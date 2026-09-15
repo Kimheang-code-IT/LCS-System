@@ -87,6 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,7 +103,7 @@ jobs:
 
           git fetch origin main
           if git merge-base --is-ancestor "origin/$BRANCH" origin/main; then
-            echo "Branch $BRANCH is already contained in main; nothing to do."
+            echo "Branch $BRANCH is already contained in main; nothing to merge."
             exit 0
           fi
 
@@ -110,3 +111,10 @@ jobs:
           git merge --no-ff -m "ci: auto-merge $BRANCH into main [skip ci]" "origin/$BRANCH"
           git push origin main
           echo "Merged $BRANCH into main."
+
+      # Pushes made with GITHUB_TOKEN do not trigger other workflows, so the
+      # CD workflow is dispatched explicitly after a successful merge.
+      - name: Trigger CD workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run cd.yml --ref main
