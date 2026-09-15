@@ -1,9 +1,7 @@
 import type { DocumentTabSchema } from '~/types/docetra/common'
 import {
   ACTIVE_STATUS,
-  CHARGE_CATEGORIES,
   CONTAINER_TYPES,
-  COUNTRIES,
   CURRENCIES,
   CUSTOMS_STATUS,
   DEBIT_CHARGE_TYPES,
@@ -12,10 +10,8 @@ import {
   DIRECTIONS,
   DOCUMENT_STATUS,
   DOCUMENT_TYPES,
-  EQUIPMENT_CATEGORIES,
   JOB_STATUS,
   JOB_WORKFLOW_STATUS,
-  LOCATION_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUS,
   PLACE_ROLES,
@@ -1106,40 +1102,6 @@ export const freightModules: FreightModule[] = [
     ],
     filters: [f('direction', 'Import / Export', 'នាំចូល / នាំចេញ', '', '', 'select', DIRECTIONS)],
   }),
-
-  ...([
-    ['/master-data/zones', 'Zones', 'តំបន់', 'Zone', 'តំបន់', 'i-lucide-map', 'zones', [['code', 'Zone Code', 'លេខកូដតំបន់'], ['name', 'Zone Name', 'ឈ្មោះតំបន់'], ['status', 'Status', 'ស្ថានភាព']]],
-    ['/master-data/locations', 'Ports / Locations', 'កំពង់ផែ / ទីតាំង', 'Location', 'ទីតាំង', 'i-lucide-map-pin', 'locations', [['code', 'Location Code', 'លេខកូដ'], ['name', 'Location Name', 'ឈ្មោះ'], ['country', 'Country', 'ប្រទេស'], ['category', 'Location Type', 'ប្រភេទទីតាំង'], ['status', 'Status', 'ស្ថានភាព']]],
-    ['/master-data/equipment-types', 'Container / Truck Types', 'ប្រភេទកុងតឺន័រ / ឡាន', 'Equipment Type', 'ប្រភេទឧបករណ៍', 'i-lucide-box', 'equipmentTypes', [['code', 'Code', 'លេខកូដ'], ['name', 'Name', 'ឈ្មោះ'], ['category', 'Category', 'ប្រភេទ'], ['status', 'Status', 'ស្ថានភាព']]],
-    ['/master-data/directions', 'Import / Export Types', 'ប្រភេទនាំចូល / នាំចេញ', 'Direction', 'ទិសដៅ', 'i-lucide-arrow-left-right', 'directions', [['code', 'Code', 'លេខកូដ'], ['name', 'Name', 'ឈ្មោះ'], ['status', 'Status', 'ស្ថានភាព']]],
-    ['/master-data/charge-types', 'Charge Types', 'ប្រភេទថ្លៃ', 'Charge Type', 'ប្រភេទថ្លៃ', 'i-lucide-tags', 'chargeTypes', [['code', 'Charge Code', 'លេខកូដថ្លៃ'], ['name', 'Charge Name', 'ឈ្មោះថ្លៃ'], ['category', 'Category', 'ប្រភេទ'], ['unit', 'Default Unit', 'ឯកតាលំនាំដើម'], ['status', 'Status', 'ស្ថានភាព']]],
-    ['/master-data/currencies', 'Currencies', 'រូបិយប័ណ្ណ', 'Currency', 'រូបិយប័ណ្ណ', 'i-lucide-coins', 'currencies', [['code', 'Currency Code', 'លេខកូដ'], ['name', 'Currency Name', 'ឈ្មោះ'], ['exchangeRate', 'Exchange Rate', 'អត្រាប្តូរ'], ['status', 'Status', 'ស្ថានភាព']]],
-  ] as Array<[string, string, string, string, string, string, string, Array<[string, string, string]>]>).map(([path, title, titleKm, singular, singularKm, icon, collection, columns]) =>
-    createModule({
-      path,
-      title,
-      titleKm,
-      singular,
-      singularKm,
-      description: `Manage reusable ${title.toLowerCase()} used throughout freight forms.`,
-      descriptionKm: `គ្រប់គ្រង${titleKm}សម្រាប់ប្រើក្នុងទម្រង់ដឹកជញ្ជូន។`,
-      icon,
-      group: 'master',
-      permission: `master.${collection.replace(/[A-Z]/g, m => `_${m.toLowerCase()}`).replace(/^_/, '')}.view`.replace('equipment_types', 'equipment_types'),
-      collection,
-      titleField: 'name',
-      columns: columns.map(([key, label, labelKm]) => col(key, label, labelKm)),
-      fields: columns.map(([key, label, labelKm]) => {
-        if (key === 'status') return f(key, label, labelKm, 'General', 'ទូទៅ', 'select', ACTIVE_STATUS)
-        if (key === 'category' && collection === 'locations') return f(key, label, labelKm, 'General', 'ទូទៅ', 'select', LOCATION_TYPES)
-        if (key === 'category' && collection === 'equipmentTypes') return f(key, label, labelKm, 'General', 'ទូទៅ', 'select', EQUIPMENT_CATEGORIES)
-        if (key === 'category' && collection === 'chargeTypes') return f(key, label, labelKm, 'General', 'ទូទៅ', 'select', CHARGE_CATEGORIES)
-        if (key === 'country') return f(key, label, labelKm, 'General', 'ទូទៅ', 'select', COUNTRIES)
-        if (key === 'exchangeRate') return f(key, label, labelKm, 'General', 'ទូទៅ', 'number')
-        return f(key, label, labelKm)
-      }),
-    }),
-  ),
 
   createModule({
     path: '/administration/users',

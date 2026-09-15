@@ -69,6 +69,9 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   transportTypes: reference('transportTypes'),
   transportAssets: reference('transportAssets'),
   feeTypes: reference('feeTypes'),
+  // Legacy collection aliases still referenced by print/container components.
+  chargeTypes: reference('feeTypes'),
+  suppliers: reference('businessParties'),
   componentGroups: reference('componentGroups'),
   componentTemplates: reference('componentTemplates'),
   tradeDirectionComponents: reference('tradeDirectionComponents'),

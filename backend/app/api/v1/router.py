@@ -9,6 +9,7 @@ from app.modules.master_data.router import router as master_data_router
 from app.modules.operations.router import router as operations_router
 from app.modules.quotations.router import router as quotations_router
 from app.modules.reports.router import router as reports_router
+from app.modules.settings.router import router as settings_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, tags=["auth"])
@@ -17,6 +18,7 @@ api_router.include_router(operations_router, tags=["operations"])
 api_router.include_router(finance_router, tags=["finance"])
 api_router.include_router(reports_router, tags=["reports"])
 api_router.include_router(master_data_router, tags=["master-data"])
+api_router.include_router(settings_router, tags=["settings"])
 api_router.include_router(audit_router, tags=["audit"])
 
 

@@ -180,6 +180,7 @@ async def me(context: RequestContext = Depends(get_current_context)) -> dict:
             "id": context.user_id,
             "name": context.display_name,
             "email": context.email,
+            "avatar": context.avatar,
             "permissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[1],
             "sourcePermissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[0],
             "organizationId": context.organization_id,
@@ -233,6 +234,26 @@ async def change_password(
     return {"data": {"changed": True}}
 
 
+@router.post("/auth/profile/avatar")
+async def update_profile_avatar(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    avatar = str(payload.get("avatar") or "").strip() or None
+    result = await service.set_user_avatar(session, context, avatar)
+    return {"data": {"avatar": result}}
+
+
+@router.delete("/auth/profile/avatar")
+async def remove_profile_avatar(
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await service.clear_user_avatar(session, context)
+    return {"data": {"removed": True}}
+
+
 @router.get("/organizations")
 async def list_organizations(
     context: RequestContext = Depends(get_current_context),
@@ -251,6 +272,38 @@ async def create_organization(
 ) -> dict:
     org = await service.create_organization(session, payload)
     return {"data": _organization_payload(org)}
+
+
+@router.get("/organizations/{organization_id}")
+async def get_organization(
+    organization_id: int,
+    context: RequestContext = Depends(require_permission("organization.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    org = await service.get_organization(session, organization_id)
+    return {"data": _organization_payload(org)}
+
+
+@router.put("/organizations/{organization_id}")
+async def update_organization(
+    organization_id: int,
+    payload: dict,
+    context: RequestContext = Depends(require_permission("organization.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    org = await service.update_organization(session, organization_id, payload)
+    return {"data": _organization_payload(org)}
+
+
+@router.delete("/organizations")
+async def delete_organizations(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("organization.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_organizations(session, ids)
+    return {"data": {"removed": len(ids)}}
 
 
 @router.get("/branches")
@@ -319,6 +372,16 @@ async def delete_branches(
     return {"data": {"removed": len(ids)}}
 
 
+@router.get("/branches/{branch_id}")
+async def get_branch(
+    branch_id: int,
+    context: RequestContext = Depends(require_permission("branch.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    branch = await service.get_branch(session, branch_id)
+    return {"data": _branch_payload(branch)}
+
+
 @router.get("/organizations/{organization_id}/branches")
 async def list_branches(
     organization_id: int,
@@ -372,6 +435,7 @@ async def get_user(
 
 
 @router.patch("/users/{user_id}")
+@router.put("/users/{user_id}")
 async def update_user(
     user_id: int,
     payload: UserUpdate,
@@ -380,6 +444,17 @@ async def update_user(
 ) -> dict:
     user = await service.update_user(session, user_id, payload.model_dump(exclude_none=True))
     return {"data": {"id": user.id, "username": user.username, "email": user.email, "status": user.status}}
+
+
+@router.delete("/users")
+async def delete_users(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("user.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_users(session, ids)
+    return {"data": {"removed": len(ids)}}
 
 
 @router.get("/users/{user_id}/role-assignments")
@@ -429,6 +504,26 @@ async def update_role(
 ) -> dict:
     role = await service.update_role(session, role_id, payload.model_dump(exclude_none=True))
     return {"data": {"id": role.id, "code": role.code, "name": role.name, "status": role.status}}
+
+
+@router.get("/roles/{role_id}")
+async def get_role(
+    role_id: int,
+    context: RequestContext = Depends(require_permission("role.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_role(session, role_id)}
+
+
+@router.delete("/roles")
+async def delete_roles(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_roles(session, ids)
+    return {"data": {"removed": len(ids)}}
 
 
 @router.get("/permissions")

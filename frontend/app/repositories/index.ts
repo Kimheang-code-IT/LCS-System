@@ -1,5 +1,4 @@
-import type { RecordAttributeRepository, RecordTypeRepository } from '~/repositories/contracts/configuration'
-import type { AppConfigRepository, AppInfoRepository, StorageRepository } from '~/repositories/contracts/settings'
+import type { AppConfigRepository, AppInfoRepository } from '~/repositories/contracts/settings'
 import type {
   AttachmentRepository,
   AuditRepository,
@@ -11,9 +10,7 @@ import type {
   ServiceChargeRepository,
   UiSchemaRepository,
 } from '~/repositories/contracts/lcs'
-import { createHttpRecordAttributeRepository, createHttpRecordTypeRepository } from '~/repositories/http/configuration'
 import { createHttpAppConfigRepository, createHttpAppInfoRepository } from '~/repositories/http/settings'
-import { createHttpStorageRepository } from '~/repositories/http/settings-storage'
 import { createHttpDynamicTabsRepository } from '~/repositories/http/dynamic-tabs'
 import type { DynamicTabsRepository } from '~/repositories/contracts/dynamic-tabs'
 import {
@@ -32,11 +29,8 @@ import type { FreightModule } from '~/config/freight-modules'
 import type { ModuleRepository } from '~/repositories/contracts/module'
 
 let initialized = false
-let recordAttributeRepo: RecordAttributeRepository
-let recordTypeRepo: RecordTypeRepository
 let appInfoRepo: AppInfoRepository
 let appConfigRepo: AppConfigRepository
-let storageRepo: StorageRepository
 let quotationRepo: QuotationRepository
 let jobRepo: JobRepository
 let componentRepo: ComponentRepository
@@ -51,11 +45,8 @@ let dynamicTabsRepo: DynamicTabsRepository
 function ensureRepositories() {
   if (initialized) return
   initialized = true
-  recordAttributeRepo = createHttpRecordAttributeRepository()
-  recordTypeRepo = createHttpRecordTypeRepository()
   appInfoRepo = createHttpAppInfoRepository()
   appConfigRepo = createHttpAppConfigRepository()
-  storageRepo = createHttpStorageRepository()
   quotationRepo = createHttpQuotationRepository()
   jobRepo = createHttpJobRepository()
   componentRepo = createHttpComponentRepository()
@@ -68,14 +59,9 @@ function ensureRepositories() {
   dynamicTabsRepo = createHttpDynamicTabsRepository()
 }
 
-export function useConfigurationRepositories() {
-  ensureRepositories()
-  return { attributes: recordAttributeRepo!, recordTypes: recordTypeRepo! }
-}
-
 export function useSettingsRepositories() {
   ensureRepositories()
-  return { appInfo: appInfoRepo!, appConfig: appConfigRepo!, storage: storageRepo! }
+  return { appInfo: appInfoRepo!, appConfig: appConfigRepo! }
 }
 
 export function useLcsRepositories() {

@@ -20,7 +20,7 @@ export function useModuleList(module: Ref<FreightModule | undefined>) {
     error.value = null
     try {
       const repository = useModuleRepository(module.value)
-      const result = await repository.list(query)
+      const result = await repository.list({ page_size: 200, ...query })
       items.value = result.items
       total.value = result.meta.total
     }

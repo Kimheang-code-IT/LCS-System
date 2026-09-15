@@ -100,6 +100,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     display_name: str | None = None
+    displayName: str | None = None
     phone: str | None = None
     status: str | None = None
     locale: str | None = None

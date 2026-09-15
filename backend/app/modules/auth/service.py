@@ -192,6 +192,8 @@ async def build_context(
         branch_id = default_branch.id
         branch_name = default_branch.name
 
+    avatar = await get_user_avatar(session, org.id, user.id)
+
     return RequestContext(
         user_id=user.id,
         username=user.username,
@@ -209,6 +211,7 @@ async def build_context(
         request_id=request_id,
         ip_address=ip_address,
         user_agent=user_agent,
+        avatar=avatar,
     )
 
 
@@ -219,6 +222,7 @@ def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
         "name": ctx.display_name,
         "email": ctx.email,
         "role": role_label,
+        "avatar": ctx.avatar,
         "permissions": page_access,
         "pageAccess": page_access,
         "organizationId": ctx.organization_id,
@@ -430,9 +434,17 @@ async def update_user(session: AsyncSession, user_id: int, data: dict) -> User:
     user = await session.get(User, user_id)
     if user is None:
         raise NotFound("User not found.")
-    for key in ("email", "display_name", "phone", "status", "locale", "timezone"):
+    for key, column in (
+        ("email", "email"),
+        ("display_name", "display_name"),
+        ("displayName", "display_name"),
+        ("phone", "phone"),
+        ("status", "status"),
+        ("locale", "locale"),
+        ("timezone", "timezone"),
+    ):
         if data.get(key) is not None:
-            setattr(user, key, data[key])
+            setattr(user, column, data[key])
     await session.commit()
     return user
 
@@ -590,3 +602,160 @@ def role_label(role_codes: list[str]) -> str:
     if role_codes:
         return role_codes[0]
     return "User"
+
+
+# --- Single-record reads / updates / deletes (generic module CRUD contract) --
+async def get_organization(session: AsyncSession, organization_id: int) -> Organization:
+    org = await session.get(Organization, organization_id)
+    if org is None:
+        raise NotFound("Organization not found.")
+    return org
+
+
+async def update_organization(session: AsyncSession, organization_id: int, data: dict) -> Organization:
+    org = await session.get(Organization, organization_id)
+    if org is None:
+        raise NotFound("Organization not found.")
+    for key, column in (
+        ("organization_code", "organization_code"),
+        ("organizationCode", "organization_code"),
+        ("legal_name", "legal_name"),
+        ("legalName", "legal_name"),
+        ("display_name", "display_name"),
+        ("displayName", "display_name"),
+        ("default_currency_code", "default_currency_code"),
+        ("defaultCurrencyCode", "default_currency_code"),
+        ("timezone", "timezone"),
+        ("status", "status"),
+    ):
+        if data.get(key) is not None:
+            setattr(org, column, data[key])
+    await session.commit()
+    return org
+
+
+async def delete_organizations(session: AsyncSession, ids: list[int]) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    for organization_id in ids:
+        org = await session.get(Organization, organization_id)
+        if org is None:
+            continue
+        await session.delete(org)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise Conflict(
+                "ORGANIZATION_IN_USE",
+                "This organization still has related records and cannot be deleted.",
+            ) from exc
+    await session.commit()
+
+
+async def get_branch(session: AsyncSession, branch_id: int) -> Branch:
+    branch = await session.get(Branch, branch_id)
+    if branch is None:
+        raise NotFound("Branch not found.")
+    return branch
+
+
+async def role_payload(session: AsyncSession, role: Role) -> dict:
+    perms = (
+        await session.execute(
+            select(Permission.code)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .where(RolePermission.role_id == role.id)
+        )
+    ).scalars().all()
+    return {
+        "id": role.id,
+        "code": role.code,
+        "name": role.name,
+        "description": role.description,
+        "isSystemRole": role.is_system_role,
+        "status": role.status,
+        "permissions": list(perms),
+    }
+
+
+async def get_role(session: AsyncSession, role_id: int) -> dict:
+    role = await session.get(Role, role_id)
+    if role is None:
+        raise NotFound("Role not found.")
+    return await role_payload(session, role)
+
+
+async def delete_roles(session: AsyncSession, ids: list[int]) -> None:
+    for role_id in ids:
+        role = await session.get(Role, role_id)
+        if role is None or role.is_system_role:
+            continue
+        await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.role_id == role_id))
+        await session.delete(role)
+    await session.commit()
+
+
+async def delete_users(session: AsyncSession, ids: list[int]) -> None:
+    for user_id in ids:
+        user = await session.get(User, user_id)
+        if user is None:
+            continue
+        await session.execute(delete(UserCredential).where(UserCredential.user_id == user_id))
+        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
+        await session.execute(delete(UserBranchAssignment).where(UserBranchAssignment.user_id == user_id))
+        await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
+        await session.delete(user)
+    await session.commit()
+
+
+# --- Profile avatar (stored as a generic module record) ----------------------
+USER_AVATAR_COLLECTION = "__user_avatar__"
+
+
+async def _avatar_record(session: AsyncSession, organization_id: int, user_id: int):
+    from app.modules.master_data.models import ModuleRecord
+
+    return (
+        await session.execute(
+            select(ModuleRecord).where(
+                ModuleRecord.organization_id == organization_id,
+                ModuleRecord.collection == USER_AVATAR_COLLECTION,
+                ModuleRecord.record_no == str(user_id),
+            )
+        )
+    ).scalars().first()
+
+
+async def get_user_avatar(session: AsyncSession, organization_id: int, user_id: int) -> str | None:
+    record = await _avatar_record(session, organization_id, user_id)
+    if record is None or not isinstance(record.data, dict):
+        return None
+    avatar = record.data.get("avatar")
+    return str(avatar) if avatar else None
+
+
+async def set_user_avatar(session: AsyncSession, context: RequestContext, avatar: str | None) -> str | None:
+    from app.modules.master_data.models import ModuleRecord
+
+    record = await _avatar_record(session, context.organization_id, context.user_id)
+    if record is None:
+        record = ModuleRecord(
+            organization_id=context.organization_id,
+            collection=USER_AVATAR_COLLECTION,
+            record_no=str(context.user_id),
+            data={"avatar": avatar},
+        )
+        session.add(record)
+    else:
+        record.data = {**(record.data or {}), "avatar": avatar}
+    await session.commit()
+    return avatar
+
+
+async def clear_user_avatar(session: AsyncSession, context: RequestContext) -> None:
+    record = await _avatar_record(session, context.organization_id, context.user_id)
+    if record is not None:
+        await session.delete(record)
+        await session.commit()

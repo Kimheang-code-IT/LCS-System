@@ -72,11 +72,13 @@ export function useAuth() {
   }
 
   async function updateProfileAvatar(avatar: string) {
+    await api.post(ApiV1Endpoints.AUTH_PROFILE_AVATAR, { avatar })
     auth.updateUser({ avatar })
     return { data: { avatar } }
   }
 
   async function removeProfileAvatar() {
+    await api.delete(ApiV1Endpoints.AUTH_PROFILE_AVATAR)
     auth.updateUser({ avatar: undefined })
     return { data: { removed: true } }
   }

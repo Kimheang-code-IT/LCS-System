@@ -45,6 +45,28 @@ async def update_account(
     return {"data": await service.update_account(session, context, int(account_id), payload)}
 
 
+@router.get("/chartOfAccounts/{account_id}")
+@router.get("/chart-of-accounts/{account_id}")
+async def get_account(
+    account_id: str,
+    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_account(session, context, int(account_id))}
+
+
+@router.delete("/chartOfAccounts")
+@router.delete("/chart-of-accounts")
+async def delete_accounts(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_accounts(session, context, ids)
+    return {"data": {"removed": len(ids)}}
+
+
 # --- Financial accounts ------------------------------------------------------
 @router.get("/financial-accounts")
 @router.get("/financialAccounts")
@@ -66,6 +88,39 @@ async def create_financial_account(
     return {"data": await service.create_financial_account(session, context, payload)}
 
 
+@router.get("/financialAccounts/{account_id}")
+@router.get("/financial-accounts/{account_id}")
+async def get_financial_account(
+    account_id: str,
+    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_financial_account(session, context, int(account_id))}
+
+
+@router.put("/financialAccounts/{account_id}")
+@router.put("/financial-accounts/{account_id}")
+async def update_financial_account(
+    account_id: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.update_financial_account(session, context, int(account_id), payload)}
+
+
+@router.delete("/financialAccounts")
+@router.delete("/financial-accounts")
+async def delete_financial_accounts(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_financial_accounts(session, context, ids)
+    return {"data": {"removed": len(ids)}}
+
+
 # --- Accounting periods ------------------------------------------------------
 @router.get("/accounting-periods")
 @router.get("/accountingPeriods")
@@ -74,6 +129,16 @@ async def list_periods(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_periods(session, context)}
+
+
+@router.get("/accounting-periods/{period_id}")
+@router.get("/accountingPeriods/{period_id}")
+async def get_period(
+    period_id: str,
+    context: RequestContext = Depends(require_permission("accounting_period.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_period(session, context, int(period_id))}
 
 
 @router.put("/accounting-periods/{period_id}")
@@ -130,6 +195,16 @@ async def upsert_sequence(
     return {"data": await service.upsert_sequence(session, context, payload)}
 
 
+@router.get("/documentSequences/{sequence_id}")
+@router.get("/document-sequences/{sequence_id}")
+async def get_sequence(
+    sequence_id: str,
+    context: RequestContext = Depends(require_permission("configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_sequence(session, context, int(sequence_id))}
+
+
 # --- Posting rules -----------------------------------------------------------
 @router.get("/posting-rules")
 @router.get("/postingRules")
@@ -149,6 +224,39 @@ async def create_posting_rule(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.create_posting_rule(session, context, payload)}
+
+
+@router.get("/postingRules/{rule_id}")
+@router.get("/posting-rules/{rule_id}")
+async def get_posting_rule(
+    rule_id: str,
+    context: RequestContext = Depends(require_permission("configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.get_posting_rule(session, context, int(rule_id))}
+
+
+@router.put("/postingRules/{rule_id}")
+@router.put("/posting-rules/{rule_id}")
+async def update_posting_rule(
+    rule_id: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.update_posting_rule(session, context, int(rule_id), payload)}
+
+
+@router.delete("/postingRules")
+@router.delete("/posting-rules")
+async def delete_posting_rules(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    await service.delete_posting_rules(session, context, ids)
+    return {"data": {"removed": len(ids)}}
 
 
 # --- Financial documents -----------------------------------------------------

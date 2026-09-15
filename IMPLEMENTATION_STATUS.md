@@ -88,7 +88,7 @@ i18n keys, unused exports). Seed data now exists only as test fixtures under
 ```bash
 cd backend
 alembic upgrade head     # OK (2 revisions)
-pytest -q                # 12 passed
+pytest -q                # 17 passed
 ruff check .             # All checks passed
 
 cd ../frontend
@@ -125,6 +125,14 @@ curl http://localhost:18080/health/ready      # {"status":"ready"} (via nginx)
 - Backend is managed with **uv** (`uv.lock`, Docker `uv sync --frozen`).
 - The backend no longer seeds on startup (`SEED_ON_STARTUP` removed; `app/seed.py`
   deleted). The database is empty after migrations.
+- **API completeness**: the frontend is fully mapped to `/api/v1`; there are no
+  `/api/v2` calls. Settings/branding live at `/api/v1/settings/app-info` and
+  `/api/v1/settings/app-config` (stored per organization in `module_records`),
+  global search at `/api/v1/search` (and `/search/ask`), and the profile avatar at
+  `/api/v1/auth/profile/avatar`. Single-record read/update/delete routes were
+  added for chart-of-accounts, financial-accounts, accounting-periods,
+  document-sequences, posting-rules, organizations, branches, users and roles so
+  the generic module repository's `get`/`update`/`remove` verbs resolve.
 
 ### Environment
 

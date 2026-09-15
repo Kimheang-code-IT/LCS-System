@@ -35,6 +35,7 @@ class RequestContext:
         request_id: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        avatar: str | None = None,
     ) -> None:
         self.user_id = user_id
         self.username = username
@@ -52,6 +53,7 @@ class RequestContext:
         self.request_id = request_id
         self.ip_address = ip_address
         self.user_agent = user_agent
+        self.avatar = avatar
 
     @property
     def can_select_all_branches(self) -> bool:

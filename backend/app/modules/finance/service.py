@@ -1039,3 +1039,129 @@ async def create_posting_rule(session: AsyncSession, context: RequestContext, da
     session.add(rule)
     await session.commit()
     return {"id": str(rule.id), "documentType": rule.document_type, "debitAccount": debit.account_code, "creditAccount": credit.account_code}
+
+
+# --- Single-record reads and deletes (generic module CRUD contract) ----------
+async def get_account(session: AsyncSession, context: RequestContext, account_id: int) -> dict:
+    account = await session.get(ChartOfAccount, account_id)
+    if account is None or account.organization_id != context.organization_id:
+        raise NotFound("Account not found.")
+    parent = await session.get(ChartOfAccount, account.parent_account_id) if account.parent_account_id else None
+    return account_payload(account, parent.account_code if parent else None)
+
+
+async def delete_accounts(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
+    for account_id in ids:
+        account = await session.get(ChartOfAccount, account_id)
+        if account is not None and account.organization_id == context.organization_id:
+            await session.delete(account)
+    await session.commit()
+
+
+async def get_financial_account(session: AsyncSession, context: RequestContext, account_id: int) -> dict:
+    account = await session.get(FinancialAccount, account_id)
+    if account is None or account.organization_id != context.organization_id:
+        raise NotFound("Financial account not found.")
+    return await financial_account_payload(session, account)
+
+
+async def update_financial_account(session: AsyncSession, context: RequestContext, account_id: int, data: dict[str, Any]) -> dict:
+    account = await session.get(FinancialAccount, account_id)
+    if account is None or account.organization_id != context.organization_id:
+        raise NotFound("Financial account not found.")
+    if data.get("ledgerCode") is not None:
+        ledger = await _account_by_code(session, context.organization_id, str(data["ledgerCode"]))
+        if ledger is None:
+            raise ValidationFailed("Ledger account not found.", {"ledgerCode": "Unknown account"})
+        account.account_id = ledger.id
+    for key, column in (
+        ("accountName", "account_name"),
+        ("bankName", "bank_name"),
+        ("accountNumberMasked", "account_number_masked"),
+    ):
+        if data.get(key) is not None:
+            setattr(account, column, data[key])
+    if data.get("accountType") is not None:
+        account.account_type = str(data["accountType"]).upper()
+    if data.get("currency") is not None:
+        account.currency_code = str(data["currency"])
+    if data.get("status") is not None:
+        account.status = str(data["status"]).upper()
+    await session.commit()
+    return await financial_account_payload(session, account)
+
+
+async def delete_financial_accounts(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
+    for account_id in ids:
+        account = await session.get(FinancialAccount, account_id)
+        if account is not None and account.organization_id == context.organization_id:
+            await session.delete(account)
+    await session.commit()
+
+
+async def get_period(session: AsyncSession, context: RequestContext, period_id: int) -> dict:
+    period = await session.get(AccountingPeriod, period_id)
+    if period is None or period.organization_id != context.organization_id:
+        raise NotFound("Accounting period not found.")
+    return period_payload(period)
+
+
+async def get_sequence(session: AsyncSession, context: RequestContext, sequence_id: int) -> dict:
+    sequence = await session.get(DocumentSequence, sequence_id)
+    if sequence is None or sequence.organization_id != context.organization_id:
+        raise NotFound("Document sequence not found.")
+    return sequence_payload(sequence, context.organization_name)
+
+
+async def posting_rule_payload(session: AsyncSession, rule: PostingRule) -> dict:
+    debit = await session.get(ChartOfAccount, rule.debit_account_id)
+    credit = await session.get(ChartOfAccount, rule.credit_account_id)
+    tax = await session.get(ChartOfAccount, rule.tax_account_id) if rule.tax_account_id else None
+    return {
+        "id": str(rule.id),
+        "documentType": rule.document_type,
+        "feeType": str(rule.fee_type_id) if rule.fee_type_id else None,
+        "debitAccount": debit.account_code if debit else None,
+        "creditAccount": credit.account_code if credit else None,
+        "taxAccount": tax.account_code if tax else None,
+        "status": rule.status,
+    }
+
+
+async def get_posting_rule(session: AsyncSession, context: RequestContext, rule_id: int) -> dict:
+    rule = await session.get(PostingRule, rule_id)
+    if rule is None or rule.organization_id != context.organization_id:
+        raise NotFound("Posting rule not found.")
+    return await posting_rule_payload(session, rule)
+
+
+async def update_posting_rule(session: AsyncSession, context: RequestContext, rule_id: int, data: dict[str, Any]) -> dict:
+    rule = await session.get(PostingRule, rule_id)
+    if rule is None or rule.organization_id != context.organization_id:
+        raise NotFound("Posting rule not found.")
+    if data.get("documentType") is not None:
+        rule.document_type = str(data["documentType"]).upper()
+    if data.get("status") is not None:
+        rule.status = str(data["status"]).upper()
+    if data.get("debitAccount") is not None:
+        debit = await _account_by_code(session, context.organization_id, str(data["debitAccount"]))
+        if debit is None:
+            raise ValidationFailed("Debit account must exist.")
+        rule.debit_account_id = debit.id
+    if data.get("creditAccount") is not None:
+        credit = await _account_by_code(session, context.organization_id, str(data["creditAccount"]))
+        if credit is None:
+            raise ValidationFailed("Credit account must exist.")
+        rule.credit_account_id = credit.id
+    if "taxAccount" in data:
+        rule.tax_account_id = _int_or_none(data.get("taxAccount"))
+    await session.commit()
+    return await posting_rule_payload(session, rule)
+
+
+async def delete_posting_rules(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
+    for rule_id in ids:
+        rule = await session.get(PostingRule, rule_id)
+        if rule is not None and rule.organization_id == context.organization_id:
+            await session.delete(rule)
+    await session.commit()

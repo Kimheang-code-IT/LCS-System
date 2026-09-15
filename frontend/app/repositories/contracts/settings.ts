@@ -1,11 +1,4 @@
-import type {
-  AppConfig,
-  AppInfo,
-  ConnectionStatus,
-  CreateStorageProviderInput,
-  StorageProvider,
-  UpdateStorageProviderInput,
-} from '~/types/docetra/settings'
+import type { AppConfig, AppInfo, ConnectionStatus } from '~/types/docetra/settings'
 
 export interface AppInfoRepository {
   get: () => Promise<AppInfo>
@@ -20,15 +13,4 @@ export interface AppConfigRepository {
   sendTestEmail: (to: string) => Promise<{ status: ConnectionStatus, message: string }>
   testTelegramConnection: () => Promise<{ status: ConnectionStatus, message: string }>
   sendTestTelegramMessage: (destinationId?: string) => Promise<{ status: ConnectionStatus, message: string }>
-}
-
-export interface StorageRepository {
-  list: () => Promise<StorageProvider[]>
-  getById: (id: string) => Promise<StorageProvider>
-  create: (input: CreateStorageProviderInput) => Promise<StorageProvider>
-  update: (id: string, input: UpdateStorageProviderInput) => Promise<StorageProvider>
-  setDefault: (id: string) => Promise<StorageProvider>
-  setActive: (id: string, active: boolean) => Promise<StorageProvider>
-  testConnection: (id: string) => Promise<{ status: ConnectionStatus, message: string }>
-  remove: (id: string) => Promise<void>
 }

@@ -9,6 +9,7 @@ export const ApiV1Endpoints = {
   AUTH_RESET_RESEND: '/api/v1/auth/forgot-password/resend',
   AUTH_RESET_PASSWORD: '/api/v1/auth/forgot-password/reset',
   AUTH_CHANGE_PASSWORD: '/api/v1/auth/change-password',
+  AUTH_PROFILE_AVATAR: '/api/v1/auth/profile/avatar',
   ORGANIZATIONS: '/api/v1/organizations',
   BRANCHES: (organizationId: number) => `/api/v1/organizations/${organizationId}/branches`,
   USERS: '/api/v1/users',
