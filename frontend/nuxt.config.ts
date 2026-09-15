@@ -135,11 +135,6 @@ export default defineNuxtConfig({
     },
   },
 
-  nitro: {
-    // Respect NITRO_PRESET (vercel.json) and Vercel's VERCEL env; default to node-server locally.
-    preset: process.env.NITRO_PRESET || (process.env.VERCEL ? 'vercel' : 'node-server'),
-  },
-
   compatibilityDate: '2024-07-11',
 
   vite: {
