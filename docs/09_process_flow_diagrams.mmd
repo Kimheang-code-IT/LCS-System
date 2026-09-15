@@ -1,0 +1,47 @@
+flowchart TD
+  A[Create Quotation] --> B[Draft Revision]
+  B --> C{Valid?}
+  C -- no --> B
+  C -- yes --> D[Send Revision]
+  D --> E{Customer Decision}
+  E -- Reject --> F[Rejected]
+  E -- No response --> G[Expired]
+  E -- Accept --> H[Accepted]
+  H --> I{User Converts?}
+  I -- no --> H
+  I -- yes --> J[Lock Revision]
+  J --> K{Already Converted?}
+  K -- yes --> L[Return Existing Order]
+  K -- no --> M[Create Service Order Snapshot]
+  M --> N[Create Required Components]
+  N --> O[Conversion Audit]
+
+  O --> P[Execute Service Order]
+  P --> Q[Add Containers and Components]
+  Q --> R{Required Data Complete?}
+  R -- no --> S[Remain Pending or On Hold]
+  R -- yes --> T[Complete Components]
+  T --> U[Create Service Charge]
+  U --> V[Issue Service Note]
+  V --> W{Accounting Required?}
+  W -- no --> X[Finish Commercial Process]
+  W -- yes --> Y[Create Draft Financial Invoice]
+  Y --> Z[Review Draft]
+  Z --> AA{Approved and Valid?}
+  AA -- no --> Y
+  AA -- yes --> AB[Post Invoice]
+  AB --> AC{Balanced and Open Period?}
+  AC -- no --> AD[Reject and Keep Draft]
+  AC -- yes --> AE[Journal Posted]
+
+  AF[Create Receipt or Payment] --> AG[Enter Account and Reference]
+  AG --> AH[Post Cash/Bank Journal]
+  AH --> AI[Allocate to Invoice or Bill]
+  AI --> AJ{Within Available Balances?}
+  AJ -- no --> AK[Reject Allocation]
+  AJ -- yes --> AL[Settlement Updated]
+
+  AM[Posted Document] --> AN[Request Reversal]
+  AN --> AO{Authorized and Open Period?}
+  AO -- no --> AP[Reject Reversal]
+  AO -- yes --> AQ[Create Reversal Document and Journal]

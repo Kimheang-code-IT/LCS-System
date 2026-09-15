@@ -1,0 +1,38 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python / backend
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+backend/storage/
+
+# Node / Nuxt / frontend
+node_modules/
+frontend/.nuxt/
+frontend/.output/
+frontend/.vercel/
+frontend/dist/
+frontend/coverage/
+frontend/scripts/*.generated.*
+
+# Build / test artifacts
+coverage/
+coverage.xml
+junit.xml
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/settings.json

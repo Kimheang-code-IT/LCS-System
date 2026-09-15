@@ -1,0 +1,234 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+@import "./scrollbar.css";
+
+@theme static {
+  --font-sans:
+    "Inter", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Arial, sans-serif;
+  --font-khmer:
+    "Noto Sans Khmer", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Arial, sans-serif;
+
+  /* Logo coral-red primary palette — must be @theme static for Nuxt UI */
+  --color-brand-50: #fff2ef;
+  --color-brand-100: #ffe0d8;
+  --color-brand-200: #ffc0b0;
+  --color-brand-300: #ff9478;
+  --color-brand-400: #f8613e;
+  --color-brand-500: #e8472a;
+  --color-brand-600: #c93519;
+  --color-brand-700: #a82914;
+  --color-brand-800: #8a2415;
+  --color-brand-900: #722318;
+  --color-brand-950: #3e0e08;
+
+  /* Logo navy accent */
+  --color-navy-50: #eef1f8;
+  --color-navy-100: #d5ddf0;
+  --color-navy-200: #adbce2;
+  --color-navy-300: #7e94ce;
+  --color-navy-400: #556db8;
+  --color-navy-500: #3a539f;
+  --color-navy-600: #2e4184;
+  --color-navy-700: #26366c;
+  --color-navy-800: #1b2b5e;
+  --color-navy-900: #182450;
+  --color-navy-950: #0e1630;
+
+  --color-gray-900: #18181b;
+}
+
+@layer base {
+  html {
+    font-size: var(--app-font-size, 16px);
+  }
+
+  html,
+  body,
+  #__nuxt {
+    height: 100%;
+    font-family: var(--font-sans) !important;
+  }
+
+  .dark,
+  .dark body {
+    background-color: #18191a !important;
+  }
+
+  /* Khmer locale — prefer Noto Sans Khmer from Google Fonts */
+  html[lang="km"],
+  html[lang="km"] body,
+  html[lang="km"] #__nuxt {
+    font-family: var(--font-khmer) !important;
+  }
+
+  /* Khmer Font Readability Enhancements */
+  :lang(km) {
+    line-height: 1.6;
+    letter-spacing: normal;
+    font-family: var(--font-khmer) !important;
+  }
+
+  [lang="km"] .tracking-tighter,
+  [lang="km"].tracking-tighter {
+    letter-spacing: normal !important;
+  }
+}
+
+@layer components {
+  .app-toolbar-shell {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--ui-border);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  /* Keep Nuxt page roots filling the dashboard panel after client navigation. */
+  .dashboard-page-slot > * {
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+    height: 100%;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .app-timeline-point {
+    display: block;
+    width: 0.625rem;
+    height: 0.625rem;
+    flex-shrink: 0;
+    border-radius: 9999px;
+    background: #404040;
+    box-shadow: 0 0 0 4px var(--ui-bg);
+  }
+
+  .dark .app-timeline-point {
+    background: #d4d4d4;
+  }
+}
+
+/* Sidebar — override Nuxt UI text-muted / text-dimmed on nav + footer controls. */
+@layer utilities {
+  .app-sidebar .app-sidebar-text {
+    color: #171717;
+  }
+
+  .dark .app-sidebar .app-sidebar-text {
+    color: var(--ui-text);
+  }
+
+  .app-sidebar [data-active="true"].app-sidebar-text,
+  .app-sidebar [data-active="true"] .app-sidebar-text,
+  .app-sidebar .group[data-active] .app-sidebar-text {
+    color: var(--ui-primary);
+  }
+
+  /* User menu dropdown (teleported outside sidebar). */
+  .app-user-menu .app-sidebar-text {
+    color: #171717;
+  }
+
+  .dark .app-user-menu .app-sidebar-text {
+    color: var(--ui-text);
+  }
+
+  .app-user-menu .text-error.app-sidebar-text,
+  .app-user-menu .text-error .app-sidebar-text {
+    color: var(--ui-error);
+  }
+
+  /* Live search: hide native browser clear — AppLiveSearch renders its own X. */
+  .app-live-search [data-slot="base"]::-ms-clear,
+  .app-live-search [data-slot="base"]::-ms-reveal {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .app-live-search [data-slot="base"]::-webkit-search-cancel-button,
+  .app-live-search [data-slot="base"]::-webkit-search-decoration,
+  .app-live-search [data-slot="base"]::-webkit-search-results-button,
+  .app-live-search [data-slot="base"]::-webkit-search-results-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
+  }
+}
+
+/* Freight list tables — semantic theme tokens keep the full grid legible in both modes. */
+.freight-table table {
+  border-collapse: separate;
+  border-spacing: 0;
+  background-color: var(--ui-bg);
+  color: var(--ui-text);
+}
+
+.freight-table table thead {
+  background-color: var(--ui-bg-elevated) !important;
+}
+
+.freight-table table thead th,
+.freight-table table [data-slot="th"] {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border: 1px solid var(--ui-border) !important;
+  background-color: var(--ui-bg-elevated) !important;
+  color: var(--ui-text-highlighted);
+  font-weight: 600;
+}
+
+.freight-table table tbody td {
+  border: 1px solid var(--ui-border);
+  background-color: var(--ui-bg);
+  color: var(--ui-text);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.freight-table table tbody tr:hover td {
+  background-color: var(--ui-bg-muted) !important;
+}
+
+.freight-table table tbody tr[data-selected="true"] td {
+  background-color: color-mix(
+    in srgb,
+    var(--ui-primary) 10%,
+    var(--ui-bg)
+  ) !important;
+}
+
+.dark .freight-table table tbody tr[data-selected="true"] td {
+  background-color: color-mix(
+    in srgb,
+    var(--ui-primary) 16%,
+    var(--ui-bg)
+  ) !important;
+}
+
+/* Document / line tables: shorter rows and smaller cell type. */
+.freight-table-compact table thead th,
+.freight-table-compact table [data-slot="th"] {
+  font-size: 11px;
+  line-height: 1.25;
+  padding: 0.25rem 0.5rem;
+}
+
+.freight-table-compact table tbody td {
+  font-size: 12px;
+  line-height: 1.25;
+  padding: 0.25rem 0.5rem;
+}
+
+.freight-table-compact table tbody td input,
+.freight-table-compact table tbody td textarea,
+.freight-table-compact table tbody td button {
+  font-size: 12px;
+}

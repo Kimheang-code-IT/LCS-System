@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+# One run per ref; cancel superseded runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: '0.12.14'
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Pytest
+        run: uv run pytest -q
+
+  frontend:
+    name: Frontend (typecheck + tests + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build static SPA
+        run: pnpm generate
+
+      # The repository still has pre-existing lint warnings; keep this
+      # informational so it does not block the pipeline.
+      - name: Lint (informational)
+        continue-on-error: true
+        run: pnpm exec eslint app tests
+
+  promote-to-main:
+    name: Auto-merge branch into main
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge branch into main and push
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main
+          if git merge-base --is-ancestor "origin/$BRANCH" origin/main; then
+            echo "Branch $BRANCH is already contained in main; nothing to do."
+            exit 0
+          fi
+
+          git checkout -B main origin/main
+          git merge --no-ff -m "ci: auto-merge $BRANCH into main [skip ci]" "origin/$BRANCH"
+          git push origin main
+          echo "Merged $BRANCH into main."

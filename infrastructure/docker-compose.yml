@@ -1,0 +1,102 @@
+name: freight_forwarding
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-freight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-freight_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-freight}
+    ports:
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - freight_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-freight} -d ${POSTGRES_DB:-freight}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_HOST_PORT:-16379}:6379"
+    volumes:
+      - freight_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_HOST_PORT:-19000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-19001}:9001"
+    volumes:
+      - freight_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  backend:
+    build:
+      context: ../backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-freight}:${POSTGRES_PASSWORD:-freight_dev_password}@postgres:5432/${POSTGRES_DB:-freight}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_ENABLED: "true"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-32-byte-minimum-secret}
+      CORS_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-18080},http://127.0.0.1:${FRONTEND_HOST_PORT:-18080}
+      STORAGE_PROVIDER: s3
+      STORAGE_LOCAL_PATH: /app/storage
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_HOST_PORT:-19000}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-freight-attachments}
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+    ports:
+      - "${BACKEND_HOST_PORT:-18081}:8000"
+    volumes:
+      - freight_uploads:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ../frontend
+    ports:
+      - "${FRONTEND_HOST_PORT:-18080}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  freight_postgres_data:
+  freight_redis_data:
+  freight_minio_data:
+  freight_uploads:

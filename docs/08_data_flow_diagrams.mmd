@@ -1,0 +1,46 @@
+flowchart TD
+  USER[Authenticated User] --> CTX[Resolve Organization and Branch Context]
+  CTX --> AUTH[Authorize Permission and Scope]
+  AUTH -- denied --> DENY[403 / Non-disclosing Error]
+  AUTH -- allowed --> API[FastAPI API]
+  API --> MOD[Application Module]
+  MOD --> TX[Transactional Service]
+  TX --> PG[(PostgreSQL)]
+  TX --> AUDIT[Audit Event]
+  MOD --> OUTBOX[Outbox Event]
+  OUTBOX --> WORKER[Background Worker]
+  WORKER --> STORAGE[(Object Storage)]
+  WORKER --> EXT[External Systems]
+
+  subgraph Quotation_to_Order
+    Q1[Draft Quotation Revision] --> Q2[Send Immutable Revision]
+    Q2 --> Q3[Record Acceptance]
+    Q3 --> Q4[Explicit Conversion Command]
+    Q4 --> Q5[Service Order Snapshot]
+    Q5 --> Q6[Required Components]
+  end
+
+  subgraph Service_Charge
+    S1[Service Order] --> S2[Fee Lines]
+    S2 --> S3[Optional Container Links]
+    S3 --> S4[Issue Customer Note]
+    S4 --> S5[No Accounting Journal]
+    S4 --> S6[Optional Draft Finance Invoice]
+  end
+
+  subgraph Finance_Posting
+    F1[Draft Financial Document] --> F2[Validate Totals and Scope]
+    F2 --> F3[Resolve Open Accounting Period]
+    F3 --> F4[Resolve Posting Rules]
+    F4 --> F5[Build Journal Lines]
+    F5 --> F6{Debits Equal Credits?}
+    F6 -- no --> F7[Reject Posting]
+    F6 -- yes --> F8[Post Journal]
+    F8 --> F9[General Ledger]
+  end
+
+  subgraph Settlement
+    P1[Customer Receipt or Supplier Payment] --> P2[Post Cash/Bank Journal]
+    P2 --> P3[Payment Allocation]
+    P3 --> P4[Outstanding Balance]
+  end
