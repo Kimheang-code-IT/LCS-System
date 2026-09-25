@@ -7,6 +7,7 @@ import type {
   JobRepository,
   OrganizationRepository,
   QuotationRepository,
+  ReportsRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
 } from '~/repositories/contracts/lcs'
@@ -21,6 +22,7 @@ import {
   createHttpJobRepository,
   createHttpOrganizationRepository,
   createHttpQuotationRepository,
+  createHttpReportsRepository,
   createHttpServiceChargeRepository,
   createHttpUiSchemaRepository,
 } from '~/repositories/http/lcs'
@@ -40,6 +42,7 @@ let organizationRepo: OrganizationRepository
 let auditRepo: AuditRepository
 let attachmentRepo: AttachmentRepository
 let uiSchemaRepo: UiSchemaRepository
+let reportsRepo: ReportsRepository
 let dynamicTabsRepo: DynamicTabsRepository
 
 function ensureRepositories() {
@@ -56,6 +59,7 @@ function ensureRepositories() {
   auditRepo = createHttpAuditRepository()
   attachmentRepo = createHttpAttachmentRepository()
   uiSchemaRepo = createHttpUiSchemaRepository()
+  reportsRepo = createHttpReportsRepository()
   dynamicTabsRepo = createHttpDynamicTabsRepository()
 }
 
@@ -76,6 +80,7 @@ export function useLcsRepositories() {
     audit: auditRepo!,
     attachments: attachmentRepo!,
     uiSchema: uiSchemaRepo!,
+    reports: reportsRepo!,
     dynamicTabs: dynamicTabsRepo!,
   }
 }

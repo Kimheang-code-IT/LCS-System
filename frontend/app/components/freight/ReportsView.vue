@@ -16,8 +16,10 @@ import { limitFilterSelects, matchesFilter } from '~/utils/filter/values'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary } from '~/utils/table/list-table'
 import { getFreightReport, type FreightReportDefinition } from '~/config/freight-reports'
+import { useLcsRepositories } from '~/repositories'
 
 const store = useFreightStore()
+const { reports } = useLcsRepositories()
 const auth = useAuthStore()
 const route = useRoute()
 const { t, te } = useI18n()
@@ -48,7 +50,39 @@ const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const rowSelection = ref<Record<string, boolean>>({})
 const postedLines = computed<FreightRecord[]>(() => postedJournalLines(store.list('journals'), store.list('chartOfAccounts')))
 function jobByNo(value: unknown) { return store.list('jobs').find(row => String(row.jobNo) === String(value)) }
-const rows = computed<FreightRecord[]>(() => buildReportRows(slug.value, store, t, te))
+
+const backendSlugs = ['accounts-receivable', 'accounts-payable', 'profitability']
+const useBackend = computed(() => backendSlugs.includes(slug.value))
+const backendRows = ref<FreightRecord[]>([])
+const backendPending = ref(false)
+
+async function loadBackendReport() {
+  if (!useBackend.value) {
+    backendRows.value = []
+    return
+  }
+  backendPending.value = true
+  try {
+    let data: FreightRecord[] = []
+    if (slug.value === 'accounts-receivable') data = await reports.receivables()
+    else if (slug.value === 'accounts-payable') data = await reports.payables()
+    else if (slug.value === 'profitability') data = await reports.profitability()
+    backendRows.value = data
+  }
+  catch {
+    backendRows.value = []
+  }
+  finally {
+    backendPending.value = false
+  }
+}
+
+watch(slug, loadBackendReport, { immediate: true })
+
+const rows = computed<FreightRecord[]>(() => {
+  if (useBackend.value) return backendRows.value
+  return buildReportRows(slug.value, store, t, te)
+})
 const filtered = computed(() => rows.value.filter((row) => {
   const text = Object.values(row).join(' ').toLowerCase()
   const day = reportRowDate(row)
@@ -166,7 +200,7 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
     <LayoutAppHeaderPageActions
       :can-create="false"
       :export-fields="exportFields"
-      @refresh="store.reload()"
+      @refresh="() => { store.reload(); loadBackendReport() }"
       @export="exportCsv"
     />
     <template v-if="!report.statement">

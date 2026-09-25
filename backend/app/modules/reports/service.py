@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.pagination import PageParams, parse_date
 from app.modules.finance.models import ChartOfAccount, FinancialDocument, JournalEntry, JournalEntryLine
+from app.modules.master_data.models import BusinessParty
 from app.modules.operations.models import ServiceOrder
 from app.modules.quotations.models import Quotation
 
@@ -34,29 +35,49 @@ async def _scope_filters(context: RequestContext, model: Any, stmt: Any, page: P
 
 
 async def receivables(session: AsyncSession, context: RequestContext) -> list[dict]:
-    rows = (
-        await session.execute(
-            select(FinancialDocument).where(
-                FinancialDocument.organization_id == context.organization_id,
-                FinancialDocument.document_type == "CUSTOMER_INVOICE",
-                FinancialDocument.status == "POSTED",
-            )
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    stmt = (
+        select(FinancialDocument, BusinessParty.display_name, ServiceOrder.service_order_no)
+        .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
+        .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
+        .where(
+            FinancialDocument.organization_id == context.organization_id,
+            FinancialDocument.document_type == "CUSTOMER_INVOICE",
+            FinancialDocument.status == "POSTED",
         )
-    ).scalars().all()
+    )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(FinancialDocument.branch_id == context.branch_id)
+    rows = (await session.execute(stmt)).all()
     items = []
-    for row in rows:
+    for row, party_name, service_order_no in rows:
         outstanding = (row.total_amount or Decimal("0")) - (row.paid_amount or Decimal("0"))
+        due = row.due_date.isoformat() if row.due_date else None
+        doc_date = row.document_date.isoformat() if row.document_date else None
+        aging_days = None
+        if due and doc_date:
+            try:
+                aging_days = (_date.fromisoformat(today) - _date.fromisoformat(due)).days
+            except Exception:
+                pass
         items.append(
             {
                 "id": str(row.id),
                 "documentNo": row.document_no,
+                "invoiceNo": row.document_no,
                 "partyId": row.party_id,
-                "documentDate": row.document_date.isoformat() if row.document_date else None,
-                "dueDate": row.due_date.isoformat() if row.due_date else None,
+                "customer": party_name or "",
+                "jobNo": service_order_no or "",
+                "documentDate": doc_date,
+                "invoiceDate": doc_date,
+                "dueDate": due,
                 "currency": row.currency_code,
                 "total": _f(row.total_amount),
                 "paid": _f(row.paid_amount),
                 "balance": _f(outstanding),
+                "outstanding": _f(outstanding),
+                "aging": f"{aging_days}d" if aging_days is not None and aging_days > 0 else "",
                 "status": "PAID" if outstanding <= 0 else ("PARTIAL" if row.paid_amount else "OPEN"),
             }
         )
@@ -64,29 +85,49 @@ async def receivables(session: AsyncSession, context: RequestContext) -> list[di
 
 
 async def payables(session: AsyncSession, context: RequestContext) -> list[dict]:
-    rows = (
-        await session.execute(
-            select(FinancialDocument).where(
-                FinancialDocument.organization_id == context.organization_id,
-                FinancialDocument.document_type == "SUPPLIER_BILL",
-                FinancialDocument.status == "POSTED",
-            )
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    stmt = (
+        select(FinancialDocument, BusinessParty.display_name, ServiceOrder.service_order_no)
+        .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
+        .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
+        .where(
+            FinancialDocument.organization_id == context.organization_id,
+            FinancialDocument.document_type == "SUPPLIER_BILL",
+            FinancialDocument.status == "POSTED",
         )
-    ).scalars().all()
+    )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(FinancialDocument.branch_id == context.branch_id)
+    rows = (await session.execute(stmt)).all()
     items = []
-    for row in rows:
+    for row, party_name, service_order_no in rows:
         outstanding = (row.total_amount or Decimal("0")) - (row.paid_amount or Decimal("0"))
+        due = row.due_date.isoformat() if row.due_date else None
+        doc_date = row.document_date.isoformat() if row.document_date else None
+        aging_days = None
+        if due and doc_date:
+            try:
+                aging_days = (_date.fromisoformat(today) - _date.fromisoformat(due)).days
+            except Exception:
+                pass
         items.append(
             {
                 "id": str(row.id),
                 "documentNo": row.document_no,
+                "invoiceNo": row.document_no,
                 "partyId": row.party_id,
-                "documentDate": row.document_date.isoformat() if row.document_date else None,
-                "dueDate": row.due_date.isoformat() if row.due_date else None,
+                "supplier": party_name or "",
+                "jobNo": service_order_no or "",
+                "documentDate": doc_date,
+                "billDate": doc_date,
+                "dueDate": due,
                 "currency": row.currency_code,
                 "total": _f(row.total_amount),
                 "paid": _f(row.paid_amount),
                 "balance": _f(outstanding),
+                "outstanding": _f(outstanding),
+                "aging": f"{aging_days}d" if aging_days is not None and aging_days > 0 else "",
                 "status": "PAID" if outstanding <= 0 else ("PARTIAL" if row.paid_amount else "OPEN"),
             }
         )
@@ -94,25 +135,27 @@ async def payables(session: AsyncSession, context: RequestContext) -> list[dict]
 
 
 async def _account_type_totals(session: AsyncSession, context: RequestContext, account_type: str) -> list[dict]:
-    rows = (
-        await session.execute(
-            select(
-                ChartOfAccount.account_code,
-                ChartOfAccount.account_name,
-                func.coalesce(func.sum(JournalEntryLine.base_debit_amount), 0),
-                func.coalesce(func.sum(JournalEntryLine.base_credit_amount), 0),
-            )
-            .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
-            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
-            .where(
-                ChartOfAccount.organization_id == context.organization_id,
-                ChartOfAccount.account_type == account_type,
-                JournalEntry.status == "POSTED",
-            )
-            .group_by(ChartOfAccount.account_code, ChartOfAccount.account_name)
-            .order_by(ChartOfAccount.account_code)
+    stmt = (
+        select(
+            ChartOfAccount.account_code,
+            ChartOfAccount.account_name,
+            func.coalesce(func.sum(JournalEntryLine.base_debit_amount), 0),
+            func.coalesce(func.sum(JournalEntryLine.base_credit_amount), 0),
         )
-    ).all()
+        .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+        .where(
+            ChartOfAccount.organization_id == context.organization_id,
+            ChartOfAccount.account_type == account_type,
+            JournalEntry.status == "POSTED",
+        )
+    )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(JournalEntry.branch_id == context.branch_id)
+    rows = (await session.execute(
+        stmt.group_by(ChartOfAccount.account_code, ChartOfAccount.account_name)
+        .order_by(ChartOfAccount.account_code)
+    )).all()
     result = []
     for code, name, debit, credit in rows:
         if account_type in {"REVENUE", "LIABILITY", "EQUITY"}:
@@ -132,13 +175,16 @@ async def expenses(session: AsyncSession, context: RequestContext) -> list[dict]
 
 
 async def profitability(session: AsyncSession, context: RequestContext) -> list[dict]:
-    orders = (
-        await session.execute(
-            select(ServiceOrder).where(ServiceOrder.organization_id == context.organization_id)
-        )
-    ).scalars().all()
+    stmt = (
+        select(ServiceOrder, BusinessParty.display_name)
+        .outerjoin(BusinessParty, BusinessParty.id == ServiceOrder.customer_party_id)
+        .where(ServiceOrder.organization_id == context.organization_id)
+    )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
+    rows = (await session.execute(stmt)).all()
     items = []
-    for order in orders:
+    for order, customer_name in rows:
         revenue = await session.scalar(
             select(func.coalesce(func.sum(FinancialDocument.total_amount), 0)).where(
                 FinancialDocument.service_order_id == order.id,
@@ -159,12 +205,17 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
                 "id": str(order.id),
                 "jobNo": order.service_order_no,
                 "serviceOrderNo": order.service_order_no,
+                "customer": customer_name or "",
+                "branchName": "",
                 "status": order.status,
                 "currency": order.currency_code,
                 "revenue": _f(revenue),
+                "postedRevenue": _f(revenue),
                 "cost": _f(cost),
+                "postedCost": _f(cost),
                 "totalCost": _f(cost),
                 "profit": _f(profit),
+                "grossProfit": _f(profit),
                 "margin": _f(profit / Decimal(str(revenue)) * 100) if revenue else 0.0,
             }
         )
@@ -214,23 +265,179 @@ async def financial_summary(session: AsyncSession, context: RequestContext) -> d
     }
 
 
-async def dashboard(session: AsyncSession, context: RequestContext) -> dict:
-    open_orders = await session.scalar(
-        select(func.count()).select_from(ServiceOrder).where(
-            ServiceOrder.organization_id == context.organization_id,
-            ServiceOrder.status.in_(["OPEN", "IN_PROGRESS", "ON_HOLD"]),
+_AGING_BUCKETS = ["not_due", "d1_30", "d31_60", "d61_90", "d90_plus"]
+
+
+def _aging_bucket(due_date: Any, today: Any) -> str:
+    if not due_date or not today:
+        return "not_due"
+    try:
+        from datetime import date as _date, timedelta
+        if isinstance(due_date, str):
+            due = _date.fromisoformat(due_date)
+        else:
+            due = due_date
+        if isinstance(today, str):
+            tday = _date.fromisoformat(today)
+        else:
+            tday = today
+        days = (tday - due).days
+        if days <= 0:
+            return "not_due"
+        if days <= 30:
+            return "d1_30"
+        if days <= 60:
+            return "d31_60"
+        if days <= 90:
+            return "d61_90"
+        return "d90_plus"
+    except Exception:
+        return "not_due"
+
+
+def _empty_aging() -> list[dict]:
+    return [{"key": key, "amount": 0.0} for key in _AGING_BUCKETS]
+
+
+def _bucketize(aging: list[dict], due_date: Any, today: Any, outstanding: float) -> None:
+    bucket = _aging_bucket(due_date, today)
+    for item in aging:
+        if item["key"] == bucket:
+            item["amount"] = round(item["amount"] + max(outstanding, 0), 4)
+
+
+async def _service_order_status_counts(session: AsyncSession, context: RequestContext) -> dict:
+    stmt = select(ServiceOrder.status, func.count()).where(
+        ServiceOrder.organization_id == context.organization_id,
+    )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
+    rows = (await session.execute(stmt.group_by(ServiceOrder.status))).all()
+    counts = {status: int(count) for status, count in rows}
+    return {
+        "openOrders": counts.get("OPEN", 0),
+        "inProgressOrders": counts.get("IN_PROGRESS", 0),
+        "onHoldOrders": counts.get("ON_HOLD", 0),
+        "awaitingClosure": counts.get("COMPLETED", 0),
+        "byStatus": [
+            {"status": status, "count": counts.get(status, 0)}
+            for status in ["OPEN", "IN_PROGRESS", "ON_HOLD", "COMPLETED"]
+        ],
+    }
+
+
+async def _journal_revenue_expense_by_month(session: AsyncSession, context: RequestContext) -> tuple[float, float, list[dict]]:
+    from datetime import date as _date
+    stmt = (
+        select(
+            JournalEntryLine,
+            ChartOfAccount.account_type,
+            JournalEntry.posting_date,
+        )
+        .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+        .where(
+            ChartOfAccount.organization_id == context.organization_id,
+            ChartOfAccount.account_type.in_(["REVENUE", "EXPENSE"]),
+            JournalEntry.status == "POSTED",
         )
     )
-    quotations = await session.scalar(
-        select(func.count()).select_from(Quotation).where(Quotation.organization_id == context.organization_id)
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(JournalEntry.branch_id == context.branch_id)
+    rows = (await session.execute(stmt)).all()
+    by_month: dict[str, dict[str, float]] = {}
+    total_revenue = 0.0
+    total_expense = 0.0
+    for line, account_type, posting_date in rows:
+        if not posting_date:
+            continue
+        month = posting_date.isoformat()[:7] if hasattr(posting_date, "isoformat") else str(posting_date)[:7]
+        debit = _f(line.base_debit_amount)
+        credit = _f(line.base_credit_amount)
+        if account_type == "REVENUE":
+            amount = round(credit - debit, 4)
+            total_revenue = round(total_revenue + amount, 4)
+        else:
+            amount = round(debit - credit, 4)
+            total_expense = round(total_expense + amount, 4)
+        bucket = by_month.setdefault(month, {"revenue": 0.0, "expense": 0.0})
+        if account_type == "REVENUE":
+            bucket["revenue"] = round(bucket["revenue"] + amount, 4)
+        else:
+            bucket["expense"] = round(bucket["expense"] + amount, 4)
+    points = [
+        {"month": month, "revenue": bucket["revenue"], "expense": bucket["expense"]}
+        for month, bucket in sorted(by_month.items())
+    ]
+    return total_revenue, total_expense, points
+
+
+async def _customers(session: AsyncSession, context: RequestContext) -> list[str]:
+    stmt = (
+        select(BusinessParty.display_name)
+        .join(ServiceOrder, ServiceOrder.customer_party_id == BusinessParty.id)
+        .where(
+            ServiceOrder.organization_id == context.organization_id,
+            BusinessParty.display_name.is_not(None),
+        )
     )
+    if not context.can_select_all_branches and context.branch_id is not None:
+        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
+    rows = (await session.execute(stmt.distinct())).scalars().all()
+    return sorted([str(r) for r in rows if r])
+
+
+async def dashboard(session: AsyncSession, context: RequestContext) -> dict:
+    from datetime import date as _date
+    today = _date.today().isoformat()
+
+    status_counts = await _service_order_status_counts(session, context)
     receivable_rows = await receivables(session, context)
     payable_rows = await payables(session, context)
+    total_revenue, total_expense, revenue_expense_points = await _journal_revenue_expense_by_month(session, context)
+    customer_list = await _customers(session, context)
+
+    receivables_total = round(sum(row["balance"] for row in receivable_rows), 4)
+    payables_total = round(sum(row["balance"] for row in payable_rows), 4)
+
+    receivables_aging = _empty_aging()
+    overdue_receivable_count = 0
+    for row in receivable_rows:
+        if row.get("balance", 0) <= 0:
+            continue
+        due = row.get("dueDate") or row.get("documentDate")
+        _bucketize(receivables_aging, due, today, row["balance"])
+        if _aging_bucket(due, today) != "not_due":
+            overdue_receivable_count += 1
+
+    payables_aging = _empty_aging()
+    for row in payable_rows:
+        if row.get("balance", 0) <= 0:
+            continue
+        due = row.get("dueDate") or row.get("documentDate")
+        _bucketize(payables_aging, due, today, row["balance"])
+
     return {
-        "openServiceOrders": int(open_orders or 0),
-        "quotations": int(quotations or 0),
-        "receivableTotal": round(sum(row["balance"] for row in receivable_rows), 4),
-        "payableTotal": round(sum(row["balance"] for row in payable_rows), 4),
-        "receivables": receivable_rows,
-        "payables": payable_rows,
+        "generatedAt": _date.today().isoformat(),
+        "summary": {
+            "openOrders": status_counts["openOrders"],
+            "inProgressOrders": status_counts["inProgressOrders"],
+            "onHoldOrders": status_counts["onHoldOrders"],
+            "awaitingClosure": status_counts["awaitingClosure"],
+            "receivables": receivables_total,
+            "overdueReceivableCount": overdue_receivable_count,
+            "payables": payables_total,
+            "cashBankBalance": 0.0,
+            "revenue": total_revenue,
+            "expense": total_expense,
+        },
+        "charts": {
+            "revenueExpense": revenue_expense_points,
+            "ordersByStatus": status_counts["byStatus"],
+            "receivablesAging": receivables_aging,
+            "payablesAging": payables_aging,
+        },
+        "options": {
+            "customers": customer_list,
+        },
     }

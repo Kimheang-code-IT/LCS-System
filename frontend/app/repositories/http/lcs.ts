@@ -153,3 +153,18 @@ export function createHttpUiSchemaRepository(): UiSchemaRepository {
     },
   }
 }
+
+export function createHttpReportsRepository(): import('~/repositories/contracts/lcs').ReportsRepository {
+  const api = useApi()
+  return {
+    dashboard: async () => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD)),
+    receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
+    payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
+    profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),
+    income: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_INCOME)),
+    expenses: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_EXPENSES)),
+    serviceOrders: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_SERVICE_ORDERS)),
+    quotationPerformance: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_QUOTATION_PERFORMANCE)),
+    financialSummary: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_FINANCIAL_SUMMARY)),
+  }
+}

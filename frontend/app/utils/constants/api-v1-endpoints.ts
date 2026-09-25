@@ -54,4 +54,13 @@ export const ApiV1Endpoints = {
   ATTACHMENTS: '/api/v1/attachments',
   UI_SCHEMA: (page: string) => `/api/v1/ui-schemas/${encodeURIComponent(page)}`,
   AUDIT_EVENTS: '/api/v1/audit-events',
+  REPORTS_DASHBOARD: '/api/v1/reports/dashboard',
+  REPORTS_SERVICE_ORDERS: '/api/v1/reports/service-orders',
+  REPORTS_QUOTATION_PERFORMANCE: '/api/v1/reports/quotation-performance',
+  REPORTS_RECEIVABLES: '/api/v1/reports/receivables',
+  REPORTS_PAYABLES: '/api/v1/reports/payables',
+  REPORTS_INCOME: '/api/v1/reports/income',
+  REPORTS_EXPENSES: '/api/v1/reports/expenses',
+  REPORTS_PROFITABILITY: '/api/v1/reports/profitability',
+  REPORTS_FINANCIAL_SUMMARY: '/api/v1/reports/financial-summary',
 } as const
