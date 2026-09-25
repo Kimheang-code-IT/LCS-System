@@ -91,20 +91,6 @@ function toggleAll(checked: boolean) {
   })))
 }
 
-function updateCreatorScope(documentType: string, checked: boolean | 'indeterminate') {
-  if (props.disabled) return
-  commit(displayRows.value.map(row => row.documentType === documentType
-    ? { ...row, onlyIfCreator: row.actions.length > 0 && checked === true }
-    : row))
-}
-
-function updateLevel(documentType: string, value: string | number) {
-  if (props.disabled) return
-  const level = Math.min(9, Math.max(0, Number(value || 0)))
-  commit(displayRows.value.map(row => row.documentType === documentType
-    ? { ...row, level }
-    : row))
-}
 </script>
 
 <template>
@@ -156,8 +142,6 @@ function updateLevel(documentType: string, value: string | number) {
               {{ $t('docetra.rolePermissions.documentType') }}
             </th>
             <th class="px-3 py-2.5 font-semibold">{{ $t('docetra.fields.permissions') }}</th>
-            <th class="w-36 px-3 py-2.5 font-semibold">{{ $t('docetra.rolePermissions.scope') }}</th>
-            <th class="w-24 px-3 py-2.5 font-semibold">{{ $t('docetra.rolePermissions.level') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -191,25 +175,6 @@ function updateLevel(documentType: string, value: string | number) {
                   </label>
                 </div>
               </div>
-            </td>
-            <td class="px-3 py-3">
-              <UCheckbox
-                :model-value="Boolean(row.onlyIfCreator)"
-                :disabled="disabled || row.actions.length === 0 || row.actions.includes('purge')"
-                :label="$t('docetra.rolePermissions.creatorOnly')"
-                @update:model-value="updateCreatorScope(row.documentType, $event)"
-              />
-            </td>
-            <td class="px-3 py-3">
-              <UInput
-                :model-value="row.level || 0"
-                type="number"
-                :min="0"
-                :max="9"
-                size="sm"
-                :disabled="disabled || row.actions.length === 0"
-                @update:model-value="updateLevel(row.documentType, $event)"
-              />
             </td>
           </tr>
         </tbody>

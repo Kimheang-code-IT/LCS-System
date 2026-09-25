@@ -69,7 +69,7 @@
       "chartOfAccounts": "Chart of Accounts",
       "financialAccounts": "Financial Accounts",
       "journals": "Journal Entries",
-      "users": "Users",
+      "users": "User Management",
       "roles": "Roles & Permissions",
       "settings": "Settings",
       "auditLogs": "Audit Logs"
@@ -678,7 +678,7 @@
         "singular": "Role",
         "description": "Define module permissions for freight-forwarding teams.",
         "fields": {
-          "name": "Role name"
+          "name": "Role name only"
         }
       },
       "shipments": {

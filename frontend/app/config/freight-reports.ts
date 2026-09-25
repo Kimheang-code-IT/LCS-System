@@ -170,7 +170,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     statementTypes: ['Asset', 'Liability', 'Equity'],
     statementFooterKey: 'freight.reportCatalog.difference',
   }),
-  report('cash-flow', 'finance', 'Cash Flow / Cash & Bank', 'Posted cash and bank activity without unsupported classifications.', ['branch', 'currency', 'date'], [
+  report('cash-flow', 'finance', 'Cash Flow', 'Posted cash and bank activity without unsupported classifications.', ['branch', 'currency', 'date'], [
     col('postingDate', 'Date', { labelKey: 'freight.reportCatalog.columns.postingDate' }),
     col('account', 'Account', { labelKey: 'freight.reportCatalog.columns.account' }),
     col('sourceDocument', 'Source'),
