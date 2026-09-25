@@ -40,7 +40,6 @@ onBeforeUnmount(clear)
 usePageSeo({ title: () => reportLabel(report.value) })
 
 const q = ref('')
-const branch = ref<string[]>([])
 const party = ref<string[]>([])
 const status = ref<string[]>([])
 const currency = ref<string[]>([])
@@ -81,42 +80,39 @@ watch(slug, loadBackendReport, { immediate: true })
 
 const rows = computed<FreightRecord[]>(() => {
   if (useBackend.value) return backendRows.value
-  return buildReportRows(slug.value, store, t, te)
+  return buildReportRows(slug.value, store)
 })
 const filtered = computed(() => rows.value.filter((row) => {
   const text = Object.values(row).join(' ').toLowerCase()
   const day = reportRowDate(row)
   const rowParty = String(row.customer || row.supplier || row.party || '')
   return (!q.value || text.includes(q.value.toLowerCase()))
-    && matchesFilter(row.branchName, branch.value)
     && matchesFilter(rowParty, party.value)
     && matchesFilter(row.status || row.workflowStatus, status.value)
     && matchesFilter(row.currency, currency.value)
     && (!dateFrom.value || day >= dateFrom.value)
     && (!dateTo.value || day <= dateTo.value)
 }))
-watch([q, branch, party, status, currency, dateFrom, dateTo, slug], () => {
+watch([q, party, status, currency, dateFrom, dateTo, slug], () => {
   rowSelection.value = {}
   pagination.value = { ...pagination.value, pageIndex: 0 }
 })
 const choices = (getter:(r:FreightRecord)=>unknown) => computed(() => [...new Set(rows.value.map(r=>String(getter(r)||'')).filter(Boolean))].sort().map(value=>({label:value,value})))
-const branchItems=choices(r=>r.branchName), partyItems=choices(r=>r.customer||r.supplier||r.party), currencyItems=choices(r=>r.currency)
+const partyItems=choices(r=>r.customer||r.supplier||r.party), currencyItems=choices(r=>r.currency)
 const statusItems=computed(()=>{
   if (['service-orders','service-order-status'].includes(slug.value)) return labeledStatusOptions(JOB_WORKFLOW_STATUS, t, te)
   if (slug.value==='containers') return labeledStatusOptions(CONTAINER_STATUSES, t, te)
   return [...new Set(rows.value.map(r=>String(r.status||r.workflowStatus||'')).filter(Boolean))].sort().map(value=>({label:value,value}))
 })
-type ReportFilterKey = 'branch' | 'party' | 'status' | 'currency'
+type ReportFilterKey = 'party' | 'status' | 'currency'
 const filterSelects = computed<Array<{ key: ReportFilterKey, items: Array<{ label: string, value: string }>, placeholder: string, width: string }>>(() => {
   const selects: Array<{ key: ReportFilterKey, items: Array<{ label: string, value: string }>, placeholder: string, width: string }> = []
-  if (report.value.filters.includes('branch')) selects.push({ key: 'branch', items: branchItems.value, placeholder: t('freight.ui.branchCol'), width: 'w-36' })
   if (report.value.filters.includes('party')) selects.push({ key: 'party', items: partyItems.value, placeholder: t('freight.fields.party'), width: 'w-44' })
   if (report.value.filters.includes('status')) selects.push({ key: 'status', items: statusItems.value, placeholder: t('freight.ui.status'), width: 'w-36' })
   if (report.value.filters.includes('currency')) selects.push({ key: 'currency', items: currencyItems.value, placeholder: t('freight.ui.cols.currency'), width: 'w-28' })
   return limitFilterSelects(selects, report.value.filters.includes('date'), select => select.key === 'status')
 })
 const filterValues = computed<Record<ReportFilterKey, string[]>>(() => ({
-  branch: branch.value,
   party: party.value,
   status: status.value,
   currency: currency.value,
@@ -124,14 +120,15 @@ const filterValues = computed<Record<ReportFilterKey, string[]>>(() => ({
 
 function setFilterValue(key: ReportFilterKey, value: string[] | string | undefined) {
   const next = Array.isArray(value) ? value : value ? [value] : []
-  if (key === 'branch') branch.value = next
-  else if (key === 'party') party.value = next
+  if (key === 'party') party.value = next
   else if (key === 'status') status.value = next
   else currency.value = next
 }
 
-const statementGroups=computed(()=>buildStatementGroups(postedLines.value, slug.value==='profit-loss'?['Revenue','Expense']:['Asset','Liability','Equity']))
+const statementTypes=computed(()=>report.value.statementTypes||(slug.value==='profit-loss'?['Revenue','Expense']:['Asset','Liability','Equity']))
+const statementGroups=computed(()=>buildStatementGroups(postedLines.value, statementTypes.value))
 const statementDifference=computed(()=>statementDifferenceOf(statementGroups.value, slug.value==='balance-sheet'))
+const statementFooterLabel=computed(()=>{const key=report.value.statementFooterKey;return key&&te(key)?t(key):(slug.value==='profit-loss'?'Net Profit':'Difference')})
 function actions(row: FreightRecord): DropdownMenuItem[][] {
   const job = jobByNo(row.jobNo)
   if (!job) return []
@@ -175,7 +172,6 @@ const columns=computed<TableColumn<FreightRecord>[]>(()=>{
 })
 const hasActiveFilters = computed(() => Boolean(
   q.value
-  || isFilterValueActive(branch.value)
   || isFilterValueActive(party.value)
   || isFilterValueActive(status.value)
   || isFilterValueActive(currency.value)
@@ -184,7 +180,6 @@ const hasActiveFilters = computed(() => Boolean(
 ))
 function clearFilters() {
   q.value = ''
-  branch.value = []
   party.value = []
   status.value = []
   currency.value = []
@@ -247,13 +242,6 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
               <CommonAppFilterMenu :active="hasActiveFilters">
                 <template #default="{ compact }">
                   <CommonAppFilterSelect
-                    v-if="report.filters.includes('branch')"
-                    v-model="branch"
-                    :items="branchItems"
-                    :placeholder="t('freight.ui.branchCol')"
-                    class="w-36"
-                  />
-                  <CommonAppFilterSelect
                     v-if="report.filters.includes('currency')"
                     v-model="currency"
                     :items="currencyItems"
@@ -295,7 +283,7 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
                 </div>
               </div>
               <div class="flex justify-between border-t-2 border-default px-3 pt-3 font-semibold">
-                <span>{{ report.slug === 'profit-loss' ? 'Net Profit' : 'Difference' }}</span>
+                <span>{{ statementFooterLabel }}</span>
                 <span>{{ formatMoney(statementDifference) }}</span>
               </div>
             </div>

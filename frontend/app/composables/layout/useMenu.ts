@@ -64,14 +64,14 @@ export function useMenu() {
     '/master-data/transport-types': 'master.reference.view',
     '/master-data/transport-assets': 'master.reference.view',
     '/master-data/fee-types': 'master.reference.view',
-    '/configuration/component-templates': 'configuration.manage',
-    '/configuration/component-groups': 'configuration.manage',
-    '/configuration/trade-direction-components': 'configuration.manage',
-    '/configuration/service-order-tabs': 'configuration.manage',
+    '/configuration/component-templates': 'configuration.view',
+    '/configuration/component-groups': 'configuration.view',
+    '/configuration/trade-direction-components': 'configuration.view',
+    '/configuration/service-order-tabs': 'configuration.view',
     '/administration/users': 'admin.users.view',
     '/administration/roles': 'admin.roles.view',
     '/administration/audit-logs': 'admin.audit_logs.view',
-    '/administration/document-sequences': 'configuration.manage',
+    '/administration/document-sequences': 'admin.document_sequences.view',
     '/administration/system-settings': 'settings.app_config.view',
   }
 
@@ -111,6 +111,7 @@ export function useMenu() {
       { label: t('freight.nav.quotations'), icon: 'i-lucide-file-check-2', to: '/quotations', class: 'text-sm gap-2', onSelect: close },
       { label: t('freight.pages.serviceOrders'), icon: 'i-lucide-briefcase', to: '/service-orders', class: 'text-sm gap-2', onSelect: close },
       { label: t('freight.pages.serviceCharges'), icon: 'i-lucide-receipt-text', to: '/service-charges', class: 'text-sm gap-2', onSelect: close },
+      group('operations-reports', 'Operations Reports', 'i-lucide-chart-no-axes-column-increasing', reportLinks('operations')),
       group('finance', t('freight.nav.finance'), 'i-lucide-banknote', [
         pageLink(t('freight.pages.financialDocuments'), '/finance/documents'),
         pageLink(t('freight.pages.chartOfAccounts'), '/finance/chart-of-accounts'),
@@ -118,7 +119,6 @@ export function useMenu() {
         pageLink(t('freight.pages.journals'), '/finance/journals'),
         pageLink(t('freight.pages.accountingPeriods'), '/finance/accounting-periods'),
       ]),
-      group('operations-reports', 'Operations Reports', 'i-lucide-chart-no-axes-column-increasing', reportLinks('operations')),
       group('financial-reports', 'Financial Reports', 'i-lucide-chart-no-axes-combined', reportLinks('finance')),
       group('master', t('freight.nav.master'), 'i-lucide-database', [
         pageLink(t('freight.pages.businessParties'), '/master-data/business-parties'),

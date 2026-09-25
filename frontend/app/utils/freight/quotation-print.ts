@@ -105,7 +105,6 @@ function pricingLinesForSlot(record: FreightRecord, slot: QuotationContainerSlot
     const line = mapPricingLine(row, index, reference, currency)
     if (divisor > 1) {
       line.quantity = line.quantity / divisor
-      line.unitPrice = line.unitPrice
       line.amount = line.amount / divisor
       line.debit = line.debit / divisor
     }

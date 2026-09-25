@@ -1,4 +1,4 @@
-/** Default invoice logo used when tenant branding has no printable logo. */
+/** Default invoice logo used when branding settings have no printable logo. */
 export const DEFAULT_INVOICE_LOGO_URL = '/lcs-invoice-logo.png'
 
 /**

@@ -13,7 +13,7 @@ export const localStore = {
     }
   },
   
-  set: (key: string, value: any): void => {
+  set: (key: string, value: unknown): void => {
     if (typeof window === 'undefined') return
     const storedValue = typeof value === 'string' ? value : JSON.stringify(value)
     localStorage.setItem(key, storedValue)

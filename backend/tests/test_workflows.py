@@ -21,7 +21,6 @@ async def test_login_returns_user_and_permissions(client):
     data = response.json()["data"]
     assert data["user"]["email"] == "admin@example.test"
     assert data["access_token"]
-    assert data["user"]["organizationCode"] == "DEMO"
 
 
 async def test_business_party_roles(client):
@@ -107,6 +106,12 @@ async def test_service_order_components_and_containers(client):
     assert container.status_code == 201, container.text
     assert container.json()["data"]["containerNumber"] == "MSCU1234567"
 
+    # Components created from the trade-direction config on conversion are listable.
+    converted_components = await client.get("/api/v1/service-order-components", headers=headers)
+    assert converted_components.status_code == 200, converted_components.text
+    converted_items = converted_components.json()["data"]["items"]
+    assert any(item["groupCode"] == "CUSTOMS" and item["jobNo"] for item in converted_items)
+
     duplicate = await client.post(
         f"/api/v1/service-orders/{service_order_id}/containers",
         headers=headers,
@@ -121,6 +126,13 @@ async def test_service_order_components_and_containers(client):
     )
     assert component.status_code == 201, component.text
     component_id = component.json()["data"]["id"]
+    assert component.json()["data"]["groupCode"] == "CUSTOMS"
+    assert component.json()["data"]["jobNo"]
+
+    listed_components = await client.get("/api/v1/service-order-components", headers=headers, params={"page_size": 200})
+    assert listed_components.status_code == 200, listed_components.text
+    listed_items = listed_components.json()["data"]["items"]
+    assert any(item["id"] == component_id and item["groupCode"] == "CUSTOMS" for item in listed_items)
 
     values = await client.put(
         f"/api/v1/service-order-components/{component_id}/values",

@@ -291,7 +291,7 @@ async def delete_financial_documents(
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
     for document_id in ids:
         document = await session.get(FinancialDocument, document_id)
-        if document is not None and document.organization_id == context.organization_id and document.status == "DRAFT":
+        if document is not None and document.status == "DRAFT":
             await session.delete(document)
     await session.commit()
     return {"data": {"removed": len(ids)}}

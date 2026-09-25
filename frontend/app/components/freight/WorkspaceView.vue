@@ -93,8 +93,6 @@ const canManageModule = computed(() => {
   if (!current.value) return false
   if (auth.user?.pageAccess?.includes('ALL_PAGES')) return true
   if (current.value.collection === 'chartOfAccounts' || current.value.collection === 'financialAccounts') return lcs.can('chart_of_accounts.manage')
-  if (current.value.collection === 'organizations') return lcs.can('organization.update')
-  if (current.value.collection === 'branches') return lcs.can('branch.manage')
   if (current.value.collection === 'users') return lcs.can('user.manage')
   if (current.value.collection === 'roles') return lcs.can('role.manage')
   if (current.value.group === 'master') return false
@@ -110,6 +108,35 @@ const canMutate = computed(() => Boolean(current.value) && !current.value?.readO
 const deactivationOnly = computed(() => current.value?.group === 'master' || current.value?.collection === 'documentSequences')
 
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
+
+const selectedRecords = computed(() => {
+  const ids = new Set(selectedIds.value)
+  return current.value ? store.list(current.value.collection).filter(row => ids.has(String(row.id))) : []
+})
+
+/** Bulk action mirrors the row rule: active records deactivate, inactive records delete. */
+const bulkAction = computed<{ kind: 'delete' | 'deactivate', label: string, icon: string, color: 'error' | 'warning' } | null>(() => {
+  if (!selectedIds.value.length || !canMutate.value) return null
+  const rows = selectedRecords.value
+  const statuses = rows.map(recordStatusValue)
+  const statusBased = rows.length > 0 && statuses.every(status => status === 'ACTIVE' || status === 'INACTIVE')
+  if (statusBased && statuses.some(status => status === 'ACTIVE')) {
+    return { kind: 'deactivate', label: t('freight.ui.deactivate'), icon: 'i-lucide-circle-off', color: 'warning' }
+  }
+  if (statusBased) {
+    return { kind: 'delete', label: t('freight.ui.delete'), icon: 'i-lucide-trash-2', color: 'error' }
+  }
+  return deactivationOnly.value
+    ? { kind: 'deactivate', label: t('freight.ui.deactivate'), icon: 'i-lucide-circle-off', color: 'warning' }
+    : { kind: 'delete', label: t('freight.ui.delete'), icon: 'i-lucide-trash-2', color: 'error' }
+})
+
+function runBulkAction() {
+  const action = bulkAction.value
+  if (!action) return
+  if (action.kind === 'delete') void deleteIds(selectedIds.value)
+  else void deactivateIds(selectedIds.value)
+}
 
 /** Lights the collapsed filter-menu button when any toolbar filter is set. */
 const hasActiveFilters = computed(() => Boolean(
@@ -130,7 +157,7 @@ watch(current, (value) => {
   setTitle(moduleTitle(value))
   setBreadcrumbs([{ label: moduleTitle(value) }])
   rowSelection.value = {}
-  for (const key of Object.keys(filters)) delete filters[key]
+  for (const key of Object.keys(filters)) Reflect.deleteProperty(filters, key)
   for (const filter of value.filters || []) {
     filters[filter.key] = parseFilterQuery(route.query[filter.key])
   }
@@ -207,15 +234,8 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
         icon: 'i-lucide-pencil',
         onSelect: () => openRow(row),
       })
-      const active = String(row.status || '').toUpperCase() === 'ACTIVE'
-      items.push({
-        label: t(active ? 'docetra.rowActions.deactivate' : 'docetra.rowActions.activate'),
-        icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-        color: active ? 'warning' : 'success',
-        onSelect: () => setDocumentSequenceStatus(row, active ? 'INACTIVE' : 'ACTIVE'),
-      })
     }
-    return [items]
+    // Status toggle and conditional delete are appended by the shared block below.
   }
   if (collection === 'quotations') {
     const status = quotationDomainStatus(row.status)
@@ -288,12 +308,41 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (status === 'CLOSED') items.push({ label: t('freight.ui.reopenPeriod'), icon: 'i-lucide-lock-open', onSelect: () => { void runRowAction('reopenPeriod', row) } })
   }
   if (canMutate.value && collection !== 'jobs') {
-    items.push({
-      label: deactivationOnly.value ? t('freight.ui.deactivate') : t('freight.ui.delete'),
-      icon: deactivationOnly.value ? 'i-lucide-circle-off' : 'i-lucide-trash-2',
-      color: deactivationOnly.value ? 'warning' : 'error',
-      onSelect: () => { void (deactivationOnly.value ? deactivateIds([String(row.id)]) : deleteIds([String(row.id)])) },
-    })
+    const status = recordStatusValue(row)
+    if (status === 'ACTIVE' || status === 'INACTIVE') {
+      const active = status === 'ACTIVE'
+      items.push({
+        label: t(active ? 'freight.ui.deactivate' : 'freight.ui.activate'),
+        icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
+        color: active ? 'warning' : 'success',
+        onSelect: () => setRecordStatus(row, active ? 'INACTIVE' : 'ACTIVE'),
+      })
+      // Active records must be deactivated first; only inactive records can be deleted.
+      if (!active) {
+        items.push({
+          label: t('freight.ui.delete'),
+          icon: 'i-lucide-trash-2',
+          color: 'error',
+          onSelect: () => { void deleteIds([String(row.id)]) },
+        })
+      }
+    }
+    else if (deactivationOnly.value) {
+      items.push({
+        label: t('freight.ui.deactivate'),
+        icon: 'i-lucide-circle-off',
+        color: 'warning',
+        onSelect: () => { void deactivateIds([String(row.id)]) },
+      })
+    }
+    else {
+      items.push({
+        label: t('freight.ui.delete'),
+        icon: 'i-lucide-trash-2',
+        color: 'error',
+        onSelect: () => { void deleteIds([String(row.id)]) },
+      })
+    }
   }
   return [items]
 }
@@ -310,7 +359,6 @@ async function applyJobWorkflow(row: Record<string, unknown>, next: ServiceOrder
       workflowStatus: next,
       updatedAt: new Date().toISOString(),
     } as FreightRecord)
-    store.addAudit(`${displayStatus} service order`, 'Service Orders', String(row.jobNo || id))
     toast.add({ title: t('freight.ui.actionCompleted'), color: 'success' })
   }
   finally {
@@ -321,8 +369,10 @@ async function applyJobWorkflow(row: Record<string, unknown>, next: ServiceOrder
 async function runRowAction(action: string, row: Record<string, unknown>) {
   try {
     const id = String(row.id || '')
-    if (action === 'send') await lcs.runCommand('quotation.send', id, key => lcs.quotations.send(id, key))
-    else if (action === 'accept') await lcs.runCommand('quotation.accept', id, key => lcs.quotations.accept(id, key))
+    // Quotation revision endpoints need the revision id; other actions use the quotation id.
+    const revisionId = String(row.revisionId || row.id || '')
+    if (action === 'send') await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
+    else if (action === 'accept') await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
     else if (action === 'createRevision') {
       const created = await lcs.quotations.createRevision(id)
       store.reload()
@@ -330,13 +380,12 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
       return
     }
     else if (action === 'convert') {
-      const job = await lcs.runCommand('quotation.convert', id, key => lcs.quotations.convert(id, key))
+      const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
       await navigateTo(`/service-orders/${job.id}`)
       return
     }
     else if (action === 'reject' || action === 'cancel') {
       store.save('quotations', { ...row, id, status: action === 'reject' ? 'Rejected' : 'Cancelled' } as FreightRecord)
-      store.addAudit(action === 'reject' ? 'Rejected quotation' : 'Cancelled quotation', 'Quotations', String(row.quotationNo || id))
     }
     else if (action === 'issueCharge') await lcs.runCommand('charge.issue', id, key => lcs.charges.issue(id, key))
     else if (action === 'createInvoice') {
@@ -355,7 +404,6 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
     }
     else if (action === 'reopenPeriod') {
       store.save('accountingPeriods', { ...row, id, status: 'REOPENED', closedBy: '', closedAt: '', updatedAt: new Date().toISOString() } as FreightRecord)
-      store.addAudit('Reopened accounting period', 'Accounting Periods', String(row.code || id))
     }
     store.reload()
     toast.add({ title: t('freight.ui.actionCompleted'), color: 'success' })
@@ -452,7 +500,6 @@ async function deleteIds(ids: string[]) {
   const ok = await confirm({ kind: 'delete', count: ids.length })
   if (!ok) return
   store.remove(current.value.collection, ids)
-  store.addAudit('Deleted', current.value.title, ids.join(', '))
   rowSelection.value = {}
   toast.add({ title: t('docetra.actions.deletedItems', { n: ids.length }), color: 'success' })
 }
@@ -463,16 +510,22 @@ async function deactivateIds(ids: string[]) {
     const record = store.get(current.value.collection, id)
     if (record) store.save(current.value.collection, { ...record, status: current.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive' })
   }
-  store.addAudit('Deactivated', current.value.title, ids.join(', '))
   rowSelection.value = {}
   toast.add({ title: t('freight.ui.deactivated'), color: 'success' })
 }
 
-function setDocumentSequenceStatus(row: Record<string, unknown>, status: 'ACTIVE' | 'INACTIVE') {
+function recordStatusValue(row: Record<string, unknown>) {
+  return String(row.status || '').trim().toUpperCase()
+}
+
+function setRecordStatus(row: Record<string, unknown>, next: 'ACTIVE' | 'INACTIVE') {
   if (!current.value || !canMutate.value) return
+  const status = current.value.collection === 'documentSequences'
+    ? next
+    : (next === 'ACTIVE' ? 'Active' : 'Inactive')
   store.save(current.value.collection, { ...row, id: String(row.id || ''), status } as FreightRecord)
-  store.addAudit(status === 'ACTIVE' ? 'Activated' : 'Deactivated', current.value.title, String(row.documentType || row.id || ''))
-  toast.add({ title: t(status === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
+  rowSelection.value = {}
+  toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
 }
 
 function refresh() {
@@ -489,10 +542,7 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
     ? store.list(current.value.collection).map(row => current.value?.collection === 'auditLogs' ? normalizeAuditLog(row) : row)
     : []
   const fromData = [...new Set(sourceRows.map(row => String(row[filter.key] ?? '').trim()).filter(Boolean))]
-  const fromBranches = filter.key === 'branchName'
-    ? store.list('branches').map(row => String(row.name || ''))
-    : []
-  return [...new Set([...fromOptions, ...fromData, ...fromBranches])]
+  return [...new Set([...fromOptions, ...fromData])]
     .map(value => String(value).trim())
     .filter(Boolean)
     .map((value) => {
@@ -542,15 +592,15 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
         />
       </template>
       <template #actions>
-        <template v-if="selectedIds.length && canMutate && !isJobList">
+        <template v-if="bulkAction && !isJobList">
           <UButton
-            :color="deactivationOnly ? 'warning' : 'error'"
+            :color="bulkAction.color"
             variant="soft"
             size="sm"
-            :icon="deactivationOnly ? 'i-lucide-circle-off' : 'i-lucide-trash-2'"
+            :icon="bulkAction.icon"
             class="shrink-0"
-            :label="`${deactivationOnly ? t('freight.ui.deactivate') : t('freight.ui.delete')} (${selectedIds.length})`"
-            @click="deactivationOnly ? deactivateIds(selectedIds) : deleteIds(selectedIds)"
+            :label="`${bulkAction.label} (${selectedIds.length})`"
+            @click="runBulkAction"
           />
           <UButton
             color="neutral"

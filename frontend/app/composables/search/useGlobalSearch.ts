@@ -3,7 +3,6 @@
  */
 import type { CommandPaletteItem, CommandPaletteGroup } from '@nuxt/ui'
 import type { SearchHit, SearchMode } from '~/types/docetra/search'
-import { ensureSearchIndexSeeded } from '~/utils/search/seed-index'
 import { useMenu } from '~/composables/layout/useMenu'
 import { useSearch } from '~/composables/search/useSearch'
 
@@ -22,8 +21,6 @@ export function useGlobalSearch() {
   const aiAnswer = ref<string | null>(null)
   const aiCitations = ref<SearchHit[]>([])
 
-  ensureSearchIndexSeeded()
-
   const navItems = computed<CommandPaletteItem[]>(() => {
     const items: CommandPaletteItem[] = []
     const navLinks = links.value?.[0] || []
@@ -41,7 +38,7 @@ export function useGlobalSearch() {
       })
     }
 
-    for (const link of navLinks as any[]) {
+    for (const link of navLinks as NavigationMenuItem[]) {
       if (link.children?.length) {
         for (const child of link.children) {
           if (child.to) pushLink(String(child.label), String(child.to), child.icon || link.icon)
@@ -86,8 +83,7 @@ export function useGlobalSearch() {
   })
 
   watch(open, (isOpen) => {
-    if (isOpen) ensureSearchIndexSeeded()
-    else {
+    if (!isOpen) {
       aiAnswer.value = null
       aiCitations.value = []
     }

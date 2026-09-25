@@ -1,6 +1,5 @@
 import type { FreightRecord } from '~/types/freight/record'
-import { paidAmountOf } from '~/utils/freight/finance'
-import { agingBucket, daysSince, postedJournalLines } from '~/utils/freight/report'
+import { daysSince, postedJournalLines } from '~/utils/freight/report'
 
 export function indexRowsByKey<T extends Record<string, unknown>>(
   rows: T[],
@@ -61,62 +60,9 @@ export function buildContainerReportRows(
     return {
       ...row,
       customer: job?.customer,
-      branchName: job?.branchName,
       currentMilestone: job?.stage || job?.workflowStatus || job?.status,
     }
   })
-}
-
-export function buildProfitabilityReportRows(
-  rows: FreightRecord[],
-  jobsByNo: Map<string, FreightRecord>,
-  chargesByJob: Map<string, FreightRecord[]>,
-) {
-  return rows.map((row) => {
-    const job = jobsByNo.get(String(row.jobNo || ''))
-    const serviceCharges = (chargesByJob.get(String(row.jobNo || '')) || [])
-      .reduce((sum, charge) => sum + Number(charge.total || 0), 0)
-    const postedRevenue = Number(row.postedRevenue || 0)
-    const postedCost = Number(row.totalCost || 0)
-    return {
-      ...row,
-      branchName: job?.branchName,
-      date: job?.date,
-      currency: job?.currency || 'USD',
-      quoted: Number(job?.quotationAmount || job?.amount || 0),
-      serviceCharges,
-      postedRevenue,
-      postedCost,
-      grossProfit: postedRevenue - postedCost,
-      margin: postedRevenue ? ((postedRevenue - postedCost) / postedRevenue) * 100 : 0,
-    }
-  })
-}
-
-export function buildReceivableReportRows(
-  rows: FreightRecord[],
-  translate: (key: string) => string,
-  hasKey: (key: string) => boolean,
-) {
-  return rows.map(row => ({
-    ...row,
-    invoiceDate: row.date,
-    paid: paidAmountOf(row),
-    aging: agingBucket(row.dueDate, translate, hasKey),
-  }))
-}
-
-export function buildPayableReportRows(
-  rows: FreightRecord[],
-  translate: (key: string) => string,
-  hasKey: (key: string) => boolean,
-) {
-  return rows.map(row => ({
-    ...row,
-    billDate: row.date,
-    paid: paidAmountOf(row),
-    aging: agingBucket(row.dueDate, translate, hasKey),
-  }))
 }
 
 export function buildRevenueExpenseReportRows(postedLines: FreightRecord[]) {
@@ -176,13 +122,10 @@ export function buildReportRows(
   store: {
     list: (collection: string) => FreightRecord[]
   },
-  translate: (key: string) => string,
-  hasKey: (key: string) => boolean,
 ) {
   const jobs = store.list('jobs')
   const jobsByNo = new Map(jobs.map(job => [String(job.jobNo || ''), job]))
   const charges = store.list('jobCharges')
-  const chargesByJob = indexRowsByKey(charges)
   const documents = store.list('debitNotes')
   const components = store.list('serviceComponents')
   const postedLines = postedJournalLines(store.list('journals'), store.list('chartOfAccounts'))
@@ -197,15 +140,6 @@ export function buildReportRows(
   }
   if (slug === 'containers') {
     return buildContainerReportRows(store.list('actualContainers'), jobsByNo)
-  }
-  if (slug === 'profitability') {
-    return buildProfitabilityReportRows(store.list('profitability'), jobsByNo, chargesByJob)
-  }
-  if (slug === 'accounts-receivable') {
-    return buildReceivableReportRows(store.list('receivables'), translate, hasKey)
-  }
-  if (slug === 'accounts-payable') {
-    return buildPayableReportRows(store.list('payables'), translate, hasKey)
   }
   if (slug === 'revenue-expense') {
     return buildRevenueExpenseReportRows(postedLines)

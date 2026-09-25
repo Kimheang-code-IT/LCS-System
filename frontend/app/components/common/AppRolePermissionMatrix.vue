@@ -59,7 +59,7 @@ function allowedActions(documentType: string) {
 }
 
 function actionAllowed(documentType: string, action: string) {
-  return allowedActions(documentType).includes(action as any)
+  return allowedActions(documentType).some(item => item === action)
 }
 
 function toggleAction(documentType: string, action: string, checked: boolean | 'indeterminate') {

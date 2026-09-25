@@ -113,18 +113,8 @@ async def test_admin_finance_detail_and_delete_endpoints(client):
     assert rule_update.json()["data"]["status"] == "INACTIVE"
 
 
-async def test_admin_org_role_branch_and_user_endpoints(client):
+async def test_admin_role_and_user_endpoints(client):
     headers = await login(client)
-
-    organizations = (await client.get("/api/v1/organizations", headers=headers)).json()["data"]
-    org_id = organizations[0]["id"]
-    assert (await client.get(f"/api/v1/organizations/{org_id}", headers=headers)).status_code == 200
-    org_update = await client.put(f"/api/v1/organizations/{org_id}", headers=headers, json={"display_name": "Renamed Org"})
-    assert org_update.status_code == 200
-
-    branches = (await client.get("/api/v1/branches", headers=headers)).json()["data"]
-    branch_id = branches[0]["id"]
-    assert (await client.get(f"/api/v1/branches/{branch_id}", headers=headers)).status_code == 200
 
     roles = (await client.get("/api/v1/roles", headers=headers)).json()["data"]
     role_id = roles[0]["id"]

@@ -85,7 +85,6 @@ export function useFinanceCommands(options: {
       postedBy: currentUserName.value,
       postedAt: new Date().toISOString(),
     })
-    store.addAudit('Posted journal', 'Journal Entries', String(model.value.entryNo || model.value.id))
     toast({ title: t('freight.ui.journalPosted'), color: 'success' })
   }
 

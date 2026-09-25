@@ -31,6 +31,9 @@ type ApiFetchError = Error & {
 // request even when composables created separate useApi instances.
 const requestControllers = new Map<string, AbortController>()
 
+// De-duplicates the redirect that follows a burst of 401 responses.
+let pendingUnauthorizedRedirect: Promise<void> | null = null
+
 /**
  * Standard API Fetching Composable
  * ───────────────────────────────────────
@@ -78,6 +81,36 @@ export function useApi() {
             cancelRequest(requestKey)
         }
 
+        const redirectAfterUnauthorized = async () => {
+            if (pendingUnauthorizedRedirect) return pendingUnauthorizedRedirect
+            pendingUnauthorizedRedirect = (async () => {
+                let requiresSetup = false
+                try {
+                    const status = await $fetch<{ data?: { requiresSetup?: boolean } }>(
+                        '/api/v1/setup/status',
+                        { baseURL, timeout: 10000 },
+                    )
+                    requiresSetup = Boolean(status?.data?.requiresSetup)
+                }
+                catch {
+                    // Keep the safe default when the probe fails.
+                }
+                useState<boolean | null>('setup-required').value = requiresSetup
+                if (requiresSetup) {
+                    await navigateTo('/setup', { replace: true })
+                }
+                else {
+                    showSessionExpired()
+                    await navigateTo('/auth/login', { replace: true })
+                }
+            })().finally(() => {
+                setTimeout(() => {
+                    pendingUnauthorizedRedirect = null
+                }, 1500)
+            })
+            return pendingUnauthorizedRedirect
+        }
+
         const controller = new AbortController()
         requestControllers.set(requestKey, controller)
         let handledAccessError = false
@@ -109,8 +142,7 @@ export function useApi() {
                         handledAccessError = true
                         authStore.clearSession()
                         if (!options.suppressAccessAlert) {
-                            showSessionExpired()
-                            void navigateTo('/auth/login')
+                            void redirectAfterUnauthorized()
                         }
                         return
                     }

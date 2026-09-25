@@ -1,5 +1,7 @@
 /** Source OpenAPI `/api/v1` operations. Do not invent alternate verbs. */
 export const ApiV1Endpoints = {
+  SETUP_STATUS: '/api/v1/setup/status',
+  SETUP_INITIALIZE: '/api/v1/setup/initialize',
   LOGIN: '/api/v1/auth/login',
   LOGOUT: '/api/v1/auth/logout',
   REFRESH: '/api/v1/auth/refresh',
@@ -10,8 +12,6 @@ export const ApiV1Endpoints = {
   AUTH_RESET_PASSWORD: '/api/v1/auth/forgot-password/reset',
   AUTH_CHANGE_PASSWORD: '/api/v1/auth/change-password',
   AUTH_PROFILE_AVATAR: '/api/v1/auth/profile/avatar',
-  ORGANIZATIONS: '/api/v1/organizations',
-  BRANCHES: (organizationId: number) => `/api/v1/organizations/${organizationId}/branches`,
   USERS: '/api/v1/users',
   ROLE_ASSIGNMENTS: (userId: number) => `/api/v1/users/${userId}/role-assignments`,
   QUOTATIONS: '/api/v1/quotations',
@@ -55,12 +55,7 @@ export const ApiV1Endpoints = {
   UI_SCHEMA: (page: string) => `/api/v1/ui-schemas/${encodeURIComponent(page)}`,
   AUDIT_EVENTS: '/api/v1/audit-events',
   REPORTS_DASHBOARD: '/api/v1/reports/dashboard',
-  REPORTS_SERVICE_ORDERS: '/api/v1/reports/service-orders',
-  REPORTS_QUOTATION_PERFORMANCE: '/api/v1/reports/quotation-performance',
   REPORTS_RECEIVABLES: '/api/v1/reports/receivables',
   REPORTS_PAYABLES: '/api/v1/reports/payables',
-  REPORTS_INCOME: '/api/v1/reports/income',
-  REPORTS_EXPENSES: '/api/v1/reports/expenses',
   REPORTS_PROFITABILITY: '/api/v1/reports/profitability',
-  REPORTS_FINANCIAL_SUMMARY: '/api/v1/reports/financial-summary',
 } as const

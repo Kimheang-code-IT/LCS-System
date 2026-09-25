@@ -23,7 +23,6 @@ export type PrintIssuer = PrintParty & {
   addressKh: string
   displayName: string
   logoUrl: string
-  branchName: string
 }
 
 export type PrintDocumentMeta = {
@@ -91,7 +90,6 @@ export type PrintSettlement = {
   accountName: string
   accountAddress: string
   bankName: string
-  branchName: string
   accountNumber: string
   swiftCode: string
 }
@@ -120,8 +118,6 @@ export type PrintViewModel = {
 }
 
 export type PrintModelContext = {
-  organizations?: FreightRecord[]
-  branches?: FreightRecord[]
   companies?: FreightRecord[]
   suppliers?: FreightRecord[]
   jobs?: FreightRecord[]
@@ -377,14 +373,6 @@ export function sumPrintLines(lines: PrintLine[]) {
 /* View-model builder                                                  */
 /* ------------------------------------------------------------------ */
 
-function findOrg(context: PrintModelContext, record: FreightRecord): FreightRecord | null {
-  const organizations = context.organizations || []
-  const orgId = record.organizationId
-  return organizations.find(row => String(row.organizationId ?? row.id) === String(orgId))
-    || organizations[0]
-    || null
-}
-
 function resolveParty(name: string, context: PrintModelContext, record: FreightRecord): PrintParty {
   const key = name.trim().toLowerCase()
   const companies = context.companies || []
@@ -446,12 +434,11 @@ function resolveSettlement(record: FreightRecord, financialAccounts: FreightReco
   const match = key
     ? financialAccounts.find(row => String(row.accountName || '').toLowerCase() === key)
     : financialAccounts.find(row => String(row.accountType || '').toLowerCase() === 'bank')
-  if (!match) return { accountName: '', accountAddress: '', bankName: '', branchName: '', accountNumber: '', swiftCode: '' }
+  if (!match) return { accountName: '', accountAddress: '', bankName: '', accountNumber: '', swiftCode: '' }
   return {
     accountName: printStr(match.accountName),
     accountAddress: printStr(match.accountAddress) || printStr(match.address),
     bankName: printStr(match.bankName),
-    branchName: printStr(match.branchName),
     // Only the masked, print-authorized number ever reaches paper.
     accountNumber: printStr(match.accountNumberMasked),
     swiftCode: printStr(match.swiftCode),
@@ -473,10 +460,6 @@ export function buildPrintViewModel(
   templateId: string,
   context: PrintModelContext = {},
 ): PrintViewModel {
-  const issuerRow = findOrg(context, record)
-  const branchRow = (context.branches || []).find(row =>
-    String(row.id) === String(record.branchId) || String(row.branchId) === String(record.branchId),
-  ) || null
   const currency = printStr(record.currency) || 'USD'
   const exchangeRate = printNum(record.exchangeRate) || printNum(record.exchangeRateLocal)
   const lines = normalizeDocumentLines(record, templateId)
@@ -491,19 +474,18 @@ export function buildPrintViewModel(
   return {
     templateId,
     issuer: {
-      name: printStr(issuerRow?.legalName),
-      legalName: printStr(issuerRow?.legalName),
-      nameKh: printStr(issuerRow?.legalNameKh),
-      legalNameKh: printStr(issuerRow?.legalNameKh),
-      displayName: printStr(issuerRow?.displayName),
-      taxIdentifier: printStr(issuerRow?.taxIdentifier),
-      address: printStr(issuerRow?.address),
-      addressKh: printStr(issuerRow?.addressKh),
-      phone: printStr(issuerRow?.phone),
-      email: printStr(issuerRow?.email),
+      name: '',
+      legalName: '',
+      nameKh: '',
+      legalNameKh: '',
+      displayName: '',
+      taxIdentifier: '',
+      address: '',
+      addressKh: '',
+      phone: '',
+      email: '',
       contact: '',
       logoUrl: printStr(context.logoUrl) || DEFAULT_INVOICE_LOGO_URL,
-      branchName: printStr(branchRow?.name),
     },
     party,
     document: {

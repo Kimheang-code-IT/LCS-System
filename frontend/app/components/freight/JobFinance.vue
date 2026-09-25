@@ -163,11 +163,21 @@ const tableColumns = computed<TableColumn<FreightRecord>[]>(() => [
   <div class="space-y-4">
     <FreightJobSectionHeader :title="t('freight.jobSections.finance')">
       <template #actions>
-        <UButton size="xs" color="neutral" variant="soft" icon="i-lucide-printer"
-          :disabled="!latestCustomerInvoice" :label="t('freight.ui.printInvoice')"
+        <UButton
+size="xs"
+color="neutral"
+variant="soft"
+icon="i-lucide-printer"
+          :disabled="!latestCustomerInvoice"
+:label="t('freight.ui.printInvoice')"
           @click="printLatestInvoice" />
-        <UButton size="xs" color="neutral" variant="ghost" icon="i-lucide-arrow-up-right"
-          :to="{ path: '/finance/documents', query: { jobNo } }" :label="t('freight.ui.openFinance')" />
+        <UButton
+size="xs"
+color="neutral"
+variant="ghost"
+icon="i-lucide-arrow-up-right"
+          :to="{ path: '/finance/documents', query: { jobNo } }"
+:label="t('freight.ui.openFinance')" />
       </template>
     </FreightJobSectionHeader>
 
@@ -179,8 +189,12 @@ const tableColumns = computed<TableColumn<FreightRecord>[]>(() => [
       </h4>
       <div v-if="documents.length" class="overflow-hidden rounded-md border border-default">
         <div class="overflow-x-auto">
-          <UTable :data="documents" :columns="tableColumns" :get-row-id="(row: FreightRecord) => String(row.id || '')"
-            class="freight-table min-w-max" :ui="freightTableUiReadonly" />
+          <UTable
+:data="documents"
+:columns="tableColumns"
+:get-row-id="(row: FreightRecord) => String(row.id || '')"
+            class="freight-table min-w-max"
+:ui="freightTableUiReadonly" />
         </div>
       </div>
       <FreightJobEmptyState v-else :title="t('freight.ui.noFinancialDocuments')" icon="i-lucide-banknote" />

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import secrets
 
@@ -67,29 +67,6 @@ def _clear_auth_cookies(response: Response) -> None:
         response.delete_cookie(name, path="/", domain=settings.cookie_domain)
 
 
-def _organization_payload(org) -> dict:
-    return {
-        "id": org.id,
-        "organization_code": org.organization_code,
-        "legal_name": org.legal_name,
-        "display_name": org.display_name or org.legal_name,
-        "default_currency_code": org.default_currency_code,
-        "timezone": org.timezone,
-        "status": org.status,
-    }
-
-
-def _branch_payload(branch) -> dict:
-    return {
-        "id": branch.id,
-        "organization_id": branch.organization_id,
-        "branch_code": branch.branch_code,
-        "name": branch.name,
-        "is_head_office": branch.is_head_office,
-        "status": branch.status,
-    }
-
-
 @router.post("/auth/login")
 async def login(payload: LoginRequest, request: Request, response: Response, session: AsyncSession = Depends(get_session)) -> dict:
     login_value = payload.username or payload.email or ""
@@ -103,7 +80,7 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    permissions, _, _, role_codes = await service.resolve_permissions(session, user.id, context.organization_id)
+    _, role_codes = await service.resolve_permissions(session, user.id)
     access, refresh = await service.create_session(
         session, user, ip=context.ip_address, user_agent=context.user_agent
     )
@@ -160,7 +137,7 @@ async def refresh(
         user_agent=request.headers.get("user-agent"),
     )
     context = await service.build_context(session, user, request_id=getattr(request.state, "request_id", ""))
-    _, _, _, role_codes = await service.resolve_permissions(session, user.id, context.organization_id)
+    _, role_codes = await service.resolve_permissions(session, user.id)
     _set_auth_cookies(response, access, refresh_token)
     return {
         "data": {
@@ -183,10 +160,6 @@ async def me(context: RequestContext = Depends(get_current_context)) -> dict:
             "avatar": context.avatar,
             "permissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[1],
             "sourcePermissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[0],
-            "organizationId": context.organization_id,
-            "branchId": context.branch_id,
-            "assignedBranchIds": context.assigned_branch_ids,
-            "permissionScope": context.permission_scope,
         }
     }
 
@@ -254,162 +227,13 @@ async def remove_profile_avatar(
     return {"data": {"removed": True}}
 
 
-@router.get("/organizations")
-async def list_organizations(
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    context.require("organization.read")
-    orgs = await service.list_organizations(session)
-    return {"data": [_organization_payload(org) for org in orgs]}
-
-
-@router.post("/organizations", status_code=status.HTTP_201_CREATED)
-async def create_organization(
-    payload: dict,
-    context: RequestContext = Depends(require_permission("organization.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    org = await service.create_organization(session, payload)
-    return {"data": _organization_payload(org)}
-
-
-@router.get("/organizations/{organization_id}")
-async def get_organization(
-    organization_id: int,
-    context: RequestContext = Depends(require_permission("organization.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    org = await service.get_organization(session, organization_id)
-    return {"data": _organization_payload(org)}
-
-
-@router.put("/organizations/{organization_id}")
-async def update_organization(
-    organization_id: int,
-    payload: dict,
-    context: RequestContext = Depends(require_permission("organization.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    org = await service.update_organization(session, organization_id, payload)
-    return {"data": _organization_payload(org)}
-
-
-@router.delete("/organizations")
-async def delete_organizations(
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("organization.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
-    await service.delete_organizations(session, ids)
-    return {"data": {"removed": len(ids)}}
-
-
-@router.get("/branches")
-async def list_context_branches(
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    context.require("branch.read")
-    branches = await service.list_branches(session, context.organization_id)
-    return {"data": [_branch_payload(branch) for branch in branches]}
-
-
-@router.post("/branches", status_code=status.HTTP_201_CREATED)
-async def create_context_branch(
-    payload: dict,
-    context: RequestContext = Depends(require_permission("branch.manage")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    branch = await service.create_branch(session, context.organization_id, payload)
-    return {"data": _branch_payload(branch)}
-
-
-@router.put("/branches/{branch_id}")
-async def update_branch(
-    branch_id: int,
-    payload: dict,
-    context: RequestContext = Depends(require_permission("branch.manage")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    from app.modules.auth.models import Branch
-
-    branch = await session.get(Branch, branch_id)
-    if branch is None or branch.organization_id != context.organization_id:
-        raise AuthRequired("Branch not found.")
-    for key, column in (
-        ("branchCode", "branch_code"),
-        ("name", "name"),
-        ("phone", "phone"),
-        ("email", "email"),
-        ("address", "address"),
-    ):
-        if payload.get(key) is not None:
-            setattr(branch, column, payload[key])
-    if payload.get("headOffice") is not None:
-        branch.is_head_office = bool(payload["headOffice"])
-    if payload.get("status") is not None:
-        branch.status = str(payload["status"]).upper()
-    await session.commit()
-    return {"data": _branch_payload(branch)}
-
-
-@router.delete("/branches")
-async def delete_branches(
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("branch.manage")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    from app.modules.auth.models import Branch
-
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
-    for branch_id in ids:
-        branch = await session.get(Branch, branch_id)
-        if branch is not None and branch.organization_id == context.organization_id:
-            await session.delete(branch)
-    await session.commit()
-    return {"data": {"removed": len(ids)}}
-
-
-@router.get("/branches/{branch_id}")
-async def get_branch(
-    branch_id: int,
-    context: RequestContext = Depends(require_permission("branch.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    branch = await service.get_branch(session, branch_id)
-    return {"data": _branch_payload(branch)}
-
-
-@router.get("/organizations/{organization_id}/branches")
-async def list_branches(
-    organization_id: int,
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    context.require("branch.read")
-    branches = await service.list_branches(session, organization_id)
-    return {"data": [_branch_payload(branch) for branch in branches]}
-
-
-@router.post("/organizations/{organization_id}/branches", status_code=status.HTTP_201_CREATED)
-async def create_branch(
-    organization_id: int,
-    payload: dict,
-    context: RequestContext = Depends(require_permission("branch.manage")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    branch = await service.create_branch(session, organization_id, payload)
-    return {"data": _branch_payload(branch)}
-
 
 @router.get("/users")
 async def list_users(
     context: RequestContext = Depends(require_permission("user.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_users(session, context.organization_id)}
+    return {"data": await service.list_users(session)}
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
@@ -482,7 +306,7 @@ async def list_roles(
     context: RequestContext = Depends(require_permission("role.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_roles(session, context.organization_id)}
+    return {"data": await service.list_roles(session)}
 
 
 @router.post("/roles", status_code=status.HTTP_201_CREATED)
@@ -492,7 +316,7 @@ async def create_role(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     role = await service.create_role(session, payload.model_dump())
-    return {"data": {"id": role.id, "code": role.code, "name": role.name, "status": role.status}}
+    return {"data": await service.role_payload(session, role)}
 
 
 @router.put("/roles/{role_id}")
@@ -503,7 +327,7 @@ async def update_role(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     role = await service.update_role(session, role_id, payload.model_dump(exclude_none=True))
-    return {"data": {"id": role.id, "code": role.code, "name": role.name, "status": role.status}}
+    return {"data": await service.role_payload(session, role)}
 
 
 @router.get("/roles/{role_id}")

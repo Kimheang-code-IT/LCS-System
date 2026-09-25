@@ -65,7 +65,6 @@ const summaryItems = computed(() => [
 
 const detailItems = computed(() => [
   { label: t('freight.ui.cols.customer'), value: props.model.customer },
-  { label: t('freight.ui.branchCol'), value: props.model.branchName },
   { label: t('freight.ui.cols.direction'), value: props.model.direction },
   { label: t('freight.ui.cols.currency'), value: props.model.currency },
   { label: t('freight.ui.cols.sourceQuotationLabel'), value: props.model.quotationNo },

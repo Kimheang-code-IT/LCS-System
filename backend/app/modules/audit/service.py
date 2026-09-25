@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.pagination import PageParams, count_query, paged
 from app.modules.audit.models import AuditEvent
+from app.modules.auth.models import User
 
 
 async def write_audit(
@@ -25,8 +26,6 @@ async def write_audit(
     metadata: dict[str, Any] | None = None,
 ) -> AuditEvent:
     event = AuditEvent(
-        organization_id=context.organization_id if context else None,
-        branch_id=context.branch_id if context else None,
         actor_user_id=context.user_id if context else None,
         event_type=event_type,
         entity_type=entity_type,
@@ -46,38 +45,33 @@ async def write_audit(
     return event
 
 
-def serialize(event: AuditEvent) -> dict[str, Any]:
+def serialize(event: AuditEvent, user_name: str | None = None) -> dict[str, Any]:
     return {
         "id": event.id,
         "occurredAt": event.occurred_at.isoformat() if event.occurred_at else None,
-        "user": event.actor_user_id,
-        "userId": event.actor_user_id,
         "action": event.action,
-        "eventType": event.event_type,
-        "entityType": event.entity_type,
-        "entityId": event.entity_id,
-        "recordNo": str(event.entity_id),
-        "module": event.entity_type,
         "result": event.result,
-        "reason": event.reason,
-        "remark": event.reason,
-        "before": event.before_json,
-        "after": event.after_json,
+        "user": user_name or (str(event.actor_user_id) if event.actor_user_id is not None else ""),
+        "ipAddress": event.ip_address,
+        "entityId": event.entity_id,
     }
 
 
 async def list_events(session: AsyncSession, context: RequestContext, page: PageParams, entity_type: str | None = None) -> dict:
-    stmt = select(AuditEvent).where(AuditEvent.organization_id == context.organization_id)
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(or_(AuditEvent.branch_id == context.branch_id, AuditEvent.branch_id.is_(None)))
-    if context.branch_id is not None:
-        stmt = stmt.where(or_(AuditEvent.branch_id == context.branch_id, AuditEvent.branch_id.is_(None)))
+    stmt = (
+        select(AuditEvent, User.display_name)
+        .outerjoin(User, User.id == AuditEvent.actor_user_id)
+    )
     if entity_type:
         stmt = stmt.where(AuditEvent.entity_type == entity_type)
     if page.status:
         stmt = stmt.where(AuditEvent.action == page.status)
     total = await count_query(session, stmt)
     rows = (
-        await session.execute(stmt.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc()).limit(page.page_size).offset(page.offset))
-    ).scalars().all()
-    return paged([serialize(row) for row in rows], page, total)
+        await session.execute(
+            stmt.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).all()
+    return paged([serialize(event, user_name) for event, user_name in rows], page, total)

@@ -111,8 +111,6 @@ def quotation_record(quotation: Quotation, revision: QuotationRevision | None, d
             "quotationNo": quotation.quotation_no,
             "status": quotation.status.capitalize() if quotation.status.isupper() else quotation.status,
             "rawStatus": quotation.status,
-            "orgId": quotation.organization_id,
-            "branchId": quotation.branch_id,
             "revisionNo": quotation.current_revision_no,
             "createdAt": quotation.created_at.isoformat() if quotation.created_at else None,
             "updatedAt": quotation.updated_at.isoformat() if quotation.updated_at else None,
@@ -191,9 +189,7 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
 
 
 async def list_quotations(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(Quotation).where(Quotation.organization_id == context.organization_id)
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(Quotation.branch_id == context.branch_id)
+    stmt = select(Quotation)
     if page.status:
         stmt = stmt.where(Quotation.status == normalize_status(page.status))
     if page.q:
@@ -210,7 +206,7 @@ async def list_quotations(session: AsyncSession, context: RequestContext, page: 
 
 async def get_quotation(session: AsyncSession, context: RequestContext, quotation_id: int) -> dict:
     quotation = await session.get(Quotation, quotation_id)
-    if quotation is None or quotation.organization_id != context.organization_id:
+    if quotation is None:
         raise NotFound("Quotation not found.")
     revision = await get_latest_revision(session, quotation)
     return quotation_record(quotation, revision, quotation.data or {})
@@ -221,20 +217,15 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
     quotation: Quotation | None = None
     if quotation_id and str(quotation_id).isdigit():
         quotation = await session.get(Quotation, int(quotation_id))
-        if quotation is not None and quotation.organization_id != context.organization_id:
-            raise NotFound("Quotation not found.")
 
     party = await resolve_party_by_name(session, data.get("customer"), context)
     direction = await resolve_direction(session, data.get("direction"))
-    branch_id = int(data.get("branchId") or context.branch_id or 0) or (context.branch_id or 0)
 
     if quotation is None:
         number = data.get("quotationNo")
         if not number or not str(number).strip():
-            number = await allocate_number(session, context.organization_id, "QUOTATION")
+            number = await allocate_number(session, "QUOTATION")
         quotation = Quotation(
-            organization_id=context.organization_id,
-            branch_id=branch_id,
             quotation_no=str(number),
             customer_party_id=party.id,
             trade_direction_id=direction.id,
@@ -351,7 +342,7 @@ async def _clone_revision(session: AsyncSession, quotation: Quotation, source: Q
 
 async def create_revision(session: AsyncSession, context: RequestContext, quotation_id: int, data: dict[str, Any]) -> dict:
     quotation = await session.get(Quotation, quotation_id)
-    if quotation is None or quotation.organization_id != context.organization_id:
+    if quotation is None:
         raise NotFound("Quotation not found.")
     latest = await get_latest_revision(session, quotation)
     clone = await _clone_revision(session, quotation, latest) if latest else None
@@ -383,8 +374,6 @@ async def _revision_with_quotation(session: AsyncSession, revision_id: int) -> t
 
 async def send_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    if quotation.organization_id != context.organization_id:
-        raise NotFound("Quotation not found.")
     if revision.status == "SENT":
         return quotation_record(quotation, revision, quotation.data or {})
     if revision.status != "DRAFT":
@@ -407,8 +396,6 @@ async def submit_revision(session: AsyncSession, context: RequestContext, revisi
 
 async def accept_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    if quotation.organization_id != context.organization_id:
-        raise NotFound("Quotation not found.")
     if revision.status == "ACCEPTED":
         return quotation_record(quotation, revision, quotation.data or {})
     if revision.status != "SENT":
@@ -435,8 +422,6 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
     from app.modules.operations.service import create_service_order_from_quotation
 
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    if quotation.organization_id != context.organization_id:
-        raise NotFound("Quotation not found.")
     existing = (
         await session.execute(select(QuotationConversion).where(QuotationConversion.quotation_revision_id == revision.id))
     ).scalars().first()
@@ -464,6 +449,6 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
 async def delete_quotations(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
     for quotation_id in ids:
         quotation = await session.get(Quotation, quotation_id)
-        if quotation is not None and quotation.organization_id == context.organization_id:
+        if quotation is not None:
             await session.delete(quotation)
     await session.commit()

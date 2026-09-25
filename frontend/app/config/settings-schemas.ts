@@ -1,11 +1,10 @@
 import type { DocumentTabSchema } from '~/types/docetra/common'
 import {
   AWS_REGION_OPTIONS,
+  BACKUP_INTERVAL_OPTIONS,
   CURRENCY_OPTIONS,
   DATE_FORMAT_OPTIONS,
-  FIRST_DAY_OF_WEEK_OPTIONS,
   LANDING_PAGE_OPTIONS,
-  LOCALE_OPTIONS,
   NUMBER_FORMAT_OPTIONS,
   PAGE_SIZE_OPTIONS,
   SYNC_SCHEDULE_OPTIONS,
@@ -98,15 +97,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             ],
           },
           {
-            key: 'localization.availableLanguages',
-            labelKey: 'docetra.settings.availableLanguages',
-            type: 'multiselect',
-            options: [
-              { label: 'English', value: 'en' },
-              { label: 'Khmer', value: 'km' },
-            ],
-          },
-          {
             key: 'localization.timezone',
             labelKey: 'docetra.settings.timezone',
             type: 'select',
@@ -125,12 +115,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             options: TIME_FORMAT_OPTIONS,
           },
           {
-            key: 'localization.firstDayOfWeek',
-            labelKey: 'docetra.settings.firstDayOfWeek',
-            type: 'select',
-            options: FIRST_DAY_OF_WEEK_OPTIONS,
-          },
-          {
             key: 'localization.numberFormat',
             labelKey: 'docetra.settings.numberFormat',
             type: 'select',
@@ -141,12 +125,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             labelKey: 'docetra.settings.currency',
             type: 'select',
             options: CURRENCY_OPTIONS,
-          },
-          {
-            key: 'localization.locale',
-            labelKey: 'docetra.settings.locale',
-            type: 'select',
-            options: LOCALE_OPTIONS,
           },
         ],
       },
@@ -176,10 +154,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
               { label: 'STARTTLS', value: 'starttls' },
             ],
           },
-          { key: 'email.fromName', labelKey: 'docetra.settings.fromName', type: 'text' },
-          { key: 'email.fromEmail', labelKey: 'docetra.settings.fromEmail', type: 'text' },
-          { key: 'email.replyToEmail', labelKey: 'docetra.settings.replyTo', type: 'text' },
-          { key: '__emailConnection', labelKey: 'docetra.connection.title', type: 'connection-status', colSpan: 2 },
         ],
       },
     ],
@@ -205,16 +179,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
               { label: 'Khmer', value: 'km' },
             ],
           },
-          { key: 'telegram.includeRecordLink', labelKey: 'docetra.settings.includeRecordLink', type: 'boolean' },
           { key: 'telegram.includeOrganization', labelKey: 'docetra.settings.includeOrganization', type: 'boolean' },
-          { key: 'telegram.includeAssignedOfficer', labelKey: 'docetra.settings.includeAssignedOfficer', type: 'boolean' },
-          {
-            key: 'telegram.messageTemplate',
-            labelKey: 'docetra.settings.messageTemplate',
-            type: 'textarea',
-            colSpan: 2,
-            rows: 7,
-          },
           {
             key: 'telegram.destinations',
             labelKey: 'docetra.settings.destinations',
@@ -256,26 +221,40 @@ export const appConfigTabs: DocumentTabSchema[] = [
         id: 'security',
         titleKey: 'docetra.settings.tabs.security',
         fields: [
-          {
-            key: '__securityAlert',
-            labelKey: 'docetra.settings.securityDisclaimer',
-            type: 'alert',
-            helpKey: 'docetra.settings.securityDisclaimerHelp',
-            alertColor: 'warning',
-            colSpan: 2,
-          },
           { key: 'security.sessionTimeoutMinutes', labelKey: 'docetra.settings.sessionTimeout', type: 'number' },
           { key: 'security.maxLoginAttempts', labelKey: 'docetra.settings.maxLoginAttempts', type: 'number' },
           { key: 'security.accountLockMinutes', labelKey: 'docetra.settings.accountLockMinutes', type: 'number' },
           { key: 'security.passwordExpiryDays', labelKey: 'docetra.settings.passwordExpiryDays', type: 'number' },
-          { key: 'security.auditRetentionDays', labelKey: 'docetra.settings.auditRetentionDays', type: 'number' },
           { key: 'security.requirePasswordChange', labelKey: 'docetra.settings.requirePasswordChange', type: 'boolean' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'backup',
+    labelKey: 'docetra.settings.tabs.backup',
+    sections: [
+      {
+        id: 'backup',
+        titleKey: 'docetra.settings.tabs.backup',
+        fields: [
+          { key: 'backup.enabled', labelKey: 'docetra.settings.backup.enabled', type: 'boolean' },
           {
-            key: 'security.allowedUploadExtensions',
-            labelKey: 'docetra.config.allowedExtensions',
-            type: 'csv-list',
+            key: 'backup.intervalHours',
+            labelKey: 'docetra.settings.backup.intervalHours',
+            type: 'select',
+            options: BACKUP_INTERVAL_OPTIONS,
+          },
+          { key: 'backup.spreadsheetId', labelKey: 'docetra.settings.backup.spreadsheetId', type: 'text', colSpan: 2 },
+          {
+            key: 'backup.serviceAccountJson',
+            labelKey: 'docetra.settings.backup.serviceAccountJson',
+            type: 'secret',
             colSpan: 2,
           },
+          { key: 'backup.worksheetPrefix', labelKey: 'docetra.settings.backup.worksheetPrefix', type: 'text' },
+          { key: 'backup.batchSize', labelKey: 'docetra.settings.backup.batchSize', type: 'number' },
+          { key: 'backup.excludedTables', labelKey: 'docetra.settings.backup.excludedTables', type: 'csv-list', colSpan: 2 },
         ],
       },
     ],
@@ -306,14 +285,16 @@ export const appConfigTabs: DocumentTabSchema[] = [
   },
 ]
 
-const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security'])
+const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security', 'backup'])
 const SETTINGS_FIELD_HELP: Record<string, string> = {
   'email.enabled': 'docetra.fieldHelp.enableEmail',
   'email.replyToEmail': 'docetra.fieldHelp.replyTo',
   'telegram.enabled': 'docetra.fieldHelp.enableTelegram',
+  'backup.enabled': 'docetra.fieldHelp.backupEnabled',
+  'backup.serviceAccountJson': 'docetra.fieldHelp.backupServiceAccount',
 }
 
-/** Administration system settings — Localization, Email, Telegram, Security only. */
+/** Administration system settings — Localization, Email, Telegram, Security, Backup. */
 export const systemSettingsTabs: DocumentTabSchema[] = appConfigTabs
   .filter(tab => SYSTEM_SETTINGS_TAB_IDS.has(tab.id))
   .map(tab => ({
@@ -419,4 +400,3 @@ export const storageSettingsTabs: DocumentTabSchema[] = [
     ],
   },
 ]
-

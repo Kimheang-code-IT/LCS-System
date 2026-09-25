@@ -8,20 +8,17 @@ import {
   dashboardChartYearRange,
   type DashboardChartPeriodFilter,
   type DashboardChartYearFilter,
-  type DashboardSummary,
 } from '~/utils/lcs/dashboard'
+import type { DashboardSummary } from '~/repositories/contracts/lcs'
 import { freightReportPath, getFreightReport } from '~/config/freight-reports'
 import { useLcsRepositories } from '~/repositories'
 
 /**
  * Compact ERP dashboard: KPI summary cards + line chart + bar chart.
- * No page-level filter bar — org/branch scope comes from the signed-in session.
  * Each chart has its own year/period filters and download menu.
  * Accounting figures are POSTED documents and journals only.
  */
 
-const store = useFreightStore()
-const tenant = useTenantStore()
 const auth = useAuthStore()
 const { reports } = useLcsRepositories()
 const { t } = useI18n()
@@ -79,13 +76,12 @@ async function load() {
   }
 }
 
-watch(() => [tenant.organizationId, tenant.branchId], load)
 watch(revenueYear, year => {
   if (summary.value) {
     revenueSummary.value = filterByYear(summary.value, dashboardChartYearRange(year).year)
   }
 })
-watch(ordersYear, year => {
+watch(ordersYear, () => {
   if (canSeeServiceOrders.value && summary.value) {
     // ordersByStatus doesn't vary by year in the backend response;
     // just re-assign to trigger reactivity.

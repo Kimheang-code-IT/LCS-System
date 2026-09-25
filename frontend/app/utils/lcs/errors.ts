@@ -39,7 +39,7 @@ export function domainError(
     message,
     request_id: newRequestId(),
     field_errors: options.field_errors,
-  }, options.statusCode ?? (code === 'ACCESS_DENIED' || code === 'BRANCH_SCOPE_DENIED' ? 403 : 409))
+  }, options.statusCode ?? (code === 'ACCESS_DENIED' ? 403 : 409))
 }
 
 export function isLcsDomainError(error: unknown): error is LcsDomainError {

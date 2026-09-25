@@ -23,8 +23,9 @@ class Settings(BaseSettings):
         default="change-me-in-production-use-a-32-byte-minimum-secret", alias="JWT_SECRET_KEY"
     )
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
-    refresh_token_expire_days: int = 30
+    # Access JWT lifetime. Defaults to a full day (1440 minutes).
+    access_token_expire_minutes: int = Field(default=1440, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    refresh_token_expire_days: int = Field(default=30, alias="REFRESH_TOKEN_EXPIRE_DAYS")
     password_reset_code_expire_minutes: int = 15
 
     cors_origins: str = Field(default="http://localhost:3000,http://localhost:3001", alias="CORS_ORIGINS")
@@ -34,6 +35,10 @@ class Settings(BaseSettings):
     csrf_cookie_name: str = Field(default="XSRF-TOKEN", alias="CSRF_COOKIE_NAME")
     cookie_secure: bool = Field(default=False, alias="COOKIE_SECURE")
     cookie_domain: str | None = Field(default=None, alias="COOKIE_DOMAIN")
+
+    # Background Google Sheets backup scheduler (in-process asyncio loop).
+    backup_scheduler_enabled: bool = Field(default=True, alias="BACKUP_SCHEDULER_ENABLED")
+    backup_scheduler_tick_seconds: int = Field(default=60, alias="BACKUP_SCHEDULER_TICK_SECONDS")
 
     storage_provider: str = Field(default="local", alias="STORAGE_PROVIDER")
     storage_local_path: str = Field(default="./storage", alias="STORAGE_LOCAL_PATH")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,13 +12,33 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.core.redis import close_redis
+from app.modules.backup.scheduler import start_scheduler, stop_scheduler
+
+logger = logging.getLogger(__name__)
+
+
+async def _sync_permission_catalog() -> None:
+    """Best-effort: add newly introduced permissions/roles for existing installs."""
+    from app.core.bootstrap import ensure_permission_catalog
+
+    try:
+        async with SessionLocal() as session:
+            await ensure_permission_catalog(session)
+    except Exception as exc:  # noqa: BLE001 - startup must not fail if DB is not ready
+        logger.warning("Permission catalog sync skipped: %s", exc)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-    await close_redis()
+    await _sync_permission_catalog()
+    start_scheduler()
+    try:
+        yield
+    finally:
+        await stop_scheduler()
+        await close_redis()
 
 
 app = FastAPI(

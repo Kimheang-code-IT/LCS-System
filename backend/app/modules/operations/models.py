@@ -25,10 +25,8 @@ from app.core.types import JSONType
 
 class ServiceOrder(PKMixin, TimestampMixin, Base):
     __tablename__ = "service_orders"
-    __table_args__ = (UniqueConstraint("organization_id", "service_order_no", name="uq_service_orders_org_no"),)
+    __table_args__ = (UniqueConstraint("service_order_no", name="uq_service_orders_no"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     service_order_no: Mapped[str] = mapped_column(String(50), nullable=False)
     quotation_revision_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("quotation_revisions.id"))
     customer_party_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("business_parties.id"), nullable=False)
@@ -179,10 +177,8 @@ class ServiceOrderMilestone(PKMixin, TimestampMixin, Base):
 
 class ServiceOrderCharge(PKMixin, TimestampMixin, Base):
     __tablename__ = "service_order_charges"
-    __table_args__ = (UniqueConstraint("organization_id", "charge_no", name="uq_service_order_charges_org_no"),)
+    __table_args__ = (UniqueConstraint("charge_no", name="uq_service_order_charges_no"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     service_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_orders.id", ondelete="CASCADE"), nullable=False, index=True)
     charge_no: Mapped[str] = mapped_column(String(50), nullable=False)
     document_type: Mapped[str] = mapped_column(String(32), nullable=False, default="SERVICE_NOTE")
@@ -242,8 +238,6 @@ class ServiceOrderTabRow(PKMixin, TimestampMixin, Base):
 class Attachment(PKMixin, Base):
     __tablename__ = "attachments"
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     file_name: Mapped[str] = mapped_column(String(512), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), unique=True, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(128), nullable=False)

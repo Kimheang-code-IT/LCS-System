@@ -1,4 +1,5 @@
 import { useAccessAlert } from '~/composables/common/useAccessAlert'
+import { useSetup } from '~/composables/auth/useSetup'
 import { safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
 import { requiredPagePermissionForPath } from '~/utils/freight/page-access'
 
@@ -7,12 +8,14 @@ const PERMITTED_LANDING_ROUTES = [
   ['/service-orders', 'operations.service_orders.view'],
   ['/quotations', 'sales.quotations.view'],
   ['/finance/documents', 'finance.financial_documents.view'],
-  ['/reports', 'reports.view'],
+  ['/reports', 'operations.reports.view'],
   ['/administration/users', 'admin.users.view'],
   ['/administration/system-settings', 'settings.app_config.view'],
 ] as const
 
-export default defineNuxtRouteMiddleware((to, from) => {
+const SETUP_PATH = '/setup'
+
+export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
   if (import.meta.client) auth.hydrateClient()
   const { showPermissionDenied } = useAccessAlert()
@@ -23,7 +26,20 @@ export default defineNuxtRouteMiddleware((to, from) => {
     '/auth/verify-code',
     '/auth/reset-password',
   ]
-  const isPublicPage = publicPaths.includes(to.path)
+  const isSetupPage = to.path === SETUP_PATH
+  const isPublicPage = publicPaths.includes(to.path) || isSetupPage
+
+  // A freshly migrated (or reset) database has no users: route to first-run setup.
+  const setupRequired = import.meta.client ? await useSetup().refresh() : false
+  if (setupRequired) {
+    if (!isSetupPage) return navigateTo(SETUP_PATH, { replace: true })
+    // A stale cookie must not present a logged-in shell while setup is required.
+    if (auth.isLoggedIn) auth.clearSession()
+    return
+  }
+  if (isSetupPage) {
+    return navigateTo(auth.isLoggedIn ? '/' : '/auth/login', { replace: true })
+  }
 
   if (!auth.isLoggedIn && !isPublicPage) {
     return navigateTo({

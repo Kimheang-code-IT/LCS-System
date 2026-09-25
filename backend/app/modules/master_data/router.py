@@ -305,7 +305,6 @@ async def get_ui_schema(
     row = (
         await session.execute(
             select(ModuleRecord).where(
-                ModuleRecord.organization_id == context.organization_id,
                 ModuleRecord.collection == "__ui_schema__",
                 ModuleRecord.record_no == page,
             )

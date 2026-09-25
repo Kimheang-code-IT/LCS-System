@@ -3,9 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.bootstrap import reset_all_data
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
+from app.core.exceptions import ValidationFailed
 from app.modules.settings import service
 
 router = APIRouter()
@@ -43,7 +45,7 @@ async def get_app_config(
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_app_config(session, context)}
+    return {"data": service.redact_app_config(await service.get_app_config(session, context))}
 
 
 @router.patch("/settings/app-config")
@@ -52,7 +54,7 @@ async def update_app_config(
     context: RequestContext = Depends(require_permission("configuration.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.update_app_config(session, context, payload)}
+    return {"data": service.redact_app_config(await service.update_app_config(session, context, payload))}
 
 
 @router.post("/settings/app-config/email/test-connection")
@@ -91,6 +93,19 @@ async def send_test_telegram(
 ) -> dict:
     config = await service.get_app_config(session, context)
     return {"data": service.connection_result(bool(config.get("telegram", {}).get("enabled")), "Telegram")}
+
+
+# --- Danger zone: full data reset -------------------------------------------
+@router.post("/settings/reset-data")
+async def reset_data(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("settings.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    if str(payload.get("confirm") or "").strip().upper() != "RESET":
+        raise ValidationFailed("Typed confirmation is required.", {"confirm": "Type RESET to confirm."})
+    await reset_all_data(session)
+    return {"data": {"reset": True}}
 
 
 # --- Global search -----------------------------------------------------------

@@ -1,40 +1,13 @@
 import { freightModules, type FreightModule } from '~/config/freight-modules'
 import type { FreightRecord } from '~/types/freight/record'
-import { sessionFromUser } from '~/utils/lcs/session-from-user'
 import { unwrapApiData } from '~/repositories/http/response'
-import { buildDashboardSummary, type DashboardFilters, type DashboardSummary } from '~/utils/lcs/dashboard'
-import { matchesFilter, parseFilterQuery } from '~/utils/filter/values'
-import { normalizeAuditLog } from '~/utils/freight/audit-logs'
+import { createClientId } from '~/utils/client-id'
 import {
   JOB_DERIVED_COLLECTIONS,
   endpointFor,
   normalizeItems,
   stripRecord,
 } from '~/utils/api/freight-remote'
-
-function newId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-}
-
-function emptyDashboard(): DashboardSummary {
-  return {
-    generatedAt: new Date().toISOString(),
-    summary: {
-      openOrders: 0,
-      inProgressOrders: 0,
-      onHoldOrders: 0,
-      awaitingClosure: 0,
-      receivables: 0,
-      overdueReceivableCount: 0,
-      payables: 0,
-      cashBankBalance: 0,
-      revenue: 0,
-      expense: 0,
-    },
-    charts: { revenueExpense: [], ordersByStatus: [], receivablesAging: [], payablesAging: [] },
-    options: { customers: [] },
-  }
-}
 
 export const useFreightStore = defineStore('freight', () => {
   const revision = ref(0)
@@ -43,18 +16,9 @@ export const useFreightStore = defineStore('freight', () => {
   const toast = useToast()
   const { t } = useI18n()
 
-  /** The store is always backed by the real `/api/v1` API. */
-  const isRemote = computed(() => true)
-
   const remoteCache = ref<Record<string, FreightRecord[]>>({})
   const remoteLoaded = ref<Record<string, boolean>>({})
   const inflight = new Map<string, Promise<void>>()
-  const dashboardEntries = new Map<string, DashboardSummary>()
-
-  const tenant = useTenantStore()
-  watch(() => [tenant.organizationId, tenant.branchId, tenant.assignedBranches.length], () => {
-    revision.value += 1
-  })
 
   function bumpRevision() {
     revision.value += 1
@@ -86,23 +50,21 @@ export const useFreightStore = defineStore('freight', () => {
       const jobNo = String(job.jobNo || job.serviceOrderNo || '')
       const serviceOrderId = String(job.id || '')
       for (const row of Array.isArray(job.containerRequirements) ? job.containerRequirements as FreightRecord[] : []) {
-        requirements.push({ ...row, id: String(row.id || newId('cr')), jobNo, serviceOrderId })
+        requirements.push({ ...row, id: String(row.id || createClientId('cr')), jobNo, serviceOrderId })
       }
       for (const row of Array.isArray(job.actualContainers) ? job.actualContainers as FreightRecord[] : []) {
-        actuals.push({ ...row, id: String(row.id || newId('ac')), jobNo, serviceOrderId })
+        actuals.push({ ...row, id: String(row.id || createClientId('ac')), jobNo, serviceOrderId })
       }
     }
     remoteCache.value = {
       ...remoteCache.value,
       containerRequirements: requirements,
       actualContainers: actuals,
-      serviceComponents: remoteCache.value.serviceComponents || [],
     }
     remoteLoaded.value = {
       ...remoteLoaded.value,
       containerRequirements: true,
       actualContainers: true,
-      serviceComponents: true,
     }
   }
 
@@ -243,7 +205,7 @@ export const useFreightStore = defineStore('freight', () => {
         toast.add({ title: t('api.somethingWentWrong'), color: 'error' })
       }
     }
-    const optimistic = { ...record, id: newId(prefix) } as FreightRecord
+    const optimistic = { ...record, id: createClientId(prefix) } as FreightRecord
     upsertRemoteCache(collection, optimistic)
     return optimistic
   }
@@ -266,60 +228,6 @@ export const useFreightStore = defineStore('freight', () => {
     }
   }
 
-  function addAudit(_action: string, _module: string, _recordNo: string, _remark = '') {
-    // Auditing is handled server-side.
-  }
-
-  function query(module: FreightModule, options: {
-    q?: string
-    filters?: Record<string, string | string[]>
-    page?: number
-    limit?: number
-    paginate?: boolean
-    dateField?: string
-    dateFrom?: string
-    dateTo?: string
-    sortKey?: string
-    sortDir?: 'asc' | 'desc'
-  }) {
-    const q = (options.q || '').trim().toLowerCase()
-    const filters = options.filters || {}
-    let rows = list(module.collection)
-    if (module.collection === 'auditLogs') rows = rows.map(normalizeAuditLog)
-    if (q) {
-      rows = rows.filter(row => Object.values(row).some(value => String(value ?? '').toLowerCase().includes(q)))
-    }
-    for (const [key, value] of Object.entries(filters)) {
-      if (!parseFilterQuery(value).length) continue
-      rows = rows.filter(row => matchesFilter(row[key], value))
-    }
-    const dateField = options.dateField
-    const dateFrom = (options.dateFrom || '').slice(0, 10)
-    const dateTo = (options.dateTo || '').slice(0, 10)
-    if (dateField && (dateFrom || dateTo)) {
-      rows = rows.filter((row) => {
-        const day = String(row[dateField] ?? '').slice(0, 10)
-        if (!day) return false
-        if (dateFrom && day < dateFrom) return false
-        if (dateTo && day > dateTo) return false
-        return true
-      })
-    }
-    if (options.sortKey && options.sortDir) {
-      const dir = options.sortDir === 'desc' ? -1 : 1
-      const sortKey = options.sortKey
-      rows = [...rows].sort((a, b) => String(a[sortKey] ?? '').localeCompare(String(b[sortKey] ?? ''), undefined, { numeric: true }) * dir)
-    }
-    const page = options.page || 1
-    const limit = options.limit || 10
-    const start = (page - 1) * limit
-    return {
-      rows: options.paginate === false ? rows : rows.slice(start, start + limit),
-      total: rows.length,
-      all: rows,
-    }
-  }
-
   function related(module: FreightModule, record: FreightRecord) {
     return (module.related || []).map((item) => {
       const target = moduleByPath(item.path)
@@ -328,34 +236,7 @@ export const useFreightStore = defineStore('freight', () => {
     })
   }
 
-  const DASHBOARD_COLLECTIONS = [
-    'jobs',
-    'debitNotes',
-    'customerPayments',
-    'supplierCosts',
-    'supplierPayments',
-    'journals',
-    'chartOfAccounts',
-    'financialAccounts',
-  ]
-
-  function dashboardSummary(filters: DashboardFilters = {}): DashboardSummary {
-    const key = JSON.stringify(filters)
-    let entry = dashboardEntries.get(key)
-    if (!entry) {
-      entry = emptyDashboard()
-      dashboardEntries.set(key, entry)
-    }
-    void Promise.all(DASHBOARD_COLLECTIONS.map(collection => ensureRemote(collection))).then(() => {
-      const next = buildDashboardSummary(remoteCache.value, useTenantSession(), filters)
-      Object.assign(entry as object, next)
-      bumpRevision()
-    })
-    return entry
-  }
-
   return {
-    isRemote,
     collections,
     hydrate,
     reload,
@@ -365,15 +246,6 @@ export const useFreightStore = defineStore('freight', () => {
     save,
     create,
     remove,
-    addAudit,
-    query,
     related,
-    dashboardSummary,
   }
 })
-
-function useTenantSession() {
-  const auth = useAuthStore()
-  const tenant = useTenantStore()
-  return sessionFromUser(auth.user, tenant.organizationId, tenant.branchId)
-}

@@ -101,13 +101,11 @@ describe('moduleDocumentTabs', () => {
     ])
     expect(tabs[0]?.sections[0]?.fields.map(field => field.key)).toEqual([
       'customer',
-      'branchName',
       'direction',
       'date',
       'validUntil',
       'currency',
       'description',
-      'notes',
     ])
     expect(tabs.find(tab => tab.id === 'pricing')?.sections[0]?.fields[0]).toMatchObject({
       type: 'line-table',
@@ -178,7 +176,6 @@ describe('moduleDocumentTabs', () => {
       '/master-data/places': { code: 'PPAP', name: 'Phnom Penh Autonomous Port' },
       '/quotations': {
         customer: 'Acme',
-        branchName: 'Bavet',
         direction: 'Import',
         date: '2026-08-27',
         currency: 'USD',

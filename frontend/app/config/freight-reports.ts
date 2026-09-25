@@ -6,7 +6,7 @@ export type FreightReportColumn = {
   status?: boolean
 }
 
-export type FreightReportFilter = 'branch' | 'party' | 'status' | 'currency' | 'date'
+export type FreightReportFilter = 'party' | 'status' | 'currency' | 'date'
 
 export type FreightReportDefinition = {
   slug: string
@@ -58,11 +58,10 @@ function report(
 
 /** 12-report catalog. `ReportsView` and the sidebar read this list only. */
 export const FREIGHT_REPORTS: FreightReportDefinition[] = [
-  report('service-orders', 'operations', 'Service Order Register', 'Complete register of freight service orders.', ['branch', 'party', 'status', 'date'], [
+  report('service-orders', 'operations', 'Service Order Register', 'Complete register of freight service orders.', ['party', 'status', 'date'], [
     col('jobNo', 'Job No.', { labelKey: 'freight.fields.jobNo' }),
     col('date', 'Date', { labelKey: 'freight.ui.date' }),
     col('customer', 'Customer', { labelKey: 'freight.reportCatalog.columns.customer' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
     col('direction', 'Direction', { labelKey: 'freight.reportCatalog.columns.tradeDirection' }),
     n('containers', 'Containers', { labelKey: 'freight.jobSections.containers' }),
     n('components', 'Documents', { labelKey: 'freight.jobSections.documents' }),
@@ -70,10 +69,9 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('invoiceTotal', 'Invoice Total'),
     status('workflowStatus', 'Status', { labelKey: 'freight.ui.status' }),
   ]),
-  report('service-order-status', 'operations', 'Service Order Status', 'See job progress, aging, and pending operational work.', ['branch', 'party', 'status', 'date'], [
+  report('service-order-status', 'operations', 'Service Order Status', 'See job progress, aging, and pending operational work.', ['party', 'status', 'date'], [
     col('jobNo', 'Job No.', { labelKey: 'freight.fields.jobNo' }),
     col('customer', 'Customer', { labelKey: 'freight.reportCatalog.columns.customer' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
     col('direction', 'Direction', { labelKey: 'freight.reportCatalog.columns.tradeDirection' }),
     col('createdAt', 'Created Date', { labelKey: 'freight.reportCatalog.columns.createdAt' }),
     status('workflowStatus', 'Status', { labelKey: 'freight.ui.status' }),
@@ -81,22 +79,20 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('pendingComponents', 'Pending Components'),
     col('lastActivity', 'Last Activity'),
   ]),
-  report('containers', 'operations', 'Containers', 'Track actual containers attached to service orders.', ['branch', 'party', 'status'], [
+  report('containers', 'operations', 'Containers', 'Track actual containers attached to service orders.', ['party', 'status'], [
     col('containerNo', 'Container No.', { labelKey: 'freight.ui.cols.containerNo' }),
     col('containerType', 'Container Type', { labelKey: 'freight.ui.cols.containerType' }),
     col('jobNo', 'Service Job', { labelKey: 'freight.reportCatalog.columns.serviceOrder' }),
     col('customer', 'Customer', { labelKey: 'freight.reportCatalog.columns.customer' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
     col('sealNo', 'Seal', { labelKey: 'freight.ui.cols.sealNo' }),
     status('status', 'Status', { labelKey: 'freight.ui.status' }),
     n('netWeightKg', 'Net Weight', { labelKey: 'freight.ui.cols.netWeight' }),
     n('grossWeightKg', 'Gross Weight', { labelKey: 'freight.ui.cols.grossWeight' }),
     col('currentMilestone', 'Current Milestone'),
   ]),
-  report('profitability', 'operations', 'Profitability', 'Compare operational values with posted accounting results.', ['branch', 'party', 'currency', 'date'], [
+  report('profitability', 'operations', 'Profitability', 'Compare operational values with posted accounting results.', ['party', 'currency', 'date'], [
     col('jobNo', 'Job No.', { labelKey: 'freight.fields.jobNo' }),
     col('customer', 'Customer', { labelKey: 'freight.reportCatalog.columns.customer' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
     n('quoted', 'Quoted'),
     n('serviceCharges', 'Service Charges'),
     n('postedRevenue', 'Posted Revenue', { labelKey: 'freight.reportCatalog.columns.revenue' }),
@@ -104,7 +100,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('grossProfit', 'Gross Profit', { labelKey: 'freight.reportCatalog.columns.profit' }),
     n('margin', 'Margin %', { labelKey: 'freight.reportCatalog.columns.margin' }),
   ]),
-  report('revenue-expense', 'finance', 'Revenue & Expense', 'Posted revenue and expense activity for the selected period.', ['branch', 'party', 'currency', 'date'], [
+  report('revenue-expense', 'finance', 'Revenue & Expense', 'Posted revenue and expense activity for the selected period.', ['party', 'currency', 'date'], [
     col('postingDate', 'Date', { labelKey: 'freight.reportCatalog.columns.postingDate' }),
     col('account', 'Account', { labelKey: 'freight.reportCatalog.columns.account' }),
     col('category', 'Category'),
@@ -113,9 +109,8 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     col('description', 'Description'),
     n('revenue', 'Revenue', { labelKey: 'freight.reportCatalog.columns.revenue' }),
     n('expense', 'Expense', { labelKey: 'freight.reportCatalog.columns.expense' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
   ]),
-  report('accounts-receivable', 'finance', 'Accounts Receivable', 'Posted customer balances and aging.', ['branch', 'party', 'status', 'currency', 'date'], [
+  report('accounts-receivable', 'finance', 'Accounts Receivable', 'Posted customer balances and aging.', ['party', 'status', 'currency', 'date'], [
     col('invoiceNo', 'Invoice No.', { labelKey: 'freight.reportCatalog.columns.invoiceNo' }),
     col('customer', 'Customer', { labelKey: 'freight.reportCatalog.columns.customer' }),
     col('jobNo', 'Service Job', { labelKey: 'freight.reportCatalog.columns.serviceOrder' }),
@@ -127,7 +122,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     col('aging', 'Aging'),
     status('status', 'Status', { labelKey: 'freight.ui.status' }),
   ]),
-  report('accounts-payable', 'finance', 'Accounts Payable', 'Posted supplier balances and aging.', ['branch', 'party', 'status', 'currency', 'date'], [
+  report('accounts-payable', 'finance', 'Accounts Payable', 'Posted supplier balances and aging.', ['party', 'status', 'currency', 'date'], [
     col('invoiceNo', 'Bill No.', { labelKey: 'freight.reportCatalog.columns.billNo' }),
     col('supplier', 'Supplier', { labelKey: 'freight.reportCatalog.columns.supplier' }),
     col('jobNo', 'Service Job', { labelKey: 'freight.reportCatalog.columns.serviceOrder' }),
@@ -139,7 +134,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     col('aging', 'Aging'),
     status('status', 'Status', { labelKey: 'freight.ui.status' }),
   ]),
-  report('general-ledger', 'finance', 'General Ledger', 'Posted accounting movement by ledger account.', ['branch', 'party', 'date'], [
+  report('general-ledger', 'finance', 'General Ledger', 'Posted accounting movement by ledger account.', ['party', 'date'], [
     col('postingDate', 'Posting Date', { labelKey: 'freight.reportCatalog.columns.postingDate' }),
     col('journalNo', 'Journal No.'),
     col('sourceDocument', 'Source Document'),
@@ -148,9 +143,8 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('debit', 'Debit', { labelKey: 'freight.reportCatalog.columns.debit' }),
     n('credit', 'Credit', { labelKey: 'freight.reportCatalog.columns.credit' }),
     n('runningBalance', 'Running Balance', { labelKey: 'freight.reportCatalog.columns.balance' }),
-    col('branchName', 'Branch', { labelKey: 'freight.reportCatalog.columns.branch' }),
   ]),
-  report('trial-balance', 'finance', 'Trial Balance', 'Verify debit and credit balances from posted journals.', ['branch', 'date'], [
+  report('trial-balance', 'finance', 'Trial Balance', 'Verify debit and credit balances from posted journals.', ['date'], [
     col('accountCode', 'Account Code'),
     col('accountName', 'Account Name'),
     n('openingDebit', 'Opening Debit'),
@@ -160,17 +154,17 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('closingDebit', 'Closing Debit'),
     n('closingCredit', 'Closing Credit'),
   ]),
-  report('profit-loss', 'finance', 'Profit & Loss', 'Operating result from posted revenue and expense accounts.', ['branch', 'currency', 'date'], [], {
+  report('profit-loss', 'finance', 'Profit & Loss', 'Operating result from posted revenue and expense accounts.', ['currency', 'date'], [], {
     statement: true,
     statementTypes: ['Revenue', 'Expense'],
     statementFooterKey: 'freight.reportCatalog.netProfit',
   }),
-  report('balance-sheet', 'finance', 'Balance Sheet', 'Financial position from posted asset, liability, and equity accounts.', ['branch', 'currency', 'date'], [], {
+  report('balance-sheet', 'finance', 'Balance Sheet', 'Financial position from posted asset, liability, and equity accounts.', ['currency', 'date'], [], {
     statement: true,
     statementTypes: ['Asset', 'Liability', 'Equity'],
     statementFooterKey: 'freight.reportCatalog.difference',
   }),
-  report('cash-flow', 'finance', 'Cash Flow', 'Posted cash and bank activity without unsupported classifications.', ['branch', 'currency', 'date'], [
+  report('cash-flow', 'finance', 'Cash Flow', 'Posted cash and bank activity without unsupported classifications.', ['currency', 'date'], [
     col('postingDate', 'Date', { labelKey: 'freight.reportCatalog.columns.postingDate' }),
     col('account', 'Account', { labelKey: 'freight.reportCatalog.columns.account' }),
     col('sourceDocument', 'Source'),

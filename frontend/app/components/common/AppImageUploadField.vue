@@ -89,12 +89,25 @@ function onDrop(event: DragEvent) {
       @drop.prevent="onDrop"
     >
       <template v-if="model">
-        <img v-if="previewSource" :src="previewSource" alt="" class="max-h-24 max-w-full object-contain" referrerpolicy="no-referrer">
+        <img
+v-if="previewSource"
+:src="previewSource"
+alt=""
+class="max-h-24 max-w-full object-contain"
+referrerpolicy="no-referrer">
         <div class="flex gap-2">
-          <UButton size="xs" color="neutral" variant="soft" @click.stop="openPicker">
+          <UButton
+size="xs"
+color="neutral"
+variant="soft"
+@click.stop="openPicker">
             {{ t('docetra.common.replace') }}
           </UButton>
-          <UButton size="xs" color="error" variant="ghost" @click.stop="clear">
+          <UButton
+size="xs"
+color="error"
+variant="ghost"
+@click.stop="clear">
             {{ t('docetra.common.remove') }}
           </UButton>
         </div>

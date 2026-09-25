@@ -12,13 +12,6 @@ export function compactAuthUser(user: AuthUser): AuthUser {
     role: user.role,
     avatar: user.avatar,
     pageAccess: isAllAccess ? ['ALL_PAGES'] : undefined,
-    organizationId: user.organizationId,
-    organizationCode: user.organizationCode,
-    organizationName: user.organizationName,
-    branchId: user.branchId,
-    branchName: user.branchName,
-    assignedBranchIds: user.assignedBranchIds,
-    permissionScope: user.permissionScope,
   }
 }
 
@@ -33,6 +26,7 @@ export function sessionHasPermissionData(user: AuthUser | null | undefined): boo
 /** Allow application-relative navigation only; rejects protocol-relative, control chars, and /auth/ loops. */
 export function safeInternalPath(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
-  if (!raw.startsWith('/') || raw.startsWith('//') || /[\u0000-\u001f]/.test(raw) || raw.startsWith('/auth/')) return null
+  const hasControlChar = [...raw].some(char => char.charCodeAt(0) < 32)
+  if (!raw.startsWith('/') || raw.startsWith('//') || hasControlChar || raw.startsWith('/auth/')) return null
   return raw
 }

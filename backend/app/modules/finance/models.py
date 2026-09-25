@@ -25,9 +25,8 @@ from app.core.types import JSONType
 
 class ChartOfAccount(PKMixin, TimestampMixin, Base):
     __tablename__ = "chart_of_accounts"
-    __table_args__ = (UniqueConstraint("organization_id", "account_code", name="uq_coa_org_code"),)
+    __table_args__ = (UniqueConstraint("account_code", name="uq_coa_code"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     account_code: Mapped[str] = mapped_column(String(32), nullable=False)
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)
     account_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -39,9 +38,8 @@ class ChartOfAccount(PKMixin, TimestampMixin, Base):
 
 class FinancialAccount(PKMixin, TimestampMixin, Base):
     __tablename__ = "financial_accounts"
-    __table_args__ = (UniqueConstraint("organization_id", "account_id", name="uq_financial_accounts_org_account"),)
+    __table_args__ = (UniqueConstraint("account_id", name="uq_financial_accounts_account"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chart_of_accounts.id"), nullable=False)
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)
     account_type: Mapped[str] = mapped_column(String(32), nullable=False, default="BANK")
@@ -53,9 +51,8 @@ class FinancialAccount(PKMixin, TimestampMixin, Base):
 
 class AccountingPeriod(PKMixin, TimestampMixin, Base):
     __tablename__ = "accounting_periods"
-    __table_args__ = (UniqueConstraint("organization_id", "period_year", "period_month", name="uq_periods_org_year_month"),)
+    __table_args__ = (UniqueConstraint("period_year", "period_month", name="uq_periods_year_month"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     period_year: Mapped[int] = mapped_column(Integer, nullable=False)
     period_month: Mapped[int] = mapped_column(Integer, nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -67,9 +64,8 @@ class AccountingPeriod(PKMixin, TimestampMixin, Base):
 
 class DocumentSequence(PKMixin, TimestampMixin, Base):
     __tablename__ = "document_sequences"
-    __table_args__ = (UniqueConstraint("organization_id", "document_type", "period_year", name="uq_sequences_org_type_year"),)
+    __table_args__ = (UniqueConstraint("document_type", "period_year", name="uq_sequences_type_year"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     document_type: Mapped[str] = mapped_column(String(64), nullable=False)
     period_year: Mapped[int] = mapped_column(Integer, nullable=False)
     prefix: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -80,10 +76,8 @@ class DocumentSequence(PKMixin, TimestampMixin, Base):
 
 class FinancialDocument(PKMixin, TimestampMixin, Base):
     __tablename__ = "financial_documents"
-    __table_args__ = (UniqueConstraint("organization_id", "document_no", name="uq_financial_documents_org_no"),)
+    __table_args__ = (UniqueConstraint("document_no", name="uq_financial_documents_no"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     document_no: Mapped[str] = mapped_column(String(50), nullable=False)
     document_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     document_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -158,7 +152,6 @@ class FinancialDocumentAllocation(PKMixin, Base):
 class PostingRule(PKMixin, TimestampMixin, Base):
     __tablename__ = "posting_rules"
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     document_type: Mapped[str] = mapped_column(String(32), nullable=False)
     fee_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("fee_types.id"))
     debit_account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chart_of_accounts.id"), nullable=False)
@@ -169,10 +162,8 @@ class PostingRule(PKMixin, TimestampMixin, Base):
 
 class JournalEntry(PKMixin, TimestampMixin, Base):
     __tablename__ = "journal_entries"
-    __table_args__ = (UniqueConstraint("organization_id", "entry_no", name="uq_journal_entries_org_no"),)
+    __table_args__ = (UniqueConstraint("entry_no", name="uq_journal_entries_no"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     entry_no: Mapped[str] = mapped_column(String(50), nullable=False)
     entry_type: Mapped[str] = mapped_column(String(64), nullable=False, default="MANUAL")
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -200,7 +191,6 @@ class JournalEntryLine(PKMixin, Base):
     party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     service_order_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_orders.id"))
     financial_document_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("financial_documents.id"))
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     description: Mapped[str | None] = mapped_column(Text)
     debit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     credit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)

@@ -6,7 +6,6 @@ export type LcsListQuery = {
   q?: string
   page?: number
   page_size?: number
-  branch_id?: number | 'all'
   status?: string
 }
 
@@ -79,11 +78,6 @@ export interface FinanceRepository {
   closePeriod: (periodId: string, idempotencyKey: string) => Promise<FreightRecord>
 }
 
-export interface OrganizationRepository {
-  listOrganizations: () => Promise<Array<{ id: number, display_name: string, organization_code: string }>>
-  listBranches: (organizationId: number) => Promise<Array<{ id: number, name: string, organization_id: number, branch_code: string }>>
-}
-
 export interface AuditRepository {
   list: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
 }
@@ -127,11 +121,6 @@ export interface ReportsRepository {
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>
   profitability: () => Promise<FreightRecord[]>
-  income: () => Promise<FreightRecord[]>
-  expenses: () => Promise<FreightRecord[]>
-  serviceOrders: () => Promise<Record<string, unknown>>
-  quotationPerformance: () => Promise<Record<string, unknown>>
-  financialSummary: () => Promise<Record<string, unknown>>
 }
 
 export type { CreateRecordInput as LcsCreateRecordInput }

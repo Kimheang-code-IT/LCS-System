@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
@@ -37,27 +37,6 @@ class ChangePasswordRequest(BaseModel):
     password_confirmation: str | None = None
 
 
-class BranchSummary(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    organization_id: int
-    branch_code: str
-    name: str
-    is_head_office: bool
-    status: str
-
-
-class OrganizationSummary(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    organization_code: str
-    legal_name: str
-    display_name: str | None
-    default_currency_code: str
-    timezone: str
-    status: str
-
-
 class AuthUser(BaseModel):
     id: int
     name: str
@@ -66,13 +45,6 @@ class AuthUser(BaseModel):
     avatar: str | None = None
     permissions: list[str] = []
     pageAccess: list[str] = []
-    organizationId: int | None = None
-    organizationCode: str | None = None
-    organizationName: str | None = None
-    branchId: int | None = None
-    branchName: str | None = None
-    assignedBranchIds: list[int] = []
-    permissionScope: str = "BRANCH"
     sourcePermissions: list[str] = []
 
 
@@ -92,8 +64,6 @@ class UserCreate(BaseModel):
     password: str | None = Field(default=None, min_length=6)
     phone: str | None = None
     role_code: str | None = None
-    organization_id: int | None = None
-    branch_id: int | None = None
     status: str = "ACTIVE"
 
 
@@ -110,8 +80,6 @@ class UserUpdate(BaseModel):
 class RoleAssignmentCreate(BaseModel):
     role_id: int | None = None
     role_code: str | None = None
-    organization_id: int | None = None
-    branch_id: int | None = None
     starts_at: datetime | None = None
     expires_at: datetime | None = None
 

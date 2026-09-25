@@ -18,6 +18,7 @@ from app.core.serialization import jsonable
 from app.core.storage import get_storage, guess_content_type
 from app.modules.master_data.models import (
     BusinessParty,
+    ComponentGroup,
     ComponentTemplate,
     TemplateAttribute,
     TradeDirectionComponent,
@@ -91,8 +92,6 @@ def order_record(order: ServiceOrder, data: dict[str, Any], extra: dict[str, Any
             "status": order.status.capitalize() if order.status.isupper() else order.status,
             "rawStatus": order.status,
             "currency": order.currency_code,
-            "orgId": order.organization_id,
-            "branchId": order.branch_id,
             "createdAt": order.created_at.isoformat() if order.created_at else None,
             "updatedAt": order.updated_at.isoformat() if order.updated_at else None,
         }
@@ -109,22 +108,15 @@ async def resolve_order(session: AsyncSession, context: RequestContext, identifi
         order = await session.get(ServiceOrder, int(text))
     if order is None:
         order = (
-            await session.execute(
-                select(ServiceOrder).where(
-                    ServiceOrder.organization_id == context.organization_id,
-                    ServiceOrder.service_order_no == text,
-                )
-            )
+            await session.execute(select(ServiceOrder).where(ServiceOrder.service_order_no == text))
         ).scalars().first()
-    if order is None or order.organization_id != context.organization_id:
+    if order is None:
         raise NotFound("Service order not found.")
     return order
 
 
 async def list_service_orders(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(ServiceOrder).where(ServiceOrder.organization_id == context.organization_id)
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
+    stmt = select(ServiceOrder)
     if page.status:
         stmt = stmt.where(ServiceOrder.status == normalize_order_status(page.status))
     if page.q:
@@ -177,15 +169,12 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
             order = None
     party = await _resolve_party(session, data.get("customer"), context)
     direction = await resolve_direction(session, data.get("direction"))
-    branch_id = int(data.get("branchId") or context.branch_id or 0) or (context.branch_id or 0)
 
     if order is None:
         number = data.get("jobNo") or data.get("serviceOrderNo")
         if not number or not str(number).strip():
-            number = await allocate_number(session, context.organization_id, "SERVICE_ORDER")
+            number = await allocate_number(session, "SERVICE_ORDER")
         order = ServiceOrder(
-            organization_id=context.organization_id,
-            branch_id=branch_id,
             service_order_no=str(number),
             customer_party_id=party.id,
             trade_direction_id=direction.id,
@@ -210,7 +199,7 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
 
 async def update_status(session: AsyncSession, context: RequestContext, order_id: int, status_value: str) -> dict:
     order = await session.get(ServiceOrder, order_id)
-    if order is None or order.organization_id != context.organization_id:
+    if order is None:
         raise NotFound("Service order not found.")
     order.status = normalize_order_status(status_value)
     await session.commit()
@@ -220,11 +209,9 @@ async def update_status(session: AsyncSession, context: RequestContext, order_id
 async def create_service_order_from_quotation(
     session: AsyncSession, context: RequestContext, quotation: Quotation, revision: QuotationRevision
 ) -> ServiceOrder:
-    number = await allocate_number(session, context.organization_id, "SERVICE_ORDER")
+    number = await allocate_number(session, "SERVICE_ORDER")
     data = dict(quotation.data or {})
     order = ServiceOrder(
-        organization_id=quotation.organization_id,
-        branch_id=quotation.branch_id,
         service_order_no=number,
         quotation_revision_id=revision.id,
         customer_party_id=quotation.customer_party_id,
@@ -403,8 +390,34 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+async def _resolve_component_group(
+    session: AsyncSession, group_code: Any, template: ComponentTemplate | None
+) -> ComponentGroup | None:
+    code = group_code or (template.category if template is not None else None)
+    if not code:
+        return None
+    return (
+        await session.execute(select(ComponentGroup).where(ComponentGroup.code == str(code)))
+    ).scalars().first()
+
+
+async def _component_group_code(session: AsyncSession, component: ServiceOrderComponent, template: ComponentTemplate | None) -> str | None:
+    if component.component_group_id:
+        group = await session.get(ComponentGroup, component.component_group_id)
+        if group is not None:
+            return group.code
+    stored = (component.data or {}).get("groupCode")
+    if stored:
+        return str(stored)
+    if template is not None and template.category:
+        return str(template.category)
+    return None
+
+
 async def _component_payload(session: AsyncSession, component: ServiceOrderComponent) -> dict[str, Any]:
     template = await session.get(ComponentTemplate, component.component_template_id)
+    order = await session.get(ServiceOrder, component.service_order_id)
+    group_code = await _component_group_code(session, component, template)
     values = (
         await session.execute(select(ServiceComponentValue).where(ServiceComponentValue.component_id == component.id))
     ).scalars().all()
@@ -438,11 +451,13 @@ async def _component_payload(session: AsyncSession, component: ServiceOrderCompo
         {
             "id": str(component.id),
             "serviceOrderId": str(component.service_order_id),
+            "serviceOrderNo": order.service_order_no if order else None,
+            "jobNo": order.service_order_no if order else None,
             "templateCode": component.template_code or (template.code if template else None),
             "templateName": template.name if template else None,
             "templateVersion": str(component.template_version),
-            "groupCode": str(component.component_group_id) if component.component_group_id else None,
-            "group": str(component.component_group_id) if component.component_group_id else None,
+            "groupCode": group_code,
+            "group": group_code,
             "status": component.component_status,
             "sequenceNo": component.sequence_no,
             "required": component.is_required,
@@ -466,6 +481,20 @@ async def list_components(session: AsyncSession, context: RequestContext, identi
     return [await _component_payload(session, row) for row in rows]
 
 
+async def list_all_components(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
+    """List every service-order component."""
+    stmt = select(ServiceOrderComponent).join(ServiceOrder, ServiceOrder.id == ServiceOrderComponent.service_order_id)
+    total = await count_query(session, stmt)
+    rows = (
+        await session.execute(
+            stmt.order_by(ServiceOrderComponent.service_order_id.desc(), ServiceOrderComponent.sequence_no)
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
+    return paged([await _component_payload(session, row) for row in rows], page, total)
+
+
 async def ensure_component(session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]) -> dict:
     order = await resolve_order(session, context, identifier)
     template = None
@@ -479,6 +508,7 @@ async def ensure_component(session: AsyncSession, context: RequestContext, ident
         ).scalars().first()
     if template is None:
         raise ValidationFailed("Component template not found.", {"templateCode": "Unknown template"})
+    group = await _resolve_component_group(session, data.get("groupCode"), template)
     existing = (
         await session.execute(
             select(ServiceOrderComponent).where(
@@ -494,7 +524,7 @@ async def ensure_component(session: AsyncSession, context: RequestContext, ident
     component = ServiceOrderComponent(
         service_order_id=order.id,
         component_template_id=template.id,
-        component_group_id=template.category if isinstance(template.category, int) else None,
+        component_group_id=group.id if group is not None else None,
         trade_direction_component_id=_int_or_none(data.get("tradeDirectionComponentId")),
         template_code=template.code,
         template_version=template.version,
@@ -617,8 +647,6 @@ def charge_record(charge: ServiceOrderCharge, data: dict[str, Any]) -> dict[str,
             "discount": float(charge.discount_amount or 0),
             "tax": float(charge.tax_amount or 0),
             "total": float(charge.total_amount or 0),
-            "orgId": charge.organization_id,
-            "branchId": charge.branch_id,
             "createdAt": charge.created_at.isoformat() if charge.created_at else None,
         }
     )
@@ -631,9 +659,7 @@ async def _order_no(session: AsyncSession, order_id: int) -> str | None:
 
 
 async def list_charges(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(ServiceOrderCharge).where(ServiceOrderCharge.organization_id == context.organization_id)
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ServiceOrderCharge.branch_id == context.branch_id)
+    stmt = select(ServiceOrderCharge)
     if page.status:
         stmt = stmt.where(ServiceOrderCharge.status == str(page.status).upper())
     total = await count_query(session, stmt)
@@ -648,7 +674,7 @@ async def list_charges(session: AsyncSession, context: RequestContext, page: Pag
 
 async def get_charge(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
     charge = await session.get(ServiceOrderCharge, charge_id)
-    if charge is None or charge.organization_id != context.organization_id:
+    if charge is None:
         raise NotFound("Service charge not found.")
     payload = charge_record(charge, charge.data or {})
     payload["jobNo"] = await _order_no(session, charge.service_order_id)
@@ -660,8 +686,6 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     charge: ServiceOrderCharge | None = None
     if charge_id and str(charge_id).isdigit():
         charge = await session.get(ServiceOrderCharge, int(charge_id))
-        if charge is not None and charge.organization_id != context.organization_id:
-            charge = None
     identifier = order_identifier or data.get("jobNo") or data.get("serviceOrderId") or (charge.service_order_id if charge else None)
     if not identifier:
         raise ValidationFailed("A service order is required.", {"jobNo": "Required"})
@@ -671,10 +695,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     if charge is None:
         number = data.get("chargeNo") or data.get("documentNo")
         if not number or not str(number).strip():
-            number = await allocate_number(session, context.organization_id, "SERVICE_CHARGE")
+            number = await allocate_number(session, "SERVICE_CHARGE")
         charge = ServiceOrderCharge(
-            organization_id=context.organization_id,
-            branch_id=order.branch_id,
             service_order_id=order.id,
             charge_no=str(number),
             document_type=str(data.get("documentType") or "SERVICE_NOTE"),
@@ -737,7 +759,7 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
 
 async def issue_charge(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
     charge = await session.get(ServiceOrderCharge, charge_id)
-    if charge is None or charge.organization_id != context.organization_id:
+    if charge is None:
         raise NotFound("Service charge not found.")
     if charge.status == "ISSUED":
         payload = charge_record(charge, charge.data or {})
@@ -756,7 +778,7 @@ async def charge_to_invoice(session: AsyncSession, context: RequestContext, char
     from app.modules.finance import service as finance_service
 
     charge = await session.get(ServiceOrderCharge, charge_id)
-    if charge is None or charge.organization_id != context.organization_id:
+    if charge is None:
         raise NotFound("Service charge not found.")
     document = await finance_service.create_invoice_from_charge(session, context, charge)
     return document
@@ -769,7 +791,6 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
             select(Attachment)
             .join(AttachmentLink, AttachmentLink.attachment_id == Attachment.id)
             .where(
-                Attachment.organization_id == context.organization_id,
                 AttachmentLink.entity_type == module,
                 AttachmentLink.entity_id == _int_or_none(record_no) or 0,
                 Attachment.is_deleted.is_(False),
@@ -823,8 +844,6 @@ async def store_upload(
     content_type = guess_content_type(file_name, mime_type or None)
     storage.put(key, content, content_type)
     attachment = Attachment(
-        organization_id=context.organization_id,
-        branch_id=context.branch_id,
         file_name=file_name,
         storage_key=key,
         mime_type=content_type,

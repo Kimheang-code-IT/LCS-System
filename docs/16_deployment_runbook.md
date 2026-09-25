@@ -6,14 +6,17 @@ This runbook defines the repeatable procedure for deploying, verifying, monitori
 
 ## 2. Deployment Components
 
-- SvelteKit web application.
-- FastAPI API.
-- Background worker.
+- Nuxt 4 static SPA (`nuxt generate`), served by nginx.
+- FastAPI API (Uvicorn).
 - PostgreSQL database.
-- Redis.
-- Object storage.
-- Reverse proxy/TLS termination.
+- Redis (optional; disables gracefully when unavailable).
+- Object storage (MinIO / S3-compatible).
+- nginx reverse proxy (serves the SPA and proxies `/api/`).
 - Monitoring and log aggregation.
+
+Default host ports: frontend `80`, backend `8000`, PostgreSQL `5432`,
+Redis `6379`, MinIO `9000` / console `9001` (all env-driven in
+`infrastructure/.env`).
 
 ## 3. Environments
 
@@ -74,17 +77,16 @@ Secrets must not be committed to Git, included in Docker images, stored in seed 
 
 1. Announce deployment start.
 2. Verify service and database health.
-3. Pause scheduled jobs that may conflict with migration.
+3. Drain or limit write traffic that may conflict with the migration.
 4. Take a fresh database backup.
 5. Deploy the API image in a rolling or controlled update.
 6. Run database migrations once through a migration job.
 7. Verify migration completion.
-8. Deploy web image.
-9. Deploy worker image.
-10. Resume scheduled jobs.
-11. Run smoke tests.
-12. Monitor errors and latency.
-13. Announce deployment completion.
+8. Deploy the frontend (nginx) image.
+9. Resume normal traffic.
+10. Run smoke tests.
+11. Monitor errors and latency.
+12. Announce deployment completion.
 
 ## 8. Migration Safety
 
@@ -102,9 +104,9 @@ Never run destructive migration operations without an approved backup and migrat
 
 ## 9. Smoke Tests
 
-- `GET /health/live` returns success.
-- `GET /health/ready` confirms dependencies.
-- User can log in.
+- `GET /health` returns success.
+- `GET /health/ready` confirms dependencies (reachable through nginx at `/health`).
+- An empty database shows the first-run `/setup` page; after setup a user can log in.
 - User sees only assigned organization and branches.
 - A quotation draft can be created.
 - An accepted test quotation can convert once.
@@ -169,7 +171,7 @@ Use rollback when the release causes critical errors and a forward fix is not sa
 1. Stop or limit new writes if required.
 2. Preserve logs and request IDs.
 3. Keep the database available for investigation unless corruption is suspected.
-4. Roll back web, API, and worker images to the previous version.
+4. Roll back the frontend and backend images to the previous version.
 5. Do not automatically roll back database migrations.
 6. Apply a tested down migration only when safe.
 7. Prefer a forward migration for data-preserving corrections.
@@ -186,8 +188,6 @@ Alert on:
 - authorization denial spikes;
 - database connection exhaustion;
 - migration failure;
-- worker queue age;
-- repeated job retries;
 - object-storage failures;
 - backup failures;
 - journal-posting failures;
@@ -196,20 +196,31 @@ Alert on:
 
 ## 15. Operational Commands
 
-Use the project's approved scripts rather than ad hoc production commands:
+From the repository root:
 
-```text
-make build
-make test
-make migrate
-make migrate-status
-make seed-dev
-make healthcheck
-make backup
-make restore-test
+```bash
+# build and start the stack
+docker compose -f infrastructure/docker-compose.yml up -d --build
+
+# status / logs
+docker compose -f infrastructure/docker-compose.yml ps
+docker compose -f infrastructure/docker-compose.yml logs -f backend
+
+# migrations and admin provisioning run inside the backend container
+docker compose -f infrastructure/docker-compose.yml exec backend alembic upgrade head
+docker compose -f infrastructure/docker-compose.yml exec backend \
+  python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
+
+# health through nginx (frontend port 80)
+curl http://localhost/health/ready
+
+# local quality gates
+cd backend && uv run pytest -q && uv run ruff check .
+cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm generate
 ```
 
-The exact commands should be implemented in the repository and documented with environment-specific safeguards.
+Do not seed data: migrations leave the database empty and the first-run `/setup`
+page provisions the initial records.
 
 ## 16. Incident Evidence
 

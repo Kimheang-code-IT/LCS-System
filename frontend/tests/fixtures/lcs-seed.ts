@@ -7,7 +7,7 @@ import {
   DEMO_ORG_ID,
   LCS_ORG_ID,
 } from './lcs-tenant'
-import { permissionRowsToFlatKeys, seedRolePermissionRows } from '~/utils/role/permissions'
+import { permissionRowsToFlatKeys } from '~/utils/role/permissions'
 import { jobRoutePlaces } from '~/utils/freight/job-workspace'
 import { jobFileAttachments } from '~/utils/freight/attachments'
 
@@ -526,8 +526,7 @@ export function createLcsFreightSeed(): Record<string, FreightRecord[]> {
       auditHistory: [{ occurredAt: '2026-08-20 08:30', action: 'Signed in', result: 'SUCCESS', requestId: `req-user-${index + 1}` }],
     })),
     roles: stampAll(base.roles, LCS_ORG_ID, BRANCH_BAVET_ID).map((row, index) => {
-      const mode = index === 0 ? 'all' : index === 1 ? 'operations' : index === 2 ? 'finance' : 'customs'
-      const permissionRows = seedRolePermissionRows(mode)
+      const permissionRows: never[] = []
       return {
         ...row,
         code: `ROLE_${String(row.name || `ROLE_${index + 1}`).toUpperCase().replace(/\W+/g, '_')}`,

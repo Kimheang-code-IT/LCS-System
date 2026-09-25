@@ -4,7 +4,6 @@ import type {
   ComponentRepository,
   FinanceRepository,
   JobRepository,
-  OrganizationRepository,
   QuotationRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
@@ -114,15 +113,6 @@ export function createHttpFinanceRepository(): FinanceRepository {
   }
 }
 
-export function createHttpOrganizationRepository(): OrganizationRepository {
-  const api = useApi()
-  return {
-    listOrganizations: async () => unwrapApiData(await api.get<ApiResponse<Array<{ id: number, display_name: string, organization_code: string }>>>(ApiV1Endpoints.ORGANIZATIONS)),
-    listBranches: async organizationId =>
-      unwrapApiData(await api.get<ApiResponse<Array<{ id: number, name: string, organization_id: number, branch_code: string }>>>(ApiV1Endpoints.BRANCHES(organizationId))),
-  }
-}
-
 export function createHttpAuditRepository(): AuditRepository {
   const api = useApi()
   return {
@@ -161,10 +151,5 @@ export function createHttpReportsRepository(): import('~/repositories/contracts/
     receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
     payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
     profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),
-    income: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_INCOME)),
-    expenses: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_EXPENSES)),
-    serviceOrders: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_SERVICE_ORDERS)),
-    quotationPerformance: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_QUOTATION_PERFORMANCE)),
-    financialSummary: async () => unwrapApiData(await api.get<ApiResponse<Record<string, unknown>>>(ApiV1Endpoints.REPORTS_FINANCIAL_SUMMARY)),
   }
 }

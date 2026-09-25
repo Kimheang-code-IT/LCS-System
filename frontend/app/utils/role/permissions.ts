@@ -1,21 +1,7 @@
 import type { AppRolePermissionRow } from '~/types/docetra/entities'
 
-/** Canonical action codes accepted by the future authorization API. */
-export const ROLE_PERMISSION_ACTIONS = [
-  'view',
-  'create',
-  'edit',
-  'archive',
-  'restore',
-  'delete',
-  'purge',
-  'assign',
-  'share',
-  'export',
-  'comment',
-  'transition',
-  'configure',
-] as const
+/** Actions exposed per page in the role permission matrix. */
+export const ROLE_PERMISSION_ACTIONS = ['view', 'create', 'edit', 'delete', 'export'] as const
 
 export type RolePermissionAction = (typeof ROLE_PERMISSION_ACTIONS)[number]
 
@@ -26,59 +12,125 @@ export interface RoleDocumentTypeDefinition {
   actions: readonly RolePermissionAction[]
 }
 
-/** Matrix rows map to the same namespace used by page and API authorization. */
-const FREIGHT_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete', 'export']
-const FREIGHT_VIEW_ACTIONS: readonly RolePermissionAction[] = ['view', 'export']
+const CRUD_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete', 'export']
+const READ_ACTIONS: readonly RolePermissionAction[] = ['view', 'export']
+const ADMIN_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'edit', 'delete']
+const SETTINGS_ACTIONS: readonly RolePermissionAction[] = ['view', 'edit']
 
+/**
+ * Every page in the application, in navigation order.
+ *
+ * `permissionPrefix` is combined with an action to form the permission code
+ * stored on the role (for example `sales.quotations.view`). The backend maps
+ * these page permissions onto the source/API permissions they imply.
+ */
 export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { value: 'dashboard', labelKey: 'freight.pages.dashboard', permissionPrefix: 'dashboard', actions: ['view'] },
-  { value: 'sales_companies', labelKey: 'freight.pages.companies', permissionPrefix: 'sales.companies', actions: FREIGHT_ACTIONS },
-  { value: 'sales_quotations', labelKey: 'freight.pages.quotations', permissionPrefix: 'sales.quotations', actions: FREIGHT_ACTIONS },
-  { value: 'operations_service_orders', labelKey: 'freight.pages.serviceOrders', permissionPrefix: 'operations.service_orders', actions: FREIGHT_ACTIONS },
-  { value: 'operations_jobs', labelKey: 'freight.pages.jobs', permissionPrefix: 'operations.jobs', actions: FREIGHT_ACTIONS },
-  { value: 'operations_shipments', labelKey: 'freight.pages.shipments', permissionPrefix: 'operations.shipments', actions: FREIGHT_ACTIONS },
-  { value: 'operations_customs', labelKey: 'freight.pages.customs', permissionPrefix: 'operations.customs', actions: FREIGHT_ACTIONS },
-  { value: 'operations_documents', labelKey: 'freight.pages.documents', permissionPrefix: 'operations.documents', actions: FREIGHT_ACTIONS },
-  { value: 'operations_deliveries', labelKey: 'freight.pages.deliveries', permissionPrefix: 'operations.deliveries', actions: FREIGHT_ACTIONS },
-  { value: 'finance_service_charges', labelKey: 'freight.pages.serviceCharges', permissionPrefix: 'finance.service_charges', actions: FREIGHT_ACTIONS },
-  { value: 'finance_financial_documents', labelKey: 'freight.pages.financialDocuments', permissionPrefix: 'finance.financial_documents', actions: FREIGHT_ACTIONS },
-  { value: 'finance_accounting', labelKey: 'freight.pages.chartOfAccounts', permissionPrefix: 'finance.accounting', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'finance_debit_notes', labelKey: 'freight.pages.debitNotes', permissionPrefix: 'finance.debit_notes', actions: FREIGHT_ACTIONS },
-  { value: 'finance_customer_payments', labelKey: 'freight.pages.customerPayments', permissionPrefix: 'finance.customer_payments', actions: FREIGHT_ACTIONS },
-  { value: 'finance_job_charges', labelKey: 'freight.pages.jobCharges', permissionPrefix: 'finance.job_charges', actions: FREIGHT_ACTIONS },
-  { value: 'finance_supplier_costs', labelKey: 'freight.pages.supplierCosts', permissionPrefix: 'finance.supplier_costs', actions: FREIGHT_ACTIONS },
-  { value: 'finance_supplier_payments', labelKey: 'freight.pages.supplierPayments', permissionPrefix: 'finance.supplier_payments', actions: FREIGHT_ACTIONS },
-  { value: 'finance_ar', labelKey: 'freight.pages.accountsReceivable', permissionPrefix: 'finance.accounts_receivable', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'finance_ap', labelKey: 'freight.pages.accountsPayable', permissionPrefix: 'finance.accounts_payable', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'finance_profit', labelKey: 'freight.pages.jobProfitability', permissionPrefix: 'finance.job_profitability', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'reports', labelKey: 'freight.pages.reports', permissionPrefix: 'reports', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'master_reference', labelKey: 'freight.nav.master', permissionPrefix: 'master.reference', actions: FREIGHT_ACTIONS },
-  { value: 'master_suppliers', labelKey: 'freight.pages.suppliers', permissionPrefix: 'master.suppliers', actions: FREIGHT_ACTIONS },
-  { value: 'master_zones', labelKey: 'freight.pages.zones', permissionPrefix: 'master.zones', actions: FREIGHT_ACTIONS },
-  { value: 'master_locations', labelKey: 'freight.pages.locations', permissionPrefix: 'master.locations', actions: FREIGHT_ACTIONS },
-  { value: 'master_equipment', labelKey: 'freight.pages.equipmentTypes', permissionPrefix: 'master.equipment_types', actions: FREIGHT_ACTIONS },
-  { value: 'master_directions', labelKey: 'freight.pages.directions', permissionPrefix: 'master.directions', actions: FREIGHT_ACTIONS },
-  { value: 'master_charges', labelKey: 'freight.pages.chargeTypes', permissionPrefix: 'master.charge_types', actions: FREIGHT_ACTIONS },
-  { value: 'master_currencies', labelKey: 'freight.pages.currencies', permissionPrefix: 'master.currencies', actions: FREIGHT_ACTIONS },
-  { value: 'configuration', labelKey: 'freight.nav.configuration', permissionPrefix: 'configuration', actions: ['view', 'edit', 'configure'] },
-  { value: 'admin_organization', labelKey: 'freight.pages.organizations', permissionPrefix: 'admin.organization', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'admin_users', labelKey: 'freight.pages.users', permissionPrefix: 'admin.users', actions: FREIGHT_ACTIONS },
-  { value: 'admin_roles', labelKey: 'freight.pages.roles', permissionPrefix: 'admin.roles', actions: FREIGHT_ACTIONS },
-  { value: 'admin_audit', labelKey: 'freight.pages.auditLogs', permissionPrefix: 'admin.audit_logs', actions: FREIGHT_VIEW_ACTIONS },
-  { value: 'app_config', labelKey: 'docetra.pages.appConfig', permissionPrefix: 'settings.app_config', actions: ['view', 'edit', 'configure'] },
-  { value: 'app_info', labelKey: 'docetra.pages.appInfo', permissionPrefix: 'settings.app_info', actions: ['view', 'edit', 'configure'] },
-  { value: 'storage', labelKey: 'docetra.pages.storage', permissionPrefix: 'settings.storage', actions: ['view', 'edit', 'configure'] },
+  { value: 'sales_quotations', labelKey: 'freight.pages.quotations', permissionPrefix: 'sales.quotations', actions: CRUD_ACTIONS },
+  { value: 'operations_service_orders', labelKey: 'freight.pages.serviceOrders', permissionPrefix: 'operations.service_orders', actions: CRUD_ACTIONS },
+  { value: 'finance_service_charges', labelKey: 'freight.pages.serviceCharges', permissionPrefix: 'finance.service_charges', actions: CRUD_ACTIONS },
+  { value: 'finance_financial_documents', labelKey: 'freight.pages.financialDocuments', permissionPrefix: 'finance.financial_documents', actions: CRUD_ACTIONS },
+  { value: 'finance_accounting', labelKey: 'freight.pages.accounting', permissionPrefix: 'finance.accounting', actions: CRUD_ACTIONS },
+  { value: 'operations_reports', labelKey: 'freight.pages.operationsReports', permissionPrefix: 'operations.reports', actions: READ_ACTIONS },
+  { value: 'finance_reports', labelKey: 'freight.pages.financeReports', permissionPrefix: 'finance.reports', actions: READ_ACTIONS },
+  { value: 'master_reference', labelKey: 'freight.nav.master', permissionPrefix: 'master.reference', actions: CRUD_ACTIONS },
+  { value: 'configuration', labelKey: 'freight.nav.configuration', permissionPrefix: 'configuration', actions: ADMIN_ACTIONS },
+  { value: 'admin_users', labelKey: 'freight.pages.users', permissionPrefix: 'admin.users', actions: ADMIN_ACTIONS },
+  { value: 'admin_roles', labelKey: 'freight.pages.roles', permissionPrefix: 'admin.roles', actions: ADMIN_ACTIONS },
+  { value: 'admin_document_sequences', labelKey: 'freight.pages.documentSequences', permissionPrefix: 'admin.document_sequences', actions: ADMIN_ACTIONS },
+  { value: 'admin_audit_logs', labelKey: 'freight.pages.auditLogs', permissionPrefix: 'admin.audit_logs', actions: READ_ACTIONS },
+  { value: 'settings_app_config', labelKey: 'freight.pages.settings', permissionPrefix: 'settings.app_config', actions: SETTINGS_ACTIONS },
+  { value: 'settings_backup', labelKey: 'freight.pages.backup', permissionPrefix: 'settings.backup', actions: SETTINGS_ACTIONS },
 ] as const
+
+/**
+ * Legacy source/API permission codes mapped onto matrix pages. Used to hydrate
+ * the matrix for roles that were granted permissions before the page catalog
+ * existed. New roles store the page codes directly.
+ */
+const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: string, action: RolePermissionAction }>> = {
+  'quotation.read': [{ value: 'sales_quotations', action: 'view' }],
+  'quotation.create': [{ value: 'sales_quotations', action: 'create' }],
+  'quotation.update_draft': [{ value: 'sales_quotations', action: 'edit' }],
+  'quotation.send': [{ value: 'sales_quotations', action: 'edit' }],
+  'quotation.accept': [{ value: 'sales_quotations', action: 'edit' }],
+  'quotation.convert': [{ value: 'sales_quotations', action: 'edit' }, { value: 'operations_service_orders', action: 'view' }],
+  'service_order.read': [{ value: 'operations_service_orders', action: 'view' }],
+  'service_order.create': [{ value: 'operations_service_orders', action: 'create' }],
+  'service_order.update': [{ value: 'operations_service_orders', action: 'edit' }],
+  'service_order.complete': [{ value: 'operations_service_orders', action: 'edit' }],
+  'service_charge.create': [{ value: 'finance_service_charges', action: 'view' }, { value: 'finance_service_charges', action: 'create' }],
+  'service_charge.issue': [{ value: 'finance_service_charges', action: 'edit' }],
+  'service_charge.convert_to_invoice': [{ value: 'finance_service_charges', action: 'edit' }],
+  'financial_document.read': [{ value: 'finance_financial_documents', action: 'view' }],
+  'financial_document.create': [{ value: 'finance_financial_documents', action: 'create' }],
+  'financial_document.update_draft': [{ value: 'finance_financial_documents', action: 'edit' }],
+  'financial_document.post': [{ value: 'finance_financial_documents', action: 'edit' }],
+  'financial_document.reverse': [{ value: 'finance_financial_documents', action: 'edit' }],
+  'financial_document.allocate': [{ value: 'finance_financial_documents', action: 'edit' }],
+  'journal_entry.read': [{ value: 'finance_accounting', action: 'view' }],
+  'journal_entry.create': [{ value: 'finance_accounting', action: 'create' }],
+  'journal_entry.post': [{ value: 'finance_accounting', action: 'edit' }],
+  'accounting_period.read': [{ value: 'finance_accounting', action: 'view' }],
+  'accounting_period.close': [{ value: 'finance_accounting', action: 'edit' }],
+  'chart_of_accounts.manage': [{ value: 'finance_accounting', action: 'edit' }],
+  'audit_log.read': [{ value: 'admin_audit_logs', action: 'view' }],
+  'report.read': [{ value: 'operations_reports', action: 'view' }, { value: 'finance_reports', action: 'view' }],
+  'report.export': [{ value: 'operations_reports', action: 'export' }, { value: 'finance_reports', action: 'export' }],
+  'master.reference.view': [{ value: 'master_reference', action: 'view' }],
+  'master.reference.manage': [
+    { value: 'master_reference', action: 'create' },
+    { value: 'master_reference', action: 'edit' },
+    { value: 'master_reference', action: 'delete' },
+  ],
+  'configuration.manage': [
+    { value: 'configuration', action: 'view' },
+    { value: 'configuration', action: 'create' },
+    { value: 'configuration', action: 'edit' },
+    { value: 'configuration', action: 'delete' },
+    { value: 'admin_document_sequences', action: 'view' },
+    { value: 'admin_document_sequences', action: 'create' },
+    { value: 'admin_document_sequences', action: 'edit' },
+    { value: 'admin_document_sequences', action: 'delete' },
+    { value: 'settings_app_config', action: 'view' },
+    { value: 'settings_app_config', action: 'edit' },
+  ],
+  'configuration.configure': [{ value: 'configuration', action: 'edit' }],
+  'user.read': [{ value: 'admin_users', action: 'view' }],
+  'user.manage': [
+    { value: 'admin_users', action: 'view' },
+    { value: 'admin_users', action: 'create' },
+    { value: 'admin_users', action: 'edit' },
+    { value: 'admin_users', action: 'delete' },
+  ],
+  'role.read': [{ value: 'admin_roles', action: 'view' }],
+  'role.manage': [
+    { value: 'admin_roles', action: 'view' },
+    { value: 'admin_roles', action: 'create' },
+    { value: 'admin_roles', action: 'edit' },
+    { value: 'admin_roles', action: 'delete' },
+  ],
+  'settings.manage': [
+    { value: 'settings_app_config', action: 'view' },
+    { value: 'settings_app_config', action: 'edit' },
+    { value: 'settings_backup', action: 'view' },
+    { value: 'settings_backup', action: 'edit' },
+  ],
+  'backup.read': [{ value: 'settings_backup', action: 'view' }],
+  'backup.manage': [{ value: 'settings_backup', action: 'edit' }],
+  'finance.view': [{ value: 'finance_accounting', action: 'view' }],
+}
 
 const ACTION_SET = new Set<string>(ROLE_PERMISSION_ACTIONS)
 const LEGACY_ACTION_MAP: Record<string, RolePermissionAction | undefined> = {
   select: 'view',
   read: 'view',
   write: 'edit',
-  email: 'comment',
+  email: 'edit',
   report: 'view',
   import: 'create',
   mask: 'view',
+  manage: 'edit',
 }
 
 export function normalizePermissionActions(actions: readonly string[] | null | undefined): RolePermissionAction[] {
@@ -106,12 +158,57 @@ export function normalizePermissionRows(
     return {
       id: existing?.id || `perm_${definition.value}`,
       documentType: definition.value,
-      onlyIfCreator: actions.length && !actions.includes('purge') ? Boolean(existing?.onlyIfCreator) : false,
+      onlyIfCreator: Boolean(existing?.onlyIfCreator),
       level: Math.min(9, Math.max(0, Number(existing?.level || 0))),
       actions,
     }
   })
   return includeEmpty ? normalized : normalized.filter(row => row.actions.length > 0)
+}
+
+/**
+ * Build matrix rows from flat permission codes. Accepts both page codes emitted
+ * by this matrix (`sales.quotations.view`) and legacy source codes
+ * (`quotation.read`) so previously saved roles render correctly.
+ */
+export function permissionRowsFromFlatKeys(
+  codes: readonly string[] | null | undefined,
+): AppRolePermissionRow[] {
+  const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.permissionPrefix, item.value]))
+  const granted = new Map<string, Set<RolePermissionAction>>()
+  const add = (value: string, action: RolePermissionAction) => {
+    const set = granted.get(value) || new Set<RolePermissionAction>()
+    set.add(action)
+    granted.set(value, set)
+  }
+
+  for (const code of codes || []) {
+    const dot = code.lastIndexOf('.')
+    if (dot > 0) {
+      const prefix = code.slice(0, dot)
+      const action = code.slice(dot + 1)
+      const value = definitions.get(prefix)
+      if (value && ACTION_SET.has(action)) {
+        add(value, action as RolePermissionAction)
+        continue
+      }
+    }
+    for (const mapping of SOURCE_PERMISSION_PAGE_ACTIONS[code] || []) {
+      add(mapping.value, mapping.action)
+    }
+  }
+
+  return ROLE_DOCUMENT_TYPES.map((definition) => {
+    const actions = normalizePermissionActions([...(granted.get(definition.value) || [])])
+      .filter(action => definition.actions.includes(action))
+    return {
+      id: `perm_${definition.value}`,
+      documentType: definition.value,
+      onlyIfCreator: false,
+      level: 0,
+      actions,
+    }
+  })
 }
 
 /** Enforce action dependencies consistently for checkbox and API payload flows. */
@@ -136,14 +233,10 @@ export function setPermissionAction(
     actions.delete(normalizedAction)
   }
   const ordered = ROLE_PERMISSION_ACTIONS.filter(item => actions.has(item))
-  return {
-    ...row,
-    actions: ordered,
-    onlyIfCreator: ordered.length && !ordered.includes('purge') ? Boolean(row.onlyIfCreator) : false,
-  }
+  return { ...row, actions: ordered }
 }
 
-/** Expanded capabilities sent with structured rows for fast authorization checks. */
+/** Expanded page permission codes sent to the API for a set of matrix rows. */
 export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[] {
   const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.value, item]))
   const keys = new Set<string>()
@@ -153,27 +246,4 @@ export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[]
     for (const action of row.actions) keys.add(`${prefix}.${action}`)
   }
   return [...keys].sort()
-}
-
-export type SeedRolePermissionMode = 'all' | 'operations' | 'finance' | 'customs'
-
-/** Fixture rows for seeded roles in the mock workspace. */
-export function seedRolePermissionRows(mode: SeedRolePermissionMode): AppRolePermissionRow[] {
-  const allow = (prefix: string) => {
-    if (mode === 'all') return true
-    if (mode === 'operations') {
-      return prefix.startsWith('operations') || prefix.startsWith('sales') || prefix === 'reports' || prefix.startsWith('master')
-    }
-    if (mode === 'finance') return prefix.startsWith('finance') || prefix === 'reports'
-    return prefix.includes('customs') || prefix.includes('documents')
-  }
-  return normalizePermissionRows(
-    ROLE_DOCUMENT_TYPES.map(definition => ({
-      id: `perm_${definition.value}`,
-      documentType: definition.value,
-      onlyIfCreator: false,
-      level: 0,
-      actions: allow(definition.permissionPrefix) ? [...definition.actions] : [],
-    })),
-  )
 }

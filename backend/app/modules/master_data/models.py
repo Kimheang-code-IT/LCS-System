@@ -188,9 +188,8 @@ class ServiceOrderTabConfig(PKMixin, TimestampMixin, Base):
     """Configurable Service Order operational tab (renders as a dynamic table)."""
 
     __tablename__ = "service_order_tab_configs"
-    __table_args__ = (UniqueConstraint("organization_id", "code", name="uq_so_tab_configs_org_code"),)
+    __table_args__ = (UniqueConstraint("code", name="uq_so_tab_configs_code"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     name_km: Mapped[str | None] = mapped_column(String(255))
@@ -240,8 +239,6 @@ class ModuleRecord(PKMixin, TimestampMixin, Base):
 
     __tablename__ = "module_records"
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     collection: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     record_no: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str | None] = mapped_column(String(32))

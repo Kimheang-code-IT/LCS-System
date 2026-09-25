@@ -41,8 +41,6 @@ export function normalizeAuditLog(row: FreightRecord): FreightRecord {
     eventType: row.eventType || eventTypeFrom(row.action),
     entityType: row.entityType || row.module || 'Record',
     entity: row.entity || row.recordNo || '',
-    organizationName: row.organizationName || row.organization || '',
-    branchName: row.branchName || row.branch || '',
     result: row.result || 'SUCCESS',
     reason: row.reason || row.remark || '',
   }

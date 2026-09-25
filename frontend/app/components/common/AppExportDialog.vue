@@ -79,18 +79,28 @@ function submit() {
   >
     <template #body>
       <div class="space-y-5">
-        <UFormField
-          :label="$t('docetra.exportDialog.dateRange')"
-          :help="$t('docetra.exportDialog.dateRangeHelp')"
-          :error="invalidRange ? $t('docetra.exportDialog.invalidRange') : undefined"
-        >
-          <CommonAppDateRangeFilter
-            v-model:start="startDate"
-            v-model:end="endDate"
-            inline
-            class="w-full"
-          />
-        </UFormField>
+        <div>
+          <div class="grid gap-4 sm:grid-cols-2">
+            <UFormField :label="$t('docetra.exportDialog.startDate')">
+              <CommonAppInputDate
+                v-model="startDate"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField :label="$t('docetra.exportDialog.endDate')">
+              <CommonAppInputDate
+                v-model="endDate"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+          <p v-if="invalidRange" class="mt-1 text-xs text-error">
+            {{ $t('docetra.exportDialog.invalidRange') }}
+          </p>
+          <p v-else class="mt-1 text-xs text-muted">
+            {{ $t('docetra.exportDialog.dateRangeHelp') }}
+          </p>
+        </div>
 
         <UFormField :label="$t('docetra.exportDialog.scope')" :help="$t('docetra.exportDialog.scopeHelp')">
           <USelect
@@ -124,10 +134,18 @@ function submit() {
 
     <template #footer>
       <div class="flex w-full justify-end gap-2">
-        <UButton color="neutral" variant="ghost" :disabled="loading" @click="open = false">
+        <UButton
+color="neutral"
+variant="ghost"
+:disabled="loading"
+@click="open = false">
           {{ $t('actions.cancel') }}
         </UButton>
-        <UButton icon="i-lucide-download" :loading="loading" :disabled="!canSubmit" @click="submit">
+        <UButton
+icon="i-lucide-download"
+:loading="loading"
+:disabled="!canSubmit"
+@click="submit">
           {{ $t('actions.export') }}
         </UButton>
       </div>

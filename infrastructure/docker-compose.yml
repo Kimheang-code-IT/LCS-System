@@ -2,13 +2,14 @@ name: freight_forwarding
 
 services:
   postgres:
+    container_name: ff-db
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-freight}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-freight_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-freight}
     ports:
-      - "${POSTGRES_HOST_PORT:-15432}:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - freight_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,10 +19,11 @@ services:
       retries: 12
 
   redis:
+    container_name: ff-redis
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_HOST_PORT:-16379}:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - freight_redis_data:/data
     healthcheck:
@@ -31,14 +33,15 @@ services:
       retries: 12
 
   minio:
+    container_name: ff-minio
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "${MINIO_HOST_PORT:-19000}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-19001}:9001"
+      - "${MINIO_HOST_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - freight_minio_data:/data
     healthcheck:
@@ -49,6 +52,7 @@ services:
       start_period: 10s
 
   backend:
+    container_name: ff-api
     build:
       context: ../backend
     environment:
@@ -56,18 +60,20 @@ services:
       REDIS_URL: redis://redis:6379/0
       REDIS_ENABLED: "true"
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-32-byte-minimum-secret}
-      CORS_ORIGINS: http://localhost:${FRONTEND_HOST_PORT:-18080},http://127.0.0.1:${FRONTEND_HOST_PORT:-18080}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      CORS_ORIGINS: http://localhost,http://127.0.0.1,http://localhost:${FRONTEND_HOST_PORT:-80},http://127.0.0.1:${FRONTEND_HOST_PORT:-80}
       STORAGE_PROVIDER: s3
       STORAGE_LOCAL_PATH: /app/storage
       S3_ENDPOINT_URL: http://minio:9000
-      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_HOST_PORT:-19000}
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:${MINIO_HOST_PORT:-9000}
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_BUCKET: ${S3_BUCKET:-freight-attachments}
       S3_REGION: us-east-1
       S3_USE_SSL: "false"
     ports:
-      - "${BACKEND_HOST_PORT:-18081}:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - freight_uploads:/app/storage
     depends_on:
@@ -85,10 +91,11 @@ services:
       start_period: 30s
 
   frontend:
+    container_name: ff-frontend
     build:
       context: ../frontend
     ports:
-      - "${FRONTEND_HOST_PORT:-18080}:80"
+      - "${FRONTEND_HOST_PORT:-80}:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

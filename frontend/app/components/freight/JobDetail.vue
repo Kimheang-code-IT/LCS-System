@@ -169,7 +169,6 @@ function setDynamicRows(rows: Array<Record<string, unknown>>) {
 async function saveDynamicTab() {
   try {
     await dynamicTabsState.saveTab(activeTab.value)
-    store.addAudit('Saved service order tab', 'Service Orders', String(model.value.jobNo || ''))
   }
   catch {
     toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
@@ -251,7 +250,7 @@ watch(() => route.query.new, (value) => {
 const jobSections = computed(() => module.value ? groupedFields(module.value) : [])
 
 const headerSubtitle = computed(() =>
-  [String(model.value.customer || ''), String(model.value.direction || ''), String(model.value.branchName || '')]
+  [String(model.value.customer || ''), String(model.value.direction || '')]
     .filter(Boolean).join(' · '),
 )
 
@@ -297,26 +296,9 @@ async function save() {
   saving.value = true
   try {
     const payload = { ...model.value }
-    if (!store.isRemote && (isCreate.value || !payload.id)) {
-      const currentYear = new Date().getFullYear()
-      const sequence = store.list('documentSequences').find(row =>
-        String(row.documentType) === 'SERVICE_ORDER'
-        && Number(row.year) === currentYear
-        && String(row.status).toUpperCase() === 'ACTIVE',
-      )
-      const next = Number(sequence?.lastValue || store.list('jobs').length) + 1
-      payload.jobNo ||= `${sequence?.prefix || 'SO'}-${currentYear}-${String(next).padStart(Number(sequence?.paddingLength || 6), '0')}`
-      payload.status ||= 'Draft'
-      payload.workflowStatus ||= 'DRAFT'
-      payload.currency ||= 'USD'
-      payload.createdAt ||= new Date().toISOString()
-      payload.createdBy ||= String(currentUser.value?.name || 'Current User')
-      if (sequence) store.save('documentSequences', { ...sequence, lastValue: next })
-    }
     const saved = isCreate.value || !payload.id
       ? await store.create('jobs', payload, 'job')
       : store.save('jobs', model.value)
-    store.addAudit('Updated service order', 'Service Orders', String(saved.jobNo))
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     editingOverview.value = false
     if (isCreate.value) await navigateTo(`/service-orders/${saved.id}`)
@@ -337,7 +319,7 @@ function discardEdit() {
   load()
 }
 
-function applyWorkflow(next: ServiceOrderStatus, displayStatus: string, auditAction: string) {
+function applyWorkflow(next: ServiceOrderStatus, displayStatus: string) {
   if (!model.value.id) return
   const saved = store.save('jobs', {
     ...model.value,
@@ -346,7 +328,6 @@ function applyWorkflow(next: ServiceOrderStatus, displayStatus: string, auditAct
     updatedAt: new Date().toISOString(),
   })
   model.value = saved
-  store.addAudit(auditAction, 'Service Orders', String(saved.jobNo))
 }
 
 async function transition(next: ServiceOrderStatus, displayStatus: string, messageKey: string) {
@@ -358,12 +339,7 @@ async function transition(next: ServiceOrderStatus, displayStatus: string, messa
     confirmColor: next === 'CANCELLED' ? 'warning' : 'primary',
   })
   if (!ok) return
-  const auditAction
-    = next === 'ON_HOLD' ? 'Put service order on hold'
-      : next === 'CANCELLED' ? 'Cancelled service order'
-        : next === 'COMPLETED' ? 'Completed service order'
-          : `${displayStatus} service order`
-  applyWorkflow(next, displayStatus, auditAction)
+  applyWorkflow(next, displayStatus)
   toast.add({ title: t(messageKey), color: next === 'CANCELLED' ? 'warning' : 'success' })
 }
 

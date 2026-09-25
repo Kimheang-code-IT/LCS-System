@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import AuthRequired, Conflict, NotFound
-from app.core.permissions import SOURCE_PERMISSIONS
+from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
     create_access_token,
@@ -21,53 +21,89 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.auth.models import (
-    Branch,
-    Organization,
     PasswordResetToken,
     Permission,
     Role,
     RolePermission,
     User,
-    UserBranchAssignment,
     UserCredential,
     UserRoleAssignment,
     UserSession,
 )
 
 # Map source permissions to frontend page keys (mirrors the Nuxt contract).
+# Page keys come from the Roles & Permissions matrix catalog; a few source codes
+# double as page keys for backwards compatibility.
 PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
-    "organization.read": ("admin.organization.view", "master.reference.view"),
-    "organization.update": ("admin.organization.view",),
-    "branch.read": ("admin.organization.view", "master.reference.view"),
-    "branch.manage": ("admin.organization.view",),
     "user.read": ("admin.users.view",),
-    "user.manage": ("admin.users.view",),
+    "user.manage": ("admin.users.view", "admin.users.create", "admin.users.edit", "admin.users.delete"),
     "role.read": ("admin.roles.view",),
-    "role.manage": ("admin.roles.view",),
-    "quotation.read": ("sales.quotations.view", "sales.companies.view"),
+    "role.manage": ("admin.roles.view", "admin.roles.create", "admin.roles.edit", "admin.roles.delete"),
+    "quotation.read": ("sales.quotations.view",),
     "quotation.create": ("sales.quotations.create",),
     "quotation.update_draft": ("sales.quotations.edit",),
     "quotation.send": ("sales.quotations.edit",),
     "quotation.accept": ("sales.quotations.edit",),
-    "quotation.convert": ("sales.quotations.edit", "operations.service_orders.create"),
-    "service_order.read": ("operations.service_orders.view", "operations.jobs.view"),
+    "quotation.convert": ("sales.quotations.edit", "operations.service_orders.view"),
+    "service_order.read": ("operations.service_orders.view",),
     "service_order.create": ("operations.service_orders.create",),
-    "service_order.update": ("operations.service_orders.edit", "configuration.manage"),
+    "service_order.update": ("operations.service_orders.edit", "configuration.view", "configuration.manage"),
     "service_order.complete": ("operations.service_orders.edit",),
     "service_charge.create": ("finance.service_charges.view", "finance.service_charges.create"),
     "service_charge.issue": ("finance.service_charges.edit",),
-    "financial_document.read": ("finance.financial_documents.view", "finance.debit_notes.view"),
-    "financial_document.create": ("finance.financial_documents.create", "finance.debit_notes.create"),
+    "service_charge.convert_to_invoice": ("finance.service_charges.edit",),
+    "financial_document.read": ("finance.financial_documents.view",),
+    "financial_document.create": ("finance.financial_documents.create",),
+    "financial_document.update_draft": ("finance.financial_documents.edit",),
     "financial_document.post": ("finance.financial_documents.edit",),
-    "journal_entry.read": ("finance.accounting.view", "finance.journals.view"),
-    "journal_entry.create": ("finance.journals.create",),
-    "accounting_period.read": ("finance.accounting.view", "finance.accounting_periods.view"),
-    "accounting_period.close": ("finance.accounting_periods.edit",),
+    "financial_document.reverse": ("finance.financial_documents.edit",),
+    "financial_document.allocate": ("finance.financial_documents.edit",),
+    "journal_entry.read": ("finance.accounting.view",),
+    "journal_entry.create": ("finance.accounting.create",),
+    "journal_entry.post": ("finance.accounting.edit",),
+    "accounting_period.read": ("finance.accounting.view",),
+    "accounting_period.close": ("finance.accounting.edit",),
+    "chart_of_accounts.manage": ("finance.accounting.edit",),
     "audit_log.read": ("admin.audit_logs.view",),
-    "report.read": ("dashboard.view", "reports.view"),
+    "report.read": ("operations.reports.view", "finance.reports.view", "reports.view"),
+    "report.export": ("operations.reports.export", "finance.reports.export"),
     "master.reference.view": ("master.reference.view",),
-    "configuration.manage": ("configuration.manage",),
+    "master.reference.manage": ("master.reference.create", "master.reference.edit", "master.reference.delete"),
+    "configuration.manage": (
+        "configuration.view",
+        "configuration.create",
+        "configuration.edit",
+        "configuration.delete",
+        "configuration.manage",
+        "admin.document_sequences.view",
+        "admin.document_sequences.create",
+        "admin.document_sequences.edit",
+        "admin.document_sequences.delete",
+        "settings.app_config.view",
+        "settings.app_config.edit",
+    ),
+    "configuration.configure": ("configuration.edit", "configuration.configure"),
+    "settings.manage": (
+        "settings.app_config.view",
+        "settings.app_config.edit",
+        "settings.backup.view",
+        "settings.backup.edit",
+        "settings.manage",
+    ),
+    "backup.read": ("settings.backup.view",),
+    "backup.manage": ("settings.backup.edit",),
+    "finance.view": ("finance.accounting.view", "finance.view"),
 }
+
+SOURCE_PERMISSION_CODES = {code for code, _, _ in SOURCE_PERMISSIONS}
+
+
+def expand_source_permissions(permissions: set[str]) -> set[str]:
+    """Expand stored page permissions into the source/API permissions they imply."""
+    expanded = set(permissions)
+    for code in permissions:
+        expanded.update(PAGE_PERMISSION_SOURCE_CODES.get(code, ()))
+    return expanded
 
 
 async def get_user_by_login(session: AsyncSession, login: str) -> User | None:
@@ -90,15 +126,10 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
     return user
 
 
-async def resolve_permissions(session: AsyncSession, user_id: int, organization_id: int) -> tuple[set[str], str, list[int], list[str]]:
+async def resolve_permissions(session: AsyncSession, user_id: int) -> tuple[set[str], list[str]]:
     now = datetime.now(UTC)
     assignments = (
-        await session.execute(
-            select(UserRoleAssignment).where(
-                UserRoleAssignment.user_id == user_id,
-                UserRoleAssignment.organization_id == organization_id,
-            )
-        )
+        await session.execute(select(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
     ).scalars().all()
     role_ids = {a.role_id for a in assignments if a.expires_at is None or a.expires_at > now}
     role_codes: list[str] = []
@@ -118,30 +149,24 @@ async def resolve_permissions(session: AsyncSession, user_id: int, organization_
             .scalars()
             .all()
         )
-    scope = "ORGANIZATION" if any(a.branch_id is None for a in assignments) else ("BRANCH" if assignments else "NONE")
-    branch_rows = (
-        await session.execute(
-            select(UserBranchAssignment.branch_id).where(
-                UserBranchAssignment.user_id == user_id,
-                UserBranchAssignment.organization_id == organization_id,
-            )
-        )
-    ).scalars().all()
-    assigned_branch_ids = list(branch_rows)
-    return permissions, scope, assigned_branch_ids, role_codes
+    # A role may store matrix page permissions; expand them to the API-level
+    # source permissions they imply so enforcement keeps working.
+    return expand_source_permissions(permissions), role_codes
 
 
 def resolve_page_keys(permissions: set[str], is_platform_admin: bool) -> tuple[list[str], list[str]]:
-    source = [code for code, _, _ in SOURCE_PERMISSIONS if code in permissions]
     if is_platform_admin or "ALL_PAGES" in permissions:
         return ["ALL_PAGES"], ["ALL_PAGES"]
+    source = sorted(code for code in permissions if code in SOURCE_PERMISSION_CODES)
     pages: set[str] = {"dashboard.view"}
-    for code in source:
-        pages.update(PAGE_KEYS_BY_SOURCE.get(code, ()))
     for code in permissions:
-        if "." in code and code not in source:
+        # Page-level codes (configuration.manage, master.reference.view, …) are
+        # also mapped so they grant the finer-grained matrix pages.
+        if code in SOURCE_PERMISSION_CODES or code in PAGE_KEYS_BY_SOURCE:
+            pages.update(PAGE_KEYS_BY_SOURCE.get(code, ()))
+        if code not in SOURCE_PERMISSION_CODES and "." in code:
             pages.add(code)
-    return sorted(source), sorted(pages)
+    return source, sorted(pages)
 
 
 async def build_context(
@@ -149,64 +174,19 @@ async def build_context(
     user: User,
     *,
     request_id: str,
-    organization_id: int | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> RequestContext:
-    if organization_id is None:
-        organization_id = (
-            await session.execute(
-                select(UserBranchAssignment.organization_id)
-                .where(UserBranchAssignment.user_id == user.id)
-                .limit(1)
-            )
-        ).scalar()
-    if organization_id is None:
-        organization_id = (
-            await session.execute(select(UserRoleAssignment.organization_id).where(UserRoleAssignment.user_id == user.id).limit(1))
-        ).scalar()
-    org = await session.get(Organization, organization_id) if organization_id else None
-    if org is None:
-        raise AuthRequired("No organization is assigned to this account.")
-
-    permissions, scope, assigned_branch_ids, role_codes = await resolve_permissions(session, user.id, org.id)
+    permissions, role_codes = await resolve_permissions(session, user.id)
     is_platform_admin = "PLATFORM_ADMIN" in role_codes or "*" in permissions
-
-    branch_id = None
-    branch_name = None
-    default_branch = (
-        await session.execute(
-            select(Branch)
-            .join(UserBranchAssignment, UserBranchAssignment.branch_id == Branch.id)
-            .where(
-                UserBranchAssignment.user_id == user.id,
-                UserBranchAssignment.organization_id == org.id,
-                UserBranchAssignment.is_default.is_(True),
-            )
-            .limit(1)
-        )
-    ).scalars().first()
-    if default_branch is None and assigned_branch_ids:
-        default_branch = await session.get(Branch, assigned_branch_ids[0])
-    if default_branch is not None:
-        branch_id = default_branch.id
-        branch_name = default_branch.name
-
-    avatar = await get_user_avatar(session, org.id, user.id)
+    avatar = await get_user_avatar(session, user.id)
 
     return RequestContext(
         user_id=user.id,
         username=user.username,
         email=user.email,
         display_name=user.display_name,
-        organization_id=org.id,
-        organization_code=org.organization_code,
-        organization_name=org.display_name or org.legal_name,
-        branch_id=branch_id,
-        branch_name=branch_name,
-        assigned_branch_ids=assigned_branch_ids,
         permissions=permissions | ({"ALL_PAGES"} if is_platform_admin else set()),
-        permission_scope="ORGANIZATION" if is_platform_admin else scope,
         is_platform_admin=is_platform_admin,
         request_id=request_id,
         ip_address=ip_address,
@@ -225,13 +205,6 @@ def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
         "avatar": ctx.avatar,
         "permissions": page_access,
         "pageAccess": page_access,
-        "organizationId": ctx.organization_id,
-        "organizationCode": ctx.organization_code,
-        "organizationName": ctx.organization_name,
-        "branchId": ctx.branch_id,
-        "branchName": ctx.branch_name,
-        "assignedBranchIds": ctx.assigned_branch_ids,
-        "permissionScope": ctx.permission_scope,
         "sourcePermissions": list(source_permissions),
     }
 
@@ -247,7 +220,7 @@ async def create_session(session: AsyncSession, user: User, *, ip: str | None, u
     )
     session.add(record)
     await session.flush()
-    access = create_access_token(user.id, {"org": None})
+    access = create_access_token(user.id)
     user.last_login_at = datetime.now(UTC)
     await session.commit()
     return access, refresh
@@ -358,23 +331,15 @@ async def change_password(session: AsyncSession, user: User, current_password: s
     await session.commit()
 
 
-async def list_users(session: AsyncSession, organization_id: int) -> list[dict]:
-    users = (
-        await session.execute(
-            select(User)
-            .join(UserRoleAssignment, UserRoleAssignment.user_id == User.id)
-            .where(UserRoleAssignment.organization_id == organization_id)
-            .distinct()
-            .order_by(User.id)
-        )
-    ).scalars().all()
+async def list_users(session: AsyncSession) -> list[dict]:
+    users = (await session.execute(select(User).order_by(User.id))).scalars().all()
     output = []
     for user in users:
         assignments = (
             await session.execute(
                 select(Role.code)
                 .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
-                .where(UserRoleAssignment.user_id == user.id, UserRoleAssignment.organization_id == organization_id)
+                .where(UserRoleAssignment.user_id == user.id)
             )
         ).scalars().all()
         output.append(
@@ -422,8 +387,7 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
                 UserRoleAssignment(
                     user_id=user.id,
                     role_id=role.id,
-                    organization_id=data.get("organization_id") or context.organization_id,
-                    branch_id=data.get("branch_id"),
+                    assigned_by_user_id=context.user_id,
                 )
             )
     await session.commit()
@@ -463,8 +427,6 @@ async def list_role_assignments(session: AsyncSession, user_id: int) -> list[dic
             "userId": assignment.user_id,
             "roleId": assignment.role_id,
             "roleCode": code,
-            "organizationId": assignment.organization_id,
-            "branchId": assignment.branch_id,
             "expiresAt": assignment.expires_at.isoformat() if assignment.expires_at else None,
         }
         for assignment, code in rows
@@ -482,8 +444,6 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
     assignment = UserRoleAssignment(
         user_id=user_id,
         role_id=role.id,
-        organization_id=data.get("organization_id") or context.organization_id,
-        branch_id=data.get("branch_id"),
         assigned_by_user_id=context.user_id,
         expires_at=data.get("expires_at"),
     )
@@ -492,7 +452,7 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
     return assignment
 
 
-async def list_roles(session: AsyncSession, organization_id: int) -> list[dict]:
+async def list_roles(session: AsyncSession) -> list[dict]:
     roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
     output = []
     for role in roles:
@@ -551,45 +511,6 @@ async def sync_role_permissions(session: AsyncSession, role_id: int, codes: list
         session.add(RolePermission(role_id=role_id, permission_id=pid))
 
 
-async def list_organizations(session: AsyncSession) -> list[Organization]:
-    return list((await session.execute(select(Organization).order_by(Organization.id))).scalars().all())
-
-
-async def list_branches(session: AsyncSession, organization_id: int) -> list[Branch]:
-    return list(
-        (await session.execute(select(Branch).where(Branch.organization_id == organization_id).order_by(Branch.id))).scalars().all()
-    )
-
-
-async def create_organization(session: AsyncSession, data: dict) -> Organization:
-    org = Organization(
-        organization_code=data["organization_code"],
-        legal_name=data["legal_name"],
-        display_name=data.get("display_name"),
-        default_currency_code=data.get("default_currency_code", "USD"),
-        timezone=data.get("timezone", "UTC"),
-        status="ACTIVE",
-    )
-    session.add(org)
-    await session.commit()
-    return org
-
-
-async def create_branch(session: AsyncSession, organization_id: int, data: dict) -> Branch:
-    branch = Branch(
-        organization_id=organization_id,
-        branch_code=data["branch_code"],
-        name=data["name"],
-        place_id=data.get("place_id"),
-        address=data.get("address"),
-        is_head_office=bool(data.get("is_head_office", False)),
-        status="ACTIVE",
-    )
-    session.add(branch)
-    await session.commit()
-    return branch
-
-
 async def user_with_credential(session: AsyncSession, user_id: int) -> User | None:
     return (
         await session.execute(select(User).options(selectinload(User.credential)).where(User.id == user_id))
@@ -602,62 +523,6 @@ def role_label(role_codes: list[str]) -> str:
     if role_codes:
         return role_codes[0]
     return "User"
-
-
-# --- Single-record reads / updates / deletes (generic module CRUD contract) --
-async def get_organization(session: AsyncSession, organization_id: int) -> Organization:
-    org = await session.get(Organization, organization_id)
-    if org is None:
-        raise NotFound("Organization not found.")
-    return org
-
-
-async def update_organization(session: AsyncSession, organization_id: int, data: dict) -> Organization:
-    org = await session.get(Organization, organization_id)
-    if org is None:
-        raise NotFound("Organization not found.")
-    for key, column in (
-        ("organization_code", "organization_code"),
-        ("organizationCode", "organization_code"),
-        ("legal_name", "legal_name"),
-        ("legalName", "legal_name"),
-        ("display_name", "display_name"),
-        ("displayName", "display_name"),
-        ("default_currency_code", "default_currency_code"),
-        ("defaultCurrencyCode", "default_currency_code"),
-        ("timezone", "timezone"),
-        ("status", "status"),
-    ):
-        if data.get(key) is not None:
-            setattr(org, column, data[key])
-    await session.commit()
-    return org
-
-
-async def delete_organizations(session: AsyncSession, ids: list[int]) -> None:
-    from sqlalchemy.exc import IntegrityError
-
-    for organization_id in ids:
-        org = await session.get(Organization, organization_id)
-        if org is None:
-            continue
-        await session.delete(org)
-        try:
-            await session.flush()
-        except IntegrityError as exc:
-            await session.rollback()
-            raise Conflict(
-                "ORGANIZATION_IN_USE",
-                "This organization still has related records and cannot be deleted.",
-            ) from exc
-    await session.commit()
-
-
-async def get_branch(session: AsyncSession, branch_id: int) -> Branch:
-    branch = await session.get(Branch, branch_id)
-    if branch is None:
-        raise NotFound("Branch not found.")
-    return branch
 
 
 async def role_payload(session: AsyncSession, role: Role) -> dict:
@@ -704,7 +569,6 @@ async def delete_users(session: AsyncSession, ids: list[int]) -> None:
             continue
         await session.execute(delete(UserCredential).where(UserCredential.user_id == user_id))
         await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
-        await session.execute(delete(UserBranchAssignment).where(UserBranchAssignment.user_id == user_id))
         await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
         await session.delete(user)
     await session.commit()
@@ -714,13 +578,12 @@ async def delete_users(session: AsyncSession, ids: list[int]) -> None:
 USER_AVATAR_COLLECTION = "__user_avatar__"
 
 
-async def _avatar_record(session: AsyncSession, organization_id: int, user_id: int):
+async def _avatar_record(session: AsyncSession, user_id: int):
     from app.modules.master_data.models import ModuleRecord
 
     return (
         await session.execute(
             select(ModuleRecord).where(
-                ModuleRecord.organization_id == organization_id,
                 ModuleRecord.collection == USER_AVATAR_COLLECTION,
                 ModuleRecord.record_no == str(user_id),
             )
@@ -728,8 +591,8 @@ async def _avatar_record(session: AsyncSession, organization_id: int, user_id: i
     ).scalars().first()
 
 
-async def get_user_avatar(session: AsyncSession, organization_id: int, user_id: int) -> str | None:
-    record = await _avatar_record(session, organization_id, user_id)
+async def get_user_avatar(session: AsyncSession, user_id: int) -> str | None:
+    record = await _avatar_record(session, user_id)
     if record is None or not isinstance(record.data, dict):
         return None
     avatar = record.data.get("avatar")
@@ -739,10 +602,9 @@ async def get_user_avatar(session: AsyncSession, organization_id: int, user_id: 
 async def set_user_avatar(session: AsyncSession, context: RequestContext, avatar: str | None) -> str | None:
     from app.modules.master_data.models import ModuleRecord
 
-    record = await _avatar_record(session, context.organization_id, context.user_id)
+    record = await _avatar_record(session, context.user_id)
     if record is None:
         record = ModuleRecord(
-            organization_id=context.organization_id,
             collection=USER_AVATAR_COLLECTION,
             record_no=str(context.user_id),
             data={"avatar": avatar},
@@ -755,7 +617,7 @@ async def set_user_avatar(session: AsyncSession, context: RequestContext, avatar
 
 
 async def clear_user_avatar(session: AsyncSession, context: RequestContext) -> None:
-    record = await _avatar_record(session, context.organization_id, context.user_id)
+    record = await _avatar_record(session, context.user_id)
     if record is not None:
         await session.delete(record)
         await session.commit()

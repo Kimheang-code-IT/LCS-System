@@ -9,10 +9,6 @@ from __future__ import annotations
 
 # --- Source (API) permissions -------------------------------------------------
 SOURCE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
-    ("organization.read", "organization", "read"),
-    ("organization.update", "organization", "update"),
-    ("branch.read", "branch", "read"),
-    ("branch.manage", "branch", "manage"),
     ("user.read", "user", "read"),
     ("user.manage", "user", "manage"),
     ("role.read", "role", "read"),
@@ -62,13 +58,157 @@ PAGE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("configuration.configure", "configuration", "configure"),
     ("admin.user_manage", "admin", "user_manage"),
     ("admin.role_manage", "admin", "role_manage"),
-    ("admin.organization_manage", "admin", "organization_manage"),
     ("settings.manage", "settings", "manage"),
+    ("backup.read", "backup", "read"),
+    ("backup.manage", "backup", "manage"),
     ("finance.view", "finance", "view"),
     ("report.export", "report", "export"),
 )
 
-PERMISSION_CATALOG: tuple[tuple[str, str, str], ...] = SOURCE_PERMISSIONS + PAGE_PERMISSIONS
+# --- Matrix page permissions (Roles & Permissions screen) --------------------
+# Every page exposes a small set of actions. These codes are what the role
+# matrix stores; ``PAGE_PERMISSION_SOURCE_CODES`` maps them onto the source/API
+# permissions they imply so a page grant also enables the matching API calls.
+MATRIX_PAGE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
+    ("dashboard.view", "dashboard", "view"),
+    ("sales.quotations.view", "sales.quotations", "view"),
+    ("sales.quotations.create", "sales.quotations", "create"),
+    ("sales.quotations.edit", "sales.quotations", "edit"),
+    ("sales.quotations.delete", "sales.quotations", "delete"),
+    ("sales.quotations.export", "sales.quotations", "export"),
+    ("operations.service_orders.view", "operations.service_orders", "view"),
+    ("operations.service_orders.create", "operations.service_orders", "create"),
+    ("operations.service_orders.edit", "operations.service_orders", "edit"),
+    ("operations.service_orders.delete", "operations.service_orders", "delete"),
+    ("operations.service_orders.export", "operations.service_orders", "export"),
+    ("finance.service_charges.view", "finance.service_charges", "view"),
+    ("finance.service_charges.create", "finance.service_charges", "create"),
+    ("finance.service_charges.edit", "finance.service_charges", "edit"),
+    ("finance.service_charges.delete", "finance.service_charges", "delete"),
+    ("finance.service_charges.export", "finance.service_charges", "export"),
+    ("finance.financial_documents.view", "finance.financial_documents", "view"),
+    ("finance.financial_documents.create", "finance.financial_documents", "create"),
+    ("finance.financial_documents.edit", "finance.financial_documents", "edit"),
+    ("finance.financial_documents.delete", "finance.financial_documents", "delete"),
+    ("finance.financial_documents.export", "finance.financial_documents", "export"),
+    ("finance.accounting.view", "finance.accounting", "view"),
+    ("finance.accounting.create", "finance.accounting", "create"),
+    ("finance.accounting.edit", "finance.accounting", "edit"),
+    ("finance.accounting.delete", "finance.accounting", "delete"),
+    ("finance.accounting.export", "finance.accounting", "export"),
+    ("operations.reports.view", "operations.reports", "view"),
+    ("operations.reports.export", "operations.reports", "export"),
+    ("finance.reports.view", "finance.reports", "view"),
+    ("finance.reports.export", "finance.reports", "export"),
+    ("master.reference.create", "master.reference", "create"),
+    ("master.reference.edit", "master.reference", "edit"),
+    ("master.reference.delete", "master.reference", "delete"),
+    ("master.reference.export", "master.reference", "export"),
+    ("configuration.view", "configuration", "view"),
+    ("configuration.create", "configuration", "create"),
+    ("configuration.edit", "configuration", "edit"),
+    ("configuration.delete", "configuration", "delete"),
+    ("admin.users.view", "admin.users", "view"),
+    ("admin.users.create", "admin.users", "create"),
+    ("admin.users.edit", "admin.users", "edit"),
+    ("admin.users.delete", "admin.users", "delete"),
+    ("admin.roles.view", "admin.roles", "view"),
+    ("admin.roles.create", "admin.roles", "create"),
+    ("admin.roles.edit", "admin.roles", "edit"),
+    ("admin.roles.delete", "admin.roles", "delete"),
+    ("admin.document_sequences.view", "admin.document_sequences", "view"),
+    ("admin.document_sequences.create", "admin.document_sequences", "create"),
+    ("admin.document_sequences.edit", "admin.document_sequences", "edit"),
+    ("admin.document_sequences.delete", "admin.document_sequences", "delete"),
+    ("admin.audit_logs.view", "admin.audit_logs", "view"),
+    ("admin.audit_logs.export", "admin.audit_logs", "export"),
+    ("settings.app_config.view", "settings.app_config", "view"),
+    ("settings.app_config.edit", "settings.app_config", "edit"),
+    ("settings.backup.view", "settings.backup", "view"),
+    ("settings.backup.edit", "settings.backup", "edit"),
+)
+
+# (page permission) -> source/API permission codes granted together with it.
+PAGE_PERMISSION_SOURCE_CODES: dict[str, tuple[str, ...]] = {
+    "dashboard.view": (),
+    "sales.quotations.view": ("quotation.read",),
+    "sales.quotations.create": ("quotation.create",),
+    "sales.quotations.edit": ("quotation.update_draft", "quotation.send", "quotation.accept", "quotation.convert"),
+    "sales.quotations.delete": ("quotation.update_draft",),
+    "sales.quotations.export": ("report.export",),
+    "operations.service_orders.view": ("service_order.read",),
+    "operations.service_orders.create": ("service_order.create",),
+    "operations.service_orders.edit": ("service_order.update", "service_order.complete"),
+    "operations.service_orders.delete": ("service_order.update",),
+    "operations.service_orders.export": ("report.export",),
+    "finance.service_charges.view": ("service_charge.create",),
+    "finance.service_charges.create": ("service_charge.create",),
+    "finance.service_charges.edit": ("service_charge.issue", "service_charge.convert_to_invoice"),
+    "finance.service_charges.delete": ("service_charge.create",),
+    "finance.service_charges.export": ("report.export",),
+    "finance.financial_documents.view": ("financial_document.read",),
+    "finance.financial_documents.create": ("financial_document.create",),
+    "finance.financial_documents.edit": (
+        "financial_document.update_draft",
+        "financial_document.post",
+        "financial_document.reverse",
+        "financial_document.allocate",
+    ),
+    "finance.financial_documents.delete": ("financial_document.update_draft",),
+    "finance.financial_documents.export": ("report.export",),
+    "finance.accounting.view": ("journal_entry.read", "accounting_period.read"),
+    "finance.accounting.create": ("journal_entry.create",),
+    "finance.accounting.edit": ("journal_entry.post", "accounting_period.close", "chart_of_accounts.manage"),
+    "finance.accounting.delete": ("journal_entry.create",),
+    "finance.accounting.export": ("report.export",),
+    "operations.reports.view": ("report.read",),
+    "operations.reports.export": ("report.export",),
+    "finance.reports.view": ("report.read",),
+    "finance.reports.export": ("report.export",),
+    "master.reference.view": ("master.reference.view",),
+    "master.reference.create": ("master.reference.manage",),
+    "master.reference.edit": ("master.reference.manage",),
+    "master.reference.delete": ("master.reference.manage",),
+    "master.reference.export": ("report.export",),
+    "configuration.view": ("configuration.manage",),
+    "configuration.create": ("configuration.manage",),
+    "configuration.edit": ("configuration.manage", "configuration.configure"),
+    "configuration.delete": ("configuration.manage",),
+    "admin.users.view": ("user.read",),
+    "admin.users.create": ("user.manage",),
+    "admin.users.edit": ("user.manage",),
+    "admin.users.delete": ("user.manage",),
+    "admin.roles.view": ("role.read",),
+    "admin.roles.create": ("role.manage",),
+    "admin.roles.edit": ("role.manage",),
+    "admin.roles.delete": ("role.manage",),
+    "admin.document_sequences.view": ("configuration.manage",),
+    "admin.document_sequences.create": ("configuration.manage",),
+    "admin.document_sequences.edit": ("configuration.manage",),
+    "admin.document_sequences.delete": ("configuration.manage",),
+    "admin.audit_logs.view": ("audit_log.read",),
+    "admin.audit_logs.export": ("report.export",),
+    "settings.app_config.view": ("configuration.manage",),
+    "settings.app_config.edit": ("configuration.manage",),
+    "settings.backup.view": ("backup.read",),
+    "settings.backup.edit": ("backup.manage",),
+}
+
+
+def _dedupe_catalog(catalog: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str, str], ...]:
+    seen: set[str] = set()
+    unique: list[tuple[str, str, str]] = []
+    for item in catalog:
+        if item[0] in seen:
+            continue
+        seen.add(item[0])
+        unique.append(item)
+    return tuple(unique)
+
+
+PERMISSION_CATALOG: tuple[tuple[str, str, str], ...] = _dedupe_catalog(
+    SOURCE_PERMISSIONS + PAGE_PERMISSIONS + MATRIX_PAGE_PERMISSIONS
+)
 
 ALL_PERMISSION_CODES = tuple(code for code, _, _ in PERMISSION_CATALOG)
 
@@ -87,14 +227,10 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "description": "Full platform administration",
         "permissions": tuple(ALL_PERMISSION_CODES),
     },
-    "ORGANIZATION_ADMIN": {
-        "name": "Organization Administrator",
-        "description": "Organization and branch administration",
+    "ADMINISTRATOR": {
+        "name": "Administrator",
+        "description": "System administration",
         "permissions": (
-            "organization.read",
-            "organization.update",
-            "branch.read",
-            "branch.manage",
             "user.read",
             "user.manage",
             "role.read",
@@ -138,16 +274,15 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "configuration.manage",
             "admin.user_manage",
             "admin.role_manage",
-            "admin.organization_manage",
             "settings.manage",
+            "backup.read",
+            "backup.manage",
         ),
     },
-    "BRANCH_MANAGER": {
-        "name": "Branch Manager",
-        "description": "Branch operations and review",
+    "OPERATIONS_MANAGER": {
+        "name": "Operations Manager",
+        "description": "Operations and review",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "user.read",
             "role.read",
             "quotation.read",
@@ -177,8 +312,6 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Sales Officer",
         "description": "Quotation and commercial work",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "quotation.read",
             "quotation.create",
             "quotation.update_draft",
@@ -198,8 +331,6 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Operations Officer",
         "description": "Service-order operations",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "quotation.read",
             "quotation.convert",
             "service_order.read",
@@ -218,8 +349,6 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Finance Officer",
         "description": "Financial drafts, payments, and allocations",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "service_order.read",
             "service_charge.create",
             "service_charge.issue",
@@ -244,8 +373,6 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Finance Manager",
         "description": "Posting, periods, journals, and reversals",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "financial_document.read",
             "financial_document.create",
             "financial_document.update_draft",
@@ -270,8 +397,6 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Auditor",
         "description": "Read-only review",
         "permissions": (
-            "organization.read",
-            "branch.read",
             "user.read",
             "role.read",
             "quotation.read",

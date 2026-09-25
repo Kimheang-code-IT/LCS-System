@@ -19,10 +19,6 @@ def _f(value: Any) -> float:
 
 
 async def _scope_filters(context: RequestContext, model: Any, stmt: Any, page: PageParams) -> Any:
-    if hasattr(model, "organization_id"):
-        stmt = stmt.where(model.organization_id == context.organization_id)
-    if hasattr(model, "branch_id") and not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(model.branch_id == context.branch_id)
     if page.from_date and hasattr(model, "document_date"):
         parsed = parse_date(page.from_date)
         if parsed:
@@ -42,13 +38,10 @@ async def receivables(session: AsyncSession, context: RequestContext) -> list[di
         .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
         .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
         .where(
-            FinancialDocument.organization_id == context.organization_id,
             FinancialDocument.document_type == "CUSTOMER_INVOICE",
             FinancialDocument.status == "POSTED",
         )
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(FinancialDocument.branch_id == context.branch_id)
     rows = (await session.execute(stmt)).all()
     items = []
     for row, party_name, service_order_no in rows:
@@ -92,13 +85,10 @@ async def payables(session: AsyncSession, context: RequestContext) -> list[dict]
         .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
         .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
         .where(
-            FinancialDocument.organization_id == context.organization_id,
             FinancialDocument.document_type == "SUPPLIER_BILL",
             FinancialDocument.status == "POSTED",
         )
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(FinancialDocument.branch_id == context.branch_id)
     rows = (await session.execute(stmt)).all()
     items = []
     for row, party_name, service_order_no in rows:
@@ -145,13 +135,10 @@ async def _account_type_totals(session: AsyncSession, context: RequestContext, a
         .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
         .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
         .where(
-            ChartOfAccount.organization_id == context.organization_id,
             ChartOfAccount.account_type == account_type,
             JournalEntry.status == "POSTED",
         )
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(JournalEntry.branch_id == context.branch_id)
     rows = (await session.execute(
         stmt.group_by(ChartOfAccount.account_code, ChartOfAccount.account_name)
         .order_by(ChartOfAccount.account_code)
@@ -178,10 +165,7 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
     stmt = (
         select(ServiceOrder, BusinessParty.display_name)
         .outerjoin(BusinessParty, BusinessParty.id == ServiceOrder.customer_party_id)
-        .where(ServiceOrder.organization_id == context.organization_id)
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
     rows = (await session.execute(stmt)).all()
     items = []
     for order, customer_name in rows:
@@ -206,7 +190,6 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
                 "jobNo": order.service_order_no,
                 "serviceOrderNo": order.service_order_no,
                 "customer": customer_name or "",
-                "branchName": "",
                 "status": order.status,
                 "currency": order.currency_code,
                 "revenue": _f(revenue),
@@ -223,26 +206,20 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
 
 
 async def quotation_performance(session: AsyncSession, context: RequestContext) -> dict:
-    total = await session.scalar(
-        select(func.count()).select_from(Quotation).where(Quotation.organization_id == context.organization_id)
-    )
+    total = await session.scalar(select(func.count()).select_from(Quotation))
     rows = (
         await session.execute(
-            select(Quotation.status, func.count()).where(Quotation.organization_id == context.organization_id).group_by(Quotation.status)
+            select(Quotation.status, func.count()).group_by(Quotation.status)
         )
     ).all()
     return {"total": int(total or 0), "byStatus": {status: int(count) for status, count in rows}}
 
 
 async def service_order_report(session: AsyncSession, context: RequestContext) -> dict:
-    total = await session.scalar(
-        select(func.count()).select_from(ServiceOrder).where(ServiceOrder.organization_id == context.organization_id)
-    )
+    total = await session.scalar(select(func.count()).select_from(ServiceOrder))
     rows = (
         await session.execute(
-            select(ServiceOrder.status, func.count())
-            .where(ServiceOrder.organization_id == context.organization_id)
-            .group_by(ServiceOrder.status)
+            select(ServiceOrder.status, func.count()).group_by(ServiceOrder.status)
         )
     ).all()
     return {"total": int(total or 0), "byStatus": {status: int(count) for status, count in rows}}
@@ -272,7 +249,7 @@ def _aging_bucket(due_date: Any, today: Any) -> str:
     if not due_date or not today:
         return "not_due"
     try:
-        from datetime import date as _date, timedelta
+        from datetime import date as _date
         if isinstance(due_date, str):
             due = _date.fromisoformat(due_date)
         else:
@@ -307,11 +284,7 @@ def _bucketize(aging: list[dict], due_date: Any, today: Any, outstanding: float)
 
 
 async def _service_order_status_counts(session: AsyncSession, context: RequestContext) -> dict:
-    stmt = select(ServiceOrder.status, func.count()).where(
-        ServiceOrder.organization_id == context.organization_id,
-    )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
+    stmt = select(ServiceOrder.status, func.count())
     rows = (await session.execute(stmt.group_by(ServiceOrder.status))).all()
     counts = {status: int(count) for status, count in rows}
     return {
@@ -327,7 +300,6 @@ async def _service_order_status_counts(session: AsyncSession, context: RequestCo
 
 
 async def _journal_revenue_expense_by_month(session: AsyncSession, context: RequestContext) -> tuple[float, float, list[dict]]:
-    from datetime import date as _date
     stmt = (
         select(
             JournalEntryLine,
@@ -337,13 +309,10 @@ async def _journal_revenue_expense_by_month(session: AsyncSession, context: Requ
         .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
         .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
         .where(
-            ChartOfAccount.organization_id == context.organization_id,
             ChartOfAccount.account_type.in_(["REVENUE", "EXPENSE"]),
             JournalEntry.status == "POSTED",
         )
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(JournalEntry.branch_id == context.branch_id)
     rows = (await session.execute(stmt)).all()
     by_month: dict[str, dict[str, float]] = {}
     total_revenue = 0.0
@@ -377,12 +346,9 @@ async def _customers(session: AsyncSession, context: RequestContext) -> list[str
         select(BusinessParty.display_name)
         .join(ServiceOrder, ServiceOrder.customer_party_id == BusinessParty.id)
         .where(
-            ServiceOrder.organization_id == context.organization_id,
             BusinessParty.display_name.is_not(None),
         )
     )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ServiceOrder.branch_id == context.branch_id)
     rows = (await session.execute(stmt.distinct())).scalars().all()
     return sorted([str(r) for r in rows if r])
 

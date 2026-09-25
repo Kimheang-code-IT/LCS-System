@@ -99,8 +99,8 @@ const multiValue = computed({
 })
 
 const permissionRows = computed({
-  get: () => (Array.isArray(props.modelValue) ? props.modelValue as any[] : []),
-  set: (v: any[]) => emit('update:modelValue', v),
+  get: () => (Array.isArray(props.modelValue) ? props.modelValue as unknown[] : []),
+  set: (v: unknown[]) => emit('update:modelValue', v),
 })
 
 const csvValue = computed({
@@ -301,8 +301,6 @@ const assignedAttributes = computed({
 const attributeCatalog = computed(() =>
   (Array.isArray(props.field.meta?.catalog) ? props.field.meta!.catalog as RecordAttribute[] : []),
 )
-
-const recordTypeIdForAssign = computed(() => String(props.field.meta?.typeId || ''))
 
 const assignmentStageItems = computed(() => {
   const configured = Array.isArray(props.field.meta?.stages)

@@ -7,7 +7,6 @@ import {
   COMPONENT_INSTANCE_MODES,
   COMPONENT_INSTANCE_MODE_OVERRIDES,
   CURRENCIES,
-  TIMEZONES,
   DIRECTIONS,
   PARTY_ROLES,
   PERIOD_STATUS,
@@ -16,10 +15,6 @@ import {
 } from './freight-options'
 
 const YES_NO = ['Yes', 'No'] as const
-const FINANCE_DOCUMENT_TYPES = [
-  'CUSTOMER_INVOICE', 'SUPPLIER_BILL', 'CUSTOMER_RECEIPT', 'SUPPLIER_PAYMENT',
-  'OTHER_INCOME', 'OTHER_EXPENSE', 'TRANSFER', 'ADJUSTMENT',
-] as const
 
 const field = (
   key: string,
@@ -138,14 +133,13 @@ export const lcsReferenceModules: FreightModule[] = [
     filters: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select', DIRECTIONS), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
-    path: '/administration/document-sequences', title: 'Document Sequences', titleKm: 'លំដាប់លេខឯកសារ', singular: 'Document Sequence', singularKm: 'លំដាប់ឯកសារ', description: 'Manage organization-scoped automatic document numbering by document type and year.', descriptionKm: 'គ្រប់គ្រងលេខឯកសារស្វ័យប្រវត្តិតាមអង្គភាព ប្រភេទឯកសារ និងឆ្នាំ។',
+    path: '/administration/document-sequences', title: 'Document Sequences', titleKm: 'លំដាប់លេខឯកសារ', singular: 'Document Sequence', singularKm: 'លំដាប់ឯកសារ', description: 'Manage automatic document numbering by document type and year.', descriptionKm: 'គ្រប់គ្រងលេខឯកសារស្វ័យប្រវត្តិ តាមប្រភេទឯកសារ និងឆ្នាំ។',
     icon: 'i-lucide-list-ordered', group: 'admin', permission: 'configuration.manage', collection: 'documentSequences', titleField: 'documentType', kind: 'standard', canCreate: true,
     columns: [
       column('documentType', 'Document Type', 'ប្រភេទឯកសារ'), column('year', 'Year', 'ឆ្នាំ'), column('prefix', 'Prefix', 'បុព្វបទ'),
       column('lastValue', 'Last Value', 'តម្លៃចុងក្រោយ'), column('paddingLength', 'Padding Length', 'ប្រវែងលេខ'), column('nextNumberPreview', 'Next Number Preview', 'លេខបន្ទាប់'), column('status', 'Status', 'ស្ថានភាព'),
     ],
     fields: [
-      field('organizationName', 'Organization', 'អង្គភាព', undefined, undefined, 'text', undefined, false, { computed: true }),
       field('documentType', 'Document Type', 'ប្រភេទឯកសារ', undefined, undefined, 'select', DOCUMENT_SEQUENCE_TYPES, true),
       field('year', 'Year', 'ឆ្នាំ', undefined, undefined, 'number', undefined, true),
       field('prefix', 'Prefix', 'បុព្វបទ', undefined, undefined, 'text', undefined, true),
@@ -162,7 +156,7 @@ export const lcsReferenceModules: FreightModule[] = [
   }),
 
   module({
-    path: '/finance/chart-of-accounts', title: 'Chart of Accounts', titleKm: 'បញ្ជីគណនី', singular: 'Ledger Account', singularKm: 'គណនី', description: 'Organization-scoped double-entry ledger accounts.', descriptionKm: 'គណនីសៀវភៅធំតាមអង្គភាពសម្រាប់គណនេយ្យទ្វេភាគ។',
+    path: '/finance/chart-of-accounts', title: 'Chart of Accounts', titleKm: 'បញ្ជីគណនី', singular: 'Ledger Account', singularKm: 'គណនី', description: 'Double-entry ledger accounts.', descriptionKm: 'គណនីសៀវភៅធំសម្រាប់គណនេយ្យទ្វេភាគ។',
     icon: 'i-lucide-list-tree', group: 'finance', permission: 'finance.accounting.view', collection: 'chartOfAccounts', titleField: 'accountName', kind: 'standard', canCreate: true,
     columns: [column('accountCode', 'Account Code', 'លេខកូដគណនី'), column('accountName', 'Account Name', 'ឈ្មោះគណនី'), column('accountType', 'Account Type', 'ប្រភេទគណនី'), column('parentCode', 'Parent Account', 'គណនីមេ'), column('normalBalance', 'Normal Balance', 'សមតុល្យធម្មតា'), column('postable', 'Postable', 'អាចចុះបញ្ជី'), column('status', 'Status', 'ស្ថានភាព')],
     fields: [field('accountCode', 'Account Code', 'លេខកូដគណនី', undefined, undefined, 'text', undefined, true), field('accountName', 'Account Name', 'ឈ្មោះគណនី', undefined, undefined, 'text', undefined, true), field('accountType', 'Account Type', 'ប្រភេទគណនី', undefined, undefined, 'select', ACCOUNT_TYPES), field('parentCode', 'Parent Account', 'គណនីមេ', 'Structure', 'រចនាសម្ព័ន្ធ'), field('normalBalance', 'Normal Balance', 'សមតុល្យធម្មតា', 'Structure', 'រចនាសម្ព័ន្ធ', 'select', ['Debit', 'Credit']), field('postable', 'Is Postable', 'អាចចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'checkbox', YES_NO), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
@@ -178,13 +172,13 @@ export const lcsReferenceModules: FreightModule[] = [
   module({
     path: '/finance/journals', title: 'Journal Entries', titleKm: 'បញ្ជីទិនានុប្បវត្តិ', singular: 'Journal Entry', singularKm: 'ទិនានុប្បវត្តិ', description: 'Balanced debit and credit entries with source traceability.', descriptionKm: 'ឥណពន្ធ និងឥណទានមានតុល្យភាព និងប្រភពតាមដាន។',
     icon: 'i-lucide-book-check', group: 'finance', permission: 'finance.accounting.view', collection: 'journals', titleField: 'entryNo', kind: 'standard', canCreate: true,
-    columns: [column('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ'), column('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី'), column('sourceDocumentNo', 'Source', 'ប្រភព'), column('branchName', 'Branch', 'សាខា'), column('description', 'Description', 'បរិយាយ'), column('debitTotal', 'Debit', 'ឥណពន្ធ'), column('creditTotal', 'Credit', 'ឥណទាន'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ', undefined, undefined, 'text', undefined, true, { computed: true }), field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', undefined, undefined, 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('entryDate', 'Entry Date', 'កាលបរិច្ឆេទទិនានុប្បវត្តិ', undefined, undefined, 'date'), field('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី', undefined, undefined, 'date'), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ'), field('branchName', 'Branch', 'សាខា'), field('sourceDocumentNo', 'Source Document', 'ឯកសារប្រភព'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea', undefined, false, { colSpan: 2 }), field('debitTotal', 'Total Debit', 'ឥណពន្ធសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('creditTotal', 'Total Credit', 'ឥណទានសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('balanceDifference', 'Balance Difference', 'ភាពខុសគ្នា', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true })],
+    columns: [column('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ'), column('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី'), column('sourceDocumentNo', 'Source', 'ប្រភព'), column('description', 'Description', 'បរិយាយ'), column('debitTotal', 'Debit', 'ឥណពន្ធ'), column('creditTotal', 'Credit', 'ឥណទាន'), column('status', 'Status', 'ស្ថានភាព')],
+    fields: [field('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ', undefined, undefined, 'text', undefined, true, { computed: true }), field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', undefined, undefined, 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('entryDate', 'Entry Date', 'កាលបរិច្ឆេទទិនានុប្បវត្តិ', undefined, undefined, 'date'), field('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី', undefined, undefined, 'date'), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ'), field('sourceDocumentNo', 'Source Document', 'ឯកសារប្រភព'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea', undefined, false, { colSpan: 2 }), field('debitTotal', 'Total Debit', 'ឥណពន្ធសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('creditTotal', 'Total Credit', 'ឥណទានសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('balanceDifference', 'Balance Difference', 'ភាពខុសគ្នា', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true })],
     tables: [{ key: 'lines', title: 'Journal Lines', titleKm: 'ជួរទិនានុប្បវត្តិ', addLabel: 'Add journal line', columns: [
       { key: 'account_code', label: 'Account', labelKm: 'គណនី', required: true }, { key: 'party', label: 'Party', labelKm: 'ដៃគូ' }, { key: 'serviceOrder', label: 'Service Job', labelKm: 'បញ្ជាសេវាកម្ម' }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' }, { key: 'debit_amount', label: 'Debit', labelKm: 'ឥណពន្ធ', type: 'number' }, { key: 'credit_amount', label: 'Credit', labelKm: 'ឥណទាន', type: 'number' }, { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ', type: 'select', options: CURRENCIES },
     ] }],
     actions: [{ key: 'postJournal', label: 'Post', labelKm: 'ចុះបញ្ជី', icon: 'i-lucide-book-check', color: 'success' }],
-    filters: [field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', '', '', 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('branchName', 'Branch', 'សាខា'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ')],
+    filters: [field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', '', '', 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ')],
   }),
   module({
     path: '/finance/accounting-periods', title: 'Accounting Periods', titleKm: 'រយៈពេលគណនេយ្យ', singular: 'Accounting Period', singularKm: 'រយៈពេលគណនេយ្យ', description: 'Posting periods and closure control.', descriptionKm: 'រយៈពេលចុះគណនី និងការគ្រប់គ្រងការបិទ។',

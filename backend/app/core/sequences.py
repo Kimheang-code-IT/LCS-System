@@ -21,7 +21,6 @@ DEFAULT_PREFIXES: dict[str, str] = {
 
 async def allocate_number(
     session: AsyncSession,
-    organization_id: int,
     document_type: str,
     *,
     prefix: str | None = None,
@@ -32,7 +31,6 @@ async def allocate_number(
         await session.execute(
             select(DocumentSequence)
             .where(
-                DocumentSequence.organization_id == organization_id,
                 DocumentSequence.document_type == document_type,
                 DocumentSequence.period_year == period_year,
             )
@@ -41,7 +39,6 @@ async def allocate_number(
     ).scalars().first()
     if sequence is None:
         sequence = DocumentSequence(
-            organization_id=organization_id,
             document_type=document_type,
             period_year=period_year,
             prefix=prefix or DEFAULT_PREFIXES.get(document_type, document_type[:2]),
@@ -56,12 +53,11 @@ async def allocate_number(
     return number
 
 
-async def preview_number(session: AsyncSession, organization_id: int, document_type: str, year: int | None = None) -> str:
+async def preview_number(session: AsyncSession, document_type: str, year: int | None = None) -> str:
     period_year = year or datetime.now(UTC).year
     sequence = (
         await session.execute(
             select(DocumentSequence).where(
-                DocumentSequence.organization_id == organization_id,
                 DocumentSequence.document_type == document_type,
                 DocumentSequence.period_year == period_year,
             )

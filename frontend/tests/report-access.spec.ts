@@ -3,17 +3,17 @@ import { defaultReportPathForUser, reportAreaPermission } from '../app/utils/fre
 
 describe('report access', () => {
   it('maps report areas to page permissions', () => {
-    expect(reportAreaPermission('finance')).toBe('finance.accounting.view')
-    expect(reportAreaPermission('operations')).toBe('operations.service_orders.view')
+    expect(reportAreaPermission('finance')).toBe('finance.reports.view')
+    expect(reportAreaPermission('operations')).toBe('operations.reports.view')
   })
 
   it('defaults finance users to finance reports', () => {
-    const path = defaultReportPathForUser(permission => permission === 'finance.accounting.view')
+    const path = defaultReportPathForUser(permission => permission === 'finance.reports.view')
     expect(path).toBe('/reports/finance/revenue-expense')
   })
 
   it('defaults operations users to operations reports', () => {
-    const path = defaultReportPathForUser(permission => permission === 'operations.service_orders.view')
+    const path = defaultReportPathForUser(permission => permission === 'operations.reports.view')
     expect(path).toBe('/reports/operations/service-orders')
   })
 })

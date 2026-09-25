@@ -14,6 +14,11 @@ const moneyKeys = new Set([
   'customs_fee',
 ])
 
+/** True for a key whose values are money and should be right-aligned + currency formatted. */
+export function isMoneyColumnKey(key: string) {
+  return moneyKeys.has(key)
+}
+
 /** Shared cell width classes for AppLineTable / job workspace line tables. */
 export function lineTableColumnCellClass(column: FreightLineColumn) {
   if (column.width) return column.width

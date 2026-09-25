@@ -58,7 +58,6 @@ export const useAuthStore = defineStore('auth', () => {
     resolved = restoreSessionUser(resolved)
     if (resolved?.email) {
       persist(resolved)
-      useTenantStore().hydrate()
     }
 
     clientHydrated.value = true
@@ -66,7 +65,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   function login(userData: AuthUser) {
     persist(userData)
-    useTenantStore().applyUser(userData)
   }
 
   function setTokens(access: string | null, refresh: string | null) {
@@ -83,10 +81,6 @@ export const useAuthStore = defineStore('auth', () => {
     persist(null)
     setTokens(null, null)
     clientHydrated.value = true
-    if (import.meta.client) {
-      localStorage.removeItem('lcs-active-org')
-      localStorage.removeItem('lcs-active-branch')
-    }
   }
 
   async function logout() {

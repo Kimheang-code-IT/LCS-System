@@ -1,4 +1,4 @@
-export function compactQuery<T extends Record<string, any>>(query: T | undefined): Partial<T> | undefined {
+export function compactQuery<T extends Record<string, unknown>>(query: T | undefined): Partial<T> | undefined {
   if (!query) return undefined
 
   const compacted = Object.fromEntries(

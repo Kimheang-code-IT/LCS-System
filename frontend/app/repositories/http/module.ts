@@ -1,6 +1,6 @@
 import type { FreightModule } from '~/config/freight-modules'
 import type { FreightRecord } from '~/types/freight/record'
-import type { ModuleListQuery, ModuleRepository } from '~/repositories/contracts/module'
+import type { ModuleRepository } from '~/repositories/contracts/module'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
 import type { ApiResponse } from '~/types/docetra/common'

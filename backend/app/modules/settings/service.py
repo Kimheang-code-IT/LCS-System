@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -15,7 +16,6 @@ SETTINGS_RECORD_NO = "default"
 DEFAULT_APP_INFO: dict[str, Any] = {
     "applicationName": "LCS Freight Forwarding",
     "shortName": "LCS Freight",
-    "organizationName": "",
     "description": "Freight forwarding, operations and finance management system.",
     "supportEmail": "",
     "supportPhone": "",
@@ -98,6 +98,25 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "cacheStatus": "healthy",
         "backgroundJobStatus": "idle",
     },
+    "backup": {
+        "enabled": False,
+        "intervalHours": 24,
+        "spreadsheetId": "",
+        "serviceAccountEmail": "",
+        "serviceAccountJson": "",
+        "worksheetPrefix": "",
+        "excludedTables": [
+            "user_credentials",
+            "backup_runs",
+            "backup_records",
+            "backup_states",
+            "backup_logs",
+        ],
+        "batchSize": 500,
+        "lastRunAt": "",
+        "lastRunStatus": "idle",
+        "lastRunMessage": "",
+    },
 }
 
 
@@ -113,11 +132,10 @@ def deep_merge(base: Any, override: Any) -> Any:
     return merged
 
 
-async def _load_record(session: AsyncSession, organization_id: int, collection: str) -> ModuleRecord | None:
+async def _load_record(session: AsyncSession, collection: str) -> ModuleRecord | None:
     return (
         await session.execute(
             select(ModuleRecord).where(
-                ModuleRecord.organization_id == organization_id,
                 ModuleRecord.collection == collection,
                 ModuleRecord.record_no == SETTINGS_RECORD_NO,
             )
@@ -133,19 +151,18 @@ def _with_timestamp(data: dict[str, Any], record: ModuleRecord | None) -> dict[s
     return payload
 
 
-async def get_app_info(session: AsyncSession, context: RequestContext) -> dict:
-    record = await _load_record(session, context.organization_id, APP_INFO_COLLECTION)
+async def get_app_info(session: AsyncSession, context: RequestContext | None = None) -> dict:
+    record = await _load_record(session, APP_INFO_COLLECTION)
     merged = deep_merge(DEFAULT_APP_INFO, record.data if record else {})
     return _with_timestamp(merged, record)
 
 
-async def update_app_info(session: AsyncSession, context: RequestContext, patch: dict[str, Any]) -> dict:
-    record = await _load_record(session, context.organization_id, APP_INFO_COLLECTION)
+async def update_app_info(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
+    record = await _load_record(session, APP_INFO_COLLECTION)
     current = record.data if record else {}
     data = deep_merge(current, patch or {})
     if record is None:
         record = ModuleRecord(
-            organization_id=context.organization_id,
             collection=APP_INFO_COLLECTION,
             record_no=SETTINGS_RECORD_NO,
             data=data,
@@ -159,26 +176,45 @@ async def update_app_info(session: AsyncSession, context: RequestContext, patch:
 
 
 async def reset_app_info(session: AsyncSession, context: RequestContext) -> dict:
-    record = await _load_record(session, context.organization_id, APP_INFO_COLLECTION)
+    record = await _load_record(session, APP_INFO_COLLECTION)
     if record is not None:
         await session.delete(record)
         await session.commit()
     return _with_timestamp(dict(DEFAULT_APP_INFO), None)
 
 
-async def get_app_config(session: AsyncSession, context: RequestContext) -> dict:
-    record = await _load_record(session, context.organization_id, APP_CONFIG_COLLECTION)
+async def get_app_config(session: AsyncSession, context: RequestContext | None = None) -> dict:
+    record = await _load_record(session, APP_CONFIG_COLLECTION)
     merged = deep_merge(DEFAULT_APP_CONFIG, record.data if record else {})
     return _with_timestamp(merged, record)
 
 
-async def update_app_config(session: AsyncSession, context: RequestContext, patch: dict[str, Any]) -> dict:
-    record = await _load_record(session, context.organization_id, APP_CONFIG_COLLECTION)
+def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Never return write-only secrets (service account JSON) to clients."""
+    payload = deepcopy(config)
+    backup = payload.get("backup")
+    if isinstance(backup, dict):
+        backup["serviceAccountConfigured"] = bool(backup.pop("serviceAccountJson", ""))
+    return payload
+
+
+def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
+    """A blank secret field means 'leave the stored value unchanged'."""
+    cleaned = dict(patch or {})
+    backup = cleaned.get("backup")
+    if isinstance(backup, dict) and not str(backup.get("serviceAccountJson") or "").strip():
+        backup = dict(backup)
+        backup.pop("serviceAccountJson", None)
+        cleaned["backup"] = backup
+    return cleaned
+
+
+async def update_app_config(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
+    record = await _load_record(session, APP_CONFIG_COLLECTION)
     current = record.data if record else {}
-    data = deep_merge(current, patch or {})
+    data = deep_merge(current, _without_blank_secrets(patch))
     if record is None:
         record = ModuleRecord(
-            organization_id=context.organization_id,
             collection=APP_CONFIG_COLLECTION,
             record_no=SETTINGS_RECORD_NO,
             data=data,
@@ -239,7 +275,7 @@ async def search(session: AsyncSession, context: RequestContext, query: str, lim
     orders = (
         await session.execute(
             select(ServiceOrder)
-            .where(ServiceOrder.organization_id == context.organization_id, ServiceOrder.service_order_no.ilike(pattern))
+            .where(ServiceOrder.service_order_no.ilike(pattern))
             .limit(limit)
         )
     ).scalars().all()
@@ -249,7 +285,7 @@ async def search(session: AsyncSession, context: RequestContext, query: str, lim
     quotations = (
         await session.execute(
             select(Quotation)
-            .where(Quotation.organization_id == context.organization_id, Quotation.quotation_no.ilike(pattern))
+            .where(Quotation.quotation_no.ilike(pattern))
             .limit(limit)
         )
     ).scalars().all()
@@ -260,7 +296,6 @@ async def search(session: AsyncSession, context: RequestContext, query: str, lim
         await session.execute(
             select(FinancialDocument)
             .where(
-                FinancialDocument.organization_id == context.organization_id,
                 or_(FinancialDocument.document_no.ilike(pattern), FinancialDocument.reference_number.ilike(pattern)),
             )
             .limit(limit)
@@ -272,7 +307,7 @@ async def search(session: AsyncSession, context: RequestContext, query: str, lim
     journals = (
         await session.execute(
             select(JournalEntry)
-            .where(JournalEntry.organization_id == context.organization_id, JournalEntry.entry_no.ilike(pattern))
+            .where(JournalEntry.entry_no.ilike(pattern))
             .limit(limit)
         )
     ).scalars().all()

@@ -13,8 +13,6 @@ from app.core.types import JSONType
 class AuditEvent(PKMixin, Base):
     __tablename__ = "audit_events"
 
-    organization_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("organizations.id"), index=True)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     actor_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

@@ -2,8 +2,6 @@
 import { useGlobalSearch } from '~/composables/search/useGlobalSearch'
 
 const { t } = useI18n()
-const tenant = useTenantStore()
-onMounted(() => tenant.hydrate())
 
 const {
   open,

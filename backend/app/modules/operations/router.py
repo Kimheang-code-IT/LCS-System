@@ -148,7 +148,7 @@ async def delete_service_orders(
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
     for order_id in ids:
         order = await session.get(service.ServiceOrder, order_id)
-        if order is not None and order.organization_id == context.organization_id:
+        if order is not None:
             await session.delete(order)
     await session.commit()
     return {"data": {"removed": len(ids)}}
@@ -249,6 +249,15 @@ async def update_service_order(
 ) -> dict:
     payload = {**payload, "id": identifier}
     return {"data": await service.save_service_order(session, context, payload)}
+
+
+@router.get("/service-order-components")
+async def list_all_components(
+    page: PageParams = Depends(page_params),
+    context: RequestContext = Depends(require_permission("service_order.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.list_all_components(session, context, page)}
 
 
 @router.post("/service-order-components/{component_id}/values")
@@ -365,7 +374,7 @@ async def delete_service_charges(
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
     for charge_id in ids:
         charge = await session.get(ServiceOrderCharge, charge_id)
-        if charge is not None and charge.organization_id == context.organization_id and charge.status == "DRAFT":
+        if charge is not None and charge.status == "DRAFT":
             await session.delete(charge)
     await session.commit()
     return {"data": {"removed": len(ids)}}

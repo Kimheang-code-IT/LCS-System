@@ -5,12 +5,6 @@ export interface PersonSummary {
   avatarUrl?: string
 }
 
-export interface OrganizationSummary {
-  id: string
-  name: string
-  code?: string
-}
-
 export interface ApiMeta {
   page: number
   limit: number
@@ -114,7 +108,6 @@ export type FieldType =
   | 'select'
   | 'multiselect'
   | 'boolean'
-  | 'organization'
   | 'officer'
   | 'relation'
   | 'file'
@@ -239,7 +232,6 @@ export interface BaseEntity {
   updatedBy?: PersonSummary
   owner?: PersonSummary
   assignee?: PersonSummary
-  organization?: OrganizationSummary
   tags?: string[]
   attachmentCount?: number
   commentCount?: number
