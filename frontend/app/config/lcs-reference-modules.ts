@@ -138,46 +138,6 @@ export const lcsReferenceModules: FreightModule[] = [
     filters: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select', DIRECTIONS), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
-    path: '/configuration/posting-rules', title: 'Posting Rules', titleKm: 'ច្បាប់ចុះបញ្ជី', singular: 'Posting Rule', singularKm: 'ច្បាប់ចុះបញ្ជី', description: 'Resolve debit, credit and tax accounts by document and fee type.', descriptionKm: 'កំណត់គណនីឥណពន្ធ ឥណទាន និងពន្ធ។',
-    icon: 'i-lucide-scale', group: 'configuration', permission: 'configuration.manage', collection: 'postingRules', titleField: 'documentType', kind: 'standard', canCreate: true,
-    columns: [column('documentType', 'Document Type', 'ប្រភេទឯកសារ'), column('feeType', 'Fee Type', 'ប្រភេទថ្លៃ'), column('debitAccount', 'Debit Account', 'គណនីឥណពន្ធ'), column('creditAccount', 'Credit Account', 'គណនីឥណទាន'), column('taxAccount', 'Tax Account', 'គណនីពន្ធ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('documentType', 'Document Type', 'ប្រភេទឯកសារ', undefined, undefined, 'select', FINANCE_DOCUMENT_TYPES, true), field('feeType', 'Fee Type', 'ប្រភេទថ្លៃ'), field('debitAccount', 'Debit Account', 'គណនីឥណពន្ធ', 'Accounts', 'គណនី', 'text', undefined, true), field('creditAccount', 'Credit Account', 'គណនីឥណទាន', 'Accounts', 'គណនី', 'text', undefined, true), field('taxAccount', 'Tax Account', 'គណនីពន្ធ', 'Accounts', 'គណនី'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('documentType', 'Document Type', 'ប្រភេទឯកសារ', '', '', 'select', FINANCE_DOCUMENT_TYPES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
-
-  module({
-    path: '/administration/organizations', title: 'Organizations', titleKm: 'អង្គភាព', singular: 'Organization', singularKm: 'អង្គភាព', description: 'Legal organization, localization and default accounting context.', descriptionKm: 'អង្គភាពផ្លូវការ ភាសា និងបរិបទគណនេយ្យលំនាំដើម។',
-    icon: 'i-lucide-landmark', group: 'admin', permission: 'admin.organization.view', collection: 'organizations', titleField: 'displayName', kind: 'standard', canCreate: true,
-    columns: [column('organizationCode', 'Organization Code', 'លេខកូដអង្គភាព'), column('legalName', 'Legal Name', 'ឈ្មោះផ្លូវការ'), column('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'), column('taxIdentifier', 'Tax Identifier', 'លេខសម្គាល់ពន្ធ'), column('country', 'Country', 'ប្រទេស'), column('defaultCurrency', 'Default Currency', 'រូបិយប័ណ្ណលំនាំដើម'), column('timezone', 'Timezone', 'តំបន់ពេលវេលា'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [
-      field('organizationCode', 'Organization Code', 'លេខកូដអង្គភាព', undefined, undefined, 'text', undefined, true),
-      field('legalName', 'Legal Name', 'ឈ្មោះផ្លូវការ', undefined, undefined, 'text', undefined, true),
-      field('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'),
-      field('taxIdentifier', 'Tax Identifier', 'លេខសម្គាល់ពន្ធ'),
-      field('country', 'Country', 'ប្រទេស', undefined, undefined, 'select', COUNTRIES),
-      field('defaultCurrency', 'Default Currency', 'រូបិយប័ណ្ណលំនាំដើម', undefined, undefined, 'select', CURRENCIES),
-      field('timezone', 'Timezone', 'តំបន់ពេលវេលា', undefined, undefined, 'select', TIMEZONES),
-      field('status', 'Status', 'ស្ថានភាព', undefined, undefined, 'select', ACTIVE_STATUS),
-    ],
-    filters: [field('country', 'Country', 'ប្រទេស', '', '', 'select', COUNTRIES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
-  module({
-    path: '/administration/branches', title: 'Branches', titleKm: 'សាខា', singular: 'Branch', singularKm: 'សាខា', description: 'Branch ownership, location and contact context.', descriptionKm: 'កម្មសិទ្ធិសាខា ទីតាំង និងព័ត៌មានទំនាក់ទំនង។',
-    icon: 'i-lucide-git-branch', group: 'admin', permission: 'admin.organization.view', collection: 'branches', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('branchCode', 'Branch Code', 'លេខកូដសាខា'), column('name', 'Name', 'ឈ្មោះ'), column('organizationName', 'Organization', 'អង្គភាព'), column('place', 'Place', 'ទីកន្លែង'), column('phone', 'Phone', 'ទូរស័ព្ទ'), column('email', 'Email', 'អ៊ីមែល'), column('headOffice', 'Head Office', 'ការិយាល័យកណ្តាល'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [
-      field('branchCode', 'Branch Code', 'លេខកូដសាខា', undefined, undefined, 'text', undefined, true),
-      field('headOffice', 'Head Office', 'ការិយាល័យកណ្តាល', undefined, undefined, 'checkbox', YES_NO),
-      field('status', 'Status', 'ស្ថានភាព', undefined, undefined, 'select', ACTIVE_STATUS),
-      field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true),
-      field('place', 'Place', 'ទីកន្លែង'),
-      field('phone', 'Phone', 'ទូរស័ព្ទ'),
-      field('email', 'Email', 'អ៊ីមែល'),
-      field('address', 'Address', 'អាសយដ្ឋាន', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
-    ],
-    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
-  module({
     path: '/administration/document-sequences', title: 'Document Sequences', titleKm: 'លំដាប់លេខឯកសារ', singular: 'Document Sequence', singularKm: 'លំដាប់ឯកសារ', description: 'Manage organization-scoped automatic document numbering by document type and year.', descriptionKm: 'គ្រប់គ្រងលេខឯកសារស្វ័យប្រវត្តិតាមអង្គភាព ប្រភេទឯកសារ និងឆ្នាំ។',
     icon: 'i-lucide-list-ordered', group: 'admin', permission: 'configuration.manage', collection: 'documentSequences', titleField: 'documentType', kind: 'standard', canCreate: true,
     columns: [

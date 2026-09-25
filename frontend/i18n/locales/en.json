@@ -678,7 +678,7 @@
         "singular": "Role",
         "description": "Define module permissions for freight-forwarding teams.",
         "fields": {
-          "name": "Role name only"
+          "name": "Role name"
         }
       },
       "shipments": {

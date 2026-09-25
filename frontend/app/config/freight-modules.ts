@@ -1154,11 +1154,11 @@ export const freightModules: FreightModule[] = [
     documentForm: 'roles',
     titleField: 'name',
     columns: [
-      col('name', 'Role name only', 'ឈ្មោះតួនាទី'),
+      col('name', 'Role', 'តួនាទី'),
       col('permissionCount', 'Permissions', 'សិទ្ធិ'),
     ],
     fields: [
-      f('name', 'Role name only', 'ឈ្មោះតួនាទី', 'Main information', 'ព័ត៌មានទូទៅ', 'text', undefined, { required: true }),
+      f('name', 'Role', 'តួនាទី', 'Main information', 'ព័ត៌មានទូទៅ', 'text', undefined, { required: true }),
       f('description', 'Description', 'បរិយាយ', 'Main information', 'ព័ត៌មានទូទៅ', 'textarea', undefined, { colSpan: 2 }),
     ],
   }),
