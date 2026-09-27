@@ -64,11 +64,10 @@ Reads transactional data or reporting projections. It must not modify operationa
 ### 3.11 First-run setup
 
 Owns the one-time provisioning of an empty database: permission catalog, default
-roles, organization, head-office branch, administrator credential and a minimal
-finance baseline (chart of accounts, posting rules, financial accounts, document
-sequences, current periods). It is available through the public `/setup` page and
-the headless `python -m app.create_admin` command, and runs only while no user
-exists.
+roles, administrator credential, default document sequences for the current year,
+and the default app info/config records. No organization, branch, or finance
+baseline is seeded. It is available through the public `/setup` page and the
+headless `python -m app.create_admin` command, and runs only while no user exists.
 
 ## 4. Context Resolution
 

@@ -262,8 +262,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres
   < "$HOME/lcs-backups/freight-<timestamp>.dump"
 ```
 
-Do not seed data: migrations leave the database empty and the first-run `/setup`
-page provisions the initial records.
+Do not seed data manually: migrations leave the database empty and the first-run
+`/setup` page (or `create_admin`) provisions the initial records — the
+administrator, default document sequences for the current year, and the default
+app info/config. No finance or business data is seeded.
 
 ## 16. Incident Evidence
 

@@ -1,14 +1,16 @@
 """Baseline provisioning shared by the setup API, the CLI and the test harness.
 
 The database ships empty. ``provision_admin`` creates the first administrator
-account with its role assignment. No business data, organization, branch or
-finance baseline is seeded — every record is entered manually.
-``reset_all_data`` returns the database to that pristine, "setup required"
-state.
+account with its role assignment and seeds the default configuration: document
+sequences for the current year and the default app info/config records. No
+business or finance data (accounts, periods, parties, documents) is seeded —
+every record is entered manually. ``reset_all_data`` returns the database to
+that pristine, "setup required" state.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -75,6 +77,67 @@ async def requires_setup(session: AsyncSession) -> bool:
     return not total
 
 
+async def provision_baseline(session: AsyncSession) -> None:
+    """Seed default configuration: document sequences and app info/config.
+
+    Idempotent — existing rows are left untouched. Business/finance data
+    (accounts, periods, parties, documents) is never seeded.
+    """
+    from copy import deepcopy
+
+    from app.core.sequences import DEFAULT_PREFIXES
+    from app.modules.finance.models import DocumentSequence
+    from app.modules.master_data.models import ModuleRecord
+    from app.modules.settings.service import (
+        APP_CONFIG_COLLECTION,
+        APP_INFO_COLLECTION,
+        DEFAULT_APP_CONFIG,
+        DEFAULT_APP_INFO,
+        SETTINGS_RECORD_NO,
+    )
+
+    year = datetime.now(UTC).year
+
+    existing_types = set(
+        (
+            await session.execute(
+                select(DocumentSequence.document_type).where(DocumentSequence.period_year == year)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for document_type, prefix in DEFAULT_PREFIXES.items():
+        if document_type not in existing_types:
+            session.add(
+                DocumentSequence(
+                    document_type=document_type,
+                    period_year=year,
+                    prefix=prefix,
+                    last_value=0,
+                    padding_length=6,
+                    status="ACTIVE",
+                )
+            )
+
+    for collection, defaults in (
+        (APP_INFO_COLLECTION, DEFAULT_APP_INFO),
+        (APP_CONFIG_COLLECTION, DEFAULT_APP_CONFIG),
+    ):
+        exists = (
+            await session.execute(
+                select(ModuleRecord.id).where(
+                    ModuleRecord.collection == collection,
+                    ModuleRecord.record_no == SETTINGS_RECORD_NO,
+                )
+            )
+        ).scalars().first()
+        if exists is None:
+            session.add(ModuleRecord(collection=collection, record_no=SETTINGS_RECORD_NO, data=deepcopy(defaults)))
+
+    await session.flush()
+
+
 async def provision_admin(
     session: AsyncSession,
     *,
@@ -124,6 +187,7 @@ async def provision_admin(
     if assignment is None:
         session.add(UserRoleAssignment(user_id=user.id, role_id=role.id))
 
+    await provision_baseline(session)
     await session.commit()
 
     return {

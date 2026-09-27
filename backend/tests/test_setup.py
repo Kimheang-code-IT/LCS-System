@@ -47,6 +47,25 @@ async def test_reset_then_setup_initialize_flow(client):
     assert accounts.status_code == 200, accounts.text
     assert accounts.json()["data"]["meta"]["total"] == 0
 
+    # Default configuration is provisioned automatically: document sequences for
+    # the current year and the default app config record.
+    sequences = await client.get("/api/v1/document-sequences", headers=new_headers)
+    assert sequences.status_code == 200, sequences.text
+    assert {row["documentType"] for row in sequences.json()["data"]["items"]} == {
+        "QUOTATION",
+        "SERVICE_ORDER",
+        "SERVICE_CHARGE",
+        "CUSTOMER_INVOICE",
+        "SUPPLIER_BILL",
+        "CUSTOMER_RECEIPT",
+        "SUPPLIER_PAYMENT",
+        "JOURNAL",
+    }
+
+    app_config = await client.get("/api/v1/settings/app-config", headers=new_headers)
+    assert app_config.status_code == 200, app_config.text
+    assert app_config.json()["data"]["system"]["environment"] == "production"
+
     again = await client.post(
         "/api/v1/setup/initialize",
         json={"email": "second@fresh.test", "password": "Fresh123!"},

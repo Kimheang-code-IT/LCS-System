@@ -40,8 +40,10 @@ docker compose -f infrastructure/docker-compose.yml up -d --build   # from repo 
 Host ports: frontend 80, backend 8000, Postgres 5432, Redis 6379, MinIO 9000/9001
 (all env-driven in `infrastructure/.env`). The backend container runs
 `alembic upgrade head` on start. The DB ships empty; first login is `/setup`
-(`POST /api/v1/setup/initialize`, gated on no users existing). Admin CLI:
-`uv run python -m app.create_admin --email ... --password ...`.
+(`POST /api/v1/setup/initialize`, gated on no users existing), which provisions
+the admin plus default document sequences (current year) and the default app
+info/config — no finance or business data. Admin CLI:
+`uv run python -m app.create_admin --email ... --password ...` (same baseline).
 
 ## Backend
 
