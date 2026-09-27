@@ -27,11 +27,15 @@ pnpm vitest run tests/format.spec.ts  # single test file
 Quality gate order: `lint -> typecheck -> test` (frontend), `pytest -> ruff` (backend).
 Two long-lived branches: `dev` (integration) and `main` (protected production).
 `.github/workflows/dev-ci.yml` runs the gates plus Docker build validation on
-pushes to `dev` and on PRs targeting `main`. `.github/workflows/production.yml`
+pushes to `dev` and on PRs targeting `main`; it never deploys. `.github/workflows/production.yml`
 runs only on `main` (or manual dispatch): validate, build immutable `sha-<short>`
-images, push to GHCR, back up the database, then deploy to the AWS host
-(`docker-compose.prod.yml` sets `image:` + `pull_policy: always`). Protect `main`
-with a ruleset requiring a pull request and the **`Dev CI`** status check.
+images, push to GHCR, back up the database, then deploy to the AWS host. EC2 is a
+runtime-only host — the Git repository is NOT cloned there; the workflow
+transfers just `deploy/compose.yml` → `/opt/lcs/compose.yml` and
+`infrastructure/nginx/production.conf` → `/opt/lcs/nginx/production.conf`, and
+generates `/opt/lcs/.env` from the **production** environment secrets/vars (no
+GHCR login; the images are public). Protect `main` with a ruleset requiring a
+pull request and the **`Dev CI`** status check.
 
 ## Run stack
 

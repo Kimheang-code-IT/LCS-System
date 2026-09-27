@@ -50,7 +50,7 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # 1. Production validation/tests.
+  # 1. Validate/test the exact production commit.
   validate-backend:
     name: Production backend validation
     needs: [resolve]
@@ -94,6 +94,8 @@ jobs:
       - run: pnpm test
 
   # 2-5. Build both images, tag with the immutable commit SHA and push to GHCR.
+  # No environment: the frontend build only needs the repository-level
+  # NUXT_PUBLIC_SITE_URL variable.
   build:
     name: Build ${{ matrix.name }} image
     needs: [resolve, validate-backend, validate-frontend]
@@ -151,8 +153,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-  # 6-11. Back up the database, deploy the exact SHA-tagged images, recreate the
-  # stack (Alembic runs on backend start) and verify HTTPS readiness.
+  # 6-13. Transfer ONLY the runtime files, generate .env, back up PostgreSQL,
+  # deploy the exact SHA-tagged images and verify HTTPS readiness.
+  #
+  # EC2 is a Docker runtime host: it does NOT hold the Git repository and never
+  # runs git clone/pull/fetch/reset. The runtime directory is /opt/lcs.
   deploy:
     name: Deploy to AWS
     needs: [resolve, validate-backend, validate-frontend, build]
@@ -166,54 +171,132 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
+    # Production secrets/variables are only needed here.
     environment: production
     permissions:
       contents: read
       packages: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Ensure the runtime directory exists and is writable by the deploy user.
+      - name: Prepare runtime directory
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        env:
+          DEPLOY_DIR: /opt/lcs
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          envs: DEPLOY_DIR
+          script: |
+            set -euo pipefail
+            if mkdir -p "$DEPLOY_DIR/nginx" 2>/dev/null; then
+              echo "Runtime directory ready: $DEPLOY_DIR"
+            elif sudo -n mkdir -p "$DEPLOY_DIR/nginx" 2>/dev/null; then
+              sudo -n chown -R "$(id -u):$(id -g)" "$DEPLOY_DIR"
+              echo "Runtime directory ready (via sudo): $DEPLOY_DIR"
+            else
+              echo "Cannot create $DEPLOY_DIR; create it and chown it to the deploy user." >&2
+              exit 1
+            fi
+
+      # Copy only the runtime bundle: compose.yml + nginx/production.conf.
+      - name: Upload runtime files
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          source: "deploy/compose.yml,infrastructure/nginx/production.conf"
+          target: /opt/lcs
+          strip_components: 1
+          overwrite: true
+
+      # Generate the runtime .env atomically, back up PostgreSQL, then pull the
+      # exact immutable (public) images and recreate the stack.
       - name: Deploy ${{ needs.resolve.outputs.image_tag }}
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         env:
+          DEPLOY_DIR: /opt/lcs
           IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
-          GHCR_ACTOR: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+          IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB || 'freight' }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER || 'freight' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minioadmin' }}
+          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'freight-attachments' }}
+          S3_REGION: ${{ vars.S3_REGION || 'us-east-1' }}
+          S3_PUBLIC_ENDPOINT_URL: ${{ vars.S3_PUBLIC_ENDPOINT_URL }}
+          CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'https://lcslog.minidev.in' }}
         with:
-          host: ${{ secrets.AWS_HOST }}
-          username: ${{ secrets.AWS_USER }}
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ secrets.AWS_PORT || 22 }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: IMAGE_TAG,GHCR_ACTOR,GHCR_TOKEN
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
           script: |
             set -euo pipefail
+            cd "$DEPLOY_DIR"
 
-            # Deterministic sync of the deployment-only checkout.
-            # infrastructure/.env is git-ignored; certificates, uploads and the
-            # database live in Docker named volumes; backups live in
-            # $HOME/lcs-backups. A hard reset cannot delete persistent state.
-            cd /opt/freight-forwarding
-            git fetch --prune origin main
-            git reset --hard origin/main
-            cd infrastructure
+            # Docker command (docker group, else sudo fallback).
+            if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
+            COMPOSE="$DOCKER compose -f compose.yml"
 
-            # Choose the docker command (docker group, else sudo fallback).
-            if docker info >/dev/null 2>&1; then
-              DOCKER="docker"
-            else
-              DOCKER="sudo -E docker"
-            fi
-            COMPOSE="$DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml"
+            # Fail fast if required production values are missing, before any
+            # container or volume is touched.
+            for name in POSTGRES_PASSWORD JWT_SECRET_KEY MINIO_ROOT_PASSWORD S3_PUBLIC_ENDPOINT_URL; do
+              eval "value=\"\${$name:-}\""
+              if [ -z "$value" ]; then
+                echo "Missing required production value: $name" >&2
+                exit 1
+              fi
+            done
 
-            # Authenticate to GHCR (token supplied via the action env).
-            if [ -z "${GHCR_TOKEN:-}" ]; then
-              echo "GHCR_TOKEN is not set." >&2
-              exit 1
-            fi
-            echo "$GHCR_TOKEN" | $DOCKER login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+            # Image names must be lowercase.
+            IMAGE_PREFIX="$(printf '%s' "$IMAGE_PREFIX" | tr '[:upper:]' '[:lower:]')"
+
+            # Write the runtime .env atomically (0600). Values are passed as
+            # printf arguments so their contents are never shell-expanded.
+            ENV_FILE="$DEPLOY_DIR/.env"
+            umask 077
+            TMP="$(mktemp "$DEPLOY_DIR/.env.XXXXXX")"
+            trap 'rm -f "$TMP"' EXIT
+            write_kv() {
+              key="$1"; value="$2"
+              if [ "$(printf '%s' "$value" | wc -l | tr -d ' ')" != "0" ]; then
+                echo "Value for $key contains a newline; refusing." >&2
+                exit 1
+              fi
+              printf '%s=%s\n' "$key" "$value"
+            }
+            {
+              write_kv IMAGE_PREFIX "$IMAGE_PREFIX"
+              write_kv IMAGE_TAG "$IMAGE_TAG"
+              write_kv POSTGRES_DB "$POSTGRES_DB"
+              write_kv POSTGRES_USER "$POSTGRES_USER"
+              write_kv POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+              write_kv JWT_SECRET_KEY "$JWT_SECRET_KEY"
+              write_kv MINIO_ROOT_USER "$MINIO_ROOT_USER"
+              write_kv MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
+              write_kv S3_BUCKET "$S3_BUCKET"
+              write_kv S3_REGION "$S3_REGION"
+              write_kv S3_PUBLIC_ENDPOINT_URL "$S3_PUBLIC_ENDPOINT_URL"
+              write_kv CORS_ORIGINS "$CORS_ORIGINS"
+            } > "$TMP"
+            chmod 600 "$TMP"
+            mv -f "$TMP" "$ENV_FILE"
+            trap - EXIT
+            echo "Runtime .env written atomically (0600)."
 
             # Create and verify a PostgreSQL backup BEFORE any migration runs.
-            # 'ff-db' is the postgres container name from docker-compose.yml.
+            # 'ff-db' is the postgres container name from deploy/compose.yml.
             if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" = "true" ]; then
               BACKUP_DIR="${HOME}/lcs-backups"
               mkdir -p "$BACKUP_DIR"
@@ -221,12 +304,12 @@ jobs:
               echo "Backing up PostgreSQL to $BACKUP_FILE"
               # Credentials come from the container environment; nothing is echoed.
               if ! $COMPOSE exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_FILE"; then
-                echo "::error::PostgreSQL backup failed; aborting deployment."
+                echo "PostgreSQL backup failed; aborting deployment." >&2
                 rm -f "$BACKUP_FILE"
                 exit 1
               fi
               if [ ! -s "$BACKUP_FILE" ]; then
-                echo "::error::PostgreSQL backup is empty; aborting deployment."
+                echo "PostgreSQL backup is empty; aborting deployment." >&2
                 exit 1
               fi
               echo "Backup complete: $BACKUP_FILE"
@@ -234,8 +317,8 @@ jobs:
               echo "PostgreSQL is not running yet (first deployment); skipping backup."
             fi
 
-            # Pull the exact immutable images and recreate changed services.
-            # No `down -v`; volumes (database, uploads, certificates) are preserved.
+            # Pull the exact immutable (public) images and recreate changed
+            # services. No `down -v`; named volumes persist.
             export IMAGE_TAG
             $COMPOSE pull
             $COMPOSE up -d --remove-orphans
@@ -250,5 +333,5 @@ jobs:
               echo "Not ready yet (attempt $attempt/30); retrying in 4s..."
               sleep 4
             done
-            echo "::error::Application did not become healthy within the retry window."
+            echo "Application did not become healthy within the retry window." >&2
             exit 1
