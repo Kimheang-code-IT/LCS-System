@@ -107,15 +107,23 @@ jobs:
             git pull --ff-only
             cd infrastructure
 
+            # Prefer the docker group; fall back to sudo when the socket is not
+            # accessible to the SSH user (common on a fresh EC2 host).
+            if docker info >/dev/null 2>&1; then
+              DOCKER="docker"
+            else
+              DOCKER="sudo -E docker"
+            fi
+
             # Authenticate to GHCR (private packages). Prefer a read:packages PAT,
             # fall back to the workflow token.
             GHCR_PASSWORD='${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}'
-            echo "$GHCR_PASSWORD" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+            echo "$GHCR_PASSWORD" | $DOCKER login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
             export IMAGE_TAG
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
-            docker image prune -f
+            $DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml pull
+            $DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+            $DOCKER image prune -f
 
             # Fail the deploy if the API is not healthy through nginx.
             sleep 15
