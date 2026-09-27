@@ -98,11 +98,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "backend=${{ needs.backend.result }} frontend=${{ needs.frontend.result }} docker=${{ needs.docker.result }}"
+          # A "cancelled" job means this run was superseded in the same
+          # concurrency group; the newer run reports the real result, so it is
+          # not treated as a failure here.
           for result in \
             "${{ needs.backend.result }}" \
             "${{ needs.frontend.result }}" \
             "${{ needs.docker.result }}"; do
-            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+            if [ "$result" = "failure" ]; then
               echo "::error::A required Dev CI job did not succeed."
               exit 1
             fi
