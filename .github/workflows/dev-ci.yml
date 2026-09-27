@@ -1,0 +1,110 @@
+name: Dev CI
+
+# Development/integration validation.
+# Runs on pushes to `dev` and on pull requests targeting the protected `main`.
+# It never deploys, never SSHes to EC2 and never publishes images to GHCR.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main]
+
+# Least privilege: development CI only reads the repository.
+permissions:
+  contents: read
+
+concurrency:
+  # github.head_ref is set for pull_request events, github.ref_name for pushes,
+  # so runs for the same source branch share one group and obsolete runs cancel.
+  group: dev-ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv python install 3.12
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+
+  frontend:
+    name: Frontend (lint + typecheck + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # Verify both images build (no push, no registry login).
+  docker:
+    name: Docker build validation
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+          - name: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: false
+          build-args: |
+            NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL || 'https://lcslog.minidev.in' }}
+            NUXT_PUBLIC_AUTH_MODE=cookie
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # Single aggregate check to require in the `main` branch protection ruleset
+  # (status check name: "Dev CI").
+  dev-ci-ok:
+    name: Dev CI
+    needs: [backend, frontend, docker]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        run: |
+          set -euo pipefail
+          echo "backend=${{ needs.backend.result }} frontend=${{ needs.frontend.result }} docker=${{ needs.docker.result }}"
+          for result in \
+            "${{ needs.backend.result }}" \
+            "${{ needs.frontend.result }}" \
+            "${{ needs.docker.result }}"; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "::error::A required Dev CI job did not succeed."
+              exit 1
+            fi
+          done
+          echo "All Dev CI checks passed."

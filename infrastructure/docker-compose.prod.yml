@@ -13,7 +13,7 @@
 #     --email you@example.com --agree-tos --no-eff-email
 
 services:
-  # Prebuilt images published by .github/workflows/publish.yml (GHCR).
+  # Prebuilt images published by .github/workflows/production.yml (GHCR).
   # Override IMAGE_PREFIX / IMAGE_TAG in .env to pin or roll back a release.
   backend:
     image: ${IMAGE_PREFIX:-ghcr.io/kimheang-code-it/lcs-system}-backend:${IMAGE_TAG:-latest}

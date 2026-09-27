@@ -75,9 +75,9 @@ Secrets must not be committed to Git, included in Docker images, stored in seed 
 
 ## 7. Standard Deployment
 
-Production deployment is automated by `.github/workflows/publish.yml` on every
-push to `main` (feature branches are validated by CI, auto-merged into `main`,
-then the deploy workflow is dispatched). The manual steps below describe the
+Production deployment is automated by `.github/workflows/production.yml` on
+every push to `main` (`dev` is validated by Dev CI, then a pull request into
+`main` is reviewed and merged manually). The manual steps below describe the
 equivalent procedure and are used for exceptional/controlled deployments.
 
 1. Announce deployment start.
@@ -199,7 +199,7 @@ known-good image without rebuilding it, dispatch the deploy workflow with the
 target tag:
 
 ```bash
-gh workflow run "Build & Deploy" --ref main -f image_tag=sha-<short-commit>
+gh workflow run "Production" --ref main -f image_tag=sha-<short-commit>
 ```
 
 The deploy job resolves that tag, backs up the database, pulls the exact image,
@@ -251,10 +251,10 @@ cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm generate
 
 ```bash
 # deploy current main (builds immutable sha-<short> images, backs up, deploys)
-gh workflow run "Build & Deploy" --ref main
+gh workflow run "Production" --ref main
 
 # roll back to a previous immutable image without rebuilding
-gh workflow run "Build & Deploy" --ref main -f image_tag=sha-<short-commit>
+gh workflow run "Production" --ref main -f image_tag=sha-<short-commit>
 
 # restore a pre-deployment backup (run on the EC2 host)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres \
@@ -284,35 +284,41 @@ Preserve:
 
 ### Flow
 
-feature branch → CI → pull request → required CI passes → merge to `main`
-→ `publish.yml` builds immutable images → GHCR → EC2 deploy → database backup
+push to `dev` → Dev CI → pull request `dev` → `main` → required `Dev CI` passes
+→ manual review + manual merge → `production.yml` on `main` → production tests
+→ build immutable `sha-<short>` images → GHCR → database backup → EC2 deploy
 → Docker Compose recreate → Alembic migration/startup → HTTPS readiness check.
+
+Production never deploys from `dev`; the merge to `main` is manual.
 
 ### Workflows
 
-- `ci.yml` — runs on every branch push and pull request. Branch-aware
-  concurrency (`github.head_ref || github.ref_name`) cancels outdated runs. Path
-  filtering skips the unaffected side for backend-only/frontend-only changes;
-  workflow, infrastructure and lockfile changes run both.
-- `auto-merge.yml` — triggered by `workflow_run` after CI succeeds. If the
-  source branch has an open, same-repository pull request, it is squash-merged
-  (respecting branch protection) and `publish.yml` is dispatched.
-- `publish.yml` — builds `sha-<short-commit>` images for backend and frontend,
-  publishes to GHCR, and deploys the exact tag to EC2. It does not re-run the CI
-  suite; the required CI check on the pull request is the production gate.
+- `dev-ci.yml` (`Dev CI`) — runs on pushes to `dev` and on pull requests
+  targeting `main`. Branch-aware concurrency
+  (`github.head_ref || github.ref_name`, `cancel-in-progress: true`) cancels
+  outdated runs. Runs backend ruff + pytest, frontend lint + typecheck + test,
+  and Docker build validation for both images. It never deploys, never SSHes to
+  EC2 and never pushes images to GHCR.
+- `production.yml` (`Production`) — runs only on pushes to `main` or manual
+  dispatch. Validates, builds `sha-<short>` images, pushes to GHCR, backs up
+  PostgreSQL, deploys the exact tag to EC2, recreates the stack (Alembic runs on
+  backend start) and verifies HTTPS readiness.
 
 ### Required branch-protection check
 
-Protect `main` and require the single aggregate check named **`CI`** (the
-`ci-ok` job). The automated flow merges through the pull-request API, so it does
-not bypass protection. Do not require mandatory reviews unless you are willing
-to approve every deployment manually.
+Protect `main` with a ruleset requiring:
+
+- a pull request before merge;
+- the **`Dev CI`** status check;
+- successful checks before merge;
+- blocked force pushes and blocked branch deletion.
+
+The merge is manual; nothing auto-merges `dev` into `main`.
 
 ### Image tags
 
 - `sha-<short-commit>` — immutable, used by production. The build and the deploy
   use the same value, computed in the `resolve` job.
-- `main`, `v*` — informational tags.
 - `latest` — convenience only; production must not depend on it.
 
 ### Secrets
