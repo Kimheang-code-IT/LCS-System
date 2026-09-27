@@ -190,11 +190,19 @@ async def get_app_config(session: AsyncSession, context: RequestContext | None =
 
 
 def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Never return write-only secrets (service account JSON) to clients."""
+    """Never return write-only secrets (SMTP password, bot token, service JSON)."""
     payload = deepcopy(config)
     backup = payload.get("backup")
     if isinstance(backup, dict):
         backup["serviceAccountConfigured"] = bool(backup.pop("serviceAccountJson", ""))
+    email = payload.get("email")
+    if isinstance(email, dict) and "password" in email:
+        email["passwordConfigured"] = bool(email.get("password"))
+        email["password"] = ""
+    telegram = payload.get("telegram")
+    if isinstance(telegram, dict) and "botToken" in telegram:
+        telegram["botTokenConfigured"] = bool(telegram.get("botToken"))
+        telegram["botToken"] = ""
     return payload
 
 
@@ -206,6 +214,12 @@ def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
         backup = dict(backup)
         backup.pop("serviceAccountJson", None)
         cleaned["backup"] = backup
+    for section, key in (("email", "password"), ("telegram", "botToken")):
+        block = cleaned.get(section)
+        if isinstance(block, dict) and not str(block.get(key) or "").strip():
+            block = dict(block)
+            block.pop(key, None)
+            cleaned[section] = block
     return cleaned
 
 
@@ -272,63 +286,69 @@ async def search(session: AsyncSession, context: RequestContext, query: str, lim
             }
         )
 
-    orders = (
-        await session.execute(
-            select(ServiceOrder)
-            .where(ServiceOrder.service_order_no.ilike(pattern))
-            .limit(limit)
-        )
-    ).scalars().all()
-    for row in orders:
-        add("other", row.id, row.service_order_no, f"Service order {row.service_order_no}", f"/service-orders/{row.id}", "service_order.read", None)
-
-    quotations = (
-        await session.execute(
-            select(Quotation)
-            .where(Quotation.quotation_no.ilike(pattern))
-            .limit(limit)
-        )
-    ).scalars().all()
-    for row in quotations:
-        add("other", row.id, row.quotation_no, f"Quotation {row.quotation_no}", f"/quotations/{row.id}", "quotation.read", None)
-
-    documents = (
-        await session.execute(
-            select(FinancialDocument)
-            .where(
-                or_(FinancialDocument.document_no.ilike(pattern), FinancialDocument.reference_number.ilike(pattern)),
+    # Only surface entity types the caller is actually allowed to read.
+    if context.has_permission("service_order.read"):
+        orders = (
+            await session.execute(
+                select(ServiceOrder)
+                .where(ServiceOrder.service_order_no.ilike(pattern))
+                .limit(limit)
             )
-            .limit(limit)
-        )
-    ).scalars().all()
-    for row in documents:
-        add("document", row.id, row.document_no, f"Financial document {row.document_no}", f"/finance/documents/{row.id}", "financial_document.read", None)
+        ).scalars().all()
+        for row in orders:
+            add("other", row.id, row.service_order_no, f"Service order {row.service_order_no}", f"/service-orders/{row.id}", "service_order.read", None)
 
-    journals = (
-        await session.execute(
-            select(JournalEntry)
-            .where(JournalEntry.entry_no.ilike(pattern))
-            .limit(limit)
-        )
-    ).scalars().all()
-    for row in journals:
-        add("document", row.id, row.entry_no, f"Journal entry {row.entry_no}", f"/finance/journals/{row.id}", "journal_entry.read", None)
+    if context.has_permission("quotation.read"):
+        quotations = (
+            await session.execute(
+                select(Quotation)
+                .where(Quotation.quotation_no.ilike(pattern))
+                .limit(limit)
+            )
+        ).scalars().all()
+        for row in quotations:
+            add("other", row.id, row.quotation_no, f"Quotation {row.quotation_no}", f"/quotations/{row.id}", "quotation.read", None)
 
-    parties = (
-        await session.execute(
-            select(BusinessParty)
-            .where(
-                or_(
-                    BusinessParty.legal_name.ilike(pattern),
-                    BusinessParty.party_code.ilike(pattern),
-                    BusinessParty.display_name.ilike(pattern),
+    if context.has_permission("financial_document.read"):
+        documents = (
+            await session.execute(
+                select(FinancialDocument)
+                .where(
+                    or_(FinancialDocument.document_no.ilike(pattern), FinancialDocument.reference_number.ilike(pattern)),
                 )
+                .limit(limit)
             )
-            .limit(limit)
-        )
-    ).scalars().all()
-    for row in parties:
-        add("company", row.id, row.legal_name, f"Business party {row.party_code} - {row.legal_name}", f"/master-data/business-parties/{row.id}", "master.reference.view", None)
+        ).scalars().all()
+        for row in documents:
+            add("document", row.id, row.document_no, f"Financial document {row.document_no}", f"/finance/documents/{row.id}", "financial_document.read", None)
+
+    if context.has_permission("journal_entry.read"):
+        journals = (
+            await session.execute(
+                select(JournalEntry)
+                .where(JournalEntry.entry_no.ilike(pattern))
+                .limit(limit)
+            )
+        ).scalars().all()
+        for row in journals:
+            add("document", row.id, row.entry_no, f"Journal entry {row.entry_no}", f"/finance/journals/{row.id}", "journal_entry.read", None)
+
+    if context.has_permission("master.reference.view"):
+        parties = (
+            await session.execute(
+                select(BusinessParty)
+                .where(
+                    or_(
+                        BusinessParty.legal_name.ilike(pattern),
+                        BusinessParty.party_code.ilike(pattern),
+                        BusinessParty.display_name.ilike(pattern),
+                    )
+                )
+                .limit(limit)
+            )
+        ).scalars().all()
+        for row in parties:
+            add("company", row.id, row.legal_name, f"Business party {row.party_code} - {row.legal_name}", f"/master-data/business-parties/{row.id}", "master.reference.view", None)
 
     return hits[:limit]
 

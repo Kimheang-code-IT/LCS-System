@@ -138,53 +138,57 @@ async def get_latest_revision(session: AsyncSession, quotation: Quotation) -> Qu
 
 
 async def _save_revision_children(session: AsyncSession, revision: QuotationRevision, data: dict[str, Any]) -> None:
-    await session.execute(delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id))
-    await session.execute(delete(QuotationRevisionPlace).where(QuotationRevisionPlace.quotation_revision_id == revision.id))
-    await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
+    # Replace a child collection only when the caller supplied it, so a partial
+    # save (e.g. editing notes) does not erase containers or priced lines.
+    if "containerRequirements" in data:
+        await session.execute(delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id))
+        for _index, container in enumerate(data.get("containerRequirements") or []):
+            if not isinstance(container, dict):
+                continue
+            container_type_id = container.get("containerTypeId") or container.get("container_type_id")
+            if not container_type_id:
+                from app.modules.master_data.service import resolve_reference
 
-    for _index, container in enumerate(data.get("containerRequirements") or []):
-        if not isinstance(container, dict):
-            continue
-        container_type_id = container.get("containerTypeId") or container.get("container_type_id")
-        if not container_type_id:
-            from app.modules.master_data.service import resolve_reference
-
-            container_type_id = await resolve_reference(session, "container_type", container.get("containerType"))
-        session.add(
-            QuotationRevisionContainer(
-                quotation_revision_id=revision.id,
-                container_type_id=int(container_type_id) if container_type_id else 1,
-                quantity=_decimal(container.get("quantity"), Decimal("1")),
-                gross_weight_kg=_decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None,
-                remarks=container.get("remarks"),
+                container_type_id = await resolve_reference(session, "container_type", container.get("containerType"))
+            session.add(
+                QuotationRevisionContainer(
+                    quotation_revision_id=revision.id,
+                    container_type_id=int(container_type_id) if container_type_id else 1,
+                    quantity=_decimal(container.get("quantity"), Decimal("1")),
+                    gross_weight_kg=_decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None,
+                    remarks=container.get("remarks"),
+                )
             )
-        )
-    for index, line in enumerate(data.get("pricingLines") or data.get("lines") or []):
-        if not isinstance(line, dict):
-            continue
-        quantity = _decimal(line.get("quantity"), Decimal("1"))
-        unit_price = _decimal(line.get("unitPrice"), Decimal("0"))
-        discount = _decimal(line.get("discount"), Decimal("0"))
-        tax = _decimal(line.get("tax"), Decimal("0"))
-        subtotal = quantity * unit_price
-        total = _decimal(line.get("total"), subtotal - discount + tax)
-        session.add(
-            QuotationRevisionLine(
-                quotation_revision_id=revision.id,
-                line_no=index + 1,
-                fee_type_id=line.get("feeTypeId"),
-                service_description=str(line.get("description") or line.get("feeType") or "Service"),
-                quantity=quantity,
-                unit_code=line.get("unit"),
-                unit_price=unit_price,
-                discount_rate=discount,
-                tax_rate=tax,
-                line_subtotal=subtotal,
-                line_discount=discount,
-                line_tax=tax,
-                line_total=total,
+    if "places" in data:
+        await session.execute(delete(QuotationRevisionPlace).where(QuotationRevisionPlace.quotation_revision_id == revision.id))
+    if "pricingLines" in data or "lines" in data:
+        await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
+        for index, line in enumerate(data.get("pricingLines") or data.get("lines") or []):
+            if not isinstance(line, dict):
+                continue
+            quantity = _decimal(line.get("quantity"), Decimal("1"))
+            unit_price = _decimal(line.get("unitPrice"), Decimal("0"))
+            discount = _decimal(line.get("discount"), Decimal("0"))
+            tax = _decimal(line.get("tax"), Decimal("0"))
+            subtotal = quantity * unit_price
+            total = _decimal(line.get("total"), subtotal - discount + tax)
+            session.add(
+                QuotationRevisionLine(
+                    quotation_revision_id=revision.id,
+                    line_no=index + 1,
+                    fee_type_id=line.get("feeTypeId"),
+                    service_description=str(line.get("description") or line.get("feeType") or "Service"),
+                    quantity=quantity,
+                    unit_code=line.get("unit"),
+                    unit_price=unit_price,
+                    discount_rate=discount,
+                    tax_rate=tax,
+                    line_subtotal=subtotal,
+                    line_discount=discount,
+                    line_tax=tax,
+                    line_total=total,
+                )
             )
-        )
     await session.flush()
 
 
@@ -218,10 +222,9 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
     if quotation_id and str(quotation_id).isdigit():
         quotation = await session.get(Quotation, int(quotation_id))
 
-    party = await resolve_party_by_name(session, data.get("customer"), context)
-    direction = await resolve_direction(session, data.get("direction"))
-
     if quotation is None:
+        party = await resolve_party_by_name(session, data.get("customer"), context)
+        direction = await resolve_direction(session, data.get("direction"))
         number = data.get("quotationNo")
         if not number or not str(number).strip():
             number = await allocate_number(session, "QUOTATION")
@@ -236,8 +239,11 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
         session.add(quotation)
         await session.flush()
     else:
-        quotation.customer_party_id = party.id
-        quotation.trade_direction_id = direction.id
+        # Only reassign when supplied so a partial save cannot repoint the party.
+        if "customer" in data:
+            quotation.customer_party_id = (await resolve_party_by_name(session, data.get("customer"), context)).id
+        if "direction" in data:
+            quotation.trade_direction_id = (await resolve_direction(session, data.get("direction"))).id
         quotation.status = normalize_status(data.get("status"), quotation.status)
 
     latest = await get_latest_revision(session, quotation)
@@ -258,17 +264,21 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
         # A new revision is required instead of overwriting a sent revision.
         latest = await _clone_revision(session, quotation, latest)
         quotation.current_revision_no = latest.revision_no
+        # Cloning opens a fresh draft revision, so the quotation becomes editable.
+        if "status" not in data:
+            quotation.status = "DRAFT"
 
     latest.quotation_date = _date(data.get("date")) or latest.quotation_date
     latest.valid_until = _date(data.get("validUntil")) or latest.valid_until
     latest.currency_code = data.get("currency") or latest.currency_code
     latest.description = data.get("description") or latest.description
     latest.notes = data.get("notes") or latest.notes
-    latest.total_amount = _payload_amount(data)
+    if any(data.get(key) not in (None, "") for key in ("amount", "totalSelling", "totalAmount", "total")):
+        latest.total_amount = _payload_amount(data)
     await _save_revision_children(session, latest, data)
 
     payload = {key: value for key, value in data.items() if key not in {"id", "quotationId", "createdAt", "updatedAt"}}
-    quotation.data = jsonable(payload)
+    quotation.data = jsonable({**(quotation.data or {}), **payload})
     await session.commit()
     return quotation_record(quotation, latest, quotation.data or {})
 
@@ -386,11 +396,15 @@ async def send_revision(session: AsyncSession, context: RequestContext, revision
 
 
 async def submit_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:
-    _, revision = await _revision_with_quotation(session, revision_id)
+    quotation, revision = await _revision_with_quotation(session, revision_id)
+    if revision.status == "SENT":
+        return quotation_record(quotation, revision, quotation.data or {})
+    if revision.status != "DRAFT":
+        raise InvalidState(f"Cannot submit a revision in status {revision.status}.")
     revision.status = "SENT"
     revision.sent_at = revision.sent_at or datetime.now(UTC)
+    quotation.status = "SENT"
     await session.commit()
-    quotation, revision = await _revision_with_quotation(session, revision_id)
     return quotation_record(quotation, revision, quotation.data or {})
 
 
@@ -408,7 +422,7 @@ async def accept_revision(session: AsyncSession, context: RequestContext, revisi
             select(QuotationRevision).where(
                 QuotationRevision.quotation_id == quotation.id,
                 QuotationRevision.id != revision.id,
-                QuotationRevision.status == "SENT",
+                QuotationRevision.status.in_(("SENT", "ACCEPTED")),
             )
         )
     ).scalars().all()
@@ -422,11 +436,15 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
     from app.modules.operations.service import create_service_order_from_quotation
 
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    existing = (
-        await session.execute(select(QuotationConversion).where(QuotationConversion.quotation_revision_id == revision.id))
+    prior_conversion = (
+        await session.execute(
+            select(QuotationConversion)
+            .join(QuotationRevision, QuotationRevision.id == QuotationConversion.quotation_revision_id)
+            .where(QuotationRevision.quotation_id == quotation.id)
+        )
     ).scalars().first()
-    if existing is not None:
-        raise Conflict("DUPLICATE_CONVERSION", "This quotation revision was already converted.")
+    if prior_conversion is not None:
+        raise Conflict("DUPLICATE_CONVERSION", "This quotation was already converted to a service order.")
     if revision.status != "ACCEPTED":
         raise InvalidState("Only an accepted revision can be converted to a service order.")
     service_order = await create_service_order_from_quotation(session, context, quotation, revision)

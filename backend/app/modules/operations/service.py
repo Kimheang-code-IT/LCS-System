@@ -167,10 +167,9 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
             order = await resolve_order(session, context, identifier)
         except NotFound:
             order = None
-    party = await _resolve_party(session, data.get("customer"), context)
-    direction = await resolve_direction(session, data.get("direction"))
-
     if order is None:
+        party = await _resolve_party(session, data.get("customer"), context)
+        direction = await resolve_direction(session, data.get("direction"))
         number = data.get("jobNo") or data.get("serviceOrderNo")
         if not number or not str(number).strip():
             number = await allocate_number(session, "SERVICE_ORDER")
@@ -186,13 +185,18 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
         session.add(order)
         await session.flush()
     else:
-        order.customer_party_id = party.id
-        order.trade_direction_id = direction.id
+        # Only reassign when the caller actually supplied the field, otherwise a
+        # partial save would silently repoint the order at another party/direction.
+        if "customer" in data:
+            order.customer_party_id = (await _resolve_party(session, data.get("customer"), context)).id
+        if "direction" in data:
+            order.trade_direction_id = (await resolve_direction(session, data.get("direction"))).id
         order.status = normalize_order_status(data.get("status"), order.status)
         order.currency_code = data.get("currency") or order.currency_code
 
     payload = {key: value for key, value in data.items() if key not in {"id", "createdAt", "updatedAt"}}
-    order.data = jsonable(payload)
+    # Merge so a partial update does not discard previously stored fields.
+    order.data = jsonable({**(order.data or {}), **payload})
     await session.commit()
     return order_record(order, order.data or {})
 
@@ -289,13 +293,16 @@ async def create_service_order_from_quotation(
         )
     ).scalars().all()
     for tdc in direction_components:
+        template = await session.get(ComponentTemplate, tdc.component_template_id)
+        if template is None:
+            continue
         session.add(
             ServiceOrderComponent(
                 service_order_id=order.id,
                 trade_direction_component_id=tdc.id,
                 component_group_id=tdc.component_group_id,
                 component_template_id=tdc.component_template_id,
-                template_version=(await session.get(ComponentTemplate, tdc.component_template_id)).version,
+                template_version=template.version,
                 component_status="PENDING",
                 sequence_no=tdc.display_order,
                 is_required=tdc.is_required,
@@ -711,46 +718,53 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     else:
         charge.status = str(data.get("status") or charge.status).upper()
 
-    lines = data.get("lines") or data.get("chargeLines") or []
-    subtotal = Decimal("0")
-    discount_total = Decimal("0")
-    tax_total = Decimal("0")
-    await session.execute(delete(ServiceOrderChargeLine).where(ServiceOrderChargeLine.service_order_charge_id == charge.id))
-    for index, line in enumerate(lines):
-        if not isinstance(line, dict):
-            continue
-        quantity = _decimal(line.get("quantity"), Decimal("1")) or Decimal("1")
-        unit_price = _decimal(line.get("unitPrice"), Decimal("0")) or Decimal("0")
-        discount = _decimal(line.get("discount"), Decimal("0")) or Decimal("0")
-        tax_rate = _decimal(line.get("tax"), Decimal("0")) or Decimal("0")
-        base = quantity * unit_price
-        tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
-        line_total = _decimal(line.get("total"), base - discount + tax_amount) or (base - discount + tax_amount)
-        subtotal += base
-        discount_total += discount
-        tax_total += tax_amount
-        session.add(
-            ServiceOrderChargeLine(
-                service_order_charge_id=charge.id,
-                line_no=index + 1,
-                fee_type_id=_int_or_none(line.get("feeTypeId")),
-                service_order_container_id=_int_or_none(line.get("containerId") or line.get("serviceOrderContainerId")),
-                description=str(line.get("description") or line.get("feeType") or "Charge"),
-                quantity=quantity,
-                unit_code=line.get("unit"),
-                unit_price=unit_price,
-                discount_amount=discount,
-                tax_rate=tax_rate,
-                tax_amount=tax_amount,
-                line_amount=line_total,
+    # Only rebuild priced lines when the caller supplied them; a partial update
+    # (e.g. just a status change) must not wipe the existing lines and totals.
+    if "lines" in data or "chargeLines" in data:
+        lines = data.get("lines") or data.get("chargeLines") or []
+        subtotal = Decimal("0")
+        discount_total = Decimal("0")
+        tax_total = Decimal("0")
+        await session.execute(delete(ServiceOrderChargeLine).where(ServiceOrderChargeLine.service_order_charge_id == charge.id))
+        for index, line in enumerate(lines):
+            if not isinstance(line, dict):
+                continue
+            quantity = _decimal(line.get("quantity"), Decimal("1")) or Decimal("1")
+            unit_price = _decimal(line.get("unitPrice"), Decimal("0")) or Decimal("0")
+            discount = _decimal(line.get("discount"), Decimal("0")) or Decimal("0")
+            tax_rate = _decimal(line.get("tax"), Decimal("0")) or Decimal("0")
+            base = quantity * unit_price
+            tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
+            line_total = _decimal(line.get("total"), base - discount + tax_amount) or (base - discount + tax_amount)
+            subtotal += base
+            discount_total += discount
+            tax_total += tax_amount
+            session.add(
+                ServiceOrderChargeLine(
+                    service_order_charge_id=charge.id,
+                    line_no=index + 1,
+                    fee_type_id=_int_or_none(line.get("feeTypeId")),
+                    service_order_container_id=_int_or_none(line.get("containerId") or line.get("serviceOrderContainerId")),
+                    description=str(line.get("description") or line.get("feeType") or "Charge"),
+                    quantity=quantity,
+                    unit_code=line.get("unit"),
+                    unit_price=unit_price,
+                    discount_amount=discount,
+                    tax_rate=tax_rate,
+                    tax_amount=tax_amount,
+                    line_amount=line_total,
+                )
             )
-        )
-    charge.subtotal_amount = subtotal
-    charge.discount_amount = discount_total
-    charge.tax_amount = tax_total
-    charge.total_amount = subtotal - discount_total + tax_total
-    charge.remark = data.get("remark")
-    charge.data = jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}})
+        charge.subtotal_amount = subtotal
+        charge.discount_amount = discount_total
+        charge.tax_amount = tax_total
+        charge.total_amount = subtotal - discount_total + tax_total
+    if "remark" in data:
+        charge.remark = data.get("remark")
+    charge.data = jsonable({
+        **(charge.data or {}),
+        **{key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}},
+    })
     await session.commit()
     payload = charge_record(charge, charge.data or {})
     payload["jobNo"] = order.service_order_no
@@ -792,7 +806,7 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
             .join(AttachmentLink, AttachmentLink.attachment_id == Attachment.id)
             .where(
                 AttachmentLink.entity_type == module,
-                AttachmentLink.entity_id == _int_or_none(record_no) or 0,
+                AttachmentLink.entity_id == (_int_or_none(record_no) or 0),
                 Attachment.is_deleted.is_(False),
             )
         )

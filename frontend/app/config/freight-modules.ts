@@ -1126,12 +1126,12 @@ export const freightModules: FreightModule[] = [
       col('lastLogin', 'Last Login', 'ចូលចុងក្រោយ'),
     ],
     fields: [
-      f('userCode', 'User Code', 'លេខកូដអ្នកប្រើ', 'General', 'ទូទៅ'),
+      // Auto-generated and read-only; status is changed from the row "..." menu.
+      f('userCode', 'User Code', 'លេខកូដអ្នកប្រើ', 'General', 'ទូទៅ', 'text', undefined, { computed: true }),
       f('username', 'Username', 'ឈ្មោះអ្នកប្រើ', 'General', 'ទូទៅ'),
       f('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ', 'General', 'ទូទៅ'),
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ'),
       f('role', 'Role Name', 'ឈ្មោះតួនាទី', 'General', 'ទូទៅ', 'select'),
-      f('status', 'Status', 'ស្ថានភាព', 'General', 'ទូទៅ', 'select', ACTIVE_STATUS),
     ],
   }),
 

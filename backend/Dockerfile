@@ -18,11 +18,13 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Application code + project install.
+# Application code. The app runs from /app (uvicorn adds "." to sys.path and
+# alembic.ini sets prepend_sys_path = .), so the project is intentionally NOT
+# built/installed: that avoids fetching a build backend such as setuptools.
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 EXPOSE 8000
 

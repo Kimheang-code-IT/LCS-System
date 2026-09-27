@@ -38,6 +38,8 @@ async def get_current_context(
     user = await session.get(User, int(user_id))
     if user is None:
         raise AuthRequired("User not found.")
+    if str(user.status or "").upper() not in {"ACTIVE"}:
+        raise AuthRequired("This account is not active.")
     request_id = getattr(request.state, "request_id", None) or payload.get("jti", "")
     context = await auth_service.build_context(
         session,

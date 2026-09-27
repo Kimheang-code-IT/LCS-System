@@ -40,8 +40,17 @@ class LocalStorage:
         self.root = Path(root)
 
     def _path(self, key: str) -> Path:
-        safe = key.lstrip("/").replace("..", "_")
-        return self.root / safe
+        normalized = str(key).replace("\\", "/")
+        # Strip a Windows drive prefix (e.g. "C:") so it cannot become absolute.
+        if len(normalized) >= 2 and normalized[1] == ":":
+            normalized = normalized[2:]
+        parts = [part for part in normalized.split("/") if part not in {"", ".", ".."}]
+        candidate = Path(*parts) if parts else Path("_")
+        root = self.root.resolve()
+        resolved = (root / candidate).resolve()
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(f"Invalid storage key: {key}")
+        return resolved
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
         path = self._path(key)
@@ -78,13 +87,19 @@ class S3Storage:
 
     @staticmethod
     def _build_client(endpoint_url: str | None):
+        # Trust an explicit scheme in the URL: the internal endpoint is usually
+        # http://minio:9000 while the browser-facing endpoint is https://...
+        if endpoint_url and "://" in endpoint_url:
+            use_ssl = endpoint_url.lower().startswith("https://")
+        else:
+            use_ssl = settings.s3_use_ssl
         return boto3.client(
             "s3",
             endpoint_url=endpoint_url,
             aws_access_key_id=settings.s3_access_key,
             aws_secret_access_key=settings.s3_secret_key,
             region_name=settings.s3_region,
-            use_ssl=settings.s3_use_ssl,
+            use_ssl=use_ssl,
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
 

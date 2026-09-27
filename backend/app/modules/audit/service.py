@@ -57,13 +57,24 @@ def serialize(event: AuditEvent, user_name: str | None = None) -> dict[str, Any]
     }
 
 
-async def list_events(session: AsyncSession, context: RequestContext, page: PageParams, entity_type: str | None = None) -> dict:
+async def list_events(
+    session: AsyncSession,
+    context: RequestContext,
+    page: PageParams,
+    entity_type: str | None = None,
+    event_type: str | None = None,
+    entity_id: int | None = None,
+) -> dict:
     stmt = (
         select(AuditEvent, User.display_name)
         .outerjoin(User, User.id == AuditEvent.actor_user_id)
     )
     if entity_type:
         stmt = stmt.where(AuditEvent.entity_type == entity_type)
+    if event_type:
+        stmt = stmt.where(AuditEvent.event_type == event_type)
+    if entity_id is not None:
+        stmt = stmt.where(AuditEvent.entity_id == entity_id)
     if page.status:
         stmt = stmt.where(AuditEvent.action == page.status)
     total = await count_query(session, stmt)

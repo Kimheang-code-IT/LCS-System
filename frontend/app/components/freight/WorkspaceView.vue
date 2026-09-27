@@ -18,7 +18,7 @@ import { freightModules, type FreightSelectOption } from '~/config/freight-modul
 import { chargeDomainStatus, financeDomainStatus, jobDomainStatus, quotationDomainStatus } from '~/utils/lcs/states'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
 import { enrichJobListRows } from '~/utils/freight/job-list'
-import { limitFilterSelects, parseFilterQuery } from '~/utils/filter/values'
+import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
@@ -75,6 +75,27 @@ async function refreshList() {
 
 watch([current, q, filters, dateFrom, dateTo, dateField], () => { void refreshList() }, { immediate: true, deep: true })
 
+function rowMatchesToolbarFilters(row: FreightRecord): boolean {
+  const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row) : row
+  if (q.value) {
+    const needle = q.value.toLowerCase()
+    if (!Object.values(source).join(' ').toLowerCase().includes(needle)) return false
+  }
+  for (const [key, selected] of Object.entries(filters)) {
+    if (!isFilterValueActive(selected)) continue
+    const value = source[key] ?? source[key.toLowerCase()] ?? source[key.toUpperCase()]
+    if (!matchesFilter(value, selected)) return false
+  }
+  const field = dateField.value
+  if (field && (dateFrom.value || dateTo.value)) {
+    const day = String(source[field] ?? '').slice(0, 10)
+    if (!day) return false
+    if (dateFrom.value && day < dateFrom.value) return false
+    if (dateTo.value && day > dateTo.value) return false
+  }
+  return true
+}
+
 const result = computed(() => {
   if (!current.value) return { rows: [], total: 0, all: [] }
   let all = moduleList.items.value
@@ -86,7 +107,10 @@ const result = computed(() => {
       shipments: store.list('shipments'),
     })
   }
-  return { rows: all, total: moduleList.total.value || all.length, all }
+  // The backend module list endpoints don't understand the toolbar filter
+  // fields, so apply them (and the search box) on the loaded page client-side.
+  all = all.filter(rowMatchesToolbarFilters)
+  return { rows: all, total: all.length, all }
 })
 const isTableOnly = computed(() => Boolean(current.value?.tableOnly))
 const canManageModule = computed(() => {
@@ -95,7 +119,7 @@ const canManageModule = computed(() => {
   if (current.value.collection === 'chartOfAccounts' || current.value.collection === 'financialAccounts') return lcs.can('chart_of_accounts.manage')
   if (current.value.collection === 'users') return lcs.can('user.manage')
   if (current.value.collection === 'roles') return lcs.can('role.manage')
-  if (current.value.group === 'master') return false
+  if (current.value.group === 'master') return lcs.can('master.reference.manage')
   if (current.value.group === 'configuration') return auth.canAccessPage('configuration.manage')
   return true
 })

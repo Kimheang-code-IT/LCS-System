@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { AuthUser } from '~/types/auth-user'
 import { AUTH_STORAGE_KEY, compactAuthUser } from '~/utils/auth/session'
+import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 
 function restoreSessionUser(candidate: AuthUser | null | undefined): AuthUser | null {
   if (!candidate?.email) return null
@@ -84,6 +85,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
+    if (import.meta.client) {
+      // Revoke the server-side refresh session and clear the HttpOnly cookies.
+      try {
+        await $fetch(ApiV1Endpoints.LOGOUT, { method: 'POST', credentials: 'include' })
+      }
+      catch {
+        // Local sign-out must succeed even if the server call fails.
+      }
+    }
     clearSession()
     await navigateTo('/auth/login')
   }

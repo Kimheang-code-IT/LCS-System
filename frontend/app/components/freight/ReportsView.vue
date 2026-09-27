@@ -126,7 +126,14 @@ function setFilterValue(key: ReportFilterKey, value: string[] | string | undefin
 }
 
 const statementTypes=computed(()=>report.value.statementTypes||(slug.value==='profit-loss'?['Revenue','Expense']:['Asset','Liability','Equity']))
-const statementGroups=computed(()=>buildStatementGroups(postedLines.value, statementTypes.value))
+// Statement reports must respect the same toolbar filters as table reports.
+const filteredPostedLines=computed(()=>postedLines.value.filter((row)=>{
+  const day=reportRowDate(row)
+  return matchesFilter(row.currency,currency.value)
+    && (!dateFrom.value||day>=dateFrom.value)
+    && (!dateTo.value||day<=dateTo.value)
+}))
+const statementGroups=computed(()=>buildStatementGroups(filteredPostedLines.value, statementTypes.value))
 const statementDifference=computed(()=>statementDifferenceOf(statementGroups.value, slug.value==='balance-sheet'))
 const statementFooterLabel=computed(()=>{const key=report.value.statementFooterKey;return key&&te(key)?t(key):(slug.value==='profit-loss'?'Net Profit':'Difference')})
 function actions(row: FreightRecord): DropdownMenuItem[][] {

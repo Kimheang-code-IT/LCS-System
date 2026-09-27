@@ -268,7 +268,7 @@ async def list_financial_documents(
     context: RequestContext = Depends(require_permission("financial_document.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_documents(session, context, page, document_type)}
+    return {"data": await service.list_documents(session, context, page, document_type, party_id)}
 
 
 @router.post("/financial-documents", status_code=status.HTTP_201_CREATED)
@@ -345,7 +345,7 @@ async def allocate_payment(
     context: RequestContext = Depends(require_permission("financial_document.allocate")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    allocation = await service.allocate_payment(session, context, int(document_id), payload)
+    allocation = await service.allocate_payment(session, context, int(document_id), payload, idempotency_key)
     await write_audit(
         session,
         context,

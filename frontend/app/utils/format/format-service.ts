@@ -130,6 +130,9 @@ export function formatTime(value: unknown, fallback = '—') {
 export function formatDateTime(value: unknown, fallback = '—') {
   const date = validDate(value)
   if (!date) return fallback
+  // A date-only value (YYYY-MM-DD) has no time to show; don't invent midnight in
+  // the configured timezone, which would shift the displayed date/time.
+  if (dateOnlyParts(value)) return formatDate(value, fallback)
   return `${formatDate(value, fallback)} ${formatTime(value, '')}`.trim()
 }
 

@@ -38,7 +38,7 @@ export function useGlobalSearch() {
       })
     }
 
-    for (const link of navLinks as NavigationMenuItem[]) {
+    for (const link of navLinks) {
       if (link.children?.length) {
         for (const child of link.children) {
           if (child.to) pushLink(String(child.label), String(child.to), child.icon || link.icon)

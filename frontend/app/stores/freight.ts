@@ -107,7 +107,10 @@ export const useFreightStore = defineStore('freight', () => {
         if (collection === 'jobs') deriveJobCollections(items)
       }
       catch {
-        setCache(collection, [])
+        // Don't mark the collection as loaded on failure, otherwise a transient
+        // error is cached as "zero rows" and never retried.
+        remoteCache.value = { ...remoteCache.value, [collection]: [] }
+        bumpRevision()
       }
     })()
     inflight.set(collection, promise)

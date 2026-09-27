@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -210,11 +210,18 @@ async def resolve_period(session: AsyncSession, posting_date: date) -> Accountin
         )
     ).scalars().first()
     if period is None:
+        # Periods cover a full calendar month so a later posting date in the same
+        # month reuses this row instead of trying to create a duplicate (which
+        # would violate the (year, month) unique constraint).
+        if posting_date.month == 12:
+            end_date = date(posting_date.year, 12, 31)
+        else:
+            end_date = date(posting_date.year, posting_date.month + 1, 1) - timedelta(days=1)
         period = AccountingPeriod(
             period_year=posting_date.year,
             period_month=posting_date.month,
             start_date=posting_date.replace(day=1),
-            end_date=posting_date,
+            end_date=end_date,
             status="OPEN",
         )
         session.add(period)
@@ -360,10 +367,18 @@ async def _document_lines(session: AsyncSession, document_id: int) -> list[Finan
     )
 
 
-async def list_documents(session: AsyncSession, context: RequestContext, page: PageParams, document_type: str | None = None) -> dict:
+async def list_documents(
+    session: AsyncSession,
+    context: RequestContext,
+    page: PageParams,
+    document_type: str | None = None,
+    party_id: int | None = None,
+) -> dict:
     stmt = select(FinancialDocument)
     if document_type:
         stmt = stmt.where(FinancialDocument.document_type == document_type)
+    if party_id is not None:
+        stmt = stmt.where(FinancialDocument.party_id == party_id)
     if page.status:
         stmt = stmt.where(FinancialDocument.status == str(page.status).upper())
     if page.q:
@@ -423,6 +438,12 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
         for key, column in (("partyId", "party_id"), ("serviceOrderId", "service_order_id"), ("description", "description"), ("referenceNumber", "reference_number"), ("dueDate", "due_date")):
             if data.get(key) is not None:
                 setattr(document, column, _int_or_none(data[key]) if key.endswith("Id") else (_date(data[key]) if key == "dueDate" else data[key]))
+        if data.get("currency") is not None:
+            document.currency_code = str(data["currency"])
+        if data.get("exchangeRate") is not None:
+            document.exchange_rate = _decimal(data["exchangeRate"], document.exchange_rate or Decimal("1"))
+        if data.get("financialAccountId") is not None:
+            document.financial_account_id = _int_or_none(data["financialAccountId"])
 
     await session.execute(delete(FinancialDocumentLine).where(FinancialDocumentLine.financial_document_id == document.id))
     for index, line in enumerate(lines):
@@ -480,6 +501,16 @@ async def _account_by_code(session: AsyncSession, code: str) -> ChartOfAccount |
             select(ChartOfAccount).where(ChartOfAccount.account_code == code)
         )
     ).scalars().first()
+
+
+async def _resolve_account_ref(session: AsyncSession, value: Any) -> ChartOfAccount | None:
+    """Accept an account code (canonical) or a numeric id (legacy clients)."""
+    if value in (None, ""):
+        return None
+    account = await _account_by_code(session, str(value))
+    if account is None and str(value).isdigit():
+        account = await session.get(ChartOfAccount, int(value))
+    return account
 
 
 async def _resolve_rule(session: AsyncSession, document_type: str) -> tuple[ChartOfAccount | None, ChartOfAccount | None, ChartOfAccount | None]:
@@ -607,7 +638,11 @@ async def post_document(session: AsyncSession, context: RequestContext, document
 
 
 async def reverse_document(session: AsyncSession, context: RequestContext, document_id: int, reason: str) -> dict:
-    document = await session.get(FinancialDocument, document_id)
+    document = (
+        await session.execute(
+            select(FinancialDocument).where(FinancialDocument.id == document_id).with_for_update()
+        )
+    ).scalars().first()
     if document is None:
         raise NotFound("Financial document not found.")
     if document.status == "REVERSED":
@@ -668,12 +703,61 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
         )
     reversal.debit_total = debit_total
     reversal.credit_total = credit_total
+    # Undo payment allocations so the subledger (paid_amount) matches the ledger.
+    allocations = (
+        await session.execute(
+            select(FinancialDocumentAllocation).where(
+                or_(
+                    FinancialDocumentAllocation.payment_document_id == document.id,
+                    FinancialDocumentAllocation.target_document_id == document.id,
+                )
+            )
+        )
+    ).scalars().all()
+    for allocation in allocations:
+        other_id = (
+            allocation.target_document_id
+            if allocation.payment_document_id == document.id
+            else allocation.payment_document_id
+        )
+        other = await session.get(FinancialDocument, other_id)
+        if other is not None:
+            other.paid_amount = max(
+                Decimal("0"), (other.paid_amount or Decimal("0")) - (allocation.allocated_amount or Decimal("0"))
+            )
+        await session.delete(allocation)
+    document.paid_amount = Decimal("0")
     document.status = "REVERSED"
     await session.commit()
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
-async def allocate_payment(session: AsyncSession, context: RequestContext, payment_id: int, data: dict[str, Any]) -> dict:
+async def allocate_payment(
+    session: AsyncSession,
+    context: RequestContext,
+    payment_id: int,
+    data: dict[str, Any],
+    idempotency_key: str | None = None,
+) -> dict:
+    if idempotency_key:
+        existing = (
+            await session.execute(
+                select(FinancialDocumentAllocation).where(
+                    FinancialDocumentAllocation.idempotency_key == idempotency_key
+                )
+            )
+        ).scalars().first()
+        if existing is not None:
+            payment_doc = await session.get(FinancialDocument, existing.payment_document_id)
+            target_doc = await session.get(FinancialDocument, existing.target_document_id)
+            return {
+                "paymentDocumentId": str(existing.payment_document_id),
+                "targetDocumentId": str(existing.target_document_id),
+                "allocatedAmount": float(existing.allocated_amount),
+                "paymentBalance": float((payment_doc.total_amount or Decimal("0")) - (payment_doc.paid_amount or Decimal("0"))) if payment_doc else 0.0,
+                "targetOutstanding": float((target_doc.total_amount or Decimal("0")) - (target_doc.paid_amount or Decimal("0"))) if target_doc else 0.0,
+                "idempotentReplay": True,
+            }
     payment = (
         await session.execute(select(FinancialDocument).where(FinancialDocument.id == payment_id).with_for_update())
     ).scalars().first()
@@ -719,6 +803,7 @@ async def allocate_payment(session: AsyncSession, context: RequestContext, payme
             allocated_currency_code=payment.currency_code,
             exchange_rate=payment.exchange_rate,
             created_by_user_id=context.user_id,
+            idempotency_key=idempotency_key,
         )
     )
     payment.paid_amount = (payment.paid_amount or Decimal("0")) + amount
@@ -905,29 +990,37 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
             continue
+        account = None
         account_id = _int_or_none(line.get("account_id") or line.get("accountId"))
-        if account_id is None:
+        if account_id is not None:
+            account = await session.get(ChartOfAccount, account_id)
+        if account is None:
             code = line.get("account_code") or line.get("accountCode")
             account = await _account_by_code(session, str(code)) if code else None
-            account_id = account.id if account else None
+        if account is None:
+            raise ValidationFailed(
+                "Every journal line must reference a valid account.",
+                {"lines": f"Line {index + 1} has an unknown account."},
+            )
         debit_amount = _decimal(line.get("debit_amount") or line.get("debitAmount"))
         credit_amount = _decimal(line.get("credit_amount") or line.get("creditAmount"))
+        exchange_rate = _decimal(line.get("exchangeRate"), Decimal("1"))
         debit_total += debit_amount
         credit_total += credit_amount
         session.add(
             JournalEntryLine(
                 journal_entry_id=entry.id,
                 line_no=index + 1,
-                account_id=int(account_id or 1),
+                account_id=account.id,
                 party_id=_int_or_none(line.get("party")),
                 service_order_id=_int_or_none(line.get("serviceOrder")),
                 description=line.get("description"),
                 debit_amount=debit_amount,
                 credit_amount=credit_amount,
                 currency_code=str(line.get("currency") or "USD"),
-                exchange_rate=_decimal(line.get("exchangeRate"), Decimal("1")),
-                base_debit_amount=debit_amount,
-                base_credit_amount=credit_amount,
+                exchange_rate=exchange_rate,
+                base_debit_amount=debit_amount * exchange_rate,
+                base_credit_amount=credit_amount * exchange_rate,
             )
         )
     entry.debit_total = debit_total
@@ -992,11 +1085,12 @@ async def create_posting_rule(session: AsyncSession, context: RequestContext, da
     credit = await _account_by_code(session, str(data.get("creditAccount")))
     if debit is None or credit is None:
         raise ValidationFailed("Debit and credit accounts must exist.")
+    tax_account = await _resolve_account_ref(session, data.get("taxAccount"))
     rule = PostingRule(
         document_type=str(data.get("documentType") or "CUSTOMER_INVOICE").upper(),
         debit_account_id=debit.id,
         credit_account_id=credit.id,
-        tax_account_id=_int_or_none(data.get("taxAccount")),
+        tax_account_id=tax_account.id if tax_account else None,
         status=str(data.get("status") or "ACTIVE").upper(),
     )
     session.add(rule)
@@ -1117,7 +1211,8 @@ async def update_posting_rule(session: AsyncSession, context: RequestContext, ru
             raise ValidationFailed("Credit account must exist.")
         rule.credit_account_id = credit.id
     if "taxAccount" in data:
-        rule.tax_account_id = _int_or_none(data.get("taxAccount"))
+        tax_account = await _resolve_account_ref(session, data.get("taxAccount"))
+        rule.tax_account_id = tax_account.id if tax_account else None
     await session.commit()
     return await posting_rule_payload(session, rule)
 

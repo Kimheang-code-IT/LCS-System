@@ -120,6 +120,7 @@ async def logout(
     await write_audit(
         session, context, event_type="LOGOUT", entity_type="user", entity_id=context.user_id, action="logout"
     )
+    await session.commit()
     _clear_auth_cookies(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
@@ -243,7 +244,7 @@ async def create_user(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     user = await service.create_user(session, payload.model_dump(), context)
-    return {"data": {"id": user.id, "username": user.username, "email": user.email, "displayName": user.display_name, "status": user.status}}
+    return {"data": await service.user_payload(session, user)}
 
 
 @router.get("/users/{user_id}")
@@ -255,7 +256,7 @@ async def get_user(
     user = await session.get(User, user_id)
     if user is None:
         raise AuthRequired("User not found.")
-    return {"data": {"id": user.id, "username": user.username, "email": user.email, "displayName": user.display_name, "phone": user.phone, "status": user.status}}
+    return {"data": await service.user_payload(session, user)}
 
 
 @router.patch("/users/{user_id}")
@@ -267,7 +268,7 @@ async def update_user(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     user = await service.update_user(session, user_id, payload.model_dump(exclude_none=True))
-    return {"data": {"id": user.id, "username": user.username, "email": user.email, "status": user.status}}
+    return {"data": await service.user_payload(session, user)}
 
 
 @router.delete("/users")

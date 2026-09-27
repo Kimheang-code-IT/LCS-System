@@ -143,6 +143,22 @@ watch(
   { immediate: true },
 )
 
+// User Code is read-only and auto-generated from the username.
+watch(
+  [() => module.value?.collection, () => model.value.username],
+  ([collection]) => {
+    if (collection !== 'users') return
+    const username = String(model.value.username || '').trim()
+    const existing = String(model.value.userCode || '').trim()
+    if (!username || (!isCreate.value && existing)) return
+    const generated = username.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
+    if (generated && generated !== existing) {
+      model.value = { ...model.value, userCode: generated }
+    }
+  },
+  { immediate: true },
+)
+
 const title = computed(() => {
   if (!module.value) return ''
   if (isCreate.value) return t('freight.ui.newEntity', { entity: moduleSingular(module.value) })
@@ -174,7 +190,7 @@ const readOnly = computed(() => {
     if ((module.value.collection === 'chartOfAccounts' || module.value.collection === 'financialAccounts') && !lcs.can('chart_of_accounts.manage')) return true
     if (module.value.collection === 'users' && !lcs.can('user.manage')) return true
     if (module.value.collection === 'roles' && !lcs.can('role.manage')) return true
-    if (module.value.group === 'master') return true
+    if (module.value.group === 'master' && !lcs.can('master.reference.manage')) return true
     if (module.value.group === 'configuration' && !auth.canAccessPage('configuration.manage')) return true
   }
   if (isRecordReadOnly(module.value.collection, model.value)) return true

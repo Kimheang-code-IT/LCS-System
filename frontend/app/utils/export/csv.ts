@@ -21,5 +21,6 @@ export function downloadCsv(options: {
   link.href = url
   link.download = filename
   link.click()
-  URL.revokeObjectURL(url)
+  // Defer revocation: some browsers start the download asynchronously.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }

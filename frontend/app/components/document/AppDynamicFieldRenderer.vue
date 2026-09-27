@@ -15,6 +15,7 @@ import type {
   VisibilityRule,
   WorkflowTransition,
 } from '~/types/docetra/configuration'
+import type { AppRolePermissionRow } from '~/types/docetra/entities'
 import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/docetra/settings'
 import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/docetra/settings'
 import { createClientId } from '~/utils/client-id'
@@ -99,8 +100,8 @@ const multiValue = computed({
 })
 
 const permissionRows = computed({
-  get: () => (Array.isArray(props.modelValue) ? props.modelValue as unknown[] : []),
-  set: (v: unknown[]) => emit('update:modelValue', v),
+  get: () => (Array.isArray(props.modelValue) ? props.modelValue as AppRolePermissionRow[] : []),
+  set: (v: AppRolePermissionRow[]) => emit('update:modelValue', v),
 })
 
 const csvValue = computed({

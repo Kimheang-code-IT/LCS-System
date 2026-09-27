@@ -14,6 +14,13 @@ WORKDIR /app
 # Install with full source so Nuxt's postinstall (nuxt prepare) can run.
 COPY . .
 RUN pnpm install --frozen-lockfile
+
+# Public runtime config is inlined at build time. Override per environment
+# (e.g. NUXT_PUBLIC_SITE_URL=https://lcslog.minidev.in).
+ARG NUXT_PUBLIC_SITE_URL=""
+ARG NUXT_PUBLIC_AUTH_MODE="cookie"
+ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL \
+    NUXT_PUBLIC_AUTH_MODE=$NUXT_PUBLIC_AUTH_MODE
 RUN pnpm generate
 
 FROM nginx:1.27-alpine AS runtime

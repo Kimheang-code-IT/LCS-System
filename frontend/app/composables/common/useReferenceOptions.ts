@@ -48,7 +48,12 @@ export function useReferenceOptions() {
       requestKey: `field-options:${endpoint}`,
       cancelPrevious: true,
     })
-    return Array.isArray(response) ? response : response.data
+    // Accept a bare array, `{ data: [...] }`, or the paginated `{ data: { items } }` shape.
+    if (Array.isArray(response)) return response
+    const body = (response as { data?: unknown })?.data
+    if (Array.isArray(body)) return body as FieldOption[]
+    const items = (body as { items?: unknown })?.items
+    return Array.isArray(items) ? items as FieldOption[] : []
   }
 
   async function loadReferenceOptions(endpoint: string, search = '') {

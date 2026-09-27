@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.context import RequestContext
-from app.core.exceptions import AuthRequired, Conflict, NotFound
+from app.core.exceptions import AuthRequired, Conflict, NotFound, ValidationFailed
 from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
@@ -120,7 +120,7 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
     ).scalars().first()
     if credential is None or not verify_password(password, credential.password_hash):
         raise AuthRequired("Invalid username or password.")
-    if user.status not in {"ACTIVE"}:
+    if str(user.status or "").upper() not in {"ACTIVE"}:
         raise AuthRequired("This account is not active.")
     await session.commit()
     return user
@@ -245,10 +245,19 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str, *, ip:
     if user is None:
         raise AuthRequired("User not found.")
     record.revoked_at = datetime.now(UTC)
-    new_refresh = create_refresh_token(user.id)
-    record.refresh_token_hash = hash_token(new_refresh)
     record.last_used_at = datetime.now(UTC)
-    record.expires_at = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
+    new_refresh = create_refresh_token(user.id)
+    # Rotation issues a brand-new session row. Reusing the now-revoked row would
+    # make the fresh token fail the revoked check on the very next refresh.
+    session.add(
+        UserSession(
+            user_id=user.id,
+            refresh_token_hash=hash_token(new_refresh),
+            ip_address=ip,
+            user_agent=user_agent,
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+        )
+    )
     await session.commit()
     access = create_access_token(user.id)
     return user, access, new_refresh
@@ -368,7 +377,7 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
         email=data["email"],
         display_name=data["display_name"],
         phone=data.get("phone"),
-        status=data.get("status", "ACTIVE"),
+        status=str(data.get("status") or "ACTIVE").upper(),
     )
     session.add(user)
     await session.flush()
@@ -403,14 +412,40 @@ async def update_user(session: AsyncSession, user_id: int, data: dict) -> User:
         ("display_name", "display_name"),
         ("displayName", "display_name"),
         ("phone", "phone"),
-        ("status", "status"),
         ("locale", "locale"),
         ("timezone", "timezone"),
     ):
         if data.get(key) is not None:
             setattr(user, column, data[key])
+    if data.get("status") is not None:
+        user.status = str(data["status"]).upper()
+    role_code = data.get("role_code") or data.get("roleCode") or data.get("role")
+    if role_code:
+        role = (await session.execute(select(Role).where(Role.code == role_code))).scalars().first()
+        if role is None:
+            raise ValidationFailed("Role not found.", {"role": "Unknown role"})
+        # The user form captures a single role, so replace the current assignment.
+        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
+        session.add(UserRoleAssignment(user_id=user_id, role_id=role.id))
     await session.commit()
     return user
+
+
+async def user_payload(session: AsyncSession, user: User) -> dict:
+    assignments = await list_role_assignments(session, user.id)
+    roles = [item["roleCode"] for item in assignments if item.get("roleCode")]
+    return {
+        "id": user.id,
+        "userCode": user.user_code,
+        "username": user.username,
+        "email": user.email,
+        "displayName": user.display_name,
+        "phone": user.phone,
+        "status": str(user.status or "").upper(),
+        "role": roles[0] if roles else None,
+        "roles": roles,
+        "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
+    }
 
 
 async def list_role_assignments(session: AsyncSession, user_id: int) -> list[dict]:
@@ -571,6 +606,12 @@ async def delete_users(session: AsyncSession, ids: list[int]) -> None:
         await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
         await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
         await session.delete(user)
+    # Deleting every account would make `requires_setup` true again and expose the
+    # public first-run setup endpoint; refuse to remove the last user.
+    await session.flush()
+    if not await session.scalar(select(func.count()).select_from(User)):
+        await session.rollback()
+        raise ValidationFailed("At least one user account must remain.")
     await session.commit()
 
 

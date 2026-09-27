@@ -1,0 +1,42 @@
+# Production override for a single EC2 host (Docker Compose + Let's Encrypt).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Set NGINX_CONF=production.conf in infrastructure/.env once the certificate
+# exists. Until then keep NGINX_CONF=default.conf (HTTP) so the ACME challenge
+# can be served on port 80.
+#
+# Issue the first certificate with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     run --rm certbot certonly --webroot -w /var/www/certbot \
+#     -d lcslog.minidev.in -d storage.lcslog.minidev.in \
+#     --email you@example.com --agree-tos --no-eff-email
+
+services:
+  # Prebuilt images published by .github/workflows/publish.yml (GHCR).
+  # Override IMAGE_PREFIX / IMAGE_TAG in .env to pin or roll back a release.
+  backend:
+    image: ${IMAGE_PREFIX:-ghcr.io/kimheang-code-it/lcs-system}-backend:${IMAGE_TAG:-latest}
+    pull_policy: always
+
+  frontend:
+    image: ${IMAGE_PREFIX:-ghcr.io/kimheang-code-it/lcs-system}-frontend:${IMAGE_TAG:-latest}
+    pull_policy: always
+    ports:
+      - "${FRONTEND_HTTPS_PORT:-443}:443"
+    volumes:
+      # Shared with certbot: read-only certificate store + ACME webroot.
+      - certbot_etc:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+
+  # One-shot helper (profile "tools"): not started by `up`.
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["tools"]
+    volumes:
+      - certbot_etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+
+volumes:
+  certbot_etc:
+  certbot_www:

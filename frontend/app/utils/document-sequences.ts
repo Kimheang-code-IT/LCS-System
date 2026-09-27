@@ -36,5 +36,6 @@ export function documentSequencePreview(record: Record<string, unknown>) {
   const year = Number(record.year || record.periodYear || new Date().getFullYear())
   const next = Math.max(0, Number(record.lastValue || 0)) + 1
   const padding = Math.max(1, Number(record.paddingLength || 6))
-  return [prefix, year, String(next).padStart(padding, '0')].filter(Boolean).join('-')
+  // Must match the backend allocation format (core/sequences.py): PREFIX{year}-{padded}.
+  return `${prefix}${year}-${String(next).padStart(padding, '0')}`
 }
