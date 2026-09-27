@@ -75,6 +75,11 @@ Secrets must not be committed to Git, included in Docker images, stored in seed 
 
 ## 7. Standard Deployment
 
+Production deployment is automated by `.github/workflows/publish.yml` on every
+push to `main` (feature branches are validated by CI, auto-merged into `main`,
+then the deploy workflow is dispatched). The manual steps below describe the
+equivalent procedure and are used for exceptional/controlled deployments.
+
 1. Announce deployment start.
 2. Verify service and database health.
 3. Drain or limit write traffic that may conflict with the migration.
@@ -139,10 +144,18 @@ Do not post real financial documents as a smoke test unless the business approve
 
 ### Database
 
+The deploy workflow takes a pre-deployment `pg_dump` (custom format) on the EC2
+host before the stack is recreated. Backups are written outside the repository
+and outside container filesystems, to `$HOME/lcs-backups/freight-<timestamp>.dump`
+on the deploy user's home directory. The deployment aborts if the dump command
+fails or produces an empty file. Nothing prints database credentials; the dump
+reads `POSTGRES_USER`/`POSTGRES_DB` from the database container's own
+environment.
+
 - Schedule daily full backups.
 - Enable point-in-time recovery where supported.
 - Encrypt backups.
-- Store backups separately from the primary database.
+- Store backups separately from the primary database (copy off-host).
 - Retain backups according to policy.
 
 ### Object storage
@@ -178,6 +191,21 @@ Use rollback when the release causes critical errors and a forward fix is not sa
 8. Reconcile documents and journals created during the incident.
 9. Verify health and smoke tests.
 10. Record the incident and corrective actions.
+
+### Rolling back the application (automated)
+
+Images are immutable and tagged `sha-<short-commit>`. To redeploy an earlier
+known-good image without rebuilding it, dispatch the deploy workflow with the
+target tag:
+
+```bash
+gh workflow run "Build & Deploy" --ref main -f image_tag=sha-<short-commit>
+```
+
+The deploy job resolves that tag, backs up the database, pulls the exact image,
+recreates the stack, and runs the HTTPS readiness check. It does not rebuild
+images and does not roll back database migrations. `latest` is a convenience tag
+only and must never be used for production rollback.
 
 ## 14. Monitoring and Alerts
 
@@ -219,6 +247,21 @@ cd backend && uv run pytest -q && uv run ruff check .
 cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm generate
 ```
 
+### Automated deploy / rollback / restore
+
+```bash
+# deploy current main (builds immutable sha-<short> images, backs up, deploys)
+gh workflow run "Build & Deploy" --ref main
+
+# roll back to a previous immutable image without rebuilding
+gh workflow run "Build & Deploy" --ref main -f image_tag=sha-<short-commit>
+
+# restore a pre-deployment backup (run on the EC2 host)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres \
+  pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists \
+  < "$HOME/lcs-backups/freight-<timestamp>.dump"
+```
+
 Do not seed data: migrations leave the database empty and the first-run `/setup`
 page provisions the initial records.
 
@@ -234,3 +277,45 @@ Preserve:
 - request and correlation IDs;
 - affected organization and branch;
 - financial document and journal IDs.
+
+## 17. CI/CD Pipeline and Branch Protection
+
+### Flow
+
+feature branch → CI → pull request → required CI passes → merge to `main`
+→ `publish.yml` builds immutable images → GHCR → EC2 deploy → database backup
+→ Docker Compose recreate → Alembic migration/startup → HTTPS readiness check.
+
+### Workflows
+
+- `ci.yml` — runs on every branch push and pull request. Branch-aware
+  concurrency (`github.head_ref || github.ref_name`) cancels outdated runs. Path
+  filtering skips the unaffected side for backend-only/frontend-only changes;
+  workflow, infrastructure and lockfile changes run both.
+- `auto-merge.yml` — triggered by `workflow_run` after CI succeeds. If the
+  source branch has an open, same-repository pull request, it is squash-merged
+  (respecting branch protection) and `publish.yml` is dispatched.
+- `publish.yml` — builds `sha-<short-commit>` images for backend and frontend,
+  publishes to GHCR, and deploys the exact tag to EC2. It does not re-run the CI
+  suite; the required CI check on the pull request is the production gate.
+
+### Required branch-protection check
+
+Protect `main` and require the single aggregate check named **`CI`** (the
+`ci-ok` job). The automated flow merges through the pull-request API, so it does
+not bypass protection. Do not require mandatory reviews unless you are willing
+to approve every deployment manually.
+
+### Image tags
+
+- `sha-<short-commit>` — immutable, used by production. The build and the deploy
+  use the same value, computed in the `resolve` job.
+- `main`, `v*` — informational tags.
+- `latest` — convenience only; production must not depend on it.
+
+### Secrets
+
+`AWS_HOST`, `AWS_USER`, `AWS_SSH_KEY`, optional `AWS_PORT`; optional
+`GHCR_TOKEN` (read:packages) falling back to `GITHUB_TOKEN`. Secrets are never
+interpolated into the remote deploy script; they are forwarded through the SSH
+action's `envs` mechanism.

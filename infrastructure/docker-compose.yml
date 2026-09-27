@@ -36,7 +36,10 @@ services:
 
   minio:
     container_name: ff-minio
-    image: minio/minio:latest
+    # Upstream MinIO removed its Docker Hub/Quay images (source-only since Oct
+    # 2025, repo archived). pgsty/minio is a maintained, drop-in community fork:
+    # same env vars, `server` command, /data layout and `mc` healthcheck binary.
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
