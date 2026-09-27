@@ -1,16 +1,20 @@
 name: Build & Deploy
 
 on:
-  # Only the default branch and release tags build/publish/deploy.
+  # main pushes build + deploy; release tags build images only.
   push:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Image tag to deploy (e.g. latest or sha-1a2b3c4)
+        description: 'Existing immutable image tag to deploy (e.g. sha-c1ccaf8). Leave empty to build from this ref.'
         required: false
-        default: latest
+        default: ''
+
+# Least privilege by default; the publish job adds packages: write.
+permissions:
+  contents: read
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -20,13 +24,38 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Reuse the full CI suite; images are only built if every check passes.
-  ci:
-    uses: ./.github/workflows/ci.yml
+  # Decide what to deploy: a fresh immutable sha tag, or a manually supplied
+  # existing tag (rollback / redeploy without rebuilding).
+  resolve:
+    name: Resolve deployment tag
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+      build: ${{ steps.resolve.outputs.build }}
+    steps:
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
+            echo "Manual deployment of existing image: $INPUT_TAG"
+            echo "image_tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=sha-${SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
 
+  # CI already validated the commit before merge, so this only builds and
+  # publishes the immutable images.
   build:
     name: Build ${{ matrix.name }} image
-    needs: [ci]
+    needs: [resolve]
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,30 +71,30 @@ jobs:
             context: ./frontend
             dockerfile: ./frontend/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Compute lowercase image prefix
         run: echo "IMAGE_PREFIX=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
           tags: |
+            type=raw,value=${{ needs.resolve.outputs.image_tag }}
             type=ref,event=branch
             type=ref,event=tag
-            type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -80,52 +109,100 @@ jobs:
 
   deploy:
     name: Deploy to AWS
-    needs: [build]
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    needs: [resolve, build]
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     environment: production
+    # Serialize production deployments; never cancel one in progress.
+    concurrency:
+      group: production
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: read
     steps:
-      - name: Pull new images and restart the stack
-        uses: appleboy/ssh-action@v1
+      - name: Deploy ${{ needs.resolve.outputs.image_tag }}
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         env:
-          IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.AWS_HOST }}
           username: ${{ secrets.AWS_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
           port: ${{ secrets.AWS_PORT || 22 }}
-          envs: IMAGE_TAG,GHCR_ACTOR
+          # Sensitive values are forwarded as environment variables, never
+          # interpolated into the remote script.
+          envs: IMAGE_TAG,GHCR_ACTOR,GHCR_TOKEN
           script: |
             set -euo pipefail
+
+            # 1. Deterministic sync of the deployment-only checkout.
+            #    infrastructure/.env is git-ignored; certificates, uploads and
+            #    the database live in Docker named volumes; backups live in
+            #    $HOME/lcs-backups. A hard reset cannot delete persistent state.
             cd /opt/freight-forwarding
-            git pull --ff-only
+            git fetch --prune origin main
+            git reset --hard origin/main
             cd infrastructure
 
-            # Prefer the docker group; fall back to sudo when the socket is not
-            # accessible to the SSH user (common on a fresh EC2 host).
+            # 2. Choose the docker command (docker group, else sudo fallback).
             if docker info >/dev/null 2>&1; then
               DOCKER="docker"
             else
               DOCKER="sudo -E docker"
             fi
+            COMPOSE="$DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml"
 
-            # Authenticate to GHCR (private packages). Prefer a read:packages PAT,
-            # fall back to the workflow token.
-            GHCR_PASSWORD='${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}'
-            echo "$GHCR_PASSWORD" | $DOCKER login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+            # 3. Authenticate to GHCR (token supplied via the action env).
+            if [ -z "${GHCR_TOKEN:-}" ]; then
+              echo "GHCR_TOKEN is not set." >&2
+              exit 1
+            fi
+            echo "$GHCR_TOKEN" | $DOCKER login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
+            # 4. Pre-deploy PostgreSQL backup. Aborts the deployment on failure.
+            #    'ff-db' is the postgres container name from docker-compose.yml.
+            if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" = "true" ]; then
+              BACKUP_DIR="${HOME}/lcs-backups"
+              mkdir -p "$BACKUP_DIR"
+              BACKUP_FILE="$BACKUP_DIR/freight-$(date +%Y%m%d-%H%M%S).dump"
+              echo "Backing up PostgreSQL to $BACKUP_FILE"
+              # Credentials come from the container environment; nothing is echoed.
+              if ! $COMPOSE exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_FILE"; then
+                echo "::error::PostgreSQL backup failed; aborting deployment."
+                rm -f "$BACKUP_FILE"
+                exit 1
+              fi
+              if [ ! -s "$BACKUP_FILE" ]; then
+                echo "::error::PostgreSQL backup is empty; aborting deployment."
+                exit 1
+              fi
+              echo "Backup complete: $BACKUP_FILE"
+            else
+              echo "PostgreSQL is not running yet (first deployment); skipping backup."
+            fi
+
+            # 5. Pull the immutable images and recreate changed services.
             export IMAGE_TAG
-            $DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml pull
-            $DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+            $COMPOSE pull
+            $COMPOSE up -d --remove-orphans
             $DOCKER image prune -f
 
-            # Fail the deploy if the API is not healthy through nginx.
-            sleep 15
-            curl -fsS https://lcslog.minidev.in/health/ready \
-              || curl -fsS http://lcslog.minidev.in/health/ready
+            # 6. Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
+            for attempt in $(seq 1 30); do
+              if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
+                echo "Deployment healthy (attempt $attempt)."
+                exit 0
+              fi
+              echo "Not ready yet (attempt $attempt/30); retrying in 4s..."
+              sleep 4
+            done
+            echo "::error::Application did not become healthy within the retry window."
+            exit 1

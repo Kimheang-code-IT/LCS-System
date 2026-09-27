@@ -1,0 +1,63 @@
+name: Auto Merge
+
+# Runs when the CI workflow finishes. If the source branch has an open pull
+# request and CI passed, the PR is squash-merged (respecting branch protection)
+# and the build & deploy workflow is dispatched.
+#
+# A push made with GITHUB_TOKEN does not trigger other workflows, so the merge
+# alone would not start publish.yml; it must be dispatched explicitly.
+#
+# NOTE: This file must exist on the default branch for `workflow_run` to fire.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Merge passing PR
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch != github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Merge pull request and trigger deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          PR=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                 --json number --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            echo "No open pull request for '$BRANCH'; nothing to auto-merge."
+            exit 0
+          fi
+
+          # Fork pull requests cannot be merged with the repository token.
+          HEAD_OWNER=$(gh pr view "$PR" --repo "$REPO" \
+                         --json headRepositoryOwner --jq '.headRepositoryOwner.login')
+          if [ "$HEAD_OWNER" != "${REPO%/*}" ]; then
+            echo "PR #$PR comes from a fork ('$HEAD_OWNER'); skipping auto-merge."
+            exit 0
+          fi
+
+          echo "CI passed for '$BRANCH'; merging PR #$PR."
+          gh pr merge "$PR" --repo "$REPO" --squash --delete-branch
+
+          # Explicitly start the deploy: the merge used GITHUB_TOKEN, so the
+          # resulting push to main does not trigger workflows on its own.
+          gh workflow run publish.yml --repo "$REPO" --ref main
