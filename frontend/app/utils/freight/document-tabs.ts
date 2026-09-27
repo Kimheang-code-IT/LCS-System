@@ -6,6 +6,7 @@ import type {
   FieldOption,
   FieldType,
 } from '~/types/docetra/common'
+import { slugify } from '~/utils/text/slug'
 import type {
   FreightField,
   FreightFieldType,
@@ -63,20 +64,17 @@ const TYPE_MAP: Record<FreightFieldType, FieldType> = {
 
 const QUOTATION_OVERVIEW_KEYS = [
   'customer',
-  'branchName',
   'direction',
   'date',
   'validUntil',
   'currency',
   'description',
-  'notes',
 ] as const
 
 const FINANCE_OVERVIEW_KEYS = [
   'debitNoteNo',
   'documentType',
   'customer',
-  'branchName',
   'jobNo',
   'date',
   'postingDate',
@@ -223,10 +221,6 @@ function mapFields(
   }))
 }
 
-function i18nSlug(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'general'
-}
-
 function groupedFields(fields: FreightField[]) {
   const groups: Array<{ title: string, titleKm?: string, fields: FreightField[] }> = []
   for (const field of fields) {
@@ -243,8 +237,8 @@ function fieldsToSections(
   readOnlyKeys?: string[],
 ): DocumentSectionSchema[] {
   return groupedFields(fields).map(group => ({
-    id: i18nSlug(group.title),
-    titleKey: `freight.sections.${i18nSlug(group.title)}`,
+    id: slugify(group.title),
+    titleKey: `freight.sections.${slugify(group.title)}`,
     title: group.title,
     fields: mapFields(group.fields, readOnlyKeys),
   }))

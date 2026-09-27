@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filePreviewBlob, mimeFromFileName, mockPdfBytes } from '../app/utils/freight/attachments'
+import { filePreviewHref, mimeFromFileName } from '../app/utils/freight/attachments'
 import { safeExternalUrl, safeFilePreviewUrl } from '../app/utils/security/url'
 
 describe('file preview', () => {
@@ -10,18 +10,14 @@ describe('file preview', () => {
     expect(mimeFromFileName('photo.jpg', 'image/jpeg')).toBe('image/jpeg')
   })
 
-  it('builds a PDF the browser can open for seeded .pdf rows', async () => {
-    const pdf = mockPdfBytes('BL-8821.pdf', 'Bill of lading')
-    expect(pdf.startsWith('%PDF-1.4')).toBe(true)
-    expect(pdf).toContain('%%EOF')
-    const blob = filePreviewBlob({ fileName: 'BL-8821.pdf' })
-    expect(blob?.type).toBe('application/pdf')
-    expect((await blob!.text()).startsWith('%PDF-1.4')).toBe(true)
+  it('never fabricates a preview for rows without real content', () => {
+    expect(filePreviewHref({ fileName: 'BL-8821.pdf' })).toBeNull()
+    expect(filePreviewHref({ fileName: 'gate-photo.png' })).toBeNull()
   })
 
-  it('uses an SVG preview for image file names without bytes', () => {
-    const blob = filePreviewBlob({ fileName: 'gate-photo.png' })
-    expect(blob?.type).toBe('image/svg+xml')
+  it('returns the persisted http(s) URL when one exists', () => {
+    expect(filePreviewHref({ fileName: 'BL-8821.pdf', url: 'https://files.example.com/bl.pdf' }))
+      .toBe('https://files.example.com/bl.pdf')
   })
 
   it('rejects executable URL schemes and keeps http(s) plus blob', () => {

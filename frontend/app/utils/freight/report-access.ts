@@ -2,7 +2,7 @@ import { FREIGHT_REPORTS, freightReportPath, type FreightReportDefinition } from
 
 /** Page permission required to open reports in a catalog group. */
 export function reportAreaPermission(area: string) {
-  return area === 'finance' ? 'finance.accounting.view' : 'operations.service_orders.view'
+  return area === 'finance' ? 'finance.reports.view' : 'operations.reports.view'
 }
 
 export function reportRoutePermission(report: FreightReportDefinition) {

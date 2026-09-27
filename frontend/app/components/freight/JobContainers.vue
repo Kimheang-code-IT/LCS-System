@@ -7,6 +7,7 @@ import {
   JOB_CONTAINER_REQUIREMENT_TABLE,
 } from '~/config/job-workspace-forms'
 import { formatMoney } from '~/composables/freight/useFreight'
+import { createClientId } from '~/utils/client-id'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import {
   duplicateContainerNumber,
@@ -17,7 +18,6 @@ import {
   jobContainerPaymentTotals,
   jobContainerRequirements,
   missingContainerNumber,
-  newLineId,
   persistableActuals,
   persistablePayments,
   persistableRequirements,
@@ -122,7 +122,7 @@ function money(value: number) {
 }
 
 function withIds(rows: Array<Record<string, unknown>>, prefix: string) {
-  return rows.map(row => String(row.id || '').trim() ? row : { ...row, id: newLineId(prefix) })
+  return rows.map(row => String(row.id || '').trim() ? row : { ...row, id: createClientId(prefix) })
 }
 
 function loadRows() {

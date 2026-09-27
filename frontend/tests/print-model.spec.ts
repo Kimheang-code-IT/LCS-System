@@ -21,21 +21,6 @@ function record(overrides: Record<string, unknown> = {}): FreightRecord {
 }
 
 const context = {
-  organizations: [
-    {
-      id: 'org-001',
-      organizationId: 1,
-      legalName: 'Test Forwarding Co., Ltd.',
-      displayName: 'Test Freight',
-      legalNameKh: 'ក្រុមហ៊ុន តេស្ត',
-      taxIdentifier: 'K001-TEST',
-      address: 'Test Road, Test Province',
-      phone: '+855 00 000 000',
-      email: 'test@example.com',
-      defaultCurrency: 'USD',
-    },
-  ],
-  branches: [{ id: 1, name: 'Test Branch' }],
   companies: [
     {
       id: 'co-1',
@@ -188,10 +173,9 @@ describe('print totals', () => {
 })
 
 describe('view model mapping', () => {
-  it('resolves issuer from organization data and logo from branding settings', () => {
+  it('resolves the party from master data and the logo from branding settings', () => {
     const model = buildPrintViewModel(record({ customer: 'Acme Manufacturing' }), 'tax-invoice', context)
-    expect(model.issuer.legalName).toBe('Test Forwarding Co., Ltd.')
-    expect(model.issuer.legalNameKh).toBe('ក្រុមហ៊ុន តេស្ត')
+    expect(model.issuer.legalName).toBe('')
     expect(model.issuer.logoUrl).toBe('/lcs-invoice-logo.png')
     expect(model.party.legalName).toBe('Acme Manufacturing Co., Ltd.')
     expect(model.party.taxIdentifier).toBe('TIN-ACME')

@@ -41,6 +41,8 @@ A financial document is a reusable business transaction such as a customer invoi
 
 A journal entry records the double-entry effect of a posted financial document or manual accounting operation. Every posted journal must balance.
 
+An empty (freshly migrated) database exposes a one-time **first-run setup** flow that provisions the permission catalog, default roles, organization, head-office branch, administrator credential and a minimal finance baseline. Setup is accepted only while no user exists. Dashboard and report figures are served by the backend reporting API.
+
 ## 3. Scope
 
 ### 3.1 In scope
@@ -550,7 +552,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **NFR-008** Object storage shall support retention and recovery appropriate to business requirements.
 
-**NFR-009** Background work shall be retryable and observable.
+**NFR-009** Background work shall be retryable and observable. *(Deferred: the current release is synchronous and has no background worker.)*
 
 ### Performance
 
@@ -558,7 +560,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **NFR-011** Financial posting shall complete atomically without exposing partial journal entries.
 
-**NFR-012** Large files and document rendering shall use asynchronous processing where appropriate.
+**NFR-012** Large files and document rendering shall use asynchronous processing where appropriate. *(Deferred: files currently stream through the API.)*
 
 ### Maintainability
 
@@ -580,7 +582,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **NFR-019** Logs shall include request and correlation IDs.
 
-**NFR-020** Metrics shall cover API latency, errors, queue failures, posting failures, and authorization denials.
+**NFR-020** Metrics shall cover API latency, errors, posting failures, and authorization denials.
 
 **NFR-021** Logs shall not contain passwords, tokens, or secret values.
 

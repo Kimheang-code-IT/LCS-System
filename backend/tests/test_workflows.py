@@ -21,7 +21,6 @@ async def test_login_returns_user_and_permissions(client):
     data = response.json()["data"]
     assert data["user"]["email"] == "admin@example.test"
     assert data["access_token"]
-    assert data["user"]["organizationCode"] == "DEMO"
 
 
 async def test_business_party_roles(client):
@@ -107,6 +106,12 @@ async def test_service_order_components_and_containers(client):
     assert container.status_code == 201, container.text
     assert container.json()["data"]["containerNumber"] == "MSCU1234567"
 
+    # Components created from the trade-direction config on conversion are listable.
+    converted_components = await client.get("/api/v1/service-order-components", headers=headers)
+    assert converted_components.status_code == 200, converted_components.text
+    converted_items = converted_components.json()["data"]["items"]
+    assert any(item["groupCode"] == "CUSTOMS" and item["jobNo"] for item in converted_items)
+
     duplicate = await client.post(
         f"/api/v1/service-orders/{service_order_id}/containers",
         headers=headers,
@@ -121,6 +126,13 @@ async def test_service_order_components_and_containers(client):
     )
     assert component.status_code == 201, component.text
     component_id = component.json()["data"]["id"]
+    assert component.json()["data"]["groupCode"] == "CUSTOMS"
+    assert component.json()["data"]["jobNo"]
+
+    listed_components = await client.get("/api/v1/service-order-components", headers=headers, params={"page_size": 200})
+    assert listed_components.status_code == 200, listed_components.text
+    listed_items = listed_components.json()["data"]["items"]
+    assert any(item["id"] == component_id and item["groupCode"] == "CUSTOMS" for item in listed_items)
 
     values = await client.put(
         f"/api/v1/service-order-components/{component_id}/values",
@@ -393,6 +405,44 @@ async def test_generic_records_encrypt_credentials(client):
 
     listed = await client.get("/api/v1/companies", headers=headers)
     assert listed.status_code == 200
+
+
+async def test_user_create_exposes_role_and_normalizes_status(client):
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/users",
+        headers=headers,
+        # The UI posts camelCase keys, an explicit auto-generated user code and a
+        # display-case status.
+        json={
+            "username": "new.user",
+            "displayName": "New User",
+            "email": "new.user@example.com",
+            "userCode": "NEW-USER",
+            "role": "AUDITOR",
+            "status": "Active",
+            "password": "Passw0rd!",
+        },
+    )
+    assert created.status_code == 201, created.text
+    data = created.json()["data"]
+    assert data["userCode"] == "NEW-USER"
+    assert data["role"] == "AUDITOR"
+    assert data["status"] == "ACTIVE"
+
+    detail = await client.get(f"/api/v1/users/{data['id']}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["role"] == "AUDITOR"
+
+    updated = await client.put(
+        f"/api/v1/users/{data['id']}", headers=headers, json={"role": "SALES_OFFICER"}
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["role"] == "SALES_OFFICER"
+
+    # A display-case status must not block authentication.
+    relogin = await client.post("/api/v1/auth/login", json={"username": "new.user", "password": "Passw0rd!"})
+    assert relogin.status_code == 200, relogin.text
 
 
 async def test_consistency_guardrails(client):

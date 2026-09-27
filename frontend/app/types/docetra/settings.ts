@@ -16,7 +16,7 @@ export type EncryptionType = 'none' | 'ssl' | 'tls' | 'starttls'
 
 export type TelegramConnectionMode = 'bot_api' | 'webhook'
 
-export type TelegramDestinationType = 'chat' | 'channel' | 'group' | 'organization'
+export type TelegramDestinationType = 'chat' | 'channel' | 'group'
 
 export type NotificationChannel = 'in_app' | 'email' | 'telegram'
 
@@ -52,7 +52,6 @@ export interface AppFooterInfo {
 export interface AppInfo {
   applicationName: string
   shortName: string
-  organizationName: string
   description?: string
   supportEmail?: string
   supportPhone?: string
@@ -85,8 +84,6 @@ export interface TelegramDestination {
   name: string
   type: TelegramDestinationType
   chatId: string
-  organizationId?: string
-  organizationName?: string
   recordTypeId?: string
   recordTypeName?: string
   enabledEvents: NotificationEvent[]
@@ -103,7 +100,6 @@ export interface TelegramConfig {
   defaultDestinationId?: string
   messageLanguage: 'en' | 'km'
   includeRecordLink: boolean
-  includeOrganization: boolean
   includeAssignedOfficer: boolean
   connectionStatus: ConnectionStatus
   lastTestedAt?: string
@@ -175,6 +171,58 @@ export interface AppConfigSystem {
   backgroundJobStatus: 'idle' | 'running' | 'failed' | 'unknown'
 }
 
+export type BackupRunStatus = 'idle' | 'running' | 'success' | 'partial' | 'failed'
+
+export interface AppConfigBackup {
+  enabled: boolean
+  intervalHours: number
+  spreadsheetId: string
+  /** Write-only: never returned by the API (blank = keep stored value). */
+  serviceAccountJson: string
+  serviceAccountEmail?: string
+  serviceAccountConfigured?: boolean
+  worksheetPrefix: string
+  excludedTables: string[]
+  batchSize: number
+  lastRunAt: string
+  lastRunStatus: BackupRunStatus
+  lastRunMessage: string
+}
+
+export interface BackupRunSummary {
+  id: number
+  trigger: 'manual' | 'scheduled'
+  status: BackupRunStatus
+  startedAt: string | null
+  finishedAt: string | null
+  durationMs: number | null
+  tablesTotal: number
+  tablesProcessed: number
+  rowsScanned: number
+  rowsInserted: number
+  rowsUpdated: number
+  rowsSkipped: number
+  rowsFailed: number
+  spreadsheetId: string | null
+  message: string | null
+  triggeredByUserId: number | null
+}
+
+export interface BackupStatus {
+  config: AppConfigBackup
+  schedule: {
+    enabled: boolean
+    intervalHours: number
+    configured: boolean
+    lastRunAt: string
+    lastRunStatus: BackupRunStatus
+    lastRunMessage: string
+    running: boolean
+  }
+  activeRunId: number | null
+  lastRun: BackupRunSummary | null
+}
+
 export interface AppConfig {
   general: AppConfigGeneral
   localization: AppConfigLocalization
@@ -183,6 +231,7 @@ export interface AppConfig {
   notifications: AppConfigNotifications
   security: AppConfigSecurity
   system: AppConfigSystem
+  backup: AppConfigBackup
   updatedAt: string
 }
 
@@ -240,7 +289,6 @@ export const TELEGRAM_TEMPLATE_VARIABLES = [
   '{{record_type}}',
   '{{status}}',
   '{{stage}}',
-  '{{organization_name}}',
   '{{assigned_officer}}',
   '{{due_at}}',
   '{{created_by}}',
@@ -251,6 +299,6 @@ export const DEFAULT_TELEGRAM_TEMPLATE = [
   '[{{record_type}}] {{record_number}}',
   '{{record_title}}',
   'Status: {{status}} · Stage: {{stage}}',
-  'Org: {{organization_name}} · Assignee: {{assigned_officer}}',
+  'Assignee: {{assigned_officer}}',
   '{{record_url}}',
 ].join('\n')

@@ -11,7 +11,7 @@ import { fileTypeIcon } from '~/utils/file-icon'
 import TableLineTableColumnsCell from '~/components/table/LineTableColumnsCell.vue'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
-import { lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
+import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
 
 const props = withDefaults(defineProps<{
   table: FreightTable
@@ -67,7 +67,6 @@ const cellInputUi = { base: 'text-sm' }
 const cellNumberInputUi = { base: 'text-sm text-right tabular-nums' }
 const tableUi = computed(() => props.compact ? freightTableUiCompactReadonly : freightTableUiLine)
 
-const moneyKeys = new Set(['unitPrice', 'discountPercent', 'taxPercent', 'discountAmount', 'discount', 'taxAmount', 'lineTotal', 'total', 'amount'])
 const numericKeys = lineTableNumericColumnKeys()
 
 function columnCellClass(column: FreightLineColumn) {
@@ -87,7 +86,7 @@ function displayValue(column: FreightLineColumn, value: unknown, row?: Record<st
   if (column.type === 'number') {
     const number = Number(value)
     if (!Number.isFinite(number)) return String(value)
-    if (moneyKeys.has(column.key)) {
+    if (isMoneyColumnKey(column.key)) {
       const currency = row?.currency ? String(row.currency) : undefined
       if (column.key === 'total' && currency) return formatMoney(number, currency)
       return formatMoney(number, currency)
@@ -329,7 +328,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
-        if (column.inlineFields?.length && !moneyKeys.has(column.key)) {
+        if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
           return inlineNumberFieldsCell(column, row.original, index)
         }
         if (props.disabled || column.computed || isFileTable.value) {
@@ -500,17 +499,30 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           :disabled="action.disabled"
           @click="action.onClick"
         />
-        <UButton v-if="!disabled" :size="compact ? 'xs' : 'sm'" color="neutral" variant="soft"
+        <UButton
+v-if="!disabled"
+:size="compact ? 'xs' : 'sm'"
+color="neutral"
+variant="soft"
           :icon="isFileTable ? 'i-lucide-upload' : 'i-lucide-plus'"
           :label="table.addLabelKey && te(table.addLabelKey) ? t(table.addLabelKey) : (table.addLabel || t('freight.ui.addRow'))"
           @click="addRow" />
       </div>
     </div>
-    <input v-if="isFileTable && !disabled" ref="inputRef" type="file" multiple class="hidden" @change="onFilesChosen">
+    <input
+v-if="isFileTable && !disabled"
+ref="inputRef"
+type="file"
+multiple
+class="hidden"
+@change="onFilesChosen">
     <div class="overflow-x-auto">
-      <UTable :data="tableRows" :columns="columns"
+      <UTable
+:data="tableRows"
+:columns="columns"
         :get-row-id="(row: Record<string, unknown>) => String(row._rowIndex ?? '')"
-        :class="['freight-table min-w-max', compact ? 'freight-table-compact' : '']" :ui="tableUi" />
+        :class="['freight-table min-w-max', compact ? 'freight-table-compact' : '']"
+:ui="tableUi" />
     </div>
   </section>
 </template>

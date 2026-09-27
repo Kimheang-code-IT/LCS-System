@@ -7,13 +7,13 @@ import { JOB_CHECKLIST_TYPES } from '~/config/freight-options'
 import { defaultJobRoutePlaces, isMoneyKey } from '~/utils/freight/job-workspace'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { formatMoney as formatMoneyValue, formatNumber as formatNumberValue } from '~/utils/format/format-service'
+import { toFiniteNumber } from '~/utils/format/number'
+import { slugify } from '~/utils/text/slug'
 import { codeTitle, labeledStatusOptions, shortDay } from '~/utils/freight/format'
 
 export { codeTitle, labeledStatusOptions, shortDay }
 
-export function i18nSlug(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'general'
-}
+export const i18nSlug = slugify
 
 export function useFreightLabel() {
   const { t, te, locale } = useI18n()
@@ -150,10 +150,7 @@ export function statusColor(status: string): AppHeaderBadge['color'] {
   return 'neutral'
 }
 
-export function asNumber(value: unknown) {
-  const n = Number(value || 0)
-  return Number.isFinite(n) ? n : 0
-}
+export const asNumber = toFiniteNumber
 
 export function formatMoney(value: unknown, currency?: string) {
   return formatMoneyValue(value, currency)

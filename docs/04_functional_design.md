@@ -25,6 +25,10 @@ It does not own business records. Other modules call authorization services befo
 
 Owns organizations, branches, system settings, accounting periods, document sequences, and administrative configuration.
 
+Organizations, branches and posting rules are managed through the API/CLI and
+the first-run setup flow; their dedicated UI screens are not exposed in the
+current version. Branch scope is still enforced server-side on every request.
+
 ### 3.3 Master data
 
 Owns places, trade directions, container types, transport types, transport assets, fee types, parties, and party roles.
@@ -55,7 +59,16 @@ Owns attachment metadata, object-storage operations, document versions, and secu
 
 ### 3.10 Reporting
 
-Reads transactional data or reporting projections. It must not modify operational or accounting records.
+Reads transactional data or reporting projections. It must not modify operational or accounting records. The dashboard and all report screens are served by this module's `/reports/*` API; the frontend no longer computes report figures from cached store data.
+
+### 3.11 First-run setup
+
+Owns the one-time provisioning of an empty database: permission catalog, default
+roles, organization, head-office branch, administrator credential and a minimal
+finance baseline (chart of accounts, posting rules, financial accounts, document
+sequences, current periods). It is available through the public `/setup` page and
+the headless `python -m app.create_admin` command, and runs only while no user
+exists.
 
 ## 4. Context Resolution
 

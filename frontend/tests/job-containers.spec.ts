@@ -8,7 +8,6 @@ import {
   jobContainerPaymentRows,
   jobContainerPaymentTotals,
   jobContainerRequirements,
-  serviceOrderContainersFromQuotation,
   withRequirementProgress,
 } from '../app/utils/freight/job-containers'
 
@@ -54,23 +53,6 @@ describe('service order containers', () => {
       discountAmount: 100,
       taxAmount: 50,
       lineTotal: 1950,
-    })
-  })
-
-  it('links payments to actual containers and totals tax on the line', () => {
-    const copied = serviceOrderContainersFromQuotation(quotation, { id: 'job-1', jobNo: 'SO-1' })
-    expect(copied.requirements[0]).toMatchObject({ containerType: '40HC', quantity: 2, jobNo: 'SO-1' })
-    expect(copied.payments[0]).toMatchObject({
-      feeType: 'Trucking Fee',
-      quantity: 2,
-      unitPrice: 1000,
-      taxAmount: 200,
-      lineTotal: 2200,
-    })
-    expect(jobContainerPaymentTotals(copied.payments, 0)).toMatchObject({
-      subtotal: 2000,
-      vat: 200,
-      total: 2200,
     })
   })
 

@@ -22,7 +22,6 @@ class PageParams:
     sort_order: str = "desc"
     from_date: str | None = None
     to_date: str | None = None
-    branch_id: int | None = None
 
     @property
     def offset(self) -> int:
@@ -38,7 +37,6 @@ def page_params(
     sort_order: str = Query("desc"),
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
-    branch_id: int | None = Query(None),
     sortKey: str | None = Query(None),
     sortDir: str | None = Query(None),
     dateFrom: str | None = Query(None),
@@ -55,7 +53,6 @@ def page_params(
         sort_order="asc" if str(effective_dir).lower() == "asc" else "desc",
         from_date=from_date or dateFrom,
         to_date=to_date or dateTo,
-        branch_id=branch_id,
     )
 
 

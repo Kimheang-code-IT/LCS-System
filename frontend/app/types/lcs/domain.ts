@@ -1,5 +1,3 @@
-export type PermissionScope = 'ORGANIZATION' | 'BRANCH' | 'OWN' | 'NONE'
-
 export type QuotationRevisionStatus =
   | 'DRAFT'
   | 'SENT'
@@ -40,8 +38,6 @@ export type FinancialDocumentType =
 export type LcsErrorCode =
   | 'AUTH_REQUIRED'
   | 'ACCESS_DENIED'
-  | 'ORGANIZATION_CONTEXT_REQUIRED'
-  | 'BRANCH_SCOPE_DENIED'
   | 'INVALID_STATE_TRANSITION'
   | 'REFERENCE_NOT_FOUND'
   | 'REFERENCE_OUT_OF_SCOPE'
@@ -72,25 +68,6 @@ export interface LcsPageMeta {
 export interface LcsPaged<T> {
   items: T[]
   meta: LcsPageMeta
-}
-
-export interface LcsOrganization {
-  id: number
-  organization_code: string
-  legal_name: string
-  display_name: string
-  default_currency_code: string
-  timezone: string
-  status: string
-}
-
-export interface LcsBranch {
-  id: number
-  organization_id: number
-  branch_code: string
-  name: string
-  is_head_office: boolean
-  status: string
 }
 
 export interface LcsComponentValue {
@@ -151,10 +128,6 @@ export interface LcsJournalEntry {
 }
 
 export const SOURCE_PERMISSIONS = [
-  'organization.read',
-  'organization.update',
-  'branch.read',
-  'branch.manage',
   'user.read',
   'user.manage',
   'role.read',
@@ -169,6 +142,10 @@ export const SOURCE_PERMISSIONS = [
   'service_order.create',
   'service_order.update',
   'service_order.complete',
+  'service_order_config.view',
+  'service_order_config.create',
+  'service_order_config.update',
+  'service_order_config.delete',
   'service_charge.create',
   'service_charge.issue',
   'service_charge.convert_to_invoice',
@@ -190,6 +167,9 @@ export const SOURCE_PERMISSIONS = [
   'attachment.delete',
   'audit_log.read',
   'report.read',
+  'report.export',
+  'master.reference.view',
+  'master.reference.manage',
 ] as const
 
 export type SourcePermission = typeof SOURCE_PERMISSIONS[number]

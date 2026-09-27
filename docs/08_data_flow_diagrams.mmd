@@ -7,10 +7,8 @@ flowchart TD
   MOD --> TX[Transactional Service]
   TX --> PG[(PostgreSQL)]
   TX --> AUDIT[Audit Event]
-  MOD --> OUTBOX[Outbox Event]
-  OUTBOX --> WORKER[Background Worker]
-  WORKER --> STORAGE[(Object Storage)]
-  WORKER --> EXT[External Systems]
+  MOD --> STORAGE[(Object Storage: MinIO / S3)]
+  MOD --> EXT[External Systems (inline / not yet implemented)]
 
   subgraph Quotation_to_Order
     Q1[Draft Quotation Revision] --> Q2[Send Immutable Revision]

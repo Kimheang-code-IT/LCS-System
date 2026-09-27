@@ -18,9 +18,14 @@ export function useQuotationCommands(options: {
 }) {
   const { lcs, model, store, confirm, toast, t, quotationDraftDirty, relatedServiceOrder } = options
 
+  // Revision-level endpoints (send/submit/accept/convert) require the revision
+  // id, not the quotation id. Fall back to the quotation id only when the
+  // revision id is unavailable.
+  const revisionId = () => String(model.value.revisionId || model.value.id || '')
+
   async function send() {
-    const saved = await lcs.runCommand('quotation.send', String(model.value.id), keyValue =>
-      lcs.quotations.send(String(model.value.id), keyValue),
+    const saved = await lcs.runCommand('quotation.send', revisionId(), keyValue =>
+      lcs.quotations.send(revisionId(), keyValue),
     )
     model.value = saved
     toast({ title: t('freight.ui.quotationSent'), color: 'success' })
@@ -38,17 +43,17 @@ export function useQuotationCommands(options: {
       confirmLabel: t('freight.ui.quotationSubmit'),
     })
     if (!ok) return
-    const job = await lcs.runCommand('quotation.submit', String(model.value.id), keyValue =>
-      lcs.quotations.submit(String(model.value.id), keyValue),
+    const saved = await lcs.runCommand('quotation.submit', revisionId(), keyValue =>
+      lcs.quotations.submit(revisionId(), keyValue),
     )
+    model.value = saved
     store.reload()
     toast({ title: t('freight.ui.quotationSubmitted'), color: 'success' })
-    await navigateTo(`/service-orders/${job.id}`)
   }
 
   async function accept() {
-    const saved = await lcs.runCommand('quotation.accept', String(model.value.id), keyValue =>
-      lcs.quotations.accept(String(model.value.id), keyValue),
+    const saved = await lcs.runCommand('quotation.accept', revisionId(), keyValue =>
+      lcs.quotations.accept(revisionId(), keyValue),
     )
     model.value = saved
     toast({ title: t('freight.ui.quotationAccepted'), color: 'success' })
@@ -57,7 +62,6 @@ export function useQuotationCommands(options: {
   async function rejectOrCancel(key: 'reject' | 'cancel') {
     const nextStatus = key === 'reject' ? 'Rejected' : 'Cancelled'
     model.value = store.save('quotations', { ...model.value, status: nextStatus })
-    store.addAudit(key === 'reject' ? 'Rejected quotation' : 'Cancelled quotation', 'Quotations', String(model.value.quotationNo || model.value.id))
     toast({ title: t(key === 'reject' ? 'freight.ui.quotationRejected' : 'freight.ui.quotationCancelled'), color: key === 'reject' ? 'error' : 'warning' })
   }
 
@@ -78,8 +82,8 @@ export function useQuotationCommands(options: {
       toast({ title: t('freight.ui.convertRequiresAccepted'), color: 'warning' })
       return
     }
-    const job = await lcs.runCommand('quotation.convert', String(model.value.id), keyValue =>
-      lcs.quotations.convert(String(model.value.id), keyValue),
+    const job = await lcs.runCommand('quotation.convert', revisionId(), keyValue =>
+      lcs.quotations.convert(revisionId(), keyValue),
     )
     toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
     await navigateTo(`/service-orders/${job.id}`)

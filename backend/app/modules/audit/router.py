@@ -21,7 +21,5 @@ async def list_audit_events(
     context: RequestContext = Depends(require_permission("audit_log.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    result = await service.list_events(session, context, page, entity_type or event_type)
-    if entity_id is not None:
-        result["items"] = [item for item in result["items"] if item["entityId"] == entity_id]
+    result = await service.list_events(session, context, page, entity_type, event_type, entity_id)
     return {"data": result}

@@ -8,20 +8,19 @@ import {
   dashboardChartYearRange,
   type DashboardChartPeriodFilter,
   type DashboardChartYearFilter,
-  type DashboardSummary,
 } from '~/utils/lcs/dashboard'
+import type { DashboardSummary } from '~/repositories/contracts/lcs'
 import { freightReportPath, getFreightReport } from '~/config/freight-reports'
+import { useLcsRepositories } from '~/repositories'
 
 /**
  * Compact ERP dashboard: KPI summary cards + line chart + bar chart.
- * No page-level filter bar — org/branch scope comes from the signed-in session.
  * Each chart has its own year/period filters and download menu.
  * Accounting figures are POSTED documents and journals only.
  */
 
-const store = useFreightStore()
-const tenant = useTenantStore()
 const auth = useAuthStore()
+const { reports } = useLcsRepositories()
 const { t } = useI18n()
 const { formatMoney, formatCompact, formatDatePart } = useAppLocalization()
 const { setTitle, clear } = useAppHeader()
@@ -42,9 +41,14 @@ const revenuePeriod = ref<DashboardChartPeriodFilter>('monthly')
 const ordersYear = ref<DashboardChartYearFilter>('thisYear')
 const ordersPeriod = ref<DashboardChartPeriodFilter>('monthly')
 
-function loadChart(year: DashboardChartYearFilter) {
-  const { dateFrom, dateTo } = dashboardChartYearRange(year)
-  return store.dashboardSummary({ dateFrom, dateTo })
+function filterByYear(data: DashboardSummary, year: number): DashboardSummary {
+  return {
+    ...data,
+    charts: {
+      ...data.charts,
+      revenueExpense: data.charts.revenueExpense.filter(point => point.month.startsWith(String(year))),
+    },
+  }
 }
 
 const canSeeServiceOrders = computed(() => auth.canAccessPage('operations.service_orders.view'))
@@ -54,10 +58,11 @@ async function load() {
   error.value = ''
   await nextTick()
   try {
-    summary.value = store.dashboardSummary()
-    revenueSummary.value = loadChart(revenueYear.value)
+    const data = await reports.dashboard()
+    summary.value = data
+    revenueSummary.value = filterByYear(data, dashboardChartYearRange(revenueYear.value).year)
     if (canSeeServiceOrders.value) {
-      ordersSummary.value = loadChart(ordersYear.value)
+      ordersSummary.value = data
     }
     else {
       ordersSummary.value = null
@@ -71,10 +76,17 @@ async function load() {
   }
 }
 
-watch(() => [tenant.organizationId, tenant.branchId], load)
-watch(revenueYear, year => { revenueSummary.value = loadChart(year) })
-watch(ordersYear, year => {
-  if (canSeeServiceOrders.value) ordersSummary.value = loadChart(year)
+watch(revenueYear, year => {
+  if (summary.value) {
+    revenueSummary.value = filterByYear(summary.value, dashboardChartYearRange(year).year)
+  }
+})
+watch(ordersYear, () => {
+  if (canSeeServiceOrders.value && summary.value) {
+    // ordersByStatus doesn't vary by year in the backend response;
+    // just re-assign to trigger reactivity.
+    ordersSummary.value = summary.value
+  }
 })
 onMounted(load)
 

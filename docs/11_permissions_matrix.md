@@ -23,51 +23,85 @@ Scopes are:
 
 All permissions are constrained by organization isolation.
 
+In the current UI the role form captures only a role name and the permission
+actions it grants; per-role scope/level columns were removed. Scope is applied
+per user assignment and enforced by the API.
+
 ## 2. Permission Catalog
 
-| Permission | Resource | Action | Risk |
-|---|---|---|---|
-| organization.read | organization | read | Low |
-| organization.update | organization | update | High |
-| branch.read | branch | read | Low |
-| branch.manage | branch | manage | High |
-| user.read | user | read | Medium |
-| user.manage | user | manage | High |
-| role.read | role | read | Medium |
-| role.manage | role | manage | Critical |
-| quotation.read | quotation | read | Low |
-| quotation.create | quotation | create | Medium |
-| quotation.update_draft | quotation | update draft | Medium |
-| quotation.send | quotation | send | Medium |
-| quotation.accept | quotation | accept | High |
-| quotation.convert | quotation | convert | High |
-| service_order.read | service order | read | Low |
-| service_order.create | service order | create | Medium |
-| service_order.update | service order | update | Medium |
-| service_order.complete | service order | complete | High |
-| service_charge.create | service charge | create | Medium |
-| service_charge.issue | service charge | issue | Medium |
-| service_charge.convert_to_invoice | service charge | convert | High |
-| financial_document.read | financial document | read | Medium |
-| financial_document.create | financial document | create | High |
-| financial_document.update_draft | financial document | update draft | High |
-| financial_document.post | financial document | post | Critical |
-| financial_document.reverse | financial document | reverse | Critical |
-| financial_document.allocate | financial document | allocate | High |
-| journal_entry.read | journal entry | read | High |
-| journal_entry.create | journal entry | create | Critical |
-| journal_entry.post | journal entry | post | Critical |
-| accounting_period.read | accounting period | read | High |
-| accounting_period.close | accounting period | close | Critical |
-| chart_of_accounts.manage | chart of accounts | manage | Critical |
-| customs_credential.retrieve | customs credential | retrieve | Critical |
-| attachment.read | attachment | read | Medium |
-| attachment.upload | attachment | upload | Medium |
-| attachment.delete | attachment | delete | High |
-| audit_log.read | audit log | read | High |
-| report.read | report | read | Medium |
+Permissions are `module.action` codes seeded from
+`backend/app/core/permissions.py` (`SOURCE_PERMISSIONS` + `PAGE_PERMISSIONS`).
+
+### 2.1 Source (API) permissions
+
+| Permission | Resource | Action |
+|---|---|---|
+| organization.read | organization | read |
+| organization.update | organization | update |
+| branch.read | branch | read |
+| branch.manage | branch | manage |
+| user.read | user | read |
+| user.manage | user | manage |
+| role.read | role | read |
+| role.manage | role | manage |
+| quotation.read | quotation | read |
+| quotation.create | quotation | create |
+| quotation.update_draft | quotation | update_draft |
+| quotation.send | quotation | send |
+| quotation.accept | quotation | accept |
+| quotation.convert | quotation | convert |
+| service_order.read | service_order | read |
+| service_order.create | service_order | create |
+| service_order.update | service_order | update |
+| service_order.complete | service_order | complete |
+| service_order_config.view | service_order_config | view |
+| service_order_config.create | service_order_config | create |
+| service_order_config.update | service_order_config | update |
+| service_order_config.delete | service_order_config | delete |
+| service_charge.create | service_charge | create |
+| service_charge.issue | service_charge | issue |
+| service_charge.convert_to_invoice | service_charge | convert_to_invoice |
+| financial_document.read | financial_document | read |
+| financial_document.create | financial_document | create |
+| financial_document.update_draft | financial_document | update_draft |
+| financial_document.post | financial_document | post |
+| financial_document.reverse | financial_document | reverse |
+| financial_document.allocate | financial_document | allocate |
+| journal_entry.read | journal_entry | read |
+| journal_entry.create | journal_entry | create |
+| journal_entry.post | journal_entry | post |
+| accounting_period.read | accounting_period | read |
+| accounting_period.close | accounting_period | close |
+| chart_of_accounts.manage | chart_of_accounts | manage |
+| customs_credential.retrieve | customs_credential | retrieve |
+| attachment.read | attachment | read |
+| attachment.upload | attachment | upload |
+| attachment.delete | attachment | delete |
+| audit_log.read | audit_log | read |
+| report.read | report | read |
+
+### 2.2 Page and configuration permissions
+
+These gate frontend navigation and configuration screens.
+
+| Permission | Resource | Action |
+|---|---|---|
+| master.reference.view | master_data | view |
+| master.reference.manage | master_data | manage |
+| configuration.manage | configuration | manage |
+| configuration.configure | configuration | configure |
+| admin.user_manage | admin | user_manage |
+| admin.role_manage | admin | role_manage |
+| admin.organization_manage | admin | organization_manage |
+| settings.manage | settings | manage |
+| finance.view | finance | view |
+| report.export | report | export |
 
 ## 3. Role-Permission Matrix
+
+The matrix shows the intended separation of duties. In the current UI a role is
+defined only by its permission actions; organization/branch scope is applied per
+user assignment and enforced by the API, not entered on the role form.
 
 Legend: `O` = organization scope, `B` = branch scope, `-` = not granted.
 

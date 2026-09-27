@@ -19,7 +19,7 @@ const router = useRouter()
 const store = useFreightStore()
 const auth = useAuthStore()
 const { t } = useI18n()
-const { formatDateTime } = useAppLocalization()
+const { formatDateTime, localization } = useAppLocalization()
 
 const collection = computed(() => String(route.params.collection || ''))
 const recordId = computed(() => String(route.params.id || ''))
@@ -58,11 +58,8 @@ onMounted(async () => {
   }
 })
 
-/** Local currency from the organization's configured default, never hardcoded. */
-const localCurrency = computed(() => {
-  const org = (store.list('organizations') || [])[0]
-  return String(org?.defaultCurrency || 'USD')
-})
+/** Local currency from the app localization default. */
+const localCurrency = computed(() => String(localization.value.currency || 'USD'))
 
 const containerIndex = computed(() => {
   const raw = route.query.container
@@ -82,8 +79,6 @@ const lineIndex = computed(() => {
 const viewModel = computed<PrintViewModel | null>(() => {
   if (!record.value) return null
   const context = {
-    organizations: store.list('organizations'),
-    branches: store.list('branches'),
     companies: store.list('companies'),
     suppliers: store.list('suppliers'),
     jobs: store.list('jobs'),

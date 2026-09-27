@@ -4,18 +4,112 @@ import type { ConnectionStatusFieldValue } from '~/types/docetra/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { useSetup } from '~/composables/auth/useSetup'
 import { useAppPageTitle } from '~/composables/layout/useAppPageTitle'
 import { getByPath, setByPath } from '~/utils/object-path'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
-const { appConfig } = useSettingsRepositories()
+const { appConfig, backup } = useSettingsRepositories()
 const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
+const setup = useSetup()
 const canEdit = computed(() => auth.canAccessPage('settings.app_config.edit'))
 const canConfigure = computed(() => auth.canAccessPage('settings.app_config.configure'))
+const canReset = computed(() => auth.canAccessPage('settings.manage'))
+const canManageBackup = computed(() => auth.canAccessPage('backup.manage'))
 const appLocalization = useAppLocalization()
+
+const runningBackup = ref(false)
+const testingBackup = ref(false)
+const restoringBackup = ref(false)
+const restoreOpen = ref(false)
+const restorePhrase = ref('')
+
+async function runBackup() {
+  if (runningBackup.value) return
+  runningBackup.value = true
+  try {
+    if (model.value) await appConfig.update(model.value)
+    const run = await backup.run()
+    toast.add({ title: t('docetra.settings.backup.runStarted', { id: run.id }), color: 'success' })
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    toast.add({ title: message || t('docetra.settings.backup.runFailed'), color: 'error' })
+  }
+  finally {
+    runningBackup.value = false
+  }
+}
+
+async function testBackupConnection() {
+  if (testingBackup.value) return
+  testingBackup.value = true
+  try {
+    if (model.value) await appConfig.update(model.value)
+    const result = await backup.testConnection()
+    toast.add({
+      title: result.message,
+      color: result.status === 'connected' ? 'success' : 'error',
+    })
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    toast.add({ title: message || t('docetra.settings.backup.testFailed'), color: 'error' })
+  }
+  finally {
+    testingBackup.value = false
+  }
+}
+
+async function submitRestore() {
+  if (restorePhrase.value.trim().toUpperCase() !== 'RESTORE' || restoringBackup.value) return
+  restoringBackup.value = true
+  try {
+    const result = await backup.restore('RESTORE')
+    restoreOpen.value = false
+    restorePhrase.value = ''
+    toast.add({
+      title: t('docetra.settings.backup.restoreDone', { restored: result.restored }),
+      color: 'success',
+    })
+    await load()
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    toast.add({ title: message || t('docetra.settings.backup.restoreFailed'), color: 'error' })
+  }
+  finally {
+    restoringBackup.value = false
+  }
+}
+
+const resetOpen = ref(false)
+const resetPhrase = ref('')
+const resetting = ref(false)
+
+async function submitReset() {
+  if (resetPhrase.value.trim().toUpperCase() !== 'RESET' || resetting.value) return
+  resetting.value = true
+  try {
+    await appConfig.resetData('RESET')
+    resetOpen.value = false
+    resetPhrase.value = ''
+    auth.clearSession()
+    await setup.refresh(true)
+    toast.add({ title: t('docetra.settings.resetDataDone'), color: 'success' })
+    await navigateTo('/setup', { replace: true })
+  }
+  catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    toast.add({ title: message || t('docetra.settings.resetDataFailed'), color: 'error' })
+  }
+  finally {
+    resetting.value = false
+  }
+}
 
 const pending = ref(true)
 const saving = ref(false)
@@ -29,8 +123,8 @@ async function load() {
   try {
     model.value = await appConfig.get()
   }
-  catch (e: any) {
-    toast.add({ title: e?.message || t('docetra.common.loadFailed'), color: 'error' })
+  catch (e) {
+    toast.add({ title: e instanceof Error ? e.message : t('docetra.common.loadFailed'), color: 'error' })
   }
   finally {
     pending.value = false
@@ -64,7 +158,7 @@ function fieldValue(key: string): unknown {
   if (key === '__securityAlert') return null
 
   // Select options use string values; coerce number fields for USelect match.
-  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'localization.firstDayOfWeek') {
+  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours') {
     const raw = getByPath(model.value, key)
     return raw == null || raw === '' ? undefined : String(raw)
   }
@@ -89,18 +183,18 @@ async function setFieldValue(key: string, value: unknown) {
       })
       if (!ok) return
     }
-    setByPath(model.value as any, key, value)
+    setByPath(model.value as unknown as Record<string, unknown>, key, value)
     return
   }
 
-  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'localization.firstDayOfWeek') {
+  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours') {
     const n = Number(value)
-    const fallback = key === 'localization.firstDayOfWeek' ? 1 : 20
-    setByPath(model.value as any, key, Number.isFinite(n) ? n : fallback)
+    const fallback = key === 'backup.intervalHours' ? 24 : 20
+    setByPath(model.value as unknown as Record<string, unknown>, key, Number.isFinite(n) ? n : fallback)
     return
   }
 
-  setByPath(model.value as any, key, value)
+  setByPath(model.value as unknown as Record<string, unknown>, key, value)
 }
 
 async function save() {
@@ -112,8 +206,8 @@ async function save() {
     usePreferencesStore().syncLocaleWithConfig()
     toast.add({ title: t('docetra.common.saved'), color: 'success' })
   }
-  catch (e: any) {
-    toast.add({ title: e?.message || t('docetra.common.saveFailed'), color: 'error' })
+  catch (e) {
+    toast.add({ title: e instanceof Error ? e.message : t('docetra.common.saveFailed'), color: 'error' })
   }
   finally {
     saving.value = false
@@ -158,8 +252,8 @@ useAppPageTitle(() => t('freight.pages.settings'))
 
 <template>
   <DocumentAppDocumentPage
-    :tabs="systemSettingsTabs"
     v-model:active-tab="activeTab"
+    :tabs="systemSettingsTabs"
     :field-value="fieldValue"
     :set-field-value="setFieldValue"
     :pending="pending || !model"
@@ -183,6 +277,123 @@ useAppPageTitle(() => t('freight.pages.settings'))
         :loading="testingTelegram"
         @click="testTelegram"
       />
+      <CommonAppConnectionTestButton
+        v-if="activeTab === 'backup' && canManageBackup"
+        :loading="testingBackup"
+        @click="testBackupConnection"
+      />
+      <UButton
+        v-if="activeTab === 'backup' && canManageBackup"
+        color="primary"
+        variant="soft"
+        size="sm"
+        icon="i-lucide-play"
+        :loading="runningBackup"
+        :label="t('docetra.settings.backup.runNow')"
+        @click="runBackup"
+      />
+      <UButton
+        v-if="activeTab === 'backup' && canReset"
+        color="warning"
+        variant="soft"
+        size="sm"
+        icon="i-lucide-history"
+        :label="t('docetra.settings.backup.restore')"
+        @click="restoreOpen = true"
+      />
+      <UButton
+        v-if="canReset"
+        color="error"
+        variant="soft"
+        size="sm"
+        icon="i-lucide-trash-2"
+        :label="t('docetra.settings.resetData')"
+        @click="resetOpen = true"
+      />
     </template>
   </DocumentAppDocumentPage>
+
+  <UModal
+    v-model:open="resetOpen"
+    :title="t('docetra.settings.resetDataConfirmTitle')"
+    :dismissible="!resetting"
+  >
+    <template #body>
+      <div class="space-y-3">
+        <UAlert
+          color="error"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :description="t('docetra.settings.resetDataHint')"
+        />
+        <p class="text-sm text-muted">{{ t('docetra.settings.resetDataConfirmHelp') }}</p>
+        <UInput
+          v-model="resetPhrase"
+          :placeholder="t('docetra.settings.resetDataPlaceholder')"
+          class="w-full"
+          autofocus
+        />
+      </div>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :label="t('docetra.common.cancel')"
+          :disabled="resetting"
+          @click="resetOpen = false; resetPhrase = ''"
+        />
+        <UButton
+          color="error"
+          :label="t('docetra.settings.resetDataConfirm')"
+          :loading="resetting"
+          :disabled="resetPhrase.trim().toUpperCase() !== 'RESET'"
+          @click="submitReset"
+        />
+      </div>
+    </template>
+  </UModal>
+
+  <UModal
+    v-model:open="restoreOpen"
+    :title="t('docetra.settings.backup.restoreConfirmTitle')"
+    :dismissible="!restoringBackup"
+  >
+    <template #body>
+      <div class="space-y-3">
+        <UAlert
+          color="warning"
+          variant="subtle"
+          icon="i-lucide-triangle-alert"
+          :description="t('docetra.settings.backup.restoreHint')"
+        />
+        <p class="text-sm text-muted">{{ t('docetra.settings.backup.restoreConfirmHelp') }}</p>
+        <UInput
+          v-model="restorePhrase"
+          :placeholder="t('docetra.settings.backup.restorePlaceholder')"
+          class="w-full"
+          autofocus
+        />
+      </div>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :label="t('docetra.common.cancel')"
+          :disabled="restoringBackup"
+          @click="restoreOpen = false; restorePhrase = ''"
+        />
+        <UButton
+          color="warning"
+          :label="t('docetra.settings.backup.restoreConfirm')"
+          :loading="restoringBackup"
+          :disabled="restorePhrase.trim().toUpperCase() !== 'RESTORE'"
+          @click="submitRestore"
+        />
+      </div>
+    </template>
+  </UModal>
 </template>

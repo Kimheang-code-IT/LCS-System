@@ -17,8 +17,6 @@ from app.modules.auth.models import User
 async def get_current_context(
     request: Request,
     authorization: str | None = Header(default=None),
-    x_organization_id: int | None = Header(default=None, alias="X-Organization-Id"),
-    x_branch_id: int | None = Header(default=None, alias="X-Branch-Id"),
     session: AsyncSession = Depends(get_session),
 ) -> RequestContext:
     token: str | None = None
@@ -40,18 +38,16 @@ async def get_current_context(
     user = await session.get(User, int(user_id))
     if user is None:
         raise AuthRequired("User not found.")
+    if str(user.status or "").upper() not in {"ACTIVE"}:
+        raise AuthRequired("This account is not active.")
     request_id = getattr(request.state, "request_id", None) or payload.get("jti", "")
     context = await auth_service.build_context(
         session,
         user,
         request_id=request_id,
-        organization_id=x_organization_id,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    if x_branch_id is not None:
-        context.assert_branch(x_branch_id)
-        context.branch_id = x_branch_id
     request.state.context = context
     request.state.actor_user_id = context.user_id
     return context
@@ -65,7 +61,7 @@ async def get_optional_context(
     if not authorization:
         return None
     try:
-        return await get_current_context(request, authorization, None, None, session)
+        return await get_current_context(request, authorization, session)
     except HTTPException:
         return None
 

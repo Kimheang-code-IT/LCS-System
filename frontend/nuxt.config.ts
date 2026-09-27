@@ -174,9 +174,5 @@ export default defineNuxtConfig({
         'vue-echarts',
       ],
     },
-    css: {
-      // Silence noisy Uppy package sourcemap warnings in dev
-      devSourcemap: false,
-    },
   }
 })

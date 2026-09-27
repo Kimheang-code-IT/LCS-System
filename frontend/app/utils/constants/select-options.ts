@@ -107,7 +107,14 @@ export const TELEGRAM_DESTINATION_TYPE_OPTIONS: FieldOption[] = [
   { label: 'Chat', value: 'chat' },
   { label: 'Channel', value: 'channel' },
   { label: 'Group', value: 'group' },
-  { label: 'Organization', value: 'organization' },
+]
+
+export const BACKUP_INTERVAL_OPTIONS: FieldOption[] = [
+  { label: 'Every 1 hour', value: '1' },
+  { label: 'Every 3 hours', value: '3' },
+  { label: 'Every 6 hours', value: '6' },
+  { label: 'Every 12 hours', value: '12' },
+  { label: 'Every 24 hours', value: '24' },
 ]
 
 export const SYNC_SCHEDULE_OPTIONS: FieldOption[] = [

@@ -2,6 +2,7 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type { EChartsCoreOption } from 'echarts/core'
 import { getFilterSelectUi } from '~/utils/filter/select-ui'
+import { slugify } from '~/utils/text/slug'
 import type { DashboardChartPeriodFilter, DashboardChartYearFilter } from '~/utils/lcs/dashboard'
 
 const props = withDefaults(defineProps<{
@@ -35,10 +36,7 @@ const periodItems = computed(() => [
 ])
 
 function fileSlug() {
-  return String(props.downloadName || props.title || 'chart')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '') || 'chart'
+  return slugify(String(props.downloadName || props.title || 'chart'), 'chart')
 }
 
 function downloadFile(href: string, filename: string) {

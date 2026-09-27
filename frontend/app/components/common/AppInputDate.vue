@@ -27,7 +27,6 @@ const emit = defineEmits<{
   'update:modelValue': [string]
 }>()
 
-const { t } = useI18n()
 const { localization } = useAppLocalization()
 const open = ref(false)
 const anchor = useTemplateRef<HTMLElement | null>('anchor')
@@ -137,18 +136,6 @@ function commitPicker(value: DateValue | undefined | null) {
   if (!isDateTime.value) open.value = false
 }
 
-function goToday() {
-  const now = today(getLocalTimeZone())
-  focused.value = false
-  draft.value = ''
-  if (isDateTime.value) {
-    const clock = new Date()
-    emit('update:modelValue', `${now.toString()}T${pad(clock.getHours())}:${pad(clock.getMinutes())}`)
-    return
-  }
-  emit('update:modelValue', now.toString())
-  open.value = false
-}
 </script>
 
 <template>

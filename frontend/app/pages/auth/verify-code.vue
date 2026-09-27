@@ -107,7 +107,7 @@ async function onResendCode() {
         <UPinInput
           v-model="code"
           :length="6"
-          size="xl"
+          size="lg"
           placeholder="○"
           autofocus
           otp

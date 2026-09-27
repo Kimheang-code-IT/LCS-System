@@ -1,4 +1,4 @@
-x# Business Requirements Document
+# Business Requirements Document
 
 ## 1. Purpose
 
@@ -30,6 +30,16 @@ The Freight Forwarding and Administrative Platform manages quotations, service o
 - Chart of accounts and double-entry journals.
 - Payment allocation.
 - Audit, authorization, and reporting foundations.
+- First-run provisioning of the organization, administrator, roles and a minimal
+  finance baseline on an empty database.
+
+### Delivered in the current version
+
+- Dashboard KPIs and all report tables are served by the backend reporting API.
+- First-run setup page provisions the initial organization, admin and finance
+  baseline; the same provisioning is available headlessly.
+- Simplified navigation: the Organizations, Branches and Posting Rules screens
+  are not exposed in the UI (their data remains server-side).
 
 ### Out of scope for the first release
 

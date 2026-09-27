@@ -14,7 +14,6 @@ const rows = computed(() => {
     items.splice(1, 0,
       { label: 'freight.print.fields.accountAddress', value: props.settlement.accountAddress },
     )
-    items.push({ label: 'freight.print.fields.branchName', value: props.settlement.branchName })
   }
   return items.filter(item => item.value)
 })

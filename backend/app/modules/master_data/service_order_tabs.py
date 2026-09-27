@@ -96,7 +96,7 @@ def _bool(value: Any, default: bool = False) -> bool:
 
 
 async def list_tabs(session: AsyncSession, context: RequestContext, page: PageParams, include_archived: bool = False) -> dict:
-    stmt = select(ServiceOrderTabConfig).where(ServiceOrderTabConfig.organization_id == context.organization_id)
+    stmt = select(ServiceOrderTabConfig)
     if not include_archived:
         stmt = stmt.where(ServiceOrderTabConfig.is_archived.is_(False))
     if page.q:
@@ -120,7 +120,7 @@ async def list_tabs(session: AsyncSession, context: RequestContext, page: PagePa
 
 async def _get_tab(session: AsyncSession, context: RequestContext, tab_id: int) -> ServiceOrderTabConfig:
     tab = await session.get(ServiceOrderTabConfig, tab_id)
-    if tab is None or tab.organization_id != context.organization_id:
+    if tab is None:
         raise NotFound("Service order tab not found.")
     return tab
 
@@ -136,7 +136,6 @@ async def create_tab(session: AsyncSession, context: RequestContext, data: dict[
     existing = (
         await session.execute(
             select(ServiceOrderTabConfig).where(
-                ServiceOrderTabConfig.organization_id == context.organization_id,
                 ServiceOrderTabConfig.code == code,
             )
         )
@@ -144,10 +143,9 @@ async def create_tab(session: AsyncSession, context: RequestContext, data: dict[
     if existing is not None:
         raise Conflict("DUPLICATE_TAB_CODE", "A tab with this code already exists.", {"code": "Already in use"})
     max_order = await session.scalar(
-        select(func.max(ServiceOrderTabConfig.sort_order)).where(ServiceOrderTabConfig.organization_id == context.organization_id)
+        select(func.max(ServiceOrderTabConfig.sort_order))
     )
     tab = ServiceOrderTabConfig(
-        organization_id=context.organization_id,
         code=code,
         name=str(data.get("name") or code.title()),
         name_km=data.get("nameKm"),
@@ -423,52 +421,3 @@ TAB_SEED: list[dict[str, Any]] = [
         ],
     },
 ]
-
-
-async def seed_service_order_tabs(session: AsyncSession, organization_id: int) -> None:
-    for tab_seed in TAB_SEED:
-        tab = (
-            await session.execute(
-                select(ServiceOrderTabConfig).where(
-                    ServiceOrderTabConfig.organization_id == organization_id, ServiceOrderTabConfig.code == tab_seed["code"]
-                )
-            )
-        ).scalars().first()
-        if tab is None:
-            tab = ServiceOrderTabConfig(
-                organization_id=organization_id,
-                code=tab_seed["code"],
-                name=tab_seed["name"],
-                icon=tab_seed.get("icon"),
-                sort_order=tab_seed.get("sort_order", 0),
-                is_active=True,
-                allow_multiple_rows=True,
-            )
-            session.add(tab)
-            await session.flush()
-        for column_seed in tab_seed["columns"]:
-            exists = (
-                await session.execute(
-                    select(ServiceOrderColumnConfig).where(
-                        ServiceOrderColumnConfig.tab_id == tab.id,
-                        ServiceOrderColumnConfig.field_key == column_seed["field_key"],
-                    )
-                )
-            ).scalars().first()
-            if exists is not None:
-                continue
-            session.add(
-                ServiceOrderColumnConfig(
-                    tab_id=tab.id,
-                    field_key=column_seed["field_key"],
-                    label=column_seed["label"],
-                    field_type=column_seed["field_type"],
-                    reference_type=column_seed.get("reference_type"),
-                    is_required=bool(column_seed.get("is_required", False)),
-                    is_active=True,
-                    sort_order=column_seed.get("sort_order", 0),
-                    width=column_seed.get("width"),
-                    options=column_seed.get("options") or [],
-                )
-            )
-    await session.flush()

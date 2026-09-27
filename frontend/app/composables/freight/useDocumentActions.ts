@@ -82,19 +82,20 @@ export function useDocumentActions(options: {
 
   async function deleteRecord() {
     if (!module.value || !canMutateRecord.value) return
-    if (deactivationOnly.value) {
+    const status = String(model.value.status || '').trim().toUpperCase()
+    const statusBased = status === 'ACTIVE' || status === 'INACTIVE'
+    // Active records (and modules without an active/inactive status) are deactivated, not deleted.
+    if (deactivationOnly.value && (!statusBased || status === 'ACTIVE')) {
       model.value = store.save(module.value.collection, {
         ...model.value,
         status: module.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive',
       })
-      store.addAudit('Deactivated', module.value.title, String(model.value[module.value.titleField] || model.value.id))
       toast({ title: t('freight.ui.recordDeactivated'), color: 'success' })
       return
     }
     const ok = await confirm({ kind: 'delete', count: 1 })
     if (!ok) return
     store.remove(module.value.collection, [String(model.value.id)])
-    store.addAudit('Deleted', module.value.title, String(model.value[module.value.titleField] || model.value.id))
     toast({ title: t('docetra.actions.deletedItems', { n: 1 }), color: 'success' })
     await navigateTo(module.value.path)
   }

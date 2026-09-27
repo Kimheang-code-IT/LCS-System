@@ -13,10 +13,8 @@ from app.core.types import JSONType
 
 class Quotation(PKMixin, TimestampMixin, Base):
     __tablename__ = "quotations"
-    __table_args__ = (UniqueConstraint("organization_id", "quotation_no", name="uq_quotations_org_no"),)
+    __table_args__ = (UniqueConstraint("quotation_no", name="uq_quotations_no"),)
 
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     quotation_no: Mapped[str] = mapped_column(String(50), nullable=False)
     customer_party_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("business_parties.id"), nullable=False)
     trade_direction_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("trade_directions.id"), nullable=False)

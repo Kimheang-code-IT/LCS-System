@@ -21,7 +21,6 @@ export type AttributeDataType =
   | 'checkbox_group'
   | 'file'
   | 'image'
-  | 'organization'
   | 'officer'
   | 'user'
   | 'record_reference'
@@ -230,7 +229,6 @@ export const ATTRIBUTE_DATA_TYPES: AttributeDataType[] = [
   'checkbox_group',
   'file',
   'image',
-  'organization',
   'officer',
   'user',
   'record_reference',

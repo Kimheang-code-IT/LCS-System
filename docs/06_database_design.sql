@@ -1,7 +1,8 @@
 -- Freight Forwarding, Service Operations, and Double-Entry Finance
--- Consolidated PostgreSQL baseline schema.
--- This file supersedes 06_database_design.sql and the platform-core addendum.
--- It is intended as a clean baseline migration, not an online migration of an existing database.
+-- Consolidated PostgreSQL schema (design reference).
+-- NOTE: The live schema is defined by the Alembic migrations in
+-- backend/alembic/; this file is an illustrative design reference, not the
+-- migration source. The database is empty after migration (no seed data).
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

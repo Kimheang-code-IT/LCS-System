@@ -177,15 +177,32 @@ async function onSaveClick() {
 
 <template>
   <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-default">
-    <LayoutAppHeaderPageActions :can-create="false" :refreshing="pending" :more-items="moreItems"
-      :export-fields="exportFields" :exporting="exporting" :show-list-nav="showListNav" :list-to="listTo"
-      :can-navigate-previous="canNavigatePrevious" :can-navigate-next="canNavigateNext"
-      :loading-list-navigation="loadingListNavigation" :list-navigation-direction="listNavigationDirection"
-      :is-create="isCreate" :show-save="showSave && canSave && !readOnly" :save-label="saveLabel" :saving="saving"
-      :show-cancel="showCancel && Boolean(listTo)" :cancel-to="listTo"
-      :show-meta-rail-toggle="showMetaRail && !notFound && !error && showForm" :meta-rail-open="metaRailOpen"
-      @refresh="emit('refresh')" @export="emit('export', $event)" @navigate-previous="emit('navigatePrevious')"
-      @navigate-next="emit('navigateNext')" @save="onSaveClick" @toggle-meta-rail="toggleMetaRail">
+    <LayoutAppHeaderPageActions
+:can-create="false"
+:refreshing="pending"
+:more-items="moreItems"
+      :export-fields="exportFields"
+:exporting="exporting"
+:show-list-nav="showListNav"
+:list-to="listTo"
+      :can-navigate-previous="canNavigatePrevious"
+:can-navigate-next="canNavigateNext"
+      :loading-list-navigation="loadingListNavigation"
+:list-navigation-direction="listNavigationDirection"
+      :is-create="isCreate"
+:show-save="showSave && canSave && !readOnly"
+:save-label="saveLabel"
+:saving="saving"
+      :show-cancel="showCancel && Boolean(listTo)"
+:cancel-to="listTo"
+      :show-meta-rail-toggle="showMetaRail && !notFound && !error && showForm"
+:meta-rail-open="metaRailOpen"
+      @refresh="emit('refresh')"
+@export="emit('export', $event)"
+@navigate-previous="emit('navigatePrevious')"
+      @navigate-next="emit('navigateNext')"
+@save="onSaveClick"
+@toggle-meta-rail="toggleMetaRail">
       <template v-if="$slots.leading" #leading>
         <slot name="leading" />
       </template>
@@ -193,55 +210,91 @@ async function onSaveClick() {
     </LayoutAppHeaderPageActions>
 
     <div class="relative flex min-h-0 w-full min-w-0 flex-1 overflow-hidden p-0">
-      <div v-if="pending"
+      <div
+v-if="pending"
         class="absolute inset-0 z-10 flex items-center justify-center bg-default/50 backdrop-blur-[1px]">
         <UIcon name="i-lucide-loader-circle" class="size-6 animate-spin text-primary" />
       </div>
 
       <div class="relative flex min-h-0 w-full min-w-0 flex-1 overflow-hidden bg-default">
-        <button v-if="metaRailOpen" type="button" class="absolute inset-0 z-20 bg-black/25 lg:hidden"
-          :aria-label="t('actions.close')" @click="metaRailOpen = false" />
+        <button
+v-if="metaRailOpen"
+type="button"
+class="absolute inset-0 z-20 bg-black/25 lg:hidden"
+          :aria-label="t('actions.close')"
+@click="metaRailOpen = false" />
 
         <div class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <DocumentAppDocumentTabBar v-if="showTabs && showForm && !notFound && !error" :tabs="tabs"
-            :active-tab="activeTab" @update:active-tab="selectTab" />
+          <DocumentAppDocumentTabBar
+v-if="showTabs && showForm && !notFound && !error"
+:tabs="tabs"
+            :active-tab="activeTab"
+@update:active-tab="selectTab" />
 
           <div ref="scrollEl" class="min-h-0 min-w-0 flex-1 overflow-auto" @scroll.passive="onFormScroll">
-            <UAlert v-if="notFound" class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10" :class="contentWide
+            <UAlert
+v-if="notFound"
+class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
+:class="contentWide
               ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
-              : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'" color="error" :title="t('docetra.states.notFound')" />
-            <UAlert v-else-if="error" class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10" :class="contentWide
+              : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
+color="error"
+:title="t('docetra.states.notFound')" />
+            <UAlert
+v-else-if="error"
+class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
+:class="contentWide
               ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
-              : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'" color="error" :title="error" />
+              : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
+color="error"
+:title="error" />
 
             <template v-else-if="showForm">
               <slot name="before-form" />
 
-              <div class="flex min-h-0 w-full"
+              <div
+class="flex min-h-0 w-full"
                 :class="$slots.aside && !showMetaRail ? 'flex-col xl:flex-row' : 'flex-col'">
                 <div class="min-w-0 flex-1">
                   <slot name="form">
-                    <DocumentAppDocumentForm :tabs="tabs" :active-tab="activeTab" :field-value="fieldValue"
-                      :set-field-value="setFieldValue" :read-only="readOnly" :wide="contentWide" />
+                    <DocumentAppDocumentForm
+:tabs="tabs"
+:active-tab="activeTab"
+:field-value="fieldValue"
+                      :set-field-value="setFieldValue"
+:read-only="readOnly"
+:wide="contentWide" />
                   </slot>
 
                   <DocumentAppDocumentContentShell v-if="showComments && !isCreate" :wide="contentWide">
-                    <DocumentAppCommentsActivity :comments="comments" :activity="activity" :comment-body="commentBody"
-                      :submitting="submittingComment" :updating-comment-id="updatingCommentId"
-                      :deleting-comment-id="deletingCommentId" :has-more="hasMoreFeed" :loading-more="loadingMoreFeed"
-                      :can-comment="canComment" :current-user="currentUser"
-                      @update:comment-body="emit('update:commentBody', $event)" @submit="emit('submitComment')"
+                    <DocumentAppCommentsActivity
+:comments="comments"
+:activity="activity"
+:comment-body="commentBody"
+                      :submitting="submittingComment"
+:updating-comment-id="updatingCommentId"
+                      :deleting-comment-id="deletingCommentId"
+:has-more="hasMoreFeed"
+:loading-more="loadingMoreFeed"
+                      :can-comment="canComment"
+:current-user="currentUser"
+                      @update:comment-body="emit('update:commentBody', $event)"
+@submit="emit('submitComment')"
                       @update-comment="emit('updateComment', $event.id, $event.body)"
-                      @delete-comment="emit('deleteComment', $event)" @load-more="emit('loadMoreFeed')" />
+                      @delete-comment="emit('deleteComment', $event)"
+@load-more="emit('loadMoreFeed')" />
                   </DocumentAppDocumentContentShell>
 
-                  <DocumentAppDocumentContentShell v-if="$slots['after-form']" :wide="contentWide"
+                  <DocumentAppDocumentContentShell
+v-if="$slots['after-form']"
+:wide="contentWide"
                     class="space-y-3 pb-6">
                     <slot name="after-form" />
                   </DocumentAppDocumentContentShell>
                 </div>
 
-                <aside v-if="$slots.aside && !showMetaRail"
+                <aside
+v-if="$slots.aside && !showMetaRail"
                   class="w-full shrink-0 border-t border-default px-4 py-6 sm:px-6 xl:w-80 xl:border-t-0 xl:border-l xl:overflow-y-auto">
                   <slot name="aside" />
                 </aside>
@@ -249,22 +302,42 @@ async function onSaveClick() {
             </template>
           </div>
 
-          <UButton v-show="showScrollTop && showForm" icon="i-lucide-chevron-up" color="neutral" variant="soft"
-            size="sm" square class="absolute bottom-4 right-4 z-20 border border-default shadow-sm"
-            :aria-label="t('docetra.document.scrollToTop')" @click="scrollToTop" />
+          <UButton
+v-show="showScrollTop && showForm"
+icon="i-lucide-chevron-up"
+color="neutral"
+variant="soft"
+            size="sm"
+square
+class="absolute bottom-4 right-4 z-20 border border-default shadow-sm"
+            :aria-label="t('docetra.document.scrollToTop')"
+@click="scrollToTop" />
         </div>
 
-        <aside v-if="showMetaRail && !notFound && !error && showForm"
+        <aside
+v-if="showMetaRail && !notFound && !error && showForm"
           class="absolute inset-y-0 end-0 z-30 w-[min(22rem,calc(100%-3rem))] bg-default shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:w-64 lg:shadow-none xl:w-72"
           :class="metaRailOpen
             ? 'translate-x-0'
             : 'translate-x-full rtl:-translate-x-full lg:hidden'">
-          <UButton icon="i-lucide-x" color="neutral" variant="ghost" size="sm" square
-            class="absolute end-2 top-2 z-10 lg:hidden" :aria-label="t('actions.close')"
+          <UButton
+icon="i-lucide-x"
+color="neutral"
+variant="ghost"
+size="sm"
+square
+            class="absolute end-2 top-2 z-10 lg:hidden"
+:aria-label="t('actions.close')"
             @click="metaRailOpen = false" />
-          <DocumentAppDocumentMetaRail class="h-full min-h-0 overflow-y-auto" :title="metaTitle"
-            :subtitle="metaSubtitle" :icon="metaIcon" :owner="metaOwner || undefined" :activity="activity"
-            :created-at="metaCreatedAt" :updated-at="metaUpdatedAt" />
+          <DocumentAppDocumentMetaRail
+class="h-full min-h-0 overflow-y-auto"
+:title="metaTitle"
+            :subtitle="metaSubtitle"
+:icon="metaIcon"
+:owner="metaOwner || undefined"
+:activity="activity"
+            :created-at="metaCreatedAt"
+:updated-at="metaUpdatedAt" />
         </aside>
       </div>
     </div>

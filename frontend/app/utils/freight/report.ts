@@ -8,33 +8,6 @@ export function daysSince(value: unknown) {
   return Number.isNaN(time) ? 0 : Math.max(0, Math.floor((Date.now() - time) / DAY_MS))
 }
 
-/** AR/AP aging bucket key for i18n `freight.dashboard.aging.*`. */
-export function agingBucketKey(value: unknown) {
-  const days = daysSince(value)
-  if (days <= 0) return 'not_due'
-  if (days <= 30) return 'd1_30'
-  if (days <= 60) return 'd31_60'
-  if (days <= 90) return 'd61_90'
-  return 'd90_plus'
-}
-
-type Translate = (key: string) => string
-type TranslateExists = (key: string) => boolean
-
-export function labelAgingBucket(
-  key: string,
-  t: Translate,
-  te: TranslateExists,
-) {
-  const i18nKey = key === 'not_due' ? 'freight.dashboard.aging.notDue' : `freight.dashboard.aging.${key}`
-  return te(i18nKey) ? String(t(i18nKey)) : key.replaceAll('_', ' ')
-}
-
-/** Localized aging label for a due date. */
-export function agingBucket(value: unknown, t: Translate, te: TranslateExists) {
-  return labelAgingBucket(agingBucketKey(value), t, te)
-}
-
 /** First known date on a report row, normalized to `YYYY-MM-DD` for range filters and exports. */
 export function reportRowDate(row: FreightRecord) {
   return String(row.postingDate || row.invoiceDate || row.billDate || row.date || row.createdAt || '').slice(0, 10)
@@ -66,7 +39,6 @@ export function postedJournalLines(journals: FreightRecord[], accounts: FreightR
           description: line.description || journal.description,
           party: line.party || '',
           jobNo: line.serviceOrder || journal.jobNo,
-          branchName: line.branch || journal.branchName,
           currency: line.currency || 'USD',
           debit,
           credit,

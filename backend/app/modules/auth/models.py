@@ -2,38 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, PKMixin, TimestampMixin
-
-
-class Organization(PKMixin, TimestampMixin, Base):
-    __tablename__ = "organizations"
-
-    organization_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str | None] = mapped_column(String(255))
-    vat_tin: Mapped[str | None] = mapped_column(String(64))
-    country_code: Mapped[str | None] = mapped_column(String(2))
-    default_currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
-    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
-
-
-class Branch(PKMixin, TimestampMixin, Base):
-    __tablename__ = "branches"
-    __table_args__ = (UniqueConstraint("organization_id", "branch_code", name="uq_branches_org_code"),)
-
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False, index=True)
-    branch_code: Mapped[str] = mapped_column(String(50), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(64))
-    email: Mapped[str | None] = mapped_column(String(255))
-    address: Mapped[str | None] = mapped_column(Text)
-    is_head_office: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
 class User(PKMixin, TimestampMixin, Base):
@@ -110,23 +82,9 @@ class UserRoleAssignment(PKMixin, TimestampMixin, Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("roles.id"), nullable=False)
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), nullable=False)
-    branch_id: Mapped[int | None] = mapped_column(BigInteger)
     assigned_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class UserBranchAssignment(Base):
-    __tablename__ = "user_branch_assignments"
-
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    organization_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("organizations.id"), primary_key=True)
-    branch_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PasswordResetToken(PKMixin, Base):

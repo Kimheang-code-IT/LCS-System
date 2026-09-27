@@ -103,14 +103,14 @@ def row_payload(row: ServiceOrderTabRow) -> dict[str, Any]:
 
 async def _get_service_order(session: AsyncSession, context: RequestContext, service_order_id: int) -> ServiceOrder:
     order = await session.get(ServiceOrder, service_order_id)
-    if order is None or order.organization_id != context.organization_id:
+    if order is None:
         raise NotFound("Service order not found.")
     return order
 
 
 async def _get_tab(session: AsyncSession, context: RequestContext, tab_id: int) -> ServiceOrderTabConfig:
     tab = await session.get(ServiceOrderTabConfig, tab_id)
-    if tab is None or tab.organization_id != context.organization_id:
+    if tab is None:
         raise NotFound("Service order tab not found.")
     return tab
 
@@ -281,7 +281,6 @@ async def bootstrap(session: AsyncSession, context: RequestContext, service_orde
         await session.execute(
             select(ServiceOrderTabConfig)
             .where(
-                ServiceOrderTabConfig.organization_id == context.organization_id,
                 ServiceOrderTabConfig.is_active.is_(True),
                 ServiceOrderTabConfig.is_archived.is_(False),
             )

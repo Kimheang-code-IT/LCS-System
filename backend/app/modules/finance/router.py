@@ -268,7 +268,7 @@ async def list_financial_documents(
     context: RequestContext = Depends(require_permission("financial_document.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_documents(session, context, page, document_type)}
+    return {"data": await service.list_documents(session, context, page, document_type, party_id)}
 
 
 @router.post("/financial-documents", status_code=status.HTTP_201_CREATED)
@@ -291,7 +291,7 @@ async def delete_financial_documents(
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
     for document_id in ids:
         document = await session.get(FinancialDocument, document_id)
-        if document is not None and document.organization_id == context.organization_id and document.status == "DRAFT":
+        if document is not None and document.status == "DRAFT":
             await session.delete(document)
     await session.commit()
     return {"data": {"removed": len(ids)}}
@@ -345,7 +345,7 @@ async def allocate_payment(
     context: RequestContext = Depends(require_permission("financial_document.allocate")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    allocation = await service.allocate_payment(session, context, int(document_id), payload)
+    allocation = await service.allocate_payment(session, context, int(document_id), payload, idempotency_key)
     await write_audit(
         session,
         context,

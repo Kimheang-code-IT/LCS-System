@@ -2,11 +2,11 @@
 
 ## 1. Architecture Decision
 
-Implement the first release as a **modular monolith** with clear bounded modules and interfaces. Use asynchronous workers for slow or failure-prone work. Extract services later only when scaling, team ownership, or deployment independence justifies it.
+Implement the first release as a **modular monolith** with clear bounded modules and interfaces. The current version runs the API, a static SPA served by nginx, and the datastores; there is no separate background worker yet. Extract services later only when scaling, team ownership, or deployment independence justifies it.
 
 ```text
-SvelteKit Web Application
-          │
+Nuxt 4 Static SPA (nuxt generate) ── served by nginx
+          │  /api/ reverse proxy
           ▼
 FastAPI Application
  ├── Identity and Authorization
@@ -18,12 +18,12 @@ FastAPI Application
  ├── Service Charge
  ├── Finance and Accounting
  ├── Document Management
+ ├── First-run Setup
  └── Reporting API
           │
           ├── PostgreSQL
           ├── Redis
-          ├── Object Storage
-          └── Background Worker
+          └── Object Storage (MinIO / S3)
 ```
 
 ## 2. Bounded Contexts
@@ -92,25 +92,27 @@ Rules:
 ## 4. Suggested Repository Structure
 
 ```text
-apps/
-  api/
-  worker/
-  web/
-packages/
-  identity/
-  organization/
-  master_data/
-  configuration/
-  quotation/
-  operations/
-  commercial/
-  finance/
-  documents/
-  reporting/
+backend/
+  app/
+    api/            versioned routers (/api/v1)
+    core/           config, auth, permissions, storage, bootstrap
+    modules/        auth, master_data, quotations, operations,
+                    finance, reports, settings, setup, audit
+  alembic/          versioned migrations (source of truth for schema)
+  tests/
+frontend/
+  app/
+    components/     Vue components (Nuxt UI)
+    composables/
+    config/         module + settings schemas
+    pages/
+    repositories/   http + contracts
+    stores/         Pinia
+    utils/
+  i18n/locales/     en.json, km.json
 infrastructure/
-  migrations/
-  docker/
-  monitoring/
+  docker-compose.yml
+  nginx/            default.conf (serves SPA, proxies /api)
 ```
 
 Each backend module should contain:
@@ -172,26 +174,11 @@ The journal is the source of truth for posted accounting balances. Financial doc
 
 ## 8. Events and Background Jobs
 
-Use an outbox table for reliable asynchronous work:
+The current version is synchronous: there is no outbox table or background
+worker. Notifications, document rendering, report refresh and external
+integrations run inline or are not yet implemented.
 
-```text
-outbox_events
--------------
-id
-organization_id
-branch_id
-event_type
-aggregate_type
-aggregate_id
-payload_json
-status
-attempt_count
-available_at
-processed_at
-created_at
-```
-
-Use workers for:
+A future release may add an outbox table and workers for:
 
 - document rendering;
 - email or Telegram notifications;
@@ -200,7 +187,8 @@ Use workers for:
 - report refresh;
 - checksum or antivirus processing.
 
-Do not use asynchronous jobs for operations that require immediate transactional consistency, such as journal posting or payment allocation.
+Asynchronous jobs must not be used for operations that require immediate
+transactional consistency, such as journal posting or payment allocation.
 
 ## 9. Storage Architecture
 
@@ -274,7 +262,6 @@ Measure:
 - API latency and error rates;
 - authorization denials;
 - posting failures;
-- queue age and retries;
 - database connections;
 - storage failures;
 - backup success.

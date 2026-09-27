@@ -1,4 +1,4 @@
-export function compactQuery<T extends Record<string, any>>(query: T | undefined): Partial<T> | undefined {
+export function compactQuery<T extends object>(query: T | undefined): Partial<T> | undefined {
   if (!query) return undefined
 
   const compacted = Object.fromEntries(
@@ -13,11 +13,12 @@ export function compactQuery<T extends Record<string, any>>(query: T | undefined
   return Object.keys(compacted).length ? compacted : undefined
 }
 
-export function stableQueryString(query: Record<string, unknown> | undefined) {
+export function stableQueryString(query: object | undefined) {
   const compacted = compactQuery(query)
   if (!compacted) return ''
-  return Object.keys(compacted)
+  const entries = compacted as Record<string, unknown>
+  return Object.keys(entries)
     .sort()
-    .map(key => `${key}=${encodeURIComponent(String(compacted[key as keyof typeof compacted]))}`)
+    .map(key => `${key}=${encodeURIComponent(String(entries[key]))}`)
     .join('&')
 }

@@ -81,7 +81,7 @@ export function useFreightRecordChrome(options: {
       String(options.model.value.jobNo || ''),
     ].filter(Boolean))
     const fromAudit = store.list('auditLogs')
-      .filter(row => recordNos.has(String(row.recordNo || row.entity || '')))
+      .filter(row => recordNos.has(String(row.entityId || '')))
       .map(row => ({
         id: String(row.id),
         entityType,

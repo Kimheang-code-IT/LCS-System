@@ -8,7 +8,7 @@ defineOptions({ inheritAttrs: false })
 
 const modelValue = defineModel<string>({ default: '' })
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     placeholder?: string
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'

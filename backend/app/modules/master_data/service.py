@@ -497,11 +497,7 @@ async def delete_reference(session: AsyncSession, collection: str, ids: list[int
 
 # --- Generic record store -----------------------------------------------------
 async def list_generic(session: AsyncSession, context: RequestContext, collection: str, page: PageParams) -> dict:
-    stmt = select(ModuleRecord).where(
-        ModuleRecord.organization_id == context.organization_id, ModuleRecord.collection == collection
-    )
-    if not context.can_select_all_branches and context.branch_id is not None:
-        stmt = stmt.where(ModuleRecord.branch_id == context.branch_id)
+    stmt = select(ModuleRecord).where(ModuleRecord.collection == collection)
     if page.q:
         stmt = stmt.where(ModuleRecord.data["name"].as_string().ilike(f"%{page.q}%"))
     if page.status:
@@ -541,18 +537,16 @@ def _generic_payload(row: ModuleRecord) -> dict[str, Any]:
 
 async def get_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int) -> dict:
     row = await session.get(ModuleRecord, record_id)
-    if row is None or row.organization_id != context.organization_id or row.collection != collection:
+    if row is None or row.collection != collection:
         raise NotFound()
     return _generic_payload(row)
 
 
 async def create_generic(session: AsyncSession, context: RequestContext, collection: str, data: dict) -> dict:
     payload = _encrypt_payload(
-        {key: value for key, value in data.items() if key not in {"id", "organizationId", "branchId"}}
+        {key: value for key, value in data.items() if key not in {"id"}}
     )
     row = ModuleRecord(
-        organization_id=context.organization_id,
-        branch_id=data.get("branchId") or context.branch_id,
         collection=collection,
         record_no=str(payload.get("code") or payload.get("name") or payload.get("documentNo") or "") or None,
         status=str(payload.get("status") or "Active"),
@@ -566,10 +560,10 @@ async def create_generic(session: AsyncSession, context: RequestContext, collect
 
 async def update_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int, data: dict) -> dict:
     row = await session.get(ModuleRecord, record_id)
-    if row is None or row.organization_id != context.organization_id or row.collection != collection:
+    if row is None or row.collection != collection:
         raise NotFound()
     payload = _encrypt_payload(
-        {key: value for key, value in data.items() if key not in {"id", "organizationId", "branchId"}}
+        {key: value for key, value in data.items() if key not in {"id"}}
     )
     merged = {**(row.data or {}), **payload}
     row.data = merged
@@ -584,7 +578,7 @@ async def update_generic(session: AsyncSession, context: RequestContext, collect
 async def delete_generic(session: AsyncSession, context: RequestContext, collection: str, ids: list[int]) -> None:
     for record_id in ids:
         row = await session.get(ModuleRecord, record_id)
-        if row is not None and row.organization_id == context.organization_id and row.collection == collection:
+        if row is not None and row.collection == collection:
             await session.delete(row)
     await session.commit()
 

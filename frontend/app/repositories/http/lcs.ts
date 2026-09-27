@@ -4,7 +4,6 @@ import type {
   ComponentRepository,
   FinanceRepository,
   JobRepository,
-  OrganizationRepository,
   QuotationRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
@@ -114,15 +113,6 @@ export function createHttpFinanceRepository(): FinanceRepository {
   }
 }
 
-export function createHttpOrganizationRepository(): OrganizationRepository {
-  const api = useApi()
-  return {
-    listOrganizations: async () => unwrapApiData(await api.get<ApiResponse<Array<{ id: number, display_name: string, organization_code: string }>>>(ApiV1Endpoints.ORGANIZATIONS)),
-    listBranches: async organizationId =>
-      unwrapApiData(await api.get<ApiResponse<Array<{ id: number, name: string, organization_id: number, branch_code: string }>>>(ApiV1Endpoints.BRANCHES(organizationId))),
-  }
-}
-
 export function createHttpAuditRepository(): AuditRepository {
   const api = useApi()
   return {
@@ -151,5 +141,15 @@ export function createHttpUiSchemaRepository(): UiSchemaRepository {
         return null
       }
     },
+  }
+}
+
+export function createHttpReportsRepository(): import('~/repositories/contracts/lcs').ReportsRepository {
+  const api = useApi()
+  return {
+    dashboard: async () => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD)),
+    receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
+    payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
+    profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),
   }
 }

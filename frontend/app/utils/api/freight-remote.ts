@@ -58,8 +58,6 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   payables: { path: '/api/v1/payables', readOnly: true },
   profitability: { path: '/api/v1/profitability', readOnly: true },
 
-  organizations: reference('organizations'),
-  branches: reference('branches'),
   users: reference('users'),
   roles: reference('roles'),
   businessParties: reference('businessParties'),
@@ -91,10 +89,14 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   documents: reference('documents'),
   deliveries: reference('deliveries'),
   cashAccounts: { path: '/api/v1/financial-accounts', readOnly: true },
+  serviceComponents: {
+    path: '/api/v1/service-order-components',
+    itemPath: id => `/api/v1/service-order-components/${id}`,
+  },
 }
 
 /** Collections derived from the service-order payload (embedded in `data`). */
-export const JOB_DERIVED_COLLECTIONS = ['containerRequirements', 'actualContainers', 'serviceComponents']
+export const JOB_DERIVED_COLLECTIONS = ['containerRequirements', 'actualContainers']
 
 export function endpointFor(collection: string): RemoteEndpoint | null {
   return REMOTE_ENDPOINTS[collection] || null

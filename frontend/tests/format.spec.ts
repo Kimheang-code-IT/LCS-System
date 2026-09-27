@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('#components', () => ({
-  UBadge: { name: 'UBadge' },
-}))
-
 import { CONTAINER_STATUSES, DOCUMENT_TYPES, JOB_WORKFLOW_STATUS } from '../app/config/freight-options'
 import { labeledStatusOptions, shortDay } from '../app/utils/freight/format'
 import { statusColor } from '../app/composables/freight/useFreight'
+
+vi.mock('#components', () => ({
+  UBadge: { name: 'UBadge' },
+}))
 
 describe('shortDay', () => {
   it('keeps YYYY-MM-DD and falls back when empty', () => {

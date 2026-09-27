@@ -29,20 +29,38 @@ All procedures are constrained by organization and branch scope.
 | Finance manager | Posting, reversals, chart of accounts, periods, approvals |
 | Auditor | Read-only review and evidence collection |
 
-## 3. Organization and Branch Setup
+## 3. Organization, Branch and First-Run Setup
 
-### Normal procedure
+### First-run setup (empty database)
 
-1. Organization administrator creates the organization.
-2. Administrator creates branches and assigns branch codes.
-3. Administrator marks the head office.
-4. Administrator assigns users to organizations and branches.
-5. Administrator assigns roles at organization or branch scope.
-6. Administrator selects default branch for each user where needed.
-7. Administrator verifies branch access using a test account.
+1. On a freshly migrated database there are no users, so the app redirects to the
+   first-run setup page (`/setup`).
+2. The installer enters the organization, the first administrator and the
+   baseline finance details, then submits.
+3. System provisions the permission catalog, default roles, the organization, the
+   head-office branch, the administrator credential and a minimal finance
+   baseline (chart of accounts, posting rules, financial accounts, document
+   sequences and current periods).
+4. System signs the administrator in. Setup is accepted only while no user exists
+   (`GET /api/v1/setup/status` / `POST /api/v1/setup/initialize`).
+
+### Headless provisioning
+
+The same provisioning is available without the browser (idempotent — re-run to
+reset the password):
+
+```bash
+python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
+```
+
+Additional branches, users and role assignments are administered from the
+API/CLI afterwards. The Organizations, Branches and Posting Rules screens are no
+longer exposed in the UI, but those records remain server-side for scope and
+posting.
 
 ### Control points
 
+- Setup can run only while no user exists.
 - Branch code is unique within the organization.
 - User cannot select an unassigned branch.
 - A branch manager cannot administer another branch unless explicitly authorized.
@@ -72,6 +90,11 @@ All procedures are constrained by organization and branch scope.
 2. System revokes active sessions.
 3. User can no longer authenticate or access records.
 4. Historical records and audit events remain unchanged.
+
+Role administration uses a streamlined form: a role records a name and the
+permission actions it grants. The per-role scope/level and code/status columns
+were removed from the UI; organization and branch scope is enforced by the
+assignment and by the API.
 
 ## 5. Master Data Procedure
 

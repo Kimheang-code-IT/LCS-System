@@ -2,7 +2,7 @@
 import type { FreightTable } from '~/config/freight-modules'
 import { parseDynamicTableRows } from '~/utils/freight/dynamic-table'
 
-const props = defineProps<{
+defineProps<{
   table: FreightTable
   disabled?: boolean
 }>()

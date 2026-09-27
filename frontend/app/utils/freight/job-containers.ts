@@ -1,13 +1,7 @@
 /** Service-order container tab: requirements (from quotation), actual boxes, and charge lines. */
 
-export function newLineId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-}
-
-function asNumber(value: unknown) {
-  const n = Number(value ?? 0)
-  return Number.isFinite(n) ? n : 0
-}
+import { createClientId } from '~/utils/client-id'
+import { toFiniteNumber as asNumber } from '~/utils/format/number'
 
 function text(value: unknown) {
   return String(value ?? '').trim()
@@ -26,7 +20,7 @@ export function normalizeContainerRequirement(
   index = 0,
 ): Record<string, unknown> {
   return {
-    id: text(row.id) || newLineId('cr'),
+    id: text(row.id) || createClientId('cr'),
     containerType: text(row.containerType) || '40HC',
     quantity: asNumber(row.quantity) || 1,
     description: text(row.description || row.remarks),
@@ -40,7 +34,7 @@ export function normalizeActualContainer(
   index = 0,
 ): Record<string, unknown> {
   return {
-    id: text(row.id) || newLineId('ac'),
+    id: text(row.id) || createClientId('ac'),
     containerRequirementId: text(row.containerRequirementId || row.container_requirement_id),
     containerType: text(row.containerType),
     containerNo: text(row.containerNo || row.container_number),
@@ -88,7 +82,7 @@ export function normalizeContainerPayment(row: Record<string, unknown>): Record<
   if (!hasNewShape && legacyAmount && !unitPrice) {
     const quantity = asNumber(row.quantity) || 1
     return {
-      id: text(row.id) || newLineId('cp'),
+      id: text(row.id) || createClientId('cp'),
       feeType: text(row.feeType || row.chargeType),
       containerNo: text(row.containerNo),
       serviceOrderContainerId: text(row.serviceOrderContainerId),
@@ -107,7 +101,7 @@ export function normalizeContainerPayment(row: Record<string, unknown>): Record<
     }
   }
   return {
-    id: text(row.id) || newLineId('cp'),
+    id: text(row.id) || createClientId('cp'),
     feeType: text(row.feeType || row.chargeType),
     containerNo: text(row.containerNo),
     serviceOrderContainerId: text(row.serviceOrderContainerId),
@@ -363,29 +357,6 @@ export function missingContainerNumber(rows: Array<Record<string, unknown>>) {
     const started = Boolean(text(row.sealNo) || asNumber(row.netWeightKg) || asNumber(row.grossWeightKg))
     return started && !text(row.containerNo)
   })
-}
-
-/** Copy quotation_revision_containers + pricing lines onto a new service order. */
-export function serviceOrderContainersFromQuotation(
-  quotation: Record<string, unknown>,
-  job: { id?: unknown, jobNo?: unknown },
-): {
-  requirements: Array<Record<string, unknown>>
-  actuals: Array<Record<string, unknown>>
-  payments: Array<Record<string, unknown>>
-} {
-  const requirements: Array<Record<string, unknown>> = jobContainerRequirements({}, { quotation }).map((row, index) => ({
-    ...row,
-    id: newLineId('cr'),
-    jobNo: text(job.jobNo),
-    serviceOrderId: text(job.id),
-    sequence: index + 1,
-  }))
-  const payments: Array<Record<string, unknown>> = jobContainerPaymentRows({}, { quotation }).map(row => ({
-    ...row,
-    id: newLineId('cp'),
-  }))
-  return { requirements, actuals: [], payments }
 }
 
 export function firstOpenRequirement(requirements: Array<Record<string, unknown>>) {

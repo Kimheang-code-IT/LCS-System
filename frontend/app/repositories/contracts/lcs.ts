@@ -6,7 +6,6 @@ export type LcsListQuery = {
   q?: string
   page?: number
   page_size?: number
-  branch_id?: number | 'all'
   status?: string
 }
 
@@ -79,11 +78,6 @@ export interface FinanceRepository {
   closePeriod: (periodId: string, idempotencyKey: string) => Promise<FreightRecord>
 }
 
-export interface OrganizationRepository {
-  listOrganizations: () => Promise<Array<{ id: number, display_name: string, organization_code: string }>>
-  listBranches: (organizationId: number) => Promise<Array<{ id: number, name: string, organization_id: number, branch_code: string }>>
-}
-
 export interface AuditRepository {
   list: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
 }
@@ -95,6 +89,38 @@ export interface AttachmentRepository {
 
 export interface UiSchemaRepository {
   getPageSchema: (page: string) => Promise<FreightRecord | null>
+}
+
+export type DashboardSummary = {
+  generatedAt: string
+  summary: {
+    openOrders: number
+    inProgressOrders: number
+    onHoldOrders: number
+    awaitingClosure: number
+    receivables: number
+    overdueReceivableCount: number
+    payables: number
+    cashBankBalance: number
+    revenue: number
+    expense: number
+  }
+  charts: {
+    revenueExpense: Array<{ month: string, revenue: number, expense: number }>
+    ordersByStatus: Array<{ status: string, count: number }>
+    receivablesAging: Array<{ key: string, amount: number }>
+    payablesAging: Array<{ key: string, amount: number }>
+  }
+  options: {
+    customers: string[]
+  }
+}
+
+export interface ReportsRepository {
+  dashboard: () => Promise<DashboardSummary>
+  receivables: () => Promise<FreightRecord[]>
+  payables: () => Promise<FreightRecord[]>
+  profitability: () => Promise<FreightRecord[]>
 }
 
 export type { CreateRecordInput as LcsCreateRecordInput }
