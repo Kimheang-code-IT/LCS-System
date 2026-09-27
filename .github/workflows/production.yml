@@ -231,7 +231,7 @@ jobs:
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
           S3_BUCKET: ${{ vars.S3_BUCKET || 'freight-attachments' }}
           S3_REGION: ${{ vars.S3_REGION || 'us-east-1' }}
-          S3_PUBLIC_ENDPOINT_URL: ${{ vars.S3_PUBLIC_ENDPOINT_URL }}
+          S3_PUBLIC_ENDPOINT_URL: ${{ vars.S3_PUBLIC_ENDPOINT_URL || 'https://lcslog.minidev.in' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'https://lcslog.minidev.in' }}
         with:
           host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}

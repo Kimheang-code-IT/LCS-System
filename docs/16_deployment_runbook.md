@@ -346,12 +346,12 @@ a certificate that does not exist yet — nginx will not start. Prepare the host
 # 0. /opt/lcs must exist and be writable by the deploy user.
 sudo mkdir -p /opt/lcs/nginx && sudo chown -R "$USER":"$USER" /opt/lcs
 
-# 1. DNS must already resolve (see the storage note below). Issue the cert into
-#    the exact named volume the stack uses; port 80 must be free.
+# 1. DNS must already resolve. Issue the cert into the exact named volume the
+#    stack uses; port 80 must be free.
 sudo docker run --rm -p 80:80 \
   -v freight_forwarding_certbot_etc:/etc/letsencrypt \
   certbot/certbot certonly --standalone \
-  -d lcslog.minidev.in -d storage.lcslog.minidev.in \
+  -d lcslog.minidev.in \
   --email you@example.com --agree-tos --no-eff-email
 ```
 
@@ -360,17 +360,17 @@ Then run the Production workflow; it transfers `compose.yml` +
 
 ### Browser-facing MinIO (presigned S3 URLs)
 
-`infrastructure/nginx/production.conf` already contains a
-`storage.lcslog.minidev.in` server block that proxies `/` to `minio:9000` with
-the `Host` and `Authorization` headers preserved (required for S3 signature
-validation). The backend signs browser upload/download URLs with
-`S3_PUBLIC_ENDPOINT_URL`, so that value must match this public host. Required:
+MinIO is internal to the Docker network and has **no** host port or public
+subdomain. The main nginx server (`infrastructure/nginx/production.conf`)
+proxies the bucket path `/freight-attachments/` to `minio:9000`, preserving the
+`Host` and `Authorization` headers so the SigV4 signature validates. The backend
+signs browser upload/download URLs with `S3_PUBLIC_ENDPOINT_URL`, which must be
+the main origin:
 
-- DNS: an `A` record `storage.lcslog.minidev.in` → the EC2 Elastic IP.
-- TLS: the certificate at `/etc/letsencrypt/live/lcslog.minidev.in/` must include
-  `storage.lcslog.minidev.in` as a SAN (issue both `-d` names, as above).
-- Variable: `S3_PUBLIC_ENDPOINT_URL=https://storage.lcslog.minidev.in`.
-- Security group: inbound 443 (and 80 for the ACME challenge).
+- `S3_PUBLIC_ENDPOINT_URL=https://lcslog.minidev.in` (the default).
+- The certificate only needs `lcslog.minidev.in` — no storage DNS/cert.
+- Keep the nginx `/freight-attachments/` path in sync with `S3_BUCKET`.
+- Presigned URLs are same-origin, so no cross-origin (CORS) rules are needed.
 
 ### Required branch-protection check
 
@@ -395,11 +395,11 @@ Secrets: `AWS_SSH_KEY`, `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`,
 `MINIO_ROOT_PASSWORD`. `GHCR_TOKEN` is **not needed** — the GHCR images are
 public and EC2 does no registry login.
 
-Variables: `AWS_HOST`, `AWS_USER`, optional `AWS_PORT`; `MINIO_ROOT_USER`,
-`S3_PUBLIC_ENDPOINT_URL`, and optional `POSTGRES_DB`, `POSTGRES_USER`,
-`S3_BUCKET`, `S3_REGION`, `CORS_ORIGINS` (each has a built-in default except the
-two above). `NUXT_PUBLIC_SITE_URL` stays a **repository-level** build variable
-(the build job does not use the environment).
+Variables: `AWS_HOST`, `AWS_USER`, optional `AWS_PORT`; `MINIO_ROOT_USER`, and
+optional `S3_PUBLIC_ENDPOINT_URL` (defaults to `https://lcslog.minidev.in`),
+`POSTGRES_DB`, `POSTGRES_USER`, `S3_BUCKET`, `S3_REGION`, `CORS_ORIGINS`.
+`NUXT_PUBLIC_SITE_URL` stays a **repository-level** build variable (the build
+job does not use the environment).
 
 Secrets are forwarded through the SSH action's `envs` mechanism and written to
 `/opt/lcs/.env` atomically (0600); they are never printed and never committed.
