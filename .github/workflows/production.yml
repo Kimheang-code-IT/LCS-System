@@ -1,23 +1,24 @@
-name: Build & Deploy
+name: Production
 
+# Production pipeline. Triggers only from `main` (push or manual dispatch).
+# A push to `dev` can never reach this workflow.
 on:
-  # main pushes build + deploy; release tags build images only.
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Existing immutable image tag to deploy (e.g. sha-c1ccaf8). Leave empty to build from this ref.'
+        description: 'Existing immutable image tag to deploy (e.g. sha-c1ccaf8). Leave empty to build from this commit.'
         required: false
         default: ''
 
-# Least privilege by default; the publish job adds packages: write.
+# Least privilege by default; only the build job may publish images.
 permissions:
   contents: read
 
+# Only one production run at a time; never cancel an in-progress deployment.
 concurrency:
-  group: publish-${{ github.ref }}
+  group: production
   cancel-in-progress: false
 
 env:
@@ -33,8 +34,7 @@ jobs:
       image_tag: ${{ steps.resolve.outputs.image_tag }}
       build: ${{ steps.resolve.outputs.build }}
     steps:
-      - name: Resolve tag
-        id: resolve
+      - id: resolve
         shell: bash
         env:
           INPUT_TAG: ${{ github.event.inputs.image_tag }}
@@ -50,12 +50,58 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # CI already validated the commit before merge, so this only builds and
-  # publishes the immutable images.
-  build:
-    name: Build ${{ matrix.name }} image
+  # 1. Production validation/tests.
+  validate-backend:
+    name: Production backend validation
     needs: [resolve]
     if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv python install 3.12
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+
+  validate-frontend:
+    name: Production frontend validation
+    needs: [resolve]
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # 2-5. Build both images, tag with the immutable commit SHA and push to GHCR.
+  build:
+    name: Build ${{ matrix.name }} image
+    needs: [resolve, validate-backend, validate-frontend]
+    if: >-
+      always() &&
+      needs.resolve.outputs.build == 'true' &&
+      needs.validate-backend.result == 'success' &&
+      needs.validate-frontend.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -90,8 +136,6 @@ jobs:
           images: ${{ env.IMAGE_PREFIX }}-${{ matrix.name }}
           tags: |
             type=raw,value=${{ needs.resolve.outputs.image_tag }}
-            type=ref,event=branch
-            type=ref,event=tag
             type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -107,21 +151,22 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
+  # 6-11. Back up the database, deploy the exact SHA-tagged images, recreate the
+  # stack (Alembic runs on backend start) and verify HTTPS readiness.
   deploy:
     name: Deploy to AWS
-    needs: [resolve, build]
+    needs: [resolve, validate-backend, validate-frontend, build]
     if: >-
       always() &&
       needs.resolve.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped') &&
+      (
+        (needs.resolve.outputs.build == 'true' && needs.build.result == 'success') ||
+        (needs.resolve.outputs.build == 'false' && needs.build.result == 'skipped')
+      ) &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
     runs-on: ubuntu-latest
     environment: production
-    # Serialize production deployments; never cancel one in progress.
-    concurrency:
-      group: production
-      cancel-in-progress: false
     permissions:
       contents: read
       packages: read
@@ -143,16 +188,16 @@ jobs:
           script: |
             set -euo pipefail
 
-            # 1. Deterministic sync of the deployment-only checkout.
-            #    infrastructure/.env is git-ignored; certificates, uploads and
-            #    the database live in Docker named volumes; backups live in
-            #    $HOME/lcs-backups. A hard reset cannot delete persistent state.
+            # Deterministic sync of the deployment-only checkout.
+            # infrastructure/.env is git-ignored; certificates, uploads and the
+            # database live in Docker named volumes; backups live in
+            # $HOME/lcs-backups. A hard reset cannot delete persistent state.
             cd /opt/freight-forwarding
             git fetch --prune origin main
             git reset --hard origin/main
             cd infrastructure
 
-            # 2. Choose the docker command (docker group, else sudo fallback).
+            # Choose the docker command (docker group, else sudo fallback).
             if docker info >/dev/null 2>&1; then
               DOCKER="docker"
             else
@@ -160,15 +205,15 @@ jobs:
             fi
             COMPOSE="$DOCKER compose -f docker-compose.yml -f docker-compose.prod.yml"
 
-            # 3. Authenticate to GHCR (token supplied via the action env).
+            # Authenticate to GHCR (token supplied via the action env).
             if [ -z "${GHCR_TOKEN:-}" ]; then
               echo "GHCR_TOKEN is not set." >&2
               exit 1
             fi
             echo "$GHCR_TOKEN" | $DOCKER login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
-            # 4. Pre-deploy PostgreSQL backup. Aborts the deployment on failure.
-            #    'ff-db' is the postgres container name from docker-compose.yml.
+            # Create and verify a PostgreSQL backup BEFORE any migration runs.
+            # 'ff-db' is the postgres container name from docker-compose.yml.
             if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" = "true" ]; then
               BACKUP_DIR="${HOME}/lcs-backups"
               mkdir -p "$BACKUP_DIR"
@@ -189,13 +234,14 @@ jobs:
               echo "PostgreSQL is not running yet (first deployment); skipping backup."
             fi
 
-            # 5. Pull the immutable images and recreate changed services.
+            # Pull the exact immutable images and recreate changed services.
+            # No `down -v`; volumes (database, uploads, certificates) are preserved.
             export IMAGE_TAG
             $COMPOSE pull
             $COMPOSE up -d --remove-orphans
             $DOCKER image prune -f
 
-            # 6. Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
+            # Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
             for attempt in $(seq 1 30); do
               if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
                 echo "Deployment healthy (attempt $attempt)."

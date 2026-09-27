@@ -25,11 +25,13 @@ pnpm vitest run tests/format.spec.ts  # single test file
 ```
 
 Quality gate order: `lint -> typecheck -> test` (frontend), `pytest -> ruff` (backend).
-CI (`.github/workflows/ci.yml`) runs these on **every branch** and PRs. Only
-`main`/tags build images: `.github/workflows/publish.yml` reuses the CI suite,
-pushes to GHCR, then the AWS host pulls them (`docker-compose.prod.yml` sets
-`image:` + `pull_policy: always`). Enable branch protection on `main` requiring
-the aggregate `CI` check.
+Two long-lived branches: `dev` (integration) and `main` (protected production).
+`.github/workflows/dev-ci.yml` runs the gates plus Docker build validation on
+pushes to `dev` and on PRs targeting `main`. `.github/workflows/production.yml`
+runs only on `main` (or manual dispatch): validate, build immutable `sha-<short>`
+images, push to GHCR, back up the database, then deploy to the AWS host
+(`docker-compose.prod.yml` sets `image:` + `pull_policy: always`). Protect `main`
+with a ruleset requiring a pull request and the **`Dev CI`** status check.
 
 ## Run stack
 
