@@ -2853,13 +2853,6 @@
       "notFound": "Document not found",
       "noAttachments": "No attachments yet",
       "loadFailed": "Failed to load data",
-      "accessDeniedTitle": "Access denied",
-      "accessDeniedDescription": "Your account does not have permission to open this page or perform this action.",
-      "sessionExpiredTitle": "Session expired",
-      "sessionExpiredDescription": "Your session has expired. Please sign in again to continue.",
-      "signInAgain": "Sign in again",
-      "requestedPage": "Requested page",
-      "requiredPermission": "Required permission",
       "goBack": "Go back",
       "uploadPermissionRequired": "You can review uploaded files, but your role cannot upload or delete files."
     },

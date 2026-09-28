@@ -2642,13 +2642,6 @@
       "notFound": "រកមិនឃើញឯកសារ",
       "noAttachments": "មិនទាន់មានឯកសារភ្ជាប់",
       "loadFailed": "មិនអាចផ្ទុកទិន្នន័យបាន",
-      "accessDeniedTitle": "មិនអាចចូលប្រើបាន",
-      "accessDeniedDescription": "គណនីរបស់អ្នកមិនមានសិទ្ធិបើកទំព័រនេះ ឬអនុវត្តសកម្មភាពនេះទេ។",
-      "sessionExpiredTitle": "សម័យបានផុតកំណត់",
-      "sessionExpiredDescription": "សម័យរបស់អ្នកបានផុតកំណត់។ សូមចូលម្តងទៀតដើម្បីបន្ត។",
-      "signInAgain": "ចូលម្តងទៀត",
-      "requestedPage": "ទំព័រដែលបានស្នើ",
-      "requiredPermission": "សិទ្ធិដែលត្រូវការ",
       "goBack": "ត្រឡប់ក្រោយ",
       "uploadPermissionRequired": "អ្នកអាចមើលឯកសារដែលបានផ្ទុកឡើង ប៉ុន្តែតួនាទីរបស់អ្នកមិនអាចផ្ទុកឡើង ឬលុបឯកសារបានទេ។"
     },

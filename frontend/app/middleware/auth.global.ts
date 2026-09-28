@@ -1,4 +1,3 @@
-import { useAccessAlert } from '~/composables/common/useAccessAlert'
 import { useSetup } from '~/composables/auth/useSetup'
 import { safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
 import { requiredPagePermissionForPath } from '~/utils/freight/page-access'
@@ -18,7 +17,6 @@ const SETUP_PATH = '/setup'
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
   if (import.meta.client) auth.hydrateClient()
-  const { showPermissionDenied } = useAccessAlert()
 
   const publicPaths = [
     '/auth/login',
@@ -57,15 +55,10 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
     : requiredPagePermissionForPath(to.path)
   const canEnforcePermissions = !import.meta.server || sessionHasPermissionData(auth.user)
   if (canEnforcePermissions && auth.isLoggedIn && permission && !auth.canAccessPage(permission)) {
-    showPermissionDenied({
-      requestedPath: to.fullPath,
-      permission,
-    })
-
     // Keep the current authorized page when denial happens during navigation.
     if (from.matched.length && from.path !== to.path) return abortNavigation()
 
-    // A direct URL needs an authorized page underneath the global dialog.
+    // A direct URL needs an authorized page underneath.
     const landing = PERMITTED_LANDING_ROUTES.find(([, required]) => auth.canAccessPage(required))
     if (landing) return navigateTo(landing[0], { replace: true })
 

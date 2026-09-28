@@ -2,7 +2,6 @@ import { useAuthStore } from '~/stores/auth'
 import { ref } from 'vue'
 import type { TableQueryParams } from '~/types/api'
 import { compactQuery, stableQueryString } from '~/utils/api/query'
-import { useAccessAlert } from '~/composables/common/useAccessAlert'
 import { csrfRequestHeaders } from '~/utils/security/csrf'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 
@@ -48,9 +47,7 @@ let refreshAccessTokenPromise: Promise<boolean> | null = null
  */
 export function useApi() {
     const toast = useToast()
-    const { showPermissionDenied, showSessionExpired } = useAccessAlert()
     const { t } = useI18n()
-    const route = useRoute()
     const config = useRuntimeConfig()
     const authStore = useAuthStore()
     const activeRequests = ref(0)
@@ -152,7 +149,6 @@ export function useApi() {
                     await navigateTo('/setup', { replace: true })
                 }
                 else {
-                    showSessionExpired()
                     await navigateTo('/auth/login', { replace: true })
                 }
             })().finally(() => {
@@ -198,12 +194,6 @@ export function useApi() {
 
                     if (response.status === 403) {
                         handledAccessError = true
-                        if (!options.suppressAccessAlert) {
-                            showPermissionDenied({
-                                requestedPath: route.fullPath,
-                                description: response._data?.message,
-                            })
-                        }
                         return
                     }
 
