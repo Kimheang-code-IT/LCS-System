@@ -79,7 +79,6 @@ useSeoMeta({
       :height="3"
     />
     <NuxtLayout />
-    <CommonAppAccessAlertHost />
     <CommonAppConfirmHost />
   </UApp>
 </template>

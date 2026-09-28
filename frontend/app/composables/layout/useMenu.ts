@@ -128,6 +128,7 @@ export function useMenu() {
         pageLink(t('freight.pages.transportTypes'), '/master-data/transport-types'),
         pageLink(t('freight.pages.transportAssets'), '/master-data/transport-assets'),
         pageLink(t('freight.pages.feeTypes'), '/master-data/fee-types'),
+        pageLink(t('freight.pages.currencies'), '/master-data/currencies'),
       ]),
       group('configuration', t('freight.nav.configuration'), 'i-lucide-blocks', [
         pageLink(t('freight.pages.componentGroups'), '/configuration/component-groups'),

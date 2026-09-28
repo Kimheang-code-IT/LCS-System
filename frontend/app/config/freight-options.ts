@@ -18,24 +18,10 @@ export const SERVICE_TYPES = [
   'Other',
 ] as const
 
-export const JOB_STATUS = [
-  'Job Created',
-  'Documents Received',
-  'Transport Registered',
-  'Customs Processing',
-  'Customs Cleared',
-  'In Transit',
-  'Arrived Factory',
-  'Delivered',
-  'Financial Completed',
-  'Closed',
-] as const
-
 export const CUSTOMS_STATUS = ['Preparing', 'Submitted', 'Processing', 'On Hold', 'Cleared'] as const
 export const QUOTATION_STATUS = ['Draft', 'Sent', 'Accepted', 'Converted', 'Rejected', 'Superseded', 'Expired', 'Cancelled'] as const
 export const DEBIT_NOTE_STATUS = ['Draft', 'Posted', 'Reversed', 'Cancelled'] as const
 export const SERVICE_CHARGE_STATUS = ['Draft', 'Issued'] as const
-export const JOB_WORKFLOW_STATUS = ['DRAFT', 'OPEN', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CLOSED', 'CANCELLED'] as const
 export const SHIPMENT_STATUS = ['Scheduled', 'Registered', 'In Transit', 'Arrived', 'Completed'] as const
 export const DELIVERY_STATUS = ['Scheduled', 'Arriving', 'Unloading', 'Delivered', 'POD Received'] as const
 export const DOCUMENT_STATUS = ['Required', 'Missing', 'Uploaded', 'Approved'] as const
@@ -103,16 +89,6 @@ export const QUOTATION_CONDITIONS = [
 ] as const
 
 export const LOCATION_TYPES = ['Port', 'Border', 'Factory', 'Yard', 'Warehouse', 'City'] as const
-export const PLACE_ROLES = [
-  'Pickup',
-  'Origin',
-  'Port of Loading',
-  'Transit / Border',
-  'Port of Discharge',
-  'Delivery',
-  'Destination',
-  'Other',
-] as const
 export const EQUIPMENT_CATEGORIES = ['Container', 'Truck'] as const
 export const CHARGE_CATEGORIES = ['Customs', 'Trucking', 'Vietnam', 'Cambodia', 'Port', 'Other'] as const
 export const COUNTRIES = ['Cambodia', 'Vietnam'] as const

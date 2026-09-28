@@ -125,3 +125,30 @@ async def test_admin_role_and_user_endpoints(client):
     user_id = users[0]["id"]
     user_update = await client.put(f"/api/v1/users/{user_id}", headers=headers, json={"displayName": "Renamed User"})
     assert user_update.status_code == 200, user_update.text
+
+
+async def test_reference_delete_requires_inactive_status(client):
+    headers = await login(client)
+
+    created = await client.post(
+        "/api/v1/feeTypes",
+        headers=headers,
+        json={"code": "FEE-DEL-1", "name": "Disposable Fee", "status": "ACTIVE"},
+    )
+    assert created.status_code == 201, created.text
+    fee_id = created.json()["data"]["id"]
+
+    # An active reference cannot be deleted.
+    blocked = await client.request("DELETE", "/api/v1/feeTypes", headers=headers, json={"ids": [fee_id]})
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "REFERENCE_ACTIVE"
+    assert (await client.get(f"/api/v1/feeTypes/{fee_id}", headers=headers)).status_code == 200
+
+    # Deactivating from the row menu then allows deletion.
+    deactivated = await client.put(f"/api/v1/feeTypes/{fee_id}", headers=headers, json={"status": "INACTIVE"})
+    assert deactivated.status_code == 200, deactivated.text
+
+    removed = await client.request("DELETE", "/api/v1/feeTypes", headers=headers, json={"ids": [fee_id]})
+    assert removed.status_code == 200, removed.text
+    assert (await client.get(f"/api/v1/feeTypes/{fee_id}", headers=headers)).status_code == 404
+

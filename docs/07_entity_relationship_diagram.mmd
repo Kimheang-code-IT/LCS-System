@@ -1,67 +1,132 @@
+%% Entity Relationship Diagram (generated from the SQLAlchemy models)
+%% Source of truth: backend/app/modules/*/models.py
+%% 63 tables. Organizations and branches were removed; access is user/role/permission based.
 erDiagram
-  ORGANIZATIONS ||--o{ BRANCHES : owns
-  ORGANIZATIONS ||--o{ USER_ROLE_ASSIGNMENTS : scopes
-  BRANCHES ||--o{ USER_ROLE_ASSIGNMENTS : narrows
+  %% ---------------------------------------------------------------
+  %% Identity and access
+  %% ---------------------------------------------------------------
+  USERS ||--|| USER_CREDENTIALS : authenticates
+  USERS ||--o{ USER_SESSIONS : opens
+  USERS ||--o{ PASSWORD_RESET_TOKENS : requests
   USERS ||--o{ USER_ROLE_ASSIGNMENTS : receives
+  USERS ||--o{ USER_ROLE_ASSIGNMENTS : assigns
   ROLES ||--o{ USER_ROLE_ASSIGNMENTS : assigned
   ROLES ||--o{ ROLE_PERMISSIONS : grants
   PERMISSIONS ||--o{ ROLE_PERMISSIONS : included
-  USERS ||--o{ USER_BRANCH_ASSIGNMENTS : may_use
-  BRANCHES ||--o{ USER_BRANCH_ASSIGNMENTS : available
-  USERS ||--o{ USER_SESSIONS : opens
-  ORGANIZATIONS ||--o{ QUOTATIONS : owns
-  BRANCHES ||--o{ QUOTATIONS : operates
+
+  %% ---------------------------------------------------------------
+  %% Audit and backup
+  %% ---------------------------------------------------------------
+  USERS ||--o{ AUDIT_EVENTS : performs
+  USERS ||--o{ BACKUP_RUNS : triggers
+  BACKUP_RUNS ||--o{ BACKUP_LOGS : logs
+  BACKUP_RUNS ||--o{ BACKUP_RECORDS : captures
+
+  %% ---------------------------------------------------------------
+  %% Master data and configuration
+  %% ---------------------------------------------------------------
+  PLACES ||--o{ PLACES : parent_of
+  BUSINESS_PARTIES ||--o{ PARTY_ROLES : has
+  BUSINESS_PARTIES ||--o{ PARTY_PLACES : operates_at
+  PLACES ||--o{ PARTY_PLACES : linked_to
+  BUSINESS_PARTIES ||--o{ CUSTOMER_CUSTOMS_ACCOUNTS : holds
+  TRANSPORT_TYPES ||--o{ TRANSPORT_ASSETS : classifies
+  BUSINESS_PARTIES ||--o{ TRANSPORT_ASSETS : owns
+  BUSINESS_PARTIES ||--o{ TRANSPORT_ASSETS : operates
+  COMPONENT_TEMPLATES ||--o{ TEMPLATE_ATTRIBUTES : defines
+  TRADE_DIRECTIONS ||--o{ TRADE_DIRECTION_COMPONENTS : configures
+  COMPONENT_GROUPS ||--o{ TRADE_DIRECTION_COMPONENTS : groups
+  COMPONENT_TEMPLATES ||--o{ TRADE_DIRECTION_COMPONENTS : selected
+  SERVICE_ORDER_TAB_CONFIGS ||--o{ SERVICE_ORDER_COLUMN_CONFIGS : defines
+
+  %% ---------------------------------------------------------------
+  %% Quotations
+  %% ---------------------------------------------------------------
   BUSINESS_PARTIES ||--o{ QUOTATIONS : customer
   TRADE_DIRECTIONS ||--o{ QUOTATIONS : classifies
+  USERS ||--o{ QUOTATION_REVISIONS : creates
   QUOTATIONS ||--o{ QUOTATION_REVISIONS : has
   QUOTATION_REVISIONS ||--o{ QUOTATION_REVISION_PLACES : uses
   QUOTATION_REVISIONS ||--o{ QUOTATION_REVISION_CONTAINERS : requires
+  CONTAINER_TYPES ||--o{ QUOTATION_REVISION_CONTAINERS : types
   QUOTATION_REVISIONS ||--o{ QUOTATION_REVISION_LINES : prices
+  FEE_TYPES ||--o{ QUOTATION_REVISION_LINES : classifies
+  QUOTATION_REVISION_CONTAINERS ||--o{ QUOTATION_REVISION_LINES : requirement
+  USERS ||--o{ QUOTATION_CONVERSIONS : converts
   QUOTATION_REVISIONS ||--o| QUOTATION_CONVERSIONS : converts
   QUOTATION_CONVERSIONS ||--|| SERVICE_ORDERS : creates
-  ORGANIZATIONS ||--o{ SERVICE_ORDERS : owns
-  BRANCHES ||--o{ SERVICE_ORDERS : operates
+
+  %% ---------------------------------------------------------------
+  %% Service orders
+  %% ---------------------------------------------------------------
+  QUOTATION_REVISIONS ||--o{ SERVICE_ORDERS : sourced_from
+  BUSINESS_PARTIES ||--o{ SERVICE_ORDERS : customer
+  TRADE_DIRECTIONS ||--o{ SERVICE_ORDERS : classifies
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_PLACES : uses
+  PLACES ||--o{ SERVICE_ORDER_PLACES : place
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_CONTAINER_REQUIREMENTS : expects
-  SERVICE_ORDER_CONTAINER_REQUIREMENTS ||--o{ SERVICE_ORDER_CONTAINERS : fulfills
+  CONTAINER_TYPES ||--o{ SERVICE_ORDER_CONTAINER_REQUIREMENTS : types
+  QUOTATION_REVISION_CONTAINERS ||--o{ SERVICE_ORDER_CONTAINER_REQUIREMENTS : source
+  SERVICE_ORDER_CONTAINER_REQUIREMENTS ||--o{ SERVICE_ORDER_CONTAINERS : fulfils
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_CONTAINERS : contains
+  CONTAINER_TYPES ||--o{ SERVICE_ORDER_CONTAINERS : types
   SERVICE_ORDERS ||--o| SERVICE_ORDER_PRICING : has
   SERVICE_ORDER_PRICING ||--o{ SERVICE_ORDER_PRICING_LINES : contains
+  FEE_TYPES ||--o{ SERVICE_ORDER_PRICING_LINES : classifies
+  QUOTATION_REVISION_LINES ||--o{ SERVICE_ORDER_PRICING_LINES : source
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_COMPONENTS : contains
   TRADE_DIRECTION_COMPONENTS ||--o{ SERVICE_ORDER_COMPONENTS : instantiates
-  COMPONENT_GROUPS ||--o{ TRADE_DIRECTION_COMPONENTS : groups
-  COMPONENT_TEMPLATES ||--o{ TRADE_DIRECTION_COMPONENTS : configures
-  COMPONENT_TEMPLATES ||--o{ TEMPLATE_ATTRIBUTES : defines
+  COMPONENT_GROUPS ||--o{ SERVICE_ORDER_COMPONENTS : groups
+  COMPONENT_TEMPLATES ||--o{ SERVICE_ORDER_COMPONENTS : templates
   SERVICE_ORDER_COMPONENTS ||--o{ SERVICE_COMPONENT_VALUES : stores
   TEMPLATE_ATTRIBUTES ||--o{ SERVICE_COMPONENT_VALUES : validates
-  ORGANIZATIONS ||--o{ SERVICE_ORDER_CHARGES : owns
-  BRANCHES ||--o{ SERVICE_ORDER_CHARGES : operates
-  SERVICE_ORDERS ||--o{ SERVICE_ORDER_CHARGES : has
+  SERVICE_ORDERS ||--o{ SERVICE_ORDER_MOVEMENTS : moves
+  PLACES ||--o{ SERVICE_ORDER_MOVEMENTS : origin
+  PLACES ||--o{ SERVICE_ORDER_MOVEMENTS : destination
+  TRANSPORT_TYPES ||--o{ SERVICE_ORDER_MOVEMENTS : classifies
+  TRANSPORT_ASSETS ||--o{ SERVICE_ORDER_MOVEMENTS : performs
+  SERVICE_ORDERS ||--o{ SERVICE_ORDER_MILESTONES : tracks
+  SERVICE_ORDERS ||--o{ SERVICE_ORDER_TAB_ROWS : has
+  SERVICE_ORDER_TAB_CONFIGS ||--o{ SERVICE_ORDER_TAB_ROWS : defines
+
+  %% ---------------------------------------------------------------
+  %% Service charges (commercial, no journal)
+  %% ---------------------------------------------------------------
+  SERVICE_ORDERS ||--o{ SERVICE_ORDER_CHARGES : bills
   SERVICE_ORDER_CHARGES ||--o{ SERVICE_ORDER_CHARGE_LINES : contains
   FEE_TYPES ||--o{ SERVICE_ORDER_CHARGE_LINES : classifies
   SERVICE_ORDER_CONTAINERS ||--o{ SERVICE_ORDER_CHARGE_LINES : concerns
-  ORGANIZATIONS ||--o{ CHART_OF_ACCOUNTS : owns
-  CHART_OF_ACCOUNTS ||--o{ FINANCIAL_ACCOUNTS : represents
-  ORGANIZATIONS ||--o{ ACCOUNTING_PERIODS : controls
-  ORGANIZATIONS ||--o{ FINANCIAL_DOCUMENTS : owns
-  BRANCHES ||--o{ FINANCIAL_DOCUMENTS : operates
+
+  %% ---------------------------------------------------------------
+  %% Finance and accounting
+  %% ---------------------------------------------------------------
   BUSINESS_PARTIES ||--o{ FINANCIAL_DOCUMENTS : counterparty
+  SERVICE_ORDERS ||--o{ FINANCIAL_DOCUMENTS : relates
+  FINANCIAL_ACCOUNTS ||--o{ FINANCIAL_DOCUMENTS : settles
+  FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENTS : reverses
   FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENT_LINES : contains
+  FEE_TYPES ||--o{ FINANCIAL_DOCUMENT_LINES : classifies
+  SERVICE_ORDERS ||--o{ FINANCIAL_DOCUMENT_LINES : dimensions
+  SERVICE_ORDER_CONTAINERS ||--o{ FINANCIAL_DOCUMENT_LINES : concerns
+  CHART_OF_ACCOUNTS ||--o{ FINANCIAL_DOCUMENT_LINES : maps
   FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENT_SOURCES : generated_from
   FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENT_ALLOCATIONS : pays
   FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENT_ALLOCATIONS : settled_by
   FINANCIAL_DOCUMENTS ||--o{ FINANCIAL_DOCUMENT_POSTINGS : posts
   JOURNAL_ENTRIES ||--o{ FINANCIAL_DOCUMENT_POSTINGS : records
-  ORGANIZATIONS ||--o{ JOURNAL_ENTRIES : owns
-  BRANCHES ||--o{ JOURNAL_ENTRIES : operates
+  CHART_OF_ACCOUNTS ||--o{ FINANCIAL_ACCOUNTS : represents
+  CHART_OF_ACCOUNTS ||--o{ POSTING_RULES : debit
+  CHART_OF_ACCOUNTS ||--o{ POSTING_RULES : credit
+  CHART_OF_ACCOUNTS ||--o{ POSTING_RULES : tax
+  FEE_TYPES ||--o{ POSTING_RULES : classifies
   ACCOUNTING_PERIODS ||--o{ JOURNAL_ENTRIES : contains
+  FINANCIAL_DOCUMENTS ||--o{ JOURNAL_ENTRIES : source
+  JOURNAL_ENTRIES ||--o{ JOURNAL_ENTRIES : reverses
   JOURNAL_ENTRIES ||--o{ JOURNAL_ENTRY_LINES : contains
   CHART_OF_ACCOUNTS ||--o{ JOURNAL_ENTRY_LINES : uses
   BUSINESS_PARTIES ||--o{ JOURNAL_ENTRY_LINES : dimensions
   SERVICE_ORDERS ||--o{ JOURNAL_ENTRY_LINES : dimensions
-  ORGANIZATIONS ||--o{ ATTACHMENTS : owns
-  BRANCHES ||--o{ ATTACHMENTS : scopes
+  FINANCIAL_DOCUMENTS ||--o{ JOURNAL_ENTRY_LINES : dimensions
+  USERS ||--o{ ACCOUNTING_PERIODS : closes
+  USERS ||--o{ ATTACHMENTS : uploads
   ATTACHMENTS ||--o{ ATTACHMENT_LINKS : links
-  ORGANIZATIONS ||--o{ AUDIT_EVENTS : records
-  BRANCHES ||--o{ AUDIT_EVENTS : scopes
-  USERS ||--o{ AUDIT_EVENTS : performs

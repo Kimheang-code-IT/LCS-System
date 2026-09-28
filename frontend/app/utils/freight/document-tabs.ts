@@ -49,6 +49,16 @@ export const freightDocumentRecordKey: InjectionKey<{
 
 export const freightDocumentModelKey: InjectionKey<Ref<FreightRecord>> = Symbol('freightDocumentModel')
 
+/**
+ * Collections whose document chrome shows the comments & activity panel.
+ * Only quotations, service orders and service charges keep this feature.
+ */
+export const COMMENT_ACTIVITY_COLLECTIONS = new Set(['quotations', 'jobs', 'jobCharges'])
+
+export function supportsCommentActivity(collection: string | null | undefined): boolean {
+  return Boolean(collection && COMMENT_ACTIVITY_COLLECTIONS.has(collection))
+}
+
 const TYPE_MAP: Record<FreightFieldType, FieldType> = {
   text: 'text',
   date: 'date',
@@ -410,11 +420,6 @@ function financeTabs(module: FreightModule, options: ModuleDocumentTabsOptions):
       labelKey: 'freight.documentTabs.files',
       sections: [{ id: 'files', fields: [lineTableField(tableOrThrow(module, 'attachments'), options)] }],
     },
-    {
-      id: 'activity',
-      labelKey: 'freight.documentTabs.activity',
-      sections: [{ id: 'activity', fields: [lineTableField(tableOrThrow(module, 'auditTimeline'), options)] }],
-    },
   ]
 }
 
@@ -458,10 +463,15 @@ function recipeTabs(module: FreightModule, options: ModuleDocumentTabsOptions): 
 }
 
 function defaultTabs(module: FreightModule, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
+  // Reference (Master Data / Configuration) status is changed from each row's
+  // "..." menu, not from the document form, so keep it off the form here.
+  const fields = (module.group === 'master' || module.group === 'configuration')
+    ? module.fields.filter(field => field.key !== 'status')
+    : module.fields
   const tabs: DocumentTabSchema[] = [{
     id: 'details',
     labelKey: 'freight.sections.details',
-    sections: fieldsToSections(module.fields, options.readOnlyKeys),
+    sections: fieldsToSections(fields, options.readOnlyKeys),
   }]
   for (const table of visibleTables(module, options.isCreate)) {
     tabs.push(tableTab(table, options))

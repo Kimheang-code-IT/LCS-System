@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
-from app.core.exceptions import Conflict, InvalidState, NotFound
+from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
@@ -147,13 +147,15 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                 continue
             container_type_id = container.get("containerTypeId") or container.get("container_type_id")
             if not container_type_id:
-                from app.modules.master_data.service import resolve_reference
+                from app.modules.master_data.service import resolve_or_create_container_type
 
-                container_type_id = await resolve_reference(session, "container_type", container.get("containerType"))
+                container_type_id = await resolve_or_create_container_type(session, container.get("containerType"))
+            if not container_type_id:
+                raise ValidationFailed("Container type is required.", {"containerType": "Required"})
             session.add(
                 QuotationRevisionContainer(
                     quotation_revision_id=revision.id,
-                    container_type_id=int(container_type_id) if container_type_id else 1,
+                    container_type_id=int(container_type_id),
                     quantity=_decimal(container.get("quantity"), Decimal("1")),
                     gross_weight_kg=_decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None,
                     remarks=container.get("remarks"),
@@ -162,6 +164,8 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
     if "places" in data:
         await session.execute(delete(QuotationRevisionPlace).where(QuotationRevisionPlace.quotation_revision_id == revision.id))
     if "pricingLines" in data or "lines" in data:
+        from app.modules.master_data.service import resolve_reference_id
+
         await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
         for index, line in enumerate(data.get("pricingLines") or data.get("lines") or []):
             if not isinstance(line, dict):
@@ -176,7 +180,12 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                 QuotationRevisionLine(
                     quotation_revision_id=revision.id,
                     line_no=index + 1,
-                    fee_type_id=line.get("feeTypeId"),
+                    fee_type_id=await resolve_reference_id(
+                        session,
+                        "fee_type",
+                        line.get("feeTypeId") or line.get("fee_type_id"),
+                        line.get("feeType") or line.get("fee_type"),
+                    ),
                     service_description=str(line.get("description") or line.get("feeType") or "Service"),
                     quantity=quantity,
                     unit_code=line.get("unit"),

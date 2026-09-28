@@ -3,6 +3,7 @@ import type { FreightField } from '~/config/freight-modules'
 import { useFreightLabel } from '~/composables/freight/useFreight'
 import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/document-sequences'
 import { resolveFormFieldHelp } from '~/utils/field-help'
+import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = defineProps<{
   field: FreightField
@@ -26,8 +27,19 @@ function selectOptionLabel(value: string, explicitLabel?: string) {
   return value
 }
 
-const items = computed(() =>
-  (props.field.options || []).flatMap((option) => {
+const store = useFreightStore()
+
+// Master Data pages are the single source of truth for these selects; static
+// `field.options` are ignored when a reference source exists.
+const referenceItems = computed(() => {
+  const source = referenceOptionSource(props.field.key)
+  if (!source) return null
+  return referenceSelectItems(store.list(source.collection), source)
+})
+
+const items = computed(() => {
+  if (referenceItems.value) return referenceItems.value
+  return (props.field.options || []).flatMap((option) => {
     if (option && typeof option === 'object') {
       const value = String(option.value ?? '').trim()
       if (!value) return []
@@ -37,8 +49,8 @@ const items = computed(() =>
     const value = String(option).trim()
     if (!value) return []
     return [{ label: selectOptionLabel(value), value }]
-  }),
-)
+  })
+})
 
 const help = computed(() => resolveFormFieldHelp({
   key: props.field.key,

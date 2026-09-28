@@ -8,12 +8,9 @@ export const DOCUMENT_OVERFLOW_ACTION_KEYS = new Set([
   'backToServiceCharge',
   'createInvoice',
   'viewInvoice',
-  'convertJob',
   'createRevision',
   'reject',
   'cancel',
-  'send',
-  'accept',
 ])
 
 export function isDocumentOverflowAction(key: string) {

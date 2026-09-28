@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
+from app.core.exceptions import Conflict
 from app.core.pagination import PageParams, page_params
-from app.modules.audit.service import write_audit
 from app.modules.operations import service
 from app.modules.operations import service_order_tabs as dynamic_tabs
 
@@ -53,9 +53,6 @@ async def create_dynamic_row(
 ) -> dict:
     order_id = await _resolve_order_id(session, context, identifier)
     row = await dynamic_tabs.create_row(session, context, order_id, tab_id, payload)
-    await write_audit(
-        session, context, event_type="DYNAMIC_ROW_CREATED", entity_type="service_order_tab_row", entity_id=int(row["id"]), action="create"
-    )
     await session.commit()
     return {"data": row}
 
@@ -73,15 +70,6 @@ async def bulk_save_dynamic_rows(
     if rows is None and isinstance(payload, dict):
         rows = payload.get("items") or []
     result = await dynamic_tabs.bulk_save(session, context, order_id, tab_id, rows or [])
-    await write_audit(
-        session,
-        context,
-        event_type="DYNAMIC_TAB_SAVED",
-        entity_type="service_order",
-        entity_id=order_id,
-        action="bulk_save",
-        after={"tabId": str(tab_id), "rowCount": len(result["items"])},
-    )
     await session.commit()
     return {"data": result}
 
@@ -109,14 +97,6 @@ async def delete_dynamic_row(
 ) -> dict:
     order_id = await _resolve_order_id(session, context, identifier)
     result = await dynamic_tabs.delete_row(session, context, order_id, tab_id, row_id)
-    await write_audit(
-        session,
-        context,
-        event_type="DYNAMIC_ROW_DELETED",
-        entity_type="service_order_tab_row",
-        entity_id=row_id,
-        action="delete",
-    )
     await session.commit()
     return {"data": result}
 
@@ -148,6 +128,10 @@ async def delete_service_orders(
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
     for order_id in ids:
         order = await session.get(service.ServiceOrder, order_id)
+        if order is not None and str(order.status).upper() != "INACTIVE":
+            raise Conflict("ORDER_ACTIVE", "Active service orders cannot be deleted. Deactivate the order first.")
+    for order_id in ids:
+        order = await session.get(service.ServiceOrder, order_id)
         if order is not None:
             await session.delete(order)
     await session.commit()
@@ -171,15 +155,6 @@ async def add_container(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     container = await service.add_container(session, context, identifier, payload)
-    await write_audit(
-        session,
-        context,
-        event_type="CONTAINER_ADDED",
-        entity_type="container",
-        entity_id=int(container["id"]),
-        action="create",
-        after={"containerNumber": container.get("containerNumber")},
-    )
     await session.commit()
     return {"data": container}
 
@@ -288,14 +263,6 @@ async def complete_component(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     component = await service.complete_component(session, context, component_id)
-    await write_audit(
-        session,
-        context,
-        event_type="COMPONENT_COMPLETED",
-        entity_type="service_order_component",
-        entity_id=int(component_id),
-        action="complete",
-    )
     await session.commit()
     return {"data": component}
 
@@ -388,14 +355,6 @@ async def issue_service_charge(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     charge = await service.issue_charge(session, context, int(charge_id))
-    await write_audit(
-        session,
-        context,
-        event_type="SERVICE_CHARGE_ISSUED",
-        entity_type="service_order_charge",
-        entity_id=int(charge_id),
-        action="issue",
-    )
     await session.commit()
     return {"data": charge}
 
@@ -408,15 +367,6 @@ async def create_finance_invoice(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     document = await service.charge_to_invoice(session, context, int(charge_id))
-    await write_audit(
-        session,
-        context,
-        event_type="SERVICE_CHARGE_CONVERTED",
-        entity_type="service_order_charge",
-        entity_id=int(charge_id),
-        action="convert_to_invoice",
-        after={"documentId": document.get("id")},
-    )
     await session.commit()
     return {"data": document}
 

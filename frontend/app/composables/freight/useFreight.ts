@@ -82,8 +82,11 @@ export function useFreightLabel() {
 
 export function useFreightRouteModule() {
   const route = useRoute()
-  const module = computed(() => getFreightModule(route.path))
-  const isCreate = computed(() => route.path.endsWith('/new') || route.params.id === 'new')
+  // nginx serves generated directories and redirects `/new` -> `/new/`, so strip
+  // trailing slashes before matching the create route.
+  const path = computed(() => route.path.replace(/\/+$/, '') || '/')
+  const module = computed(() => getFreightModule(path.value))
+  const isCreate = computed(() => path.value.endsWith('/new') || route.params.id === 'new')
   const recordId = computed(() => isCreate.value ? '' : String(route.params.id || ''))
   return { module, isCreate, recordId, route }
 }

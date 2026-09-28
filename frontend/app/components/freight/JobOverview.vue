@@ -68,7 +68,7 @@ const detailItems = computed(() => [
   { label: t('freight.ui.cols.direction'), value: props.model.direction },
   { label: t('freight.ui.cols.currency'), value: props.model.currency },
   { label: t('freight.ui.cols.sourceQuotationLabel'), value: props.model.quotationNo },
-  { label: t('freight.ui.cols.workflow'), value: props.model.workflowStatus || props.model.status },
+  { label: t('freight.ui.cols.workflow'), value: props.model.status || props.model.workflowStatus },
   { label: t('freight.ui.cols.createdAt'), value: displayDate(props.model.createdAt) },
   { label: t('freight.ui.cols.createdBy'), value: props.model.createdBy },
   { label: t('freight.ui.cols.assignedStaff'), value: props.model.assignedStaff },

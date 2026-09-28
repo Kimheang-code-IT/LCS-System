@@ -30,16 +30,34 @@ The Freight Forwarding and Administrative Platform manages quotations, service o
 - Chart of accounts and double-entry journals.
 - Payment allocation.
 - Audit, authorization, and reporting foundations.
-- First-run provisioning of the organization, administrator, roles and a minimal
-  finance baseline on an empty database.
+- First-run provisioning of the administrator, the built-in Platform
+  Administrator role and baseline configuration (current-year document sequences
+  and default app info/config) on an empty database. All other roles are created
+  manually from Roles & Permissions.
 
 ### Delivered in the current version
 
 - Dashboard KPIs and all report tables are served by the backend reporting API.
-- First-run setup page provisions the initial organization, admin and finance
-  baseline; the same provisioning is available headlessly.
-- Simplified navigation: the Organizations, Branches and Posting Rules screens
-  are not exposed in the UI (their data remains server-side).
+- First-run setup page provisions the initial administrator and baseline
+  configuration; the same provisioning is available headlessly. Only the
+  built-in Platform Administrator role is seeded — every other role is entered
+  manually.
+- Single-tenant runtime: organizations and branches were removed from both the
+  schema and the UI (migration `b7f1c2a9d4e0`); access is governed entirely by
+  users, roles and permissions. The Posting Rules screen is not exposed in the UI,
+  although posting rules remain server-side. See
+  `docs/11_permissions_matrix.md`.
+- Simplified quotation flow: Save (draft, editable/deletable) → Accept, which
+  sends, accepts and converts the quotation to a service order in one action.
+- Reference data (Master Data and Configuration) and Service Orders expose status
+  from each row's action menu: active rows cannot be deleted until they are
+  deactivated. Service orders use a simple `ACTIVE` / `INACTIVE` status instead of
+  a draft/closed lifecycle.
+- Activity feeds and comments are not shown on quotation or service-order
+  documents and lists, and quotation/service-order mutations are not written to
+  the audit log.
+- Google Sheets backup mirrors all database tables automatically; sensitive
+  columns (passwords/tokens/secrets) are never exported.
 
 ### Out of scope for the first release
 
@@ -84,7 +102,7 @@ Only an authorized user action shall convert an accepted quotation revision into
 
 ### BR-006 Service orders
 
-The system shall track service-order status, requirements, actual containers, operational components, documents, and milestones.
+The system shall track service-order `ACTIVE` / `INACTIVE` status, requirements, actual containers, operational components, documents, and milestones. An active order must be deactivated before it can be deleted.
 
 ### BR-007 Service charges
 

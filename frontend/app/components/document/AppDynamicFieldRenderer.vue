@@ -33,6 +33,7 @@ import {
   freightDocumentRecordKey,
 } from '~/utils/freight/document-tabs'
 import { resolveDynamicFieldKind } from '~/composables/freight/useDynamicFieldRegistry'
+import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = defineProps<{
   field: DocumentFieldSchema
@@ -159,6 +160,16 @@ const connectionValue = computed(() => {
 const remoteOptions = ref<FieldOption[]>([])
 const optionsPending = ref(false)
 
+const freightStore = useFreightStore()
+
+// Master Data pages drive these selects; static options are ignored when a
+// reference source matches the field key.
+const referenceOptions = computed(() => {
+  const source = referenceOptionSource(props.field.key)
+  if (!source) return null
+  return referenceSelectItems(freightStore.list(source.collection), source)
+})
+
 const resolvedOptionsEndpoint = computed(() => props.field.optionsEndpoint || undefined)
 
 watch(resolvedOptionsEndpoint, async (endpoint) => {
@@ -184,14 +195,15 @@ const searchRemoteOptions = useDebounceFn(async (search: string) => {
   finally { optionsPending.value = false }
 }, 250)
 
-const selectItems = computed(() =>
-  [...(props.field.options || []), ...remoteOptions.value]
+const selectItems = computed(() => {
+  if (referenceOptions.value) return referenceOptions.value
+  return [...(props.field.options || []), ...remoteOptions.value]
     .filter(o => o.value !== '')
     .map(o => ({
       label: o.labelKey ? t(o.labelKey) : o.label,
       value: o.value,
-    })),
-)
+    }))
+})
 
 const labelText = computed(() => {
   if (props.field.labelKey && te(props.field.labelKey)) return t(props.field.labelKey)

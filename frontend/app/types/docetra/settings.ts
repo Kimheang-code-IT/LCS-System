@@ -181,9 +181,6 @@ export interface AppConfigBackup {
   serviceAccountJson: string
   serviceAccountEmail?: string
   serviceAccountConfigured?: boolean
-  worksheetPrefix: string
-  excludedTables: string[]
-  batchSize: number
   lastRunAt: string
   lastRunStatus: BackupRunStatus
   lastRunMessage: string

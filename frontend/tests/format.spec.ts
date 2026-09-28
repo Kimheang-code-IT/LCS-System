@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { CONTAINER_STATUSES, DOCUMENT_TYPES, JOB_WORKFLOW_STATUS } from '../app/config/freight-options'
+import { ACTIVE_STATUS, CONTAINER_STATUSES, DOCUMENT_TYPES } from '../app/config/freight-options'
 import { labeledStatusOptions, shortDay } from '../app/utils/freight/format'
 import { statusColor } from '../app/composables/freight/useFreight'
 
@@ -40,6 +40,6 @@ describe('freight option lists', () => {
   it('keeps supporting-document on DOCUMENT_TYPES and container workflow statuses in config', () => {
     expect(DOCUMENT_TYPES).toContain('Supporting Document')
     expect([...CONTAINER_STATUSES]).toEqual(['Expected', 'Planned', 'Loaded', 'In Transit', 'Delivered', 'Returned'])
-    expect(JOB_WORKFLOW_STATUS).toContain('OPEN')
+    expect([...ACTIVE_STATUS]).toEqual(['Active', 'Inactive'])
   })
 })

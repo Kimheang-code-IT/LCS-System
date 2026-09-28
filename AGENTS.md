@@ -75,9 +75,15 @@ info/config — no finance or business data. Admin CLI:
 
 - `backend/tests/` uses **in-memory SQLite** (`aiosqlite`), not Postgres; `conftest.py`
   overrides `get_session` and builds the schema with `Base.metadata.create_all`.
-- `backend/tests/seed.py` is **test-only**, not used by the app.
-- Fixtures: `client` (seeded AsyncClient), `login()` for auth headers; default
-  password `Passw0rd!`.
+- `backend/tests/seed.py` is **test-only**, not used by the app. Default test login
+  is `admin` / `Passw0rd!`.
+- Fixtures: `client` (seeded AsyncClient), `login()` for auth headers.
+- **Cross-stack contract test:** `tests/test_frontend_api_contract.py` statically
+  reads frontend sources (`app/utils/constants/api-*.ts`,
+  `app/utils/api/freight-remote.ts`, `app/config/freight-modules.ts`) and asserts
+  every referenced `/api/v1/...` path and collection verb exists on the FastAPI app.
+  Adding a frontend endpoint without the matching backend route (or vice versa)
+  fails this test, not the browser.
 
 ## Frontend
 
@@ -85,13 +91,16 @@ info/config — no finance or business data. Admin CLI:
   reverse-proxies `/api/` so the browser is same-origin.
 - No mock data layer. All HTTP goes through `app/repositories/http/` behind the
   `app/repositories/index.ts` factories; Pinia stores in `app/stores/` (primary:
-  `useFreightStore`). Add endpoints to `app/utils/api/freight-remote.ts`
-  (`REMOTE_ENDPOINTS`) rather than calling `fetch` ad hoc.
+  `useFreightStore`). Register paths in `app/utils/constants/api-v1-endpoints.ts`
+  (and `api-endpoints.ts`) plus `app/utils/api/freight-remote.ts`
+  (`REMOTE_ENDPOINTS`) rather than calling `fetch` ad hoc — the backend contract
+  test (above) reads these exact files.
 - `app/utils/**` is auto-imported (`imports.dirs`); components/layouts/composables use
   Nuxt defaults. Use `~` for `app/`.
-- **Icon gotcha:** only `app/**/*.{vue,ts}` files are scanned for icons
-  (`nuxt.config.ts` `icon.clientBundle.scan`). Icons referenced only in dynamic data
-  or `.json` won't be bundled — add the reference to scanned source or the icon disappears.
+- **Icon gotcha:** `nuxt.config.ts` `icon.clientBundle.scan` only globs
+  `app/components/**/*.{vue,ts}`, `app/composables/**/*.ts`, `app/config/**/*.ts`,
+  `app/layouts/**/*.vue`, `app/pages/**/*.vue`. Icons referenced only in `app/utils`,
+  `app/types` or `.json` won't be bundled — add the reference to a scanned file.
 - Frontend tests are plain Vitest (`environment: node`, `import.meta.client = false`,
   alias `~ -> app`); only `tests/**/*.spec.ts`. They do not mount the Nuxt runtime.
 - `pnpm-workspace.yaml` only lists `ignoredBuiltDependencies` — this is **not** a
@@ -101,4 +110,4 @@ info/config — no finance or business data. Admin CLI:
 
 `docs/05_solution_architecture.md`, `docs/06_database_design.sql`,
 `docs/07_entity_relationship_diagram.mmd`, `docs/11_permissions_matrix.md`,
-`docs/16_deployment_runbook.md`, and the root `README.md`.
+`docs/12_deployment_runbook.md`, and the root `README.md`.

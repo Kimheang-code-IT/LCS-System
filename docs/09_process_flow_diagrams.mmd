@@ -1,3 +1,6 @@
+%% Process flow diagram (current implementation)
+%% Single-tenant. The streamlined UI collapses Send + Accept + Convert into one
+%% "Accept" action after the draft is saved; the API state machine below remains.
 flowchart TD
   A[Create Quotation] --> B[Draft Revision]
   B --> C{Valid?}
@@ -14,12 +17,12 @@ flowchart TD
   K -- yes --> L[Return Existing Order]
   K -- no --> M[Create Service Order Snapshot]
   M --> N[Create Required Components]
-  N --> O[Conversion Audit]
+  N --> O[Service Order Created as Active]
 
   O --> P[Execute Service Order]
   P --> Q[Add Containers and Components]
   Q --> R{Required Data Complete?}
-  R -- no --> S[Remain Pending or On Hold]
+  R -- no --> S[Remain Incomplete]
   R -- yes --> T[Complete Components]
   T --> U[Create Service Charge]
   U --> V[Issue Service Note]

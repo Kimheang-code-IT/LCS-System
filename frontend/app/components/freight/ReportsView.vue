@@ -7,7 +7,7 @@ import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { formatFreightCell, formatMoney, freightStatusBadge, labeledStatusOptions } from '~/composables/freight/useFreight'
 import type { FreightRecord } from '~/types/freight/record'
-import { CONTAINER_STATUSES, JOB_WORKFLOW_STATUS } from '~/config/freight-options'
+import { ACTIVE_STATUS, CONTAINER_STATUSES } from '~/config/freight-options'
 import { downloadCsv } from '~/utils/export/csv'
 import { buildStatementGroups, postedJournalLines, reportRowDate, statementDifference as statementDifferenceOf } from '~/utils/freight/report'
 import { buildReportRows } from '~/utils/freight/report-queries'
@@ -100,7 +100,7 @@ watch([q, party, status, currency, dateFrom, dateTo, slug], () => {
 const choices = (getter:(r:FreightRecord)=>unknown) => computed(() => [...new Set(rows.value.map(r=>String(getter(r)||'')).filter(Boolean))].sort().map(value=>({label:value,value})))
 const partyItems=choices(r=>r.customer||r.supplier||r.party), currencyItems=choices(r=>r.currency)
 const statusItems=computed(()=>{
-  if (['service-orders','service-order-status'].includes(slug.value)) return labeledStatusOptions(JOB_WORKFLOW_STATUS, t, te)
+  if (['service-orders','service-order-status'].includes(slug.value)) return labeledStatusOptions(ACTIVE_STATUS, t, te)
   if (slug.value==='containers') return labeledStatusOptions(CONTAINER_STATUSES, t, te)
   return [...new Set(rows.value.map(r=>String(r.status||r.workflowStatus||'')).filter(Boolean))].sort().map(value=>({label:value,value}))
 })

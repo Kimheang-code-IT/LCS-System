@@ -37,7 +37,7 @@ export function buildServiceOrderReportRows(
     const relatedDocuments = documentsByJob.get(jobNo) || []
     return {
       ...job,
-      workflowStatus: job.workflowStatus || job.status,
+      workflowStatus: job.status || job.workflowStatus,
       containers: (containersByJob.get(jobNo) || []).length,
       components: relatedComponents.length,
       chargeTotal: relatedCharges.reduce((sum, row) => sum + Number(row.total || 0), 0),

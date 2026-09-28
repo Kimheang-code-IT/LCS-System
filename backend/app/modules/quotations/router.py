@@ -7,7 +7,6 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_permission
 from app.core.pagination import PageParams, page_params
-from app.modules.audit.service import write_audit
 from app.modules.quotations import service
 
 router = APIRouter()
@@ -29,15 +28,6 @@ async def save_quotation(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     record = await service.save_quotation(session, context, payload)
-    await write_audit(
-        session,
-        context,
-        event_type="QUOTATION_SAVED",
-        entity_type="quotation",
-        entity_id=int(record["id"]),
-        action="create" if not payload.get("id") else "update",
-        after={"quotationNo": record.get("quotationNo"), "status": record.get("status")},
-    )
     await session.commit()
     return {"data": record}
 
@@ -71,15 +61,6 @@ async def update_quotation(
 ) -> dict:
     payload = {**payload, "id": quotation_id}
     record = await service.save_quotation(session, context, payload)
-    await write_audit(
-        session,
-        context,
-        event_type="QUOTATION_UPDATED",
-        entity_type="quotation",
-        entity_id=int(quotation_id),
-        action="update",
-        after={"status": record.get("status")},
-    )
     await session.commit()
     return {"data": record}
 
@@ -103,15 +84,6 @@ async def send_revision(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     record = await service.send_revision(session, context, int(revision_id))
-    await write_audit(
-        session,
-        context,
-        event_type="QUOTATION_SENT",
-        entity_type="quotation_revision",
-        entity_id=int(revision_id),
-        action="send",
-        after={"status": "SENT", "idempotencyKey": idempotency_key},
-    )
     await session.commit()
     return {"data": record}
 
@@ -135,15 +107,6 @@ async def accept_revision(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     record = await service.accept_revision(session, context, int(revision_id))
-    await write_audit(
-        session,
-        context,
-        event_type="QUOTATION_ACCEPTED",
-        entity_type="quotation_revision",
-        entity_id=int(revision_id),
-        action="accept",
-        after={"status": "ACCEPTED"},
-    )
     await session.commit()
     return {"data": record}
 
@@ -156,14 +119,5 @@ async def convert_revision(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     record = await service.convert_revision(session, context, int(revision_id))
-    await write_audit(
-        session,
-        context,
-        event_type="QUOTATION_CONVERTED",
-        entity_type="quotation_revision",
-        entity_id=int(revision_id),
-        action="convert",
-        after={"serviceOrderId": record.get("serviceOrderId")},
-    )
     await session.commit()
     return {"data": record}

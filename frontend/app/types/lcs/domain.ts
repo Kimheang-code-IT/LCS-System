@@ -8,14 +8,7 @@ export type QuotationRevisionStatus =
   | 'EXPIRED'
   | 'CANCELLED'
 
-export type ServiceOrderStatus =
-  | 'DRAFT'
-  | 'OPEN'
-  | 'IN_PROGRESS'
-  | 'ON_HOLD'
-  | 'COMPLETED'
-  | 'CLOSED'
-  | 'CANCELLED'
+export type ServiceOrderStatus = 'ACTIVE' | 'INACTIVE'
 
 export type ServiceChargeStatus = 'DRAFT' | 'ISSUED'
 

@@ -15,32 +15,39 @@ Operational record
 
 Issuing a service charge does not post accounting. Accounting begins only when an authorized user posts a financial document or manual journal.
 
-All procedures are constrained by organization and branch scope.
+The runtime is single-tenant: there is no organization or branch scope. Access is
+governed entirely by users, roles and permissions. A granted permission applies to
+all records of that module.
 
 ## 2. Roles and Responsibilities
 
-| Role | Main responsibilities |
-|---|---|
-| Organization administrator | Organization, branch, user, role, and operational configuration |
-| Branch manager | Branch operations, review, assignment, and branch approvals |
-| Sales officer | Quotations, revisions, customer communication |
-| Operations officer | Service orders, containers, components, documents, milestones |
-| Finance officer | Financial drafts, receipts, payments, allocations, reconciliations |
-| Finance manager | Posting, reversals, chart of accounts, periods, approvals |
-| Auditor | Read-only review and evidence collection |
+Roles are defined in code (`backend/app/core/permissions.py`). Only the Platform
+Administrator is provisioned at first-run setup; every other role below is a
+template that an administrator creates from Roles & Permissions.
 
-## 3. Organization, Branch and First-Run Setup
+| Role (code) | Main responsibilities |
+|---|---|
+| Platform Administrator (`PLATFORM_ADMIN`) | Full platform administration; built in |
+| Administrator (`ADMINISTRATOR`) | Users, roles, configuration, reference data, settings, backup |
+| Operations Manager (`OPERATIONS_MANAGER`) | Service-order and quotation review, configuration |
+| Sales Officer (`SALES_OFFICER`) | Quotations, revisions, customer communication |
+| Operations Officer (`OPERATIONS_OFFICER`) | Service orders, containers, components, documents, milestones |
+| Finance Officer (`FINANCE_OFFICER`) | Financial drafts, receipts, payments, allocations, journals |
+| Finance Manager (`FINANCE_MANAGER`) | Posting, reversals, chart of accounts, periods, approvals |
+| Auditor (`AUDITOR`) | Read-only review and evidence collection |
+
+## 3. First-Run Setup
 
 ### First-run setup (empty database)
 
 1. On a freshly migrated database there are no users, so the app redirects to the
    first-run setup page (`/setup`).
-2. The installer enters the organization, the first administrator and the
-   baseline finance details, then submits.
-3. System provisions the permission catalog, default roles, the organization, the
-   head-office branch, the administrator credential and a minimal finance
-   baseline (chart of accounts, posting rules, financial accounts, document
-   sequences and current periods).
+2. The installer enters the administrator credential (and optional name/username),
+   then submits.
+3. System provisions the permission catalog, the built-in Platform Administrator
+   role, the administrator credential, the current-year document sequences and the
+   default app info/config. No finance or business data is seeded, and no other
+   roles are created.
 4. System signs the administrator in. Setup is accepted only while no user exists
    (`GET /api/v1/setup/status` / `POST /api/v1/setup/initialize`).
 
@@ -53,48 +60,44 @@ reset the password):
 python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
 ```
 
-Additional branches, users and role assignments are administered from the
-API/CLI afterwards. The Organizations, Branches and Posting Rules screens are no
-longer exposed in the UI, but those records remain server-side for scope and
-posting.
+Additional users, roles and role assignments are administered from the UI or API
+afterwards. Posting rules remain server-side; they are not exposed in the UI.
 
 ### Control points
 
 - Setup can run only while no user exists.
-- Branch code is unique within the organization.
-- User cannot select an unassigned branch.
-- A branch manager cannot administer another branch unless explicitly authorized.
-- Organization-wide roles remain limited to their organization.
+- User codes, usernames and emails are unique.
+- Role assignments support start and expiry dates; expired assignments grant no
+  permissions.
+- The Platform Administrator role cannot be reduced below the bootstrap
+  administrator.
 
 ## 4. User and Permission Administration
 
-### Invite user
+### Create user
 
-1. Administrator creates a user invitation.
-2. System sends an invitation or creates a temporary activation flow.
-3. User sets a password.
-4. System stores only the password hash.
-5. Administrator assigns roles and scope.
-6. User logs in and selects an assigned branch.
+1. Administrator opens Users and creates the user (code, username, email, display
+   name, locale, timezone).
+2. Administrator sets the initial password (stored as an Argon2id hash).
+3. Administrator assigns one or more roles.
+4. User logs in and can change their own password.
 
 ### Change access
 
 1. Administrator reviews the requested change.
 2. Administrator adds, changes, expires, or removes a role assignment.
-3. System records the actor, old assignment, new assignment, reason, and timestamp.
-4. Existing sessions are revoked when the change is security-sensitive.
+3. System records the actor and assignment metadata.
+4. Existing sessions can be revoked for security-sensitive changes.
 
 ### Disable user
 
-1. Administrator changes status to `DISABLED`.
-2. System revokes active sessions.
-3. User can no longer authenticate or access records.
-4. Historical records and audit events remain unchanged.
+1. Administrator changes the user status to `DISABLED`.
+2. System refuses authentication and active access.
+3. Historical records and audit events remain unchanged.
 
 Role administration uses a streamlined form: a role records a name and the
-permission actions it grants. The per-role scope/level and code/status columns
-were removed from the UI; organization and branch scope is enforced by the
-assignment and by the API.
+permission actions it grants; per-role scope/level and code/status columns are not
+used. Permissions are enforced by the API.
 
 ## 5. Master Data Procedure
 
@@ -102,8 +105,13 @@ assignment and by the API.
 2. User creates or edits the record.
 3. System validates code uniqueness and required fields.
 4. User saves the record.
-5. System writes an audit event.
-6. When a record is no longer valid, user deactivates it instead of deleting it.
+5. Status is changed from the record's row action menu: an **active** record can
+   only be deactivated; a **deactivated** record can be reactivated or deleted.
+6. The API refuses to delete an active reference record; deactivate it first.
+   Status is not entered on the record form.
+
+The same activate-before-delete rule applies to **service orders**, which use a
+simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 
 ## 6. Component Template Procedure
 
@@ -118,63 +126,58 @@ assignment and by the API.
 
 ## 7. Quotation Procedure
 
-### Create draft
+### Create or edit the draft
 
-1. Sales officer selects the organization and branch.
-2. User selects customer and trade direction.
-3. User enters places, transport options, container requirements, and lines.
-4. User verifies all lines use the revision currency.
-5. System calculates subtotal, discount, tax, and total.
-6. User saves the draft.
+1. Sales officer selects the customer and trade direction.
+2. User enters places, transport options, container requirements, and lines.
+3. User verifies all lines use the revision currency.
+4. System calculates subtotal, discount, tax, and total.
+5. User selects **Save** to create the draft. While the draft has unsaved changes
+   the only action is **Save changes**.
+6. The saved draft stays editable and can be deleted from its row action menu.
 
-### Send
+### Accept and auto-convert
 
-1. User reviews the draft.
-2. User sends the revision.
-3. System validates required commercial data.
-4. System changes status to `SENT`.
-5. System prevents editing of the sent revision.
-6. System records the sent timestamp and audit event.
+1. Once the draft has no unsaved changes, the primary action becomes **Accept**
+   (Save changes and Accept are never shown at the same time).
+2. User selects **Accept** and confirms.
+3. System sends the revision (`DRAFT → SENT`), records acceptance
+   (`SENT → ACCEPTED`) and converts it to a service order
+   (`ACCEPTED → CONVERTED`) in a single action.
+4. System locks the revision and copies the required commercial and operational
+   snapshots, creates the service order and its required components, and records
+   the conversion.
+5. System opens the created service order.
 
-### Revise
+### API-level steps (advanced)
 
-1. User opens a sent revision.
-2. User selects `Create Revision`.
-3. System copies the previous revision and children.
-4. User edits the new draft.
-5. User sends the new revision.
-6. Previous revision remains available for history.
-
-### Accept and convert
-
-1. User records customer acceptance against the exact revision.
-2. Authorized user selects `Convert to Service Order`.
-3. System locks the revision.
-4. System copies required commercial and operational snapshots.
-5. System creates the service order and required components.
-6. System records conversion.
-7. System marks the revision converted.
+The streamlined Accept flow is a convenience wrapper around the revision state
+machine, which remains available through the API: `send` → `accept` → `convert`.
 
 ### Exceptions
 
 - Rejected, expired, or cancelled revisions cannot be converted.
-- Duplicate conversion attempts return the existing conversion result.
-- A sent revision cannot be edited directly.
+- A duplicate conversion attempt is rejected with `DUPLICATE_CONVERSION`; the
+  existing service order is opened instead.
+- A sent revision cannot be edited directly; create a new revision first.
 - A customer change after acceptance requires a new revision and approval policy.
 
 ## 8. Service-Order Procedure
 
 1. Operations officer reviews the converted order.
-2. User confirms branch, customer, direction, and operational places.
+2. User confirms customer, direction, and operational places.
 3. User confirms container requirements.
 4. User adds actual containers when numbers are available.
 5. User adds repeatable components such as cargo, transport, documents, and milestones.
 6. User enters template-defined values.
 7. User uploads supporting files.
 8. User completes each component after validation.
-9. Manager reviews exceptions and may place the order on hold.
-10. User marks the order completed after required components are complete.
-11. Finance and operations review before administrative closure.
+9. The service order uses a simple **Active / Inactive** status. A saved order is
+   **Active**; the status is changed from the record's row action menu, not the
+   form.
+10. An active order cannot be deleted; deactivate it first. Only an inactive order
+    can be deleted.
+11. Activity feeds and comments are not shown on service-order documents or lists.
 
 ## 9. Service-Charge Procedure
 
@@ -201,7 +204,7 @@ assignment and by the API.
 ### Create manual document
 
 1. Finance user selects a document type.
-2. User selects party, branch, currency, date, and optional service order.
+2. User selects party, currency, date, and optional service order.
 3. User enters lines.
 4. User selects or confirms account mappings.
 5. System calculates the total.
@@ -213,7 +216,7 @@ assignment and by the API.
 2. System resolves an open accounting period.
 3. System resolves posting rules.
 4. System builds journal lines.
-5. System verifies account ownership and postability.
+5. System verifies account postability.
 6. System verifies debit equals credit.
 7. Authorized user posts the document.
 8. System creates the journal and audit event.
@@ -252,14 +255,10 @@ assignment and by the API.
 3. Manager reviews ledger, receivables, payables, and unallocated payments.
 4. Manager reconciles bank and cash balances.
 5. Manager closes the period with a reason.
-6. System rejects future posting into the closed period.
+6. System rejects future posting into the closed period (`PERIOD_CLOSED`).
 7. Reopening requires elevated permission and an audit event.
 
 ## 12. Exception Handling
-
-### Wrong branch
-
-Stop processing, correct the branch assignment if authorized, and audit the correction. Do not silently move records by changing a filter.
 
 ### Missing required document
 
@@ -275,11 +274,12 @@ Keep the financial document in draft or an error state. No partial journal may r
 
 ### Unbalanced journal
 
-Do not post. Display the imbalance and affected lines to the finance user.
+Do not post. Display the imbalance and affected lines to the finance user
+(`JOURNAL_UNBALANCED`).
 
 ### Overpayment
 
-Keep the excess as unapplied balance or create a refund/credit process according to accounting policy. Do not silently allocate beyond the target balance.
+Keep the excess as unapplied balance or create a refund/credit process according to accounting policy. Do not silently allocate beyond the target balance (`ALLOCATION_EXCEEDS_BALANCE`).
 
 ### Duplicate request
 

@@ -87,10 +87,10 @@ async def _store_backup_status(session: AsyncSession, *, status: str, message: s
     )
 
 
-def _excluded_tables(config: dict[str, Any]) -> set[str]:
-    names = {str(name) for name in (config.get("excludedTables") or [])}
-    names.update({"alembic_version"})
-    return names
+def _excluded_tables() -> set[str]:
+    """Engine-internal tables that are never mirrored: the migration marker and
+    the backup bookkeeping tables themselves (which would grow without bound)."""
+    return {"alembic_version"}
 
 
 def build_client(config: dict[str, Any]) -> GoogleSheetsClient:
@@ -101,11 +101,7 @@ def build_client(config: dict[str, Any]) -> GoogleSheetsClient:
         raise BackupConfigurationError("Backup is not configured: a spreadsheet ID is required.")
     if not credentials:
         raise BackupConfigurationError("Backup is not configured: service account JSON is required.")
-    return GoogleSheetsClient(
-        credentials,
-        spreadsheet_id,
-        prefix=str(config.get("worksheetPrefix") or ""),
-    )
+    return GoogleSheetsClient(credentials, spreadsheet_id)
 
 
 # --- schema discovery --------------------------------------------------------
@@ -118,15 +114,15 @@ def _ensure_models_loaded() -> None:
     import app.modules.quotations.models  # noqa: F401
 
 
-def discover_tables(config: dict[str, Any]) -> list[Table]:
+def discover_tables() -> list[Table]:
     """All backupable tables in dependency order (parents before children)."""
     from app.core.database import Base
 
     _ensure_models_loaded()
-    excluded = _excluded_tables(config)
+    excluded = _excluded_tables()
     tables: list[Table] = []
     for table in Base.metadata.sorted_tables:
-        if table.name in excluded or table.name.startswith("backup_") or table.name == "alembic_version":
+        if table.name in excluded or table.name.startswith("backup_"):
             continue
         if not len(table.primary_key.columns):
             continue
@@ -135,7 +131,7 @@ def discover_tables(config: dict[str, Any]) -> list[Table]:
 
 
 def table_by_name(name: str) -> Table | None:
-    for table in discover_tables({}):
+    for table in discover_tables():
         if table.name == name:
             return table
     return None
@@ -308,7 +304,7 @@ async def _execute_run(run_id: int) -> None:
             return
 
         try:
-            tables = discover_tables(config)
+            tables = discover_tables()
             counters.tables_total = len(tables)
             run.tables_total = counters.tables_total
             await session.commit()
@@ -362,7 +358,7 @@ async def _process_table(
     if not columns:
         return
     pk_columns = list(table.primary_key.columns)
-    batch_size = max(1, int(config.get("batchSize") or DEFAULT_BATCH_SIZE))
+    batch_size = DEFAULT_BATCH_SIZE
 
     states = {
         state.record_id: state
@@ -570,7 +566,7 @@ async def restore_from_sheets(session: AsyncSession, *, confirm: str, tables: li
     table_summaries: list[dict[str, Any]] = []
     touched_tables: list[Table] = []
 
-    for table in discover_tables(config):
+    for table in discover_tables():
         if selected and table.name not in selected:
             continue
         title = client.worksheet_title(table.name)
@@ -756,4 +752,4 @@ def schedule_status(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def sanitize_title(table_name: str, config: dict[str, Any]) -> str:
-    return sanitize_worksheet_title(table_name, str(config.get("worksheetPrefix") or ""))
+    return sanitize_worksheet_title(table_name)

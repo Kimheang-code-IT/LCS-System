@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.bootstrap import ensure_permission_catalog
+from app.core.permissions import ROLE_DEFINITIONS
 from app.core.security import hash_password
 from app.modules.auth.models import (
     Role,
@@ -183,8 +184,12 @@ TAB_SEED: list[dict[str, Any]] = [
 
 
 async def ensure_seed_data(session: AsyncSession) -> None:
-    """Idempotently seed permissions, roles and default role mappings."""
-    await ensure_permission_catalog(session)
+    """Idempotently seed permissions, roles and default role mappings.
+
+    Unlike production, tests provision every defined role so the demo users can
+    log in with their assigned permissions.
+    """
+    await ensure_permission_catalog(session, role_codes=ROLE_DEFINITIONS.keys())
 
 
 async def _get_or_create(session: AsyncSession, model: type, defaults: dict, **filters):

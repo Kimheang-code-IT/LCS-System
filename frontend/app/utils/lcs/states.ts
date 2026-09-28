@@ -19,31 +19,6 @@ const QUOTATION_LABEL: Record<string, QuotationRevisionStatus> = {
   CANCELLED: 'CANCELLED',
 }
 
-const JOB_WORKFLOW: Record<string, ServiceOrderStatus> = {
-  Draft: 'DRAFT',
-  DRAFT: 'DRAFT',
-  Open: 'OPEN',
-  OPEN: 'OPEN',
-  'Job Created': 'OPEN',
-  'In Progress': 'IN_PROGRESS',
-  IN_PROGRESS: 'IN_PROGRESS',
-  'Documents Received': 'IN_PROGRESS',
-  'Transport Registered': 'IN_PROGRESS',
-  'Customs Processing': 'IN_PROGRESS',
-  'Customs Cleared': 'IN_PROGRESS',
-  'In Transit': 'IN_PROGRESS',
-  'Arrived Factory': 'IN_PROGRESS',
-  'On Hold': 'ON_HOLD',
-  ON_HOLD: 'ON_HOLD',
-  Delivered: 'COMPLETED',
-  'Financial Completed': 'COMPLETED',
-  COMPLETED: 'COMPLETED',
-  Closed: 'CLOSED',
-  CLOSED: 'CLOSED',
-  Cancelled: 'CANCELLED',
-  CANCELLED: 'CANCELLED',
-}
-
 const CHARGE_STATUS: Record<string, ServiceChargeStatus> = {
   Draft: 'DRAFT',
   DRAFT: 'DRAFT',
@@ -71,7 +46,10 @@ export function quotationDomainStatus(value: unknown): QuotationRevisionStatus {
 }
 
 export function jobDomainStatus(record: Record<string, unknown>): ServiceOrderStatus {
-  return JOB_WORKFLOW[String(record.workflowStatus || record.status || '')] || 'OPEN'
+  const value = String(record.status || record.workflowStatus || '').trim().toLowerCase()
+  return value === 'inactive' || value === 'cancelled' || value === 'canceled' || value === 'closed'
+    ? 'INACTIVE'
+    : 'ACTIVE'
 }
 
 export function chargeDomainStatus(value: unknown): ServiceChargeStatus {

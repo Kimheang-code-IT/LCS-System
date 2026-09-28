@@ -1,14 +1,21 @@
+%% Data flow diagram (current implementation)
+%% Single-tenant: authentication + permission check only (no organization/branch).
 flowchart TD
-  USER[Authenticated User] --> CTX[Resolve Organization and Branch Context]
-  CTX --> AUTH[Authorize Permission and Scope]
-  AUTH -- denied --> DENY[403 / Non-disclosing Error]
-  AUTH -- allowed --> API[FastAPI API]
-  API --> MOD[Application Module]
-  MOD --> TX[Transactional Service]
-  TX --> PG[(PostgreSQL)]
-  TX --> AUDIT[Audit Event]
-  MOD --> STORAGE[(Object Storage: MinIO / S3)]
-  MOD --> EXT[External Systems (inline / not yet implemented)]
+  USER[Authenticated User] --> AUTHN[Authenticate: JWT bearer or HttpOnly cookie]
+  AUTHN --> PERM[Authorize Permission]
+  PERM -- denied --> DENY[403 ACCESS_DENIED / 401 AUTH_REQUIRED]
+  PERM -- allowed --> API[FastAPI API /api/v1]
+  API --> MOD[Module router]
+  MOD --> SVC[Application service]
+  SVC --> TX[(PostgreSQL - async SQLAlchemy)]
+  SVC --> STORAGE[(Object Storage: local filesystem or MinIO / S3)]
+  SVC --> AUDIT[Audit event - high-risk actions only]
+  API --> ENV[Envelope: data / code,message,request_id,field_errors]
+
+  subgraph Setup
+    SU1[Empty database] --> SU2[/setup status]
+    SU2 --> SU3[initialize: admin + PLATFORM_ADMIN + sequences + app info/config]
+  end
 
   subgraph Quotation_to_Order
     Q1[Draft Quotation Revision] --> Q2[Send Immutable Revision]
@@ -27,12 +34,12 @@ flowchart TD
   end
 
   subgraph Finance_Posting
-    F1[Draft Financial Document] --> F2[Validate Totals and Scope]
+    F1[Draft Financial Document] --> F2[Validate Totals]
     F2 --> F3[Resolve Open Accounting Period]
     F3 --> F4[Resolve Posting Rules]
     F4 --> F5[Build Journal Lines]
     F5 --> F6{Debits Equal Credits?}
-    F6 -- no --> F7[Reject Posting]
+    F6 -- no --> F7[Reject: JOURNAL_UNBALANCED]
     F6 -- yes --> F8[Post Journal]
     F8 --> F9[General Ledger]
   end
@@ -41,4 +48,11 @@ flowchart TD
     P1[Customer Receipt or Supplier Payment] --> P2[Post Cash/Bank Journal]
     P2 --> P3[Payment Allocation]
     P3 --> P4[Outstanding Balance]
+  end
+
+  subgraph Backup
+    B1[In-process scheduler / manual run] --> B2[Scan all tables]
+    B2 --> B3[Store rows locally: backup_records]
+    B3 --> B4[Append to Google Sheets]
+    B4 --> B5[On failure: retry]
   end

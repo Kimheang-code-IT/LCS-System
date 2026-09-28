@@ -1,4 +1,3 @@
-import { useAccessAlert } from '~/composables/common/useAccessAlert'
 import { defaultReportPathForUser, reportAreaPermission } from '~/utils/freight/report-access'
 
 export default defineNuxtRouteMiddleware((to) => {
@@ -8,12 +7,6 @@ export default defineNuxtRouteMiddleware((to) => {
   const auth = useAuthStore()
   const permission = reportAreaPermission(area)
   if (auth.canAccessPage(permission)) return
-
-  const { showPermissionDenied } = useAccessAlert()
-  showPermissionDenied({
-    requestedPath: to.fullPath,
-    permission,
-  })
 
   const fallback = defaultReportPathForUser(key => auth.canAccessPage(key))
   if (fallback !== to.fullPath) {

@@ -115,8 +115,9 @@ async def test_backup_detects_insert_update_and_prevents_duplicates(session_fact
     )
     assert versions == [1, 2]
 
-    # Sensitive tables are never written to Sheets.
-    assert "user_credentials" not in fake.tabs
+    # Sensitive columns (password hashes) are never written to Sheets.
+    creds_header = fake.tabs.get("user_credentials", [[]])[0]
+    assert "password_hash" not in creds_header
 
 
 async def test_restore_recreates_deleted_rows(session_factory, monkeypatch):
