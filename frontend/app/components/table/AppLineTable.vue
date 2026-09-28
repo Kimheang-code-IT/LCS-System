@@ -12,6 +12,7 @@ import TableLineTableColumnsCell from '~/components/table/LineTableColumnsCell.v
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
+import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = withDefaults(defineProps<{
   table: FreightTable
@@ -68,6 +69,19 @@ const cellNumberInputUi = { base: 'text-sm text-right tabular-nums' }
 const tableUi = computed(() => props.compact ? freightTableUiCompactReadonly : freightTableUiLine)
 
 const numericKeys = lineTableNumericColumnKeys()
+
+const store = useFreightStore()
+
+// Master Data pages drive these line-table selects; static `column.options` are
+// ignored when a reference source matches the column key.
+const referenceColumnItems = computed<Record<string, Array<{ label: string, value: string }>>>(() => {
+  const map: Record<string, Array<{ label: string, value: string }>> = {}
+  for (const column of props.table.columns) {
+    const source = referenceOptionSource(column.key)
+    if (source) map[column.key] = referenceSelectItems(store.list(source.collection), source)
+  }
+  return map
+})
 
 function columnCellClass(column: FreightLineColumn) {
   return lineTableColumnCellClass(column)
@@ -241,7 +255,10 @@ function addRow() {
   const blank = Object.fromEntries(props.table.columns.map((column) => {
     if (column.type === 'number') return [column.key, 0]
     if (column.type === 'checkbox') return [column.key, String(column.options?.[1] ?? 'No')]
-    if (column.type === 'select') return [column.key, column.optionItems?.[0]?.value || column.options?.[0] || '']
+    if (column.type === 'select') {
+      const referenceItems = referenceColumnItems.value[column.key]
+      return [column.key, column.optionItems?.[0]?.value || referenceItems?.[0]?.value || column.options?.[0] || '']
+    }
     return [column.key, '']
   }))
   for (const column of props.table.columns) {
@@ -272,7 +289,6 @@ function addRow() {
     blank.containerNo = ''
   }
   if (props.table.key === 'places') {
-    blank.placeRole = 'Pickup'
     blank.place = ''
     blank.plannedActual = ''
     blank.notes = ''
@@ -353,9 +369,12 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           })
         }
         if (column.type === 'select') {
+          const referenceItems = referenceColumnItems.value[column.key]
           const items = column.optionItems?.length
             ? column.optionItems
-            : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
+            : referenceItems
+              ? referenceItems
+              : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
           return h(TableSelect, {
             'modelValue': String(row.original[column.key] || '') || undefined,
             'items': items,

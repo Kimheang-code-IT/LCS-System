@@ -121,12 +121,11 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
       :schema="schema"
       :title="t('pages.setup.title')"
       icon="i-lucide-shield-check"
-      :description="t('pages.setup.description')"
       :fields="fields"
       :loading="submitting"
       :submit="{
         label: t('pages.setup.submit'),
-        class: 'w-full h-10! text-xl font-normal',
+        class: 'w-full h-10! text-lg font-normal',
         loading: submitting,
       }"
       @submit="onSubmit"

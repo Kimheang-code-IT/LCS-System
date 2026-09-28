@@ -36,6 +36,7 @@ export function listTableRowMetaColumn<T extends Record<string, unknown>>(option
   summary: string
   items: (row: T) => DropdownMenuItem[][]
   loadingId?: string
+  showComments?: boolean
 }): TableColumn<T> {
   return {
     id: 'actions',
@@ -49,6 +50,7 @@ export function listTableRowMetaColumn<T extends Record<string, unknown>>(option
       row: row.original,
       items: options.items(row.original),
       loading: options.loadingId === String(row.original.id || ''),
+      showComments: options.showComments !== false,
     }),
   }
 }

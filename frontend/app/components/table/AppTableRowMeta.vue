@@ -7,8 +7,10 @@ const props = withDefaults(defineProps<{
   row: Record<string, unknown>
   items: DropdownMenuItem[][]
   loading?: boolean
+  showComments?: boolean
 }>(), {
   loading: false,
+  showComments: true,
 })
 
 const { t } = useI18n()
@@ -40,6 +42,7 @@ const relative = computed(() =>
     />
     <span class="min-w-22 text-xs text-muted" :title="stamp">{{ relative }}</span>
     <span
+      v-if="showComments"
       class="inline-flex items-center gap-0.5 text-xs text-muted"
       :title="t('freight.ui.comments')"
     >

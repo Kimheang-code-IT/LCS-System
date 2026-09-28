@@ -4,6 +4,7 @@ import type { FreightRecord } from '~/types/freight/record'
 import type { PrintTemplateId } from '~/config/print-templates'
 import { PRINT_SUPPORTED_COLLECTIONS } from '~/config/print-templates'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
+import { useModuleRepository } from '~/repositories'
 import type { useLcs } from '~/composables/lcs/useLcs'
 import type { useConfirm } from '~/composables/common/useConfirm'
 
@@ -59,9 +60,14 @@ export function useDocumentActions(options: {
       store.reload()
       return saved
     }
-    return isNew
-      ? await store.create(module.value.collection, payload, module.value.collection.slice(0, 3))
-      : store.save(module.value.collection, payload as FreightRecord)
+    // Await the API for every other collection so the caller can safely refresh
+    // or navigate after a real, persisted save (no optimistic-only result).
+    const repository = useModuleRepository(module.value)
+    const saved = isNew
+      ? await repository.create(payload)
+      : await repository.update(String(payload.id ?? ''), payload)
+    store.reload()
+    return saved
   }
 
   async function openPrint(templateId: PrintTemplateId) {

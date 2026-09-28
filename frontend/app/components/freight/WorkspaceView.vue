@@ -15,7 +15,7 @@ import {
 import { useLcs } from '~/composables/lcs/useLcs'
 import type { FreightRecord } from '~/types/freight/record'
 import { freightModules, type FreightSelectOption } from '~/config/freight-modules'
-import { chargeDomainStatus, financeDomainStatus, jobDomainStatus, quotationDomainStatus } from '~/utils/lcs/states'
+import { chargeDomainStatus, financeDomainStatus, quotationDomainStatus } from '~/utils/lcs/states'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
 import { enrichJobListRows } from '~/utils/freight/job-list'
 import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
@@ -24,8 +24,10 @@ import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/lis
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
 import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
-import type { ServiceOrderStatus } from '~/types/lcs/domain'
 import { useModuleList } from '~/composables/freight/useModuleList'
+import { useModuleRecord } from '~/composables/freight/useModuleRecord'
+import { supportsCommentActivity } from '~/utils/freight/document-tabs'
+import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const { module, route } = useFreightRouteModule()
 const store = useFreightStore()
@@ -48,6 +50,7 @@ const dateTo = ref('')
 
 const current = computed(() => module.value)
 const moduleList = useModuleList(current)
+const moduleRecord = useModuleRecord(current)
 const isJobList = computed(() => current.value?.collection === 'jobs')
 const dateField = computed(() => {
   const fields = current.value?.fields || []
@@ -265,53 +268,13 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     const status = quotationDomainStatus(row.status)
     if (status === 'DRAFT' && lcs.can('quotation.update_draft')) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
-      items.push({ label: t('freight.ui.send'), icon: 'i-lucide-send', onSelect: () => { void runRowAction('send', row) } })
     }
-    if (status === 'SENT' && lcs.can('quotation.create')) items.push({ label: t('freight.ui.createRevision'), icon: 'i-lucide-git-branch', onSelect: () => { void runRowAction('createRevision', row) } })
-    if (status === 'SENT' && lcs.can('quotation.accept')) {
-      items.push({ label: t('freight.ui.accept'), icon: 'i-lucide-check', onSelect: () => { void runRowAction('accept', row) } })
-      items.push({ label: t('freight.ui.reject'), icon: 'i-lucide-x', color: 'error', onSelect: () => { void runRowAction('reject', row) } })
+    if ((status === 'DRAFT' || status === 'SENT') && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
+      items.push({ label: t('freight.ui.accept'), icon: 'i-lucide-check', onSelect: () => { void runRowAction('acceptJob', row) } })
     }
     if (status === 'ACCEPTED' && lcs.can('quotation.convert')) items.push({ label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', onSelect: () => { void runRowAction('convert', row) } })
     const relatedJob = jobForQuotation(store.list('jobs'), row)
     if (relatedJob) items.push({ label: t('freight.ui.openServiceOrder'), icon: 'i-lucide-briefcase', onSelect: () => { void navigateTo(`/service-orders/${relatedJob.id}`) } })
-    if (['DRAFT', 'SENT', 'ACCEPTED'].includes(status) && (lcs.can('quotation.update_draft') || lcs.can('quotation.accept'))) items.push({ label: t('freight.ui.cancel'), icon: 'i-lucide-ban', color: 'warning', onSelect: () => { void runRowAction('cancel', row) } })
-  }
-  else if (collection === 'jobs') {
-    const status = jobDomainStatus(row)
-    if (lcs.can('service_order.update') && !['COMPLETED', 'CLOSED', 'CANCELLED'].includes(status)) {
-      if (status === 'DRAFT') {
-        items.push({ label: t('freight.ui.openJob'), icon: 'i-lucide-folder-open', onSelect: () => { void applyJobWorkflow(row, 'OPEN', 'Opened') } })
-      }
-      if (status === 'OPEN') {
-        items.push({ label: t('freight.ui.start'), icon: 'i-lucide-play', onSelect: () => { void applyJobWorkflow(row, 'IN_PROGRESS', 'Started') } })
-      }
-      if (status === 'IN_PROGRESS' && lcs.can('service_order.complete')) {
-        items.push({ label: t('freight.ui.complete'), icon: 'i-lucide-check-circle-2', onSelect: () => { void applyJobWorkflow(row, 'COMPLETED', 'Completed') } })
-      }
-      items.push({ label: t('freight.ui.putOnHold'), icon: 'i-lucide-pause', onSelect: () => { void applyJobWorkflow(row, 'ON_HOLD', 'On Hold') } })
-    }
-    if (lcs.can('service_order.update') && status === 'ON_HOLD') {
-      items.push({ label: t('freight.ui.resume'), icon: 'i-lucide-play', onSelect: () => { void applyJobWorkflow(row, 'IN_PROGRESS', 'Resumed') } })
-    }
-    if (lcs.can('service_charge.create') && ['IN_PROGRESS', 'COMPLETED'].includes(status)) {
-      items.push({
-        label: t('freight.ui.addPayment'),
-        icon: 'i-lucide-receipt',
-        onSelect: () => { void navigateTo({ path: `/service-orders/${row.id}`, query: { section: 'containers', new: '1' } }) },
-      })
-    }
-    if (lcs.can('service_order.update') && status === 'COMPLETED') {
-      items.push({ label: t('freight.ui.close'), icon: 'i-lucide-lock', onSelect: () => { void applyJobWorkflow(row, 'CLOSED', 'Closed') } })
-    }
-    if (lcs.can('service_order.update') && !['COMPLETED', 'CLOSED', 'CANCELLED'].includes(status)) {
-      items.push({
-        label: t('freight.ui.cancel'),
-        icon: 'i-lucide-ban',
-        color: 'warning',
-        onSelect: () => { void applyJobWorkflow(row, 'CANCELLED', 'Cancelled') },
-      })
-    }
   }
   else if (collection === 'jobCharges') {
     const status = chargeDomainStatus(row.status)
@@ -331,7 +294,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (status === 'OPEN' || status === 'REOPENED') items.push({ label: t('freight.ui.closePeriod'), icon: 'i-lucide-lock', color: 'warning', onSelect: () => { void runRowAction('closePeriod', row) } })
     if (status === 'CLOSED') items.push({ label: t('freight.ui.reopenPeriod'), icon: 'i-lucide-lock-open', onSelect: () => { void runRowAction('reopenPeriod', row) } })
   }
-  if (canMutate.value && collection !== 'jobs') {
+  if (canMutate.value) {
     const status = recordStatusValue(row)
     if (status === 'ACTIVE' || status === 'INACTIVE') {
       const active = status === 'ACTIVE'
@@ -371,25 +334,6 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   return [items]
 }
 
-async function applyJobWorkflow(row: Record<string, unknown>, next: ServiceOrderStatus, displayStatus: string) {
-  const id = String(row.id || '')
-  const saved = store.get('jobs', id) || row
-  busyId.value = id
-  try {
-    store.save('jobs', {
-      ...saved,
-      id,
-      status: displayStatus,
-      workflowStatus: next,
-      updatedAt: new Date().toISOString(),
-    } as FreightRecord)
-    toast.add({ title: t('freight.ui.actionCompleted'), color: 'success' })
-  }
-  finally {
-    busyId.value = ''
-  }
-}
-
 async function runRowAction(action: string, row: Record<string, unknown>) {
   try {
     const id = String(row.id || '')
@@ -397,6 +341,15 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
     const revisionId = String(row.revisionId || row.id || '')
     if (action === 'send') await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
     else if (action === 'accept') await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
+    else if (action === 'acceptJob') {
+      if (quotationDomainStatus(row.status) === 'DRAFT') {
+        await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
+      }
+      await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
+      const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
+      await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
+      return
+    }
     else if (action === 'createRevision') {
       const created = await lcs.quotations.createRevision(id)
       store.reload()
@@ -405,7 +358,7 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
     }
     else if (action === 'convert') {
       const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
-      await navigateTo(`/service-orders/${job.id}`)
+      await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
       return
     }
     else if (action === 'reject' || action === 'cancel') {
@@ -497,6 +450,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           summary: pageSummary.value,
           items: rowMenuItems,
           loadingId: busyId.value,
+          showComments: supportsCommentActivity(current.value.collection),
         })]
       : []),
   ]
@@ -523,36 +477,41 @@ async function deleteIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
   const ok = await confirm({ kind: 'delete', count: ids.length })
   if (!ok) return
-  store.remove(current.value.collection, ids)
+  await moduleRecord.remove(ids)
   rowSelection.value = {}
   toast.add({ title: t('docetra.actions.deletedItems', { n: ids.length }), color: 'success' })
+  await refreshList()
 }
 
 async function deactivateIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
+  const status = current.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive'
   for (const id of ids) {
-    const record = store.get(current.value.collection, id)
-    if (record) store.save(current.value.collection, { ...record, status: current.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive' })
+    const record = moduleList.items.value.find(row => String(row.id) === String(id))
+    if (record) await moduleRecord.update(String(id), { ...record, status })
   }
   rowSelection.value = {}
   toast.add({ title: t('freight.ui.deactivated'), color: 'success' })
+  await refreshList()
 }
 
 function recordStatusValue(row: Record<string, unknown>) {
   return String(row.status || '').trim().toUpperCase()
 }
 
-function setRecordStatus(row: Record<string, unknown>, next: 'ACTIVE' | 'INACTIVE') {
+async function setRecordStatus(row: Record<string, unknown>, next: 'ACTIVE' | 'INACTIVE') {
   if (!current.value || !canMutate.value) return
   const status = current.value.collection === 'documentSequences'
     ? next
     : (next === 'ACTIVE' ? 'Active' : 'Inactive')
-  store.save(current.value.collection, { ...row, id: String(row.id || ''), status } as FreightRecord)
+  await moduleRecord.update(String(row.id || ''), { ...row, status })
   rowSelection.value = {}
   toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
+  await refreshList()
 }
 
 function refresh() {
+  void refreshList()
   store.reload()
 }
 
@@ -561,6 +520,8 @@ function optionValue(option: FreightSelectOption) {
 }
 
 function filterItems(filter: { options?: readonly FreightSelectOption[] | FreightSelectOption[], key: string }) {
+  const source = referenceOptionSource(filter.key)
+  if (source) return referenceSelectItems(store.list(source.collection), source)
   const fromOptions = (filter.options || []).map(optionValue)
   const sourceRows = current.value
     ? store.list(current.value.collection).map(row => current.value?.collection === 'auditLogs' ? normalizeAuditLog(row) : row)
@@ -616,7 +577,7 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
         />
       </template>
       <template #actions>
-        <template v-if="bulkAction && !isJobList">
+        <template v-if="bulkAction">
           <UButton
             :color="bulkAction.color"
             variant="soft"

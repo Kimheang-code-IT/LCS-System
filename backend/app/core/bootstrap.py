@@ -10,6 +10,7 @@ that pristine, "setup required" state.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,7 +18,12 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
-from app.core.permissions import PERMISSION_CATALOG, ROLE_DEFINITIONS, permission_name
+from app.core.permissions import (
+    BUILTIN_ROLE_CODES,
+    PERMISSION_CATALOG,
+    ROLE_DEFINITIONS,
+    permission_name,
+)
 from app.core.security import hash_password
 from app.modules.auth.models import (
     Permission,
@@ -28,11 +34,20 @@ from app.modules.auth.models import (
     UserRoleAssignment,
 )
 
-DEFAULT_ROLES = ", ".join(ROLE_DEFINITIONS.keys())
+DEFAULT_ROLES = ", ".join(BUILTIN_ROLE_CODES)
 
 
-async def ensure_permission_catalog(session: AsyncSession) -> None:
-    """Create missing permissions, roles and role → permission mappings."""
+async def ensure_permission_catalog(
+    session: AsyncSession,
+    *,
+    role_codes: Iterable[str] | None = None,
+) -> None:
+    """Create missing permissions, roles and role → permission mappings.
+
+    Only the built-in roles (PLATFORM_ADMIN) are provisioned by default; every
+    other role is created manually from the Roles & Permissions page. Pass
+    ``role_codes`` to provision additional defined roles (used by tests).
+    """
     existing = {code for (code,) in (await session.execute(select(Permission.code))).all()}
     for code, resource, action in PERMISSION_CATALOG:
         if code not in existing:
@@ -41,7 +56,10 @@ async def ensure_permission_catalog(session: AsyncSession) -> None:
 
     permission_ids = {code: pid for pid, code in (await session.execute(select(Permission.id, Permission.code))).all()}
     roles = {role.code: role for role in (await session.execute(select(Role))).scalars().all()}
-    for code, definition in ROLE_DEFINITIONS.items():
+    for code in tuple(BUILTIN_ROLE_CODES if role_codes is None else role_codes):
+        definition = ROLE_DEFINITIONS.get(code)
+        if definition is None:
+            continue
         role = roles.get(code)
         if role is None:
             role = Role(

@@ -78,14 +78,16 @@ describe('moduleDocumentTabs', () => {
     expect(module).toBeTruthy()
     const tabs = moduleDocumentTabs(module!)
     expect(tabs.map(tab => tab.id)).toEqual(['details'])
+    // Status is managed from the row "..." menu, so it is not a form field.
     expect(tabs[0]?.sections.map(section => section.id)).toEqual([
       'general',
       'classification',
       'location',
       'coordinates',
-      'control',
     ])
-    expect(tabs[0]?.sections.flatMap(section => section.fields.map(field => field.key))).toContain('code')
+    const fieldKeys = tabs[0]?.sections.flatMap(section => section.fields.map(field => field.key)) ?? []
+    expect(fieldKeys).toContain('code')
+    expect(fieldKeys).not.toContain('status')
   })
 
   it('uses quotation schema tabs with line tables', () => {
@@ -130,7 +132,6 @@ describe('moduleDocumentTabs', () => {
       'journal',
       'traceability',
       'files',
-      'activity',
     ])
     expect(finance.find(tab => tab.id === 'traceability')?.sections[0]?.fields.map(field => field.key)).toEqual([
       'sourceChargeId',

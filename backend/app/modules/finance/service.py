@@ -446,6 +446,8 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
             document.financial_account_id = _int_or_none(data["financialAccountId"])
 
     await session.execute(delete(FinancialDocumentLine).where(FinancialDocumentLine.financial_document_id == document.id))
+    from app.modules.master_data.service import resolve_reference_id
+
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
             continue
@@ -464,7 +466,12 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
                 financial_document_id=document.id,
                 line_no=index + 1,
                 description=str(line.get("description") or "Line"),
-                fee_type_id=_int_or_none(line.get("feeTypeId")),
+                fee_type_id=await resolve_reference_id(
+                    session,
+                    "fee_type",
+                    line.get("feeTypeId") or line.get("fee_type_id"),
+                    line.get("feeType") or line.get("fee_type"),
+                ),
                 quantity=quantity,
                 unit_price=unit_price,
                 discount_amount=discount,
@@ -1222,4 +1229,16 @@ async def delete_posting_rules(session: AsyncSession, context: RequestContext, i
         rule = await session.get(PostingRule, rule_id)
         if rule is not None:
             await session.delete(rule)
+    await session.commit()
+
+
+async def delete_journals(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
+    for journal_id in ids:
+        entry = await session.get(JournalEntry, journal_id)
+        if entry is None:
+            continue
+        if entry.status == "POSTED":
+            raise InvalidState("Posted journals cannot be deleted; reverse instead.")
+        await session.execute(delete(JournalEntryLine).where(JournalEntryLine.journal_entry_id == entry.id))
+        await session.delete(entry)
     await session.commit()

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { DropdownMenuItem } from '@nuxt/ui'
 import type { AppConfig } from '~/types/docetra/settings'
 import type { ConnectionStatusFieldValue } from '~/types/docetra/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
@@ -246,6 +247,59 @@ async function testTelegram() {
   }
 }
 
+const moreItems = computed<DropdownMenuItem[][]>(() => {
+  const actions: DropdownMenuItem[] = []
+  const danger: DropdownMenuItem[] = []
+
+  if (activeTab.value === 'email' && canConfigure.value) {
+    actions.push({
+      label: t('docetra.connection.test'),
+      icon: 'i-lucide-plug-zap',
+      disabled: testingEmail.value,
+      onSelect: () => { void testEmail() },
+    })
+  }
+  if (activeTab.value === 'telegram' && canConfigure.value) {
+    actions.push({
+      label: t('docetra.connection.test'),
+      icon: 'i-lucide-plug-zap',
+      disabled: testingTelegram.value,
+      onSelect: () => { void testTelegram() },
+    })
+  }
+  if (activeTab.value === 'backup' && canManageBackup.value) {
+    actions.push({
+      label: t('docetra.connection.test'),
+      icon: 'i-lucide-plug-zap',
+      disabled: testingBackup.value,
+      onSelect: () => { void testBackupConnection() },
+    })
+    actions.push({
+      label: t('docetra.settings.backup.runNow'),
+      icon: 'i-lucide-play',
+      disabled: runningBackup.value,
+      onSelect: () => { void runBackup() },
+    })
+  }
+  if (activeTab.value === 'backup' && canReset.value) {
+    actions.push({
+      label: t('docetra.settings.backup.restore'),
+      icon: 'i-lucide-history',
+      onSelect: () => { restoreOpen.value = true },
+    })
+  }
+  if (canReset.value) {
+    danger.push({
+      label: t('docetra.settings.resetData'),
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      onSelect: () => { resetOpen.value = true },
+    })
+  }
+
+  return [actions, danger].filter(group => group.length)
+})
+
 onMounted(() => void load())
 useAppPageTitle(() => t('freight.pages.settings'))
 </script>
@@ -262,56 +316,11 @@ useAppPageTitle(() => t('freight.pages.settings'))
     :can-save="canEdit"
     :show-comments="false"
     :show-list-nav="false"
+    :more-items="moreItems"
     content-wide
     @save="save"
     @refresh="load"
-  >
-    <template #actions>
-      <CommonAppConnectionTestButton
-        v-if="activeTab === 'email' && canConfigure"
-        :loading="testingEmail"
-        @click="testEmail"
-      />
-      <CommonAppConnectionTestButton
-        v-if="activeTab === 'telegram' && canConfigure"
-        :loading="testingTelegram"
-        @click="testTelegram"
-      />
-      <CommonAppConnectionTestButton
-        v-if="activeTab === 'backup' && canManageBackup"
-        :loading="testingBackup"
-        @click="testBackupConnection"
-      />
-      <UButton
-        v-if="activeTab === 'backup' && canManageBackup"
-        color="primary"
-        variant="soft"
-        size="sm"
-        icon="i-lucide-play"
-        :loading="runningBackup"
-        :label="t('docetra.settings.backup.runNow')"
-        @click="runBackup"
-      />
-      <UButton
-        v-if="activeTab === 'backup' && canReset"
-        color="warning"
-        variant="soft"
-        size="sm"
-        icon="i-lucide-history"
-        :label="t('docetra.settings.backup.restore')"
-        @click="restoreOpen = true"
-      />
-      <UButton
-        v-if="canReset"
-        color="error"
-        variant="soft"
-        size="sm"
-        icon="i-lucide-trash-2"
-        :label="t('docetra.settings.resetData')"
-        @click="resetOpen = true"
-      />
-    </template>
-  </DocumentAppDocumentPage>
+  />
 
   <UModal
     v-model:open="resetOpen"

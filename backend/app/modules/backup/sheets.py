@@ -38,9 +38,8 @@ class SheetsApiError(RuntimeError):
     """Raised after a Google Sheets request exhausts its retries."""
 
 
-def sanitize_worksheet_title(table_name: str, prefix: str = "") -> str:
-    raw = f"{prefix}{table_name}"
-    cleaned = "".join("_" if char in _INVALID_TITLE_CHARS else char for char in raw)
+def sanitize_worksheet_title(table_name: str) -> str:
+    cleaned = "".join("_" if char in _INVALID_TITLE_CHARS else char for char in table_name)
     return cleaned[:100] or "backup"
 
 
@@ -53,7 +52,6 @@ class GoogleSheetsClient:
         retries: int = 4,
         retry_base_delay: float = 1.0,
         retry_factor: float = 2.0,
-        prefix: str = "",
     ) -> None:
         if not spreadsheet_id:
             raise BackupConfigurationError("A Google spreadsheet ID is required.")
@@ -70,7 +68,6 @@ class GoogleSheetsClient:
         self._retries = max(0, retries)
         self._retry_base_delay = retry_base_delay
         self._retry_factor = retry_factor
-        self._prefix = prefix
         self._service = None
         self._worksheet_cache: set[str] = set()
 
@@ -130,7 +127,7 @@ class GoogleSheetsClient:
         return [sheet["properties"]["title"] for sheet in meta.get("sheets", [])]
 
     def worksheet_title(self, table_name: str) -> str:
-        return sanitize_worksheet_title(table_name, self._prefix)
+        return sanitize_worksheet_title(table_name)
 
     def ensure_worksheet(self, table_name: str) -> str:
         title = self.worksheet_title(table_name)

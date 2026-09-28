@@ -1,5 +1,5 @@
 import { FILE_ATTACHMENT_COLUMNS, type FreightField, type FreightFieldType, type FreightTable } from './freight-modules'
-import { CONTAINER_STATUSES, CONTAINER_TYPES, PLACE_ROLES } from './freight-options'
+import { CONTAINER_STATUSES } from './freight-options'
 
 function field(
   key: string,
@@ -19,7 +19,7 @@ export const JOB_CONTAINER_REQUIREMENT_TABLE: FreightTable = {
   title: 'Container Requirements',
   titleKm: 'តម្រូវការកុងតឺន័រ',
   columns: [
-    { key: 'containerType', label: 'Container Type', labelKey: 'freight.ui.cols.containerType', type: 'select', options: CONTAINER_TYPES, required: true },
+    { key: 'containerType', label: 'Container Type', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true },
     { key: 'quantity', label: 'Required', labelKey: 'freight.ui.requiredCol', type: 'number', required: true },
     { key: 'actualQuantity', label: 'Actual', labelKey: 'freight.ui.actualCol', type: 'number', computed: true },
     { key: 'remaining', label: 'Remaining', labelKey: 'freight.ui.remainingCol', type: 'number', computed: true },
@@ -35,7 +35,7 @@ export const JOB_ACTUAL_CONTAINER_TABLE: FreightTable = {
   titleKm: 'កុងតឺន័រពិត',
   columns: [
     { key: 'containerNo', label: 'Container No.', labelKey: 'freight.fields.containerNo', type: 'text', required: true },
-    { key: 'containerType', label: 'Type', labelKey: 'freight.ui.cols.containerType', type: 'select', options: CONTAINER_TYPES, required: true },
+    { key: 'containerType', label: 'Type', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true },
     { key: 'containerRequirementId', label: 'Requirement', labelKey: 'freight.ui.cols.requirement', type: 'select' },
     { key: 'sealNo', label: 'Seal', labelKey: 'freight.fields.sealNo', type: 'text' },
     { key: 'status', label: 'Status', labelKey: 'freight.fields.status', type: 'select', options: CONTAINER_STATUSES },
@@ -85,7 +85,7 @@ export const JOB_ROUTE_TABLE: FreightTable = {
   key: 'places',
   title: 'Route',
   columns: [
-    { key: 'placeRole', label: 'Role', labelKey: 'freight.ui.routeRole', type: 'select', options: PLACE_ROLES, required: true },
+    { key: 'placeRole', label: 'Role', labelKey: 'freight.ui.routeRole', type: 'select', required: true },
     { key: 'place', label: 'Place', labelKey: 'freight.ui.cols.place', type: 'text', required: true },
     { key: 'plannedActual', label: 'Planned / Actual', labelKey: 'freight.ui.cols.plannedActual', type: 'date' },
     { key: 'notes', label: 'Notes', labelKey: 'freight.ui.cols.notes', type: 'text' },

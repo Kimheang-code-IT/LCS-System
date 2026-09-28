@@ -7,6 +7,7 @@ import { usePageSeo } from '~/composables/usePageSeo'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useDynamicServiceOrderTabs } from '~/composables/freight/useDynamicServiceOrderTabs'
 import { useJobRelated } from '~/composables/freight/useJobRelated'
+import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useLcs } from '~/composables/lcs/useLcs'
 import {
   emptyFreightRecord,
@@ -16,7 +17,6 @@ import {
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
 import type { FreightRecord } from '~/types/freight/record'
-import type { ServiceOrderStatus } from '~/types/lcs/domain'
 import {
   parseJobWorkspaceSection,
   type JobWorkspaceSection,
@@ -36,6 +36,7 @@ import {
 import { jobDomainStatus } from '~/utils/lcs/states'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
+const moduleRecord = useModuleRecord(module)
 const store = useFreightStore()
 const toast = useToast()
 const router = useRouter()
@@ -50,34 +51,28 @@ const editingOverview = ref(false)
 const model = ref<FreightRecord>({} as FreightRecord)
 const notFound = ref(false)
 
-const EDITABLE_STATUSES: ServiceOrderStatus[] = ['DRAFT', 'OPEN', 'IN_PROGRESS']
-
 const domainStatus = computed(() => jobDomainStatus(model.value))
 const canEdit = computed(() =>
-  !isCreate.value && lcs.can('service_order.update') && EDITABLE_STATUSES.includes(domainStatus.value))
+  !isCreate.value && lcs.can('service_order.update'))
 const canEditPayments = computed(() =>
-  !isCreate.value
-  && lcs.can('service_order.update')
-  && !['CLOSED', 'CANCELLED'].includes(domainStatus.value))
-const canComplete = computed(() =>
-  lcs.can('service_order.complete') && domainStatus.value === 'IN_PROGRESS')
+  !isCreate.value && lcs.can('service_order.update'))
 
 const {
-  commentBody,
-  submittingComment,
-  currentUser,
   listTo,
   canNavigatePrevious,
   canNavigateNext,
   navigatePrevious,
   navigateNext,
-  comments,
   attachments,
   tags,
-  activity: chromeActivity,
   metaOwner,
   metaAssignee,
   setChromeField,
+  commentBody,
+  submittingComment,
+  currentUser,
+  comments,
+  activity,
   submitComment,
   updateComment,
   deleteComment,
@@ -254,7 +249,7 @@ const headerSubtitle = computed(() =>
     .filter(Boolean).join(' · '),
 )
 
-watch([jobNo, () => model.value.workflowStatus, () => model.value.status, headerSubtitle], () => {
+watch([jobNo, () => model.value.status, headerSubtitle], () => {
   if (!module.value) return
   setBreadcrumbs([
     { label: moduleTitle(module.value), to: module.value.path },
@@ -262,9 +257,7 @@ watch([jobNo, () => model.value.workflowStatus, () => model.value.status, header
   ])
   setBadges([
     ...(model.value.direction ? [{ label: String(model.value.direction), color: 'info' as const }] : []),
-    ...(model.value.workflowStatus
-      ? [{ label: String(model.value.workflowStatus), color: statusColor(String(model.value.status || model.value.workflowStatus)) }]
-      : []),
+    ...(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : []),
   ])
 }, { immediate: true })
 
@@ -296,13 +289,12 @@ async function save() {
   saving.value = true
   try {
     const payload = { ...model.value }
-    const saved = isCreate.value || !payload.id
-      ? await store.create('jobs', payload, 'job')
-      : store.save('jobs', model.value)
+    if (isCreate.value || !payload.id) await moduleRecord.create(payload)
+    else await moduleRecord.update(String(payload.id), payload)
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     editingOverview.value = false
-    if (isCreate.value) await navigateTo(`/service-orders/${saved.id}`)
-    else model.value = saved
+    // Return to the service-order list after saving.
+    await navigateTo(module.value.path)
   }
   finally {
     saving.value = false
@@ -319,28 +311,19 @@ function discardEdit() {
   load()
 }
 
-function applyWorkflow(next: ServiceOrderStatus, displayStatus: string) {
+async function setJobStatus(next: 'ACTIVE' | 'INACTIVE') {
   if (!model.value.id) return
-  const saved = store.save('jobs', {
-    ...model.value,
-    status: displayStatus,
-    workflowStatus: next,
-    updatedAt: new Date().toISOString(),
-  })
-  model.value = saved
+  model.value = store.save('jobs', { ...model.value, status: next === 'ACTIVE' ? 'Active' : 'Inactive' })
+  toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
 }
 
-async function transition(next: ServiceOrderStatus, displayStatus: string, messageKey: string) {
-  const ok = await confirm({
-    kind: 'generic',
-    title: t(messageKey),
-    description: `${String(model.value.jobNo || '')} · ${headerSubtitle.value}`,
-    confirmLabel: t(messageKey),
-    confirmColor: next === 'CANCELLED' ? 'warning' : 'primary',
-  })
+async function deleteJob() {
+  if (!model.value.id) return
+  const ok = await confirm({ kind: 'delete', count: 1 })
   if (!ok) return
-  applyWorkflow(next, displayStatus)
-  toast.add({ title: t(messageKey), color: next === 'CANCELLED' ? 'warning' : 'success' })
+  store.remove('jobs', [String(model.value.id)])
+  toast.add({ title: t('docetra.actions.deletedItems', { n: 1 }), color: 'success' })
+  await navigateTo('/service-orders')
 }
 
 function openQuotation() {
@@ -355,25 +338,25 @@ function openQuotation() {
 const moreItems = computed<DropdownMenuItem[][]>(() => {
   if (isCreate.value || !model.value.id) return []
   const items: DropdownMenuItem[] = []
-  if (lcs.can('service_order.update') && ['OPEN', 'IN_PROGRESS'].includes(domainStatus.value)) {
-    items.push({ label: t('freight.ui.putOnHold'), icon: 'i-lucide-pause', onSelect: () => { void transition('ON_HOLD', 'On Hold', 'freight.ui.putOnHold') } })
-  }
-  if (lcs.can('service_order.update') && domainStatus.value === 'ON_HOLD') {
-    items.push({ label: t('freight.ui.resume'), icon: 'i-lucide-play', onSelect: () => { void transition('IN_PROGRESS', 'In Progress', 'freight.ui.resume') } })
-  }
-  if (domainStatus.value === 'COMPLETED' && lcs.can('service_order.update')) {
-    items.push({ label: t('freight.ui.close'), icon: 'i-lucide-lock', onSelect: () => { void transition('CLOSED', 'Closed', 'freight.ui.closeJob') } })
-  }
   if (String(model.value.quotationNo || '').trim()) {
     items.push({ label: t('freight.ui.viewSourceQuotation'), icon: 'i-lucide-file-search', onSelect: openQuotation })
   }
-  if (!['CLOSED', 'CANCELLED'].includes(domainStatus.value) && lcs.can('service_order.update')) {
+  if (lcs.can('service_order.update')) {
+    const active = domainStatus.value === 'ACTIVE'
     items.push({
-      label: t('freight.ui.cancel'),
-      icon: 'i-lucide-ban',
-      color: 'error',
-      onSelect: () => { void transition('CANCELLED', 'Cancelled', 'freight.ui.jobCancelled') },
+      label: t(active ? 'freight.ui.deactivate' : 'freight.ui.activate'),
+      icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
+      color: active ? 'warning' : 'success',
+      onSelect: () => { void setJobStatus(active ? 'INACTIVE' : 'ACTIVE') },
     })
+    if (!active) {
+      items.push({
+        label: t('freight.ui.delete'),
+        icon: 'i-lucide-trash-2',
+        color: 'error',
+        onSelect: () => { void deleteJob() },
+      })
+    }
   }
   return [items]
 })
@@ -396,7 +379,6 @@ function onTabChange(value: string) {
     :confirm-save="false"
     :show-save="editingOverview || isCreate"
     :show-cancel="!editingOverview && !isCreate"
-    :show-comments="activeTab === 'overview'"
     :show-meta-rail="!isCreate"
     show-list-nav
     content-wide
@@ -404,10 +386,11 @@ function onTabChange(value: string) {
     :can-navigate-next="canNavigateNext"
     :list-to="listTo"
     :is-create="isCreate"
+    :attachments="attachments"
+    show-comments
     :can-comment="!isCreate"
     :comments="comments"
-    :activity="chromeActivity"
-    :attachments="attachments"
+    :activity="activity"
     :comment-body="commentBody"
     :submitting-comment="submittingComment"
     :current-user="currentUser"
@@ -424,10 +407,10 @@ function onTabChange(value: string) {
     :more-items="moreItems"
     :can-export="false"
     @update:active-tab="onTabChange"
-    @update:comment-body="commentBody = $event"
     @update:attachments="setChromeField('attachments', $event)"
     @save="save"
     @refresh="load"
+    @update:comment-body="commentBody = $event"
     @submit-comment="submitComment"
     @update-comment="updateComment"
     @delete-comment="deleteComment"
@@ -440,19 +423,6 @@ function onTabChange(value: string) {
         icon="i-lucide-pencil"
         :label="t('freight.ui.edit')"
         @click="startEdit"
-      />
-      <CommonAppDocumentActionButton
-        v-if="canComplete"
-        icon="i-lucide-check-circle-2"
-        :label="t('freight.ui.complete')"
-        color="success"
-        @click="transition('COMPLETED', 'Financial Completed', 'freight.ui.jobCompleted')"
-      />
-      <CommonAppDocumentActionButton
-        v-if="domainStatus === 'ON_HOLD' && lcs.can('service_order.update')"
-        icon="i-lucide-play"
-        :label="t('freight.ui.resume')"
-        @click="transition('IN_PROGRESS', 'In Progress', 'freight.ui.resume')"
       />
     </template>
 

@@ -140,7 +140,7 @@
       "clearanceFee": "ថ្លៃបញ្ចេញ",
       "closedAt": "ពេលបិទ",
       "closedBy": "បិទដោយ",
-      "code": "លេខកូដក្រុមហ៊ុន",
+      "code": "លេខកូដ",
       "company": "ក្រុមហ៊ុន",
       "completedTime": "ម៉ោងបញ្ចប់",
       "componentGroup": "ក្រុមសមាសភាគ",
@@ -280,7 +280,7 @@
       "metadata": "មេតាទិន្នន័យ",
       "mimeType": "ប្រភេទ MIME",
       "month": "ខែ",
-      "name": "ឈ្មោះក្រុមហ៊ុន",
+      "name": "ឈ្មោះ",
       "normalBalance": "សមតុល្យធម្មតា",
       "notes": "កំណត់សម្គាល់គយ",
       "occurredAt": "ពេលវេលា",
@@ -564,6 +564,8 @@
         "singular": "ក្រុមហ៊ុន",
         "description": "កំណត់ត្រារោងចក្រ និងអតិថិជន រួមព័ត៌មានគយ និងដឹកជញ្ជូនលំនាំដើម។",
         "fields": {
+          "code": "លេខកូដក្រុមហ៊ុន",
+          "name": "ឈ្មោះក្រុមហ៊ុន",
           "direction": "ទិសដៅលំនាំដើម"
         }
       },
@@ -581,6 +583,11 @@
         "title": "ប្រភេទកុងតឺន័រ",
         "singular": "ប្រភេទកុងតឺន័រ",
         "description": "ចំណាត់ថ្នាក់ និងទំហំកុងតឺន័រ ISO។"
+      },
+      "currencies": {
+        "title": "រូបិយប័ណ្ណ",
+        "singular": "រូបិយប័ណ្ណ",
+        "description": "រូបិយប័ណ្ណ ISO សម្រាប់តម្លៃ វិក្កយបត្រ និងគណនេយ្យ។"
       },
       "customerPayments": {
         "title": "ការទូទាត់អតិថិជន",
@@ -2213,9 +2220,6 @@
         "spreadsheetId": "លេខសម្គាល់ Google Spreadsheet",
         "serviceAccountJson": "Service account JSON",
         "serviceAccountConfigured": "ព័ត៌មានគណនីសេវាត្រូវបានកំណត់រួចហើយ",
-        "worksheetPrefix": "បុព្វបទឈ្មោះ Worksheet",
-        "batchSize": "ជួរដេកក្នុងមួយក្រុម",
-        "excludedTables": "តារាងមិនរាប់បញ្ចូល",
         "runNow": "បម្រុងទុកឥឡូវនេះ",
         "runStarted": "ការបម្រុងទុក #{id} បានចាប់ផ្តើម",
         "runFailed": "មិនអាចចាប់ផ្តើមការបម្រុងទុកបានទេ",

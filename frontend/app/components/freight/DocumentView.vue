@@ -27,6 +27,7 @@ import {
   freightDocumentModelKey,
   moduleDocumentTabs,
   RELATED_FIELD_KEY,
+  supportsCommentActivity,
 } from '~/utils/freight/document-tabs'
 import {
   linkedFinanceInvoiceForCharge,
@@ -180,6 +181,8 @@ watch([title, () => module.value, () => model.value.status], () => {
 onBeforeUnmount(clear)
 usePageSeo({ title: () => title.value })
 
+/** Comments & activity are only shown on quotations, service orders and service charges. */
+const showRecordChrome = computed(() => supportsCommentActivity(module.value?.collection))
 const compactBusinessDocument = computed(() => false)
 const chargeLinkedToJob = computed(() => module.value?.collection === 'jobCharges' && Boolean(String(model.value.jobNo || '').trim()))
 const related = computed(() => module.value && !isCreate.value ? store.related(module.value, model.value) : [])
@@ -273,20 +276,35 @@ const quotationDraftDirty = computed(() => {
   return quotationDraftSnapshot(model.value) !== quotationDraftSnapshot(originalModel.value)
 })
 
-// Quotations use a deliberately simple header: one action at a time.
-// A new quotation shows "Submit" (creates it as a draft); an edited existing
-// quotation shows "Save changes". Everything else is intentionally absent.
+// Simplified quotation flow: Save (create/edit/delete the draft) -> Accept,
+// which sends (when needed), accepts and converts to a service order in one go.
+// A dirty draft shows only Save; once saved it shows Accept. Editing again
+// hides Accept until the changes are saved.
 const quotationHeaderActions = computed<FreightAction[]>(() => {
   if (module.value?.collection !== 'quotations') return []
-  if (quotationDomainStatus(model.value.status) !== 'DRAFT') return []
   if (isCreate.value) {
     if (!lcs.can('quotation.create')) return []
-    return [{ key: 'submitQuotation', label: 'Submit', labelKm: 'ដាក់ស្នើ', icon: 'i-lucide-check-circle', color: 'primary' }]
+    return [{ key: 'submitQuotation', label: 'Save', labelKm: 'រក្សាទុក', icon: 'i-lucide-save', color: 'primary' }]
   }
-  if (quotationDraftDirty.value && lcs.can('quotation.update_draft')) {
-    return [{ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' }]
+  const status = quotationDomainStatus(model.value.status)
+  const actions: FreightAction[] = []
+  if (status === 'DRAFT') {
+    if (quotationDraftDirty.value) {
+      if (lcs.can('quotation.update_draft')) {
+        actions.push({ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' })
+      }
+    }
+    else if (lcs.can('quotation.send') && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
+      actions.push({ key: 'acceptJob', label: 'Accept', labelKm: 'ទទួលយក', icon: 'i-lucide-check', color: 'success' })
+    }
   }
-  return []
+  if (status === 'SENT' && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
+    actions.push({ key: 'acceptJob', label: 'Accept', labelKm: 'ទទួលយក', icon: 'i-lucide-check', color: 'success' })
+  }
+  if (status === 'ACCEPTED' && lcs.can('quotation.convert')) {
+    actions.push({ key: 'convertJob', label: 'Convert to Service Order', labelKm: 'បម្លែងទៅបញ្ជាសេវាកម្ម', icon: 'i-lucide-arrow-right', color: 'primary' })
+  }
+  return actions
 })
 
 const headerActions = computed(() => {
@@ -358,7 +376,7 @@ const tabs = computed(() => {
       : [],
   })
   if (module.value.collection !== 'users') return compiled
-  // Turn the free-text role field into a select sourced from existing roles.
+  // Source the role field from existing roles so users pick instead of typing.
   return compiled.map(tab => ({
     ...tab,
     sections: tab.sections.map(section => ({
@@ -541,7 +559,6 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   }
 
   for (const action of overflowHeaderActions.value) {
-    if (module.value?.collection === 'quotations' && action.key === 'convertJob') continue
     items.push(headerActionMenuItem(action))
   }
 
@@ -857,11 +874,9 @@ async function save(status?: string) {
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
     toast.add({ title: t('freight.ui.save'), color: 'success' })
-    if (isCreate.value) await navigateTo(`${module.value.path}/${saved.id}`)
-    else {
-      model.value = saved
-      originalModel.value = { ...saved }
-    }
+    // Every save (create or update) returns to the list so the refreshed table
+    // is visible immediately.
+    await navigateTo(module.value.path)
   }
   catch (error) {
     if (isLcsDomainError(error)) toast.add({ title: error.message, color: 'error' })
@@ -877,7 +892,8 @@ async function setRecordStatus(next: 'ACTIVE' | 'INACTIVE') {
   const status = module.value.collection === 'documentSequences'
     ? next
     : (next === 'ACTIVE' ? 'Active' : 'Inactive')
-  model.value = store.save(module.value.collection, { ...model.value, status })
+  model.value = { ...model.value, status } as FreightRecord
+  await moduleRecord.update(String(model.value.id || ''), model.value)
   originalModel.value = { ...model.value }
   toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
 }
@@ -896,6 +912,7 @@ async function runAction(key: string) {
     if (key === 'send' && module.value.collection === 'quotations') return quotationCommands.send()
     if (key === 'submit' && module.value.collection === 'quotations') return quotationCommands.submit()
     if (key === 'accept' && module.value.collection === 'quotations') return quotationCommands.accept()
+    if (key === 'acceptJob' && module.value.collection === 'quotations') return quotationCommands.acceptAndConvert()
     if ((key === 'reject' || key === 'cancel') && module.value.collection === 'quotations') {
       return quotationCommands.rejectOrCancel(key)
     }
@@ -958,7 +975,7 @@ async function confirmReverse() {
 :save-label="t('docetra.common.save')"
       :confirm-save="false"
 :show-cancel="false"
-show-comments
+:show-comments="showRecordChrome"
 :show-tabs="tabs.length > 1"
 show-list-nav
 content-wide
@@ -966,9 +983,9 @@ content-wide
 :can-navigate-next="canNavigateNext"
 :list-to="listTo"
       :is-create="isCreate"
-:can-comment="!isCreate"
+:can-comment="showRecordChrome && !isCreate"
 :comments="comments"
-:activity="activity"
+:activity="showRecordChrome ? activity : []"
       :attachments="attachments"
 :comment-body="commentBody"
 :submitting-comment="submittingComment"

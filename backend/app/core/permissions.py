@@ -412,3 +412,8 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         ),
     },
 }
+
+# Roles provisioned automatically. Only the platform admin is built in (it is
+# required for the first account and super-admin detection); every other role is
+# created manually from the Roles & Permissions page.
+BUILTIN_ROLE_CODES: tuple[str, ...] = ("PLATFORM_ADMIN",)

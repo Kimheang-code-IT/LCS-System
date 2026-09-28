@@ -6,9 +6,6 @@ import {
   COUNTRIES,
   COMPONENT_INSTANCE_MODES,
   COMPONENT_INSTANCE_MODE_OVERRIDES,
-  CURRENCIES,
-  DIRECTIONS,
-  PARTY_ROLES,
   PERIOD_STATUS,
   PLACE_CATEGORIES,
   TRANSPORT_TYPES,
@@ -40,16 +37,16 @@ export const lcsReferenceModules: FreightModule[] = [
     columns: [
       column('partyCode', 'Party Code', 'លេខកូដ'), column('legalName', 'Legal Name', 'ឈ្មោះផ្លូវការ'), column('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'),
       column('roles', 'Roles', 'តួនាទី'), column('taxIdentifier', 'VAT / TIN', 'អាករ / TIN'), column('contactPerson', 'Contact Person', 'អ្នកទំនាក់ទំនង'),
-      column('phone', 'Phone', 'ទូរស័ព្ទ'), column('email', 'Email', 'អ៊ីមែល'), column('country', 'Country', 'ប្រទេស'), column('status', 'Status', 'ស្ថានភាព'),
+      column('phone', 'Phone', 'ទូរស័ព្ទ'), column('email', 'Email', 'អ៊ីមែល'), column('status', 'Status', 'ស្ថានភាព'),
     ],
     fields: [
       field('partyCode', 'Party Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('legalName', 'Legal Name', 'ឈ្មោះផ្លូវការ', undefined, undefined, 'text', undefined, true),
       field('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'), field('taxIdentifier', 'VAT / TIN', 'អាករ / TIN'), field('contactPerson', 'Contact Person', 'អ្នកទំនាក់ទំនង', 'Contact', 'ទំនាក់ទំនង'),
       field('phone', 'Phone', 'ទូរស័ព្ទ', 'Contact', 'ទំនាក់ទំនង'), field('email', 'Email', 'អ៊ីមែល', 'Contact', 'ទំនាក់ទំនង'),
-      field('address', 'Address', 'អាសយដ្ឋាន', 'Address', 'អាសយដ្ឋាន', 'textarea', undefined, false, { colSpan: 2 }), field('country', 'Country', 'ប្រទេស', 'Address', 'អាសយដ្ឋាន', 'select', COUNTRIES),
-      field('roles', 'Party Roles', 'តួនាទីដៃគូ', 'Roles', 'តួនាទី', 'multiselect', PARTY_ROLES, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
+      field('address', 'Address', 'អាសយដ្ឋាន', 'Address', 'អាសយដ្ឋាន', 'textarea', undefined, false, { colSpan: 2 }),
+      field('roles', 'Party Roles', 'តួនាទីដៃគូ', 'Contact', 'ទំនាក់ទំនង', 'select', undefined, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
     ],
-    filters: [field('roles', 'Role', 'តួនាទី', '', '', 'select', PARTY_ROLES), field('country', 'Country', 'ប្រទេស', '', '', 'select', COUNTRIES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    filters: [field('roles', 'Role', 'តួនាទី', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/master-data/places', title: 'Places', titleKm: 'ទីកន្លែង', singular: 'Place', singularKm: 'ទីកន្លែង', description: 'Ports, checkpoints, SEZs, warehouses, factories and destinations.', descriptionKm: 'កំពង់ផែ ច្រកព្រំដែន តំបន់សេដ្ឋកិច្ច ឃ្លាំង និងគោលដៅ។',
@@ -67,7 +64,7 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/master-data/trade-directions', title: 'Trade Directions', titleKm: 'ទិសដៅពាណិជ្ជកម្ម', singular: 'Trade Direction', singularKm: 'ទិសដៅពាណិជ្ជកម្ម', description: 'Import, export, transit and re-export service directions.', descriptionKm: 'ទិសដៅនាំចូល នាំចេញ ឆ្លងកាត់ និងនាំចេញវិញ។',
     icon: 'i-lucide-route', group: 'master', permission: 'master.reference.view', collection: 'tradeDirections', titleField: 'name', kind: 'standard', canCreate: true,
     columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('description', 'Description', 'បរិយាយ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'select', DIRECTIONS, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
+    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
@@ -104,6 +101,21 @@ export const lcsReferenceModules: FreightModule[] = [
   }),
 
   module({
+    path: '/master-data/currencies', title: 'Currencies', titleKm: 'រូបិយប័ណ្ណ', singular: 'Currency', singularKm: 'រូបិយប័ណ្ណ',
+    description: 'ISO currencies used for pricing, invoices and accounting.', descriptionKm: 'រូបិយប័ណ្ណ ISO សម្រាប់តម្លៃ វិក្កយបត្រ និងគណនេយ្យ។',
+    icon: 'i-lucide-coins', group: 'master', permission: 'master.reference.view', collection: 'currencies', titleField: 'name', kind: 'standard', canCreate: true,
+    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('symbol', 'Symbol', 'សញ្ញា'), column('exchangeRate', 'Exchange Rate', 'អត្រាប្តូរប្រាក់'), column('status', 'Status', 'ស្ថានភាព')],
+    fields: [
+      field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true),
+      field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true),
+      field('symbol', 'Symbol', 'សញ្ញា'),
+      field('exchangeRate', 'Exchange Rate', 'អត្រាប្តូរប្រាក់', 'Rate', 'អត្រា', 'number'),
+      field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
+    ],
+    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+  }),
+
+  module({
     path: '/configuration/component-groups', title: 'Component Groups', titleKm: 'ក្រុមសមាសភាគ', singular: 'Component Group', singularKm: 'ក្រុមសមាសភាគ', description: 'Display grouping for dynamic service-order components.', descriptionKm: 'ក្រុមបង្ហាញសម្រាប់សមាសភាគបញ្ជាសេវាកម្ម។',
     icon: 'i-lucide-folders', group: 'configuration', permission: 'configuration.manage', collection: 'componentGroups', titleField: 'name', kind: 'standard', canCreate: true,
     columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('description', 'Description', 'បរិយាយ'), column('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ'), column('showOnJobWorkspace', 'Job Tab', 'ផ្ទាំងការងារ'), column('status', 'Status', 'ស្ថានភាព')],
@@ -129,8 +141,8 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/configuration/trade-direction-components', title: 'Trade Direction Components', titleKm: 'សមាសភាគតាមទិសដៅ', singular: 'Direction Component', singularKm: 'សមាសភាគទិសដៅ', description: 'Controls which versioned components appear for each trade direction.', descriptionKm: 'គ្រប់គ្រងសមាសភាគដែលបង្ហាញតាមទិសដៅពាណិជ្ជកម្ម។',
     icon: 'i-lucide-workflow', group: 'configuration', permission: 'configuration.manage', collection: 'tradeDirectionComponents', titleField: 'componentTemplate', kind: 'standard', canCreate: true,
     columns: [column('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម'), column('componentGroup', 'Component Group', 'ក្រុមសមាសភាគ'), column('componentTemplate', 'Component Template', 'គំរូសមាសភាគ'), column('templateVersion', 'Template Version', 'កំណែគំរូ'), column('required', 'Required', 'តម្រូវ'), column('instanceModeOverride', 'Instance Mode Override', 'ប្ដូររបៀបកំណត់ត្រា'), column('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', undefined, undefined, 'select', DIRECTIONS, true), field('componentGroup', 'Component Group', 'ក្រុមសមាសភាគ', undefined, undefined, 'text', undefined, true), field('componentTemplate', 'Component Template', 'គំរូសមាសភាគ', undefined, undefined, 'text', undefined, true), field('templateVersion', 'Template Version', 'កំណែគំរូ', 'Version', 'កំណែ', 'text', undefined, false, { computed: true }), field('required', 'Required', 'តម្រូវ', 'Rules', 'ច្បាប់', 'checkbox', YES_NO), field('instanceModeOverride', 'Instance Mode Override', 'ប្ដូររបៀបកំណត់ត្រា', 'Rules', 'ច្បាប់', 'select', COMPONENT_INSTANCE_MODE_OVERRIDES), field('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ', 'Display', 'ការបង្ហាញ', 'number'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select', DIRECTIONS), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    fields: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', undefined, undefined, 'select', undefined, true), field('componentGroup', 'Component Group', 'ក្រុមសមាសភាគ', undefined, undefined, 'text', undefined, true), field('componentTemplate', 'Component Template', 'គំរូសមាសភាគ', undefined, undefined, 'text', undefined, true), field('templateVersion', 'Template Version', 'កំណែគំរូ', 'Version', 'កំណែ', 'text', undefined, false, { computed: true }), field('required', 'Required', 'តម្រូវ', 'Rules', 'ច្បាប់', 'checkbox', YES_NO), field('instanceModeOverride', 'Instance Mode Override', 'ប្ដូររបៀបកំណត់ត្រា', 'Rules', 'ច្បាប់', 'select', COMPONENT_INSTANCE_MODE_OVERRIDES), field('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ', 'Display', 'ការបង្ហាញ', 'number'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
+    filters: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/administration/document-sequences', title: 'Document Sequences', titleKm: 'លំដាប់លេខឯកសារ', singular: 'Document Sequence', singularKm: 'លំដាប់ឯកសារ', description: 'Manage automatic document numbering by document type and year.', descriptionKm: 'គ្រប់គ្រងលេខឯកសារស្វ័យប្រវត្តិ តាមប្រភេទឯកសារ និងឆ្នាំ។',
@@ -166,8 +178,8 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/finance/financial-accounts', title: 'Financial Accounts', titleKm: 'គណនីហិរញ្ញវត្ថុ', singular: 'Financial Account', singularKm: 'គណនីហិរញ្ញវត្ថុ', description: 'Cash, bank and settlement accounts linked to the ledger.', descriptionKm: 'គណនីសាច់ប្រាក់ ធនាគារ និងទូទាត់ភ្ជាប់សៀវភៅធំ។',
     icon: 'i-lucide-wallet-cards', group: 'finance', permission: 'finance.accounting.view', collection: 'financialAccounts', titleField: 'accountName', kind: 'standard', canCreate: true,
     columns: [column('accountName', 'Account Name', 'ឈ្មោះគណនី'), column('ledgerCode', 'Ledger Account', 'គណនីសៀវភៅ'), column('accountType', 'Type', 'ប្រភេទ'), column('currency', 'Currency', 'រូបិយប័ណ្ណ'), column('bankName', 'Bank', 'ធនាគារ'), column('accountNumberMasked', 'Account No.', 'លេខគណនី'), column('balance', 'Balance', 'សមតុល្យ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('ledgerCode', 'Ledger Account', 'គណនីសៀវភៅ', undefined, undefined, 'text', undefined, true), field('accountName', 'Account Name', 'ឈ្មោះគណនី', undefined, undefined, 'text', undefined, true), field('accountType', 'Account Type', 'ប្រភេទគណនី', undefined, undefined, 'select', ['Bank', 'Cash']), field('currency', 'Currency', 'រូបិយប័ណ្ណ', undefined, undefined, 'select', CURRENCIES), field('bankName', 'Bank Name', 'ឈ្មោះធនាគារ', 'Bank Details', 'ព័ត៌មានធនាគារ'), field('accountNumberMasked', 'Masked Account Number', 'លេខគណនីបិទបាំង', 'Bank Details', 'ព័ត៌មានធនាគារ'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('accountType', 'Account Type', 'ប្រភេទគណនី', '', '', 'select', ['Bank', 'Cash']), field('currency', 'Currency', 'រូបិយប័ណ្ណ', '', '', 'select', CURRENCIES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    fields: [field('ledgerCode', 'Ledger Account', 'គណនីសៀវភៅ', undefined, undefined, 'text', undefined, true), field('accountName', 'Account Name', 'ឈ្មោះគណនី', undefined, undefined, 'text', undefined, true), field('accountType', 'Account Type', 'ប្រភេទគណនី', undefined, undefined, 'select', ['Bank', 'Cash']), field('currency', 'Currency', 'រូបិយប័ណ្ណ', undefined, undefined, 'select'), field('bankName', 'Bank Name', 'ឈ្មោះធនាគារ', 'Bank Details', 'ព័ត៌មានធនាគារ'), field('accountNumberMasked', 'Masked Account Number', 'លេខគណនីបិទបាំង', 'Bank Details', 'ព័ត៌មានធនាគារ'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
+    filters: [field('accountType', 'Account Type', 'ប្រភេទគណនី', '', '', 'select', ['Bank', 'Cash']), field('currency', 'Currency', 'រូបិយប័ណ្ណ', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/finance/journals', title: 'Journal Entries', titleKm: 'បញ្ជីទិនានុប្បវត្តិ', singular: 'Journal Entry', singularKm: 'ទិនានុប្បវត្តិ', description: 'Balanced debit and credit entries with source traceability.', descriptionKm: 'ឥណពន្ធ និងឥណទានមានតុល្យភាព និងប្រភពតាមដាន។',
@@ -175,7 +187,7 @@ export const lcsReferenceModules: FreightModule[] = [
     columns: [column('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ'), column('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី'), column('sourceDocumentNo', 'Source', 'ប្រភព'), column('description', 'Description', 'បរិយាយ'), column('debitTotal', 'Debit', 'ឥណពន្ធ'), column('creditTotal', 'Credit', 'ឥណទាន'), column('status', 'Status', 'ស្ថានភាព')],
     fields: [field('entryNo', 'Entry No.', 'លេខទិនានុប្បវត្តិ', undefined, undefined, 'text', undefined, true, { computed: true }), field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', undefined, undefined, 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('entryDate', 'Entry Date', 'កាលបរិច្ឆេទទិនានុប្បវត្តិ', undefined, undefined, 'date'), field('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី', undefined, undefined, 'date'), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ'), field('sourceDocumentNo', 'Source Document', 'ឯកសារប្រភព'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea', undefined, false, { colSpan: 2 }), field('debitTotal', 'Total Debit', 'ឥណពន្ធសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('creditTotal', 'Total Credit', 'ឥណទានសរុប', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true }), field('balanceDifference', 'Balance Difference', 'ភាពខុសគ្នា', 'Balance', 'តុល្យភាព', 'number', undefined, false, { computed: true })],
     tables: [{ key: 'lines', title: 'Journal Lines', titleKm: 'ជួរទិនានុប្បវត្តិ', addLabel: 'Add journal line', columns: [
-      { key: 'account_code', label: 'Account', labelKm: 'គណនី', required: true }, { key: 'party', label: 'Party', labelKm: 'ដៃគូ' }, { key: 'serviceOrder', label: 'Service Job', labelKm: 'បញ្ជាសេវាកម្ម' }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' }, { key: 'debit_amount', label: 'Debit', labelKm: 'ឥណពន្ធ', type: 'number' }, { key: 'credit_amount', label: 'Credit', labelKm: 'ឥណទាន', type: 'number' }, { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ', type: 'select', options: CURRENCIES },
+      { key: 'account_code', label: 'Account', labelKm: 'គណនី', required: true }, { key: 'party', label: 'Party', labelKm: 'ដៃគូ' }, { key: 'serviceOrder', label: 'Service Job', labelKm: 'បញ្ជាសេវាកម្ម' }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' }, { key: 'debit_amount', label: 'Debit', labelKm: 'ឥណពន្ធ', type: 'number' }, { key: 'credit_amount', label: 'Credit', labelKm: 'ឥណទាន', type: 'number' }, { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ', type: 'select' },
     ] }],
     actions: [{ key: 'postJournal', label: 'Post', labelKm: 'ចុះបញ្ជី', icon: 'i-lucide-book-check', color: 'success' }],
     filters: [field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', '', '', 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ')],

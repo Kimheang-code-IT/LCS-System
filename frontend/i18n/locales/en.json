@@ -140,7 +140,7 @@
       "clearanceFee": "Clearance Fee",
       "closedAt": "Closed At",
       "closedBy": "Closed By",
-      "code": "Company Code",
+      "code": "Code",
       "company": "Company",
       "completedTime": "Completed Time",
       "componentGroup": "Component Group",
@@ -280,7 +280,7 @@
       "metadata": "Metadata",
       "mimeType": "MIME Type",
       "month": "Month",
-      "name": "Company Name",
+      "name": "Name",
       "normalBalance": "Normal Balance",
       "notes": "Customs Notes",
       "occurredAt": "Time",
@@ -564,6 +564,8 @@
         "singular": "Company",
         "description": "Factory and customer records from company information, customs credentials and logistics defaults.",
         "fields": {
+          "code": "Company Code",
+          "name": "Company Name",
           "direction": "Default Direction"
         }
       },
@@ -581,6 +583,11 @@
         "title": "Container Types",
         "singular": "Container Type",
         "description": "Physical container ISO classifications and dimensions."
+      },
+      "currencies": {
+        "title": "Currencies",
+        "singular": "Currency",
+        "description": "ISO currencies used for pricing, invoices and accounting."
       },
       "customerPayments": {
         "title": "Customer Payments",
@@ -2413,9 +2420,6 @@
         "spreadsheetId": "Google spreadsheet ID",
         "serviceAccountJson": "Service account JSON",
         "serviceAccountConfigured": "Service account credentials are configured",
-        "worksheetPrefix": "Worksheet name prefix",
-        "batchSize": "Rows per batch",
-        "excludedTables": "Excluded tables",
         "runNow": "Back up now",
         "runStarted": "Backup run #{id} started",
         "runFailed": "Could not start the backup",

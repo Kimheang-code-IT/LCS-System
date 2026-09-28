@@ -424,6 +424,17 @@ async def update_journal(
     return {"data": await service.save_journal(session, context, {**payload, "id": journal_id})}
 
 
+@router.delete("/journal-entries/{journal_id}")
+@router.delete("/journals/{journal_id}")
+async def delete_journal(
+    journal_id: str,
+    context: RequestContext = Depends(require_permission("journal_entry.create")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await service.delete_journals(session, context, [int(journal_id)])
+    return {"data": {"id": journal_id, "deleted": True}}
+
+
 @router.post("/journal-entries/{journal_id}/post")
 @router.post("/journals/{journal_id}/post")
 async def post_journal(

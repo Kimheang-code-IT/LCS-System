@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { FreightRecord } from '~/types/freight/record'
 import type { useLcs } from '~/composables/lcs/useLcs'
 import type { useConfirm } from '~/composables/common/useConfirm'
-import { canConvertQuotation } from '~/utils/lcs/states'
+import { canConvertQuotation, quotationDomainStatus } from '~/utils/lcs/states'
 
 type LcsApi = ReturnType<typeof useLcs>
 
@@ -86,13 +86,46 @@ export function useQuotationCommands(options: {
       lcs.quotations.convert(revisionId(), keyValue),
     )
     toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
-    await navigateTo(`/service-orders/${job.id}`)
+    await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
+  }
+
+  /**
+   * Simplified flow: accepting a saved quotation sends the revision (when still
+   * a draft), accepts it, and immediately converts it to a service order.
+   */
+  async function acceptAndConvert() {
+    const existing = relatedServiceOrder()
+    if (existing?.id) {
+      await navigateTo(`/service-orders/${String(existing.id)}`)
+      return
+    }
+    if (quotationDraftDirty.value) {
+      toast({ title: t('freight.ui.missingRequired'), description: t('freight.ui.quotationSaveBeforeSubmit'), color: 'warning' })
+      return
+    }
+    const ok = await confirm({
+      kind: 'submit',
+      title: t('freight.ui.quotationSubmitTitle'),
+      description: t('freight.ui.quotationSubmitDescription'),
+      confirmLabel: t('freight.ui.accept'),
+    })
+    if (!ok) return
+    const id = revisionId()
+    if (quotationDomainStatus(model.value.status) === 'DRAFT') {
+      model.value = await lcs.runCommand('quotation.send', id, keyValue => lcs.quotations.send(id, keyValue))
+    }
+    model.value = await lcs.runCommand('quotation.accept', id, keyValue => lcs.quotations.accept(id, keyValue))
+    const job = await lcs.runCommand('quotation.convert', id, keyValue => lcs.quotations.convert(id, keyValue))
+    store.reload()
+    toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
+    await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
   }
 
   return {
     send,
     submit,
     accept,
+    acceptAndConvert,
     rejectOrCancel,
     createRevision,
     convertJob,

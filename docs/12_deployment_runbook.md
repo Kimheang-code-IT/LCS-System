@@ -66,7 +66,7 @@ Secrets must not be committed to Git, included in Docker images, stored in seed 
 - [ ] Dependency and image scans passed.
 - [ ] Unit tests passed.
 - [ ] Integration tests passed.
-- [ ] Authorization and cross-branch tests passed.
+- [ ] Authorization and permission tests passed.
 - [ ] Financial posting tests passed.
 - [ ] Migration reviewed.
 - [ ] Database backup completed and verified.
@@ -101,7 +101,6 @@ Before applying a migration:
 - inspect locks and expected duration;
 - verify all new foreign keys;
 - verify indexes;
-- verify organization and branch consistency;
 - verify journal constraints;
 - prepare rollback or forward-fix plan.
 
@@ -112,7 +111,7 @@ Never run destructive migration operations without an approved backup and migrat
 - `GET /health` returns success.
 - `GET /health/ready` confirms dependencies (reachable through nginx at `/health`).
 - An empty database shows the first-run `/setup` page; after setup a user can log in.
-- User sees only assigned organization and branches.
+- A user only sees pages and actions their roles permit.
 - A quotation draft can be created.
 - An accepted test quotation can convert once.
 - A service charge can issue without creating a journal.
@@ -121,7 +120,7 @@ Never run destructive migration operations without an approved backup and migrat
 - An unbalanced journal is rejected.
 - A closed period rejects posting.
 - Attachment upload and download work for an authorized user.
-- Cross-branch access is denied.
+- A user without the required permission is denied.
 
 ## 10. Finance Safety Verification
 
@@ -135,7 +134,6 @@ After deployment, verify:
 - journal balance enforcement;
 - receipt/payment allocation limits;
 - reversal behavior;
-- branch dimensions;
 - ledger report reconciliation.
 
 Do not post real financial documents as a smoke test unless the business approves a controlled test period.
@@ -172,7 +170,7 @@ environment.
 3. Restore object-storage data or versioned objects.
 4. Deploy the matching application version.
 5. Run integrity checks.
-6. Verify organization/branch isolation.
+6. Verify role/permission isolation.
 7. Verify financial totals and journal balance.
 8. Verify representative attachments.
 9. Record recovery time and issues.
@@ -264,8 +262,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres
 
 Do not seed data manually: migrations leave the database empty and the first-run
 `/setup` page (or `create_admin`) provisions the initial records — the
-administrator, default document sequences for the current year, and the default
-app info/config. No finance or business data is seeded.
+administrator, the built-in Platform Administrator role, default document
+sequences for the current year, and the default app info/config. No finance or
+business data is seeded, and every other role is entered manually from
+Roles & Permissions.
 
 ## 16. Incident Evidence
 
@@ -277,7 +277,7 @@ Preserve:
 - audit events;
 - database metrics;
 - request and correlation IDs;
-- affected organization and branch;
+- affected user and role;
 - financial document and journal IDs.
 
 ## 17. CI/CD Pipeline and Branch Protection

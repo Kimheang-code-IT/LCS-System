@@ -17,7 +17,7 @@ Each requirement has a stable identifier so it can be traced to design, implemen
 
 ## 2. Product Definition
 
-The product is an organization- and branch-aware platform for managing freight-forwarding operations and reusable financial accounting.
+The product is a single-tenant platform for managing freight-forwarding operations and reusable financial accounting.
 
 The system separates three concepts:
 
@@ -41,15 +41,16 @@ A financial document is a reusable business transaction such as a customer invoi
 
 A journal entry records the double-entry effect of a posted financial document or manual accounting operation. Every posted journal must balance.
 
-An empty (freshly migrated) database exposes a one-time **first-run setup** flow that provisions the permission catalog, default roles, organization, head-office branch, administrator credential and a minimal finance baseline. Setup is accepted only while no user exists. Dashboard and report figures are served by the backend reporting API.
+An empty (freshly migrated) database exposes a one-time **first-run setup** flow that provisions the permission catalog, the built-in Platform Administrator role, the administrator credential, the current-year document sequences and the default app info/config. No finance or business data is seeded, and no additional roles are created — every other role is entered manually from Roles & Permissions. Setup is accepted only while no user exists. Dashboard and report figures are served by the backend reporting API.
 
 ## 3. Scope
 
 ### 3.1 In scope
 
-- Organization and branch administration.
+The platform is **single-tenant**: organizations and branches were removed from the schema and product (migration `b7f1c2a9d4e0_remove_organization_and_branch.py`), and there is no organization or branch scope anywhere.
+
 - Authentication, users, sessions, roles, permissions, and audit logs.
-- Branch-scoped authorization.
+- Permission-based authorization governed entirely by users, roles, and permissions.
 - Master data.
 - Dynamic service-component templates.
 - Quotations and immutable revisions.
@@ -81,8 +82,7 @@ An empty (freshly migrated) database exposes a one-time **first-run setup** flow
 
 | Term | Definition |
 |---|---|
-| Organization | Legal or business entity that owns data and users |
-| Branch | Operational unit within an organization |
+| Organization / Branch | Removed from the schema and product; the platform is single-tenant and no longer models either entity |
 | Business party | Customer, supplier, carrier, broker, or other counterparty |
 | Trade direction | Import, export, transit, re-export, or another movement direction |
 | Place | Administrative area, customs zone, SEZ, checkpoint, port, airport, warehouse, or destination |
@@ -92,21 +92,21 @@ An empty (freshly migrated) database exposes a one-time **first-run setup** flow
 | Financial document | Reusable invoice, bill, receipt, payment, income, expense, transfer, or adjustment |
 | Journal entry | Accounting record containing balanced debit and credit lines |
 | Posting | Finalizing a financial document and recording its journal effect |
-| Scope | Organization and optional branch boundary in which a permission applies |
+| Scope | The set of permission codes granted to a user through roles; there is no organization or branch scope |
 
 ## 5. User Classes
 
 ### UR-001 Platform administrator
 
-Manages the platform, organizations, system roles, global configuration, and technical support operations.
+Manages the platform, system roles, global configuration, and technical support operations. This role is built in and provisioned at first-run setup with every permission code.
 
-### UR-002 Organization administrator
+### UR-002 Administrator
 
-Manages organization branches, users, roles, operational configuration, and organization settings.
+Manages users, roles, operational configuration, and global application settings.
 
-### UR-003 Branch manager
+### UR-003 Operations manager
 
-Manages branch operations, reviews branch work, and handles branch-scoped approvals.
+Manages operations, reviews operational work, and holds broad quotation and service-order permissions.
 
 ### UR-004 Sales officer
 
@@ -118,33 +118,37 @@ Creates and processes service orders, components, containers, milestones, and at
 
 ### UR-006 Finance officer
 
-Creates financial documents, receipts, payments, allocations, and journal entries within assigned scope.
+Creates financial documents, receipts, payments, allocations, and journal entries.
 
 ### UR-007 Finance manager
 
-Posts or reverses financial documents, manages accounting periods, and reviews organization-wide accounting.
+Posts or reverses financial documents, manages accounting periods, and reviews accounting.
 
 ### UR-008 Auditor
 
 Reads authorized operational, financial, accounting, and audit records without changing them.
 
+> The eight roles above correspond to the code-defined role templates (`ROLE_DEFINITIONS`) documented in `docs/11_permissions_matrix.md`. Only Platform Administrator is provisioned automatically; the other seven must be created from Roles & Permissions, and custom roles may be defined as needed.
+
 ## 6. General Functional Requirements
 
 ### 6.1 Context and tenancy
 
-**FR-001** The system shall require every authenticated request to have an active user context.
+The platform is single-tenant. Every request is authorized against an authenticated user and the effective permissions derived from that user's active role assignments. There is no organization or branch context.
 
-**FR-002** The system shall resolve the active organization before accessing organization-owned data.
+**FR-001** The system shall require every protected request to have an active user context.
 
-**FR-003** The system shall reject access to records belonging to another organization.
+**FR-002** The system shall resolve the requesting user's effective permissions from active role assignments before authorizing an action.
 
-**FR-004** The system shall support an active branch context for branch-scoped users.
+**FR-003** The system shall reject a request when the required permission is not granted.
 
-**FR-005** The system shall allow organization-wide users to view or operate across branches within their organization when their permissions allow it.
+**FR-004** The system shall attach a request identifier and correlation identifier to each request for tracing and audit.
 
-**FR-006** The system shall prevent a branch-scoped permission from accessing records belonging to another branch.
+**FR-005** A granted permission shall apply to all records of the corresponding module, since the platform is single-tenant.
 
-**FR-007** The system shall validate that every branch belongs to the organization referenced by the record.
+**FR-006** The system shall deny access when no active role assignment grants the requested permission.
+
+**FR-007** The system shall treat future-dated and expired role assignments as inactive when computing effective permissions.
 
 **FR-008** The system shall apply authorization on the server side for every protected endpoint.
 
@@ -178,51 +182,53 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-021** The system shall support assigning multiple roles to one user.
 
-**FR-022** The system shall support assigning a role at organization scope.
+**FR-022** The system shall support an optional start date (`starts_at`) on a role assignment.
 
-**FR-023** The system shall support assigning a role at branch scope.
+**FR-023** The system shall support an optional expiry date (`expires_at`) on a role assignment.
 
-**FR-024** The system shall support assignment start and expiry dates.
+**FR-024** Role assignments that are not yet started or that have expired shall not contribute permissions.
 
 **FR-025** The system shall calculate effective permissions from active role assignments.
 
 **FR-026** Permission changes shall be auditable.
 
-**FR-027** The system shall deny access when no active assignment grants the requested permission and scope.
+**FR-027** The system shall deny access when no active assignment grants the requested permission.
 
 ### 6.4 Audit
 
-**FR-028** The system shall record the actor, action, target entity, result, timestamp, organization, branch context, and request correlation identifier for audited actions.
+**FR-028** The system shall record the actor, action, target entity, result, timestamp, and request correlation identifier for audited actions.
 
 **FR-029** The system shall audit financial posting, reversal, allocation, period closure, permission changes, credential retrieval, and authorization denial.
 
 **FR-030** The system shall not include plaintext passwords, tokens, or encryption keys in audit payloads.
 
-**FR-031** Authorized users shall search audit records by organization, branch, actor, event type, entity, result, and date range.
+**FR-031** Authorized users shall search audit records by actor, event type, entity, result, and date range.
 
-## 7. Organization and Branch Requirements
+## 7. Organization and Branch Requirements (Removed)
 
-**FR-032** The system shall create organizations with a unique organization code.
+The organization and branch capability has been **removed** from the schema and product (migration `b7f1c2a9d4e0_remove_organization_and_branch.py`). There are no `organization_id` or `branch_id` columns, no organization or branch scope, and no organization or branch administration in the product. Access is governed entirely by users, roles, and permissions, with role assignments carrying optional start/expiry dates. The requirements below are retained for traceability and are **not applicable** to the current implementation; the permission-management capability that replaces them is specified in Section 6.3.
 
-**FR-033** The system shall create branches under exactly one organization.
+**FR-032** *(Removed)* Organization creation is not applicable; the platform is single-tenant.
 
-**FR-034** Branch codes shall be unique within an organization.
+**FR-033** *(Removed)* Branch entities are not modelled; there is no parent-organization relationship.
 
-**FR-035** The system shall allow one branch to be marked as head office.
+**FR-034** *(Removed)* Organization-relative branch codes are not applicable.
 
-**FR-036** The system shall allow branch contact, address, and place information to be maintained.
+**FR-035** *(Removed)* The head-office designation is not applicable.
 
-**FR-037** The system shall allow a user to be assigned to multiple branches.
+**FR-036** *(Removed)* Branch contact, address, and place details are not maintained.
 
-**FR-038** The system shall allow a default branch to be selected for a user.
+**FR-037** *(Removed)* Users are not assigned to branches; access is granted through roles.
 
-**FR-039** The user interface shall display the active organization and branch context.
+**FR-038** *(Removed)* There is no default-branch selection for a user.
 
-**FR-040** Branch selectors shall display only branches available to the current user.
+**FR-039** *(Removed)* The interface does not display an active organization or branch context.
 
-**FR-041** Branch-owned records shall require a branch identifier.
+**FR-040** *(Removed)* There are no organization or branch selectors.
 
-**FR-042** Organization-level records may omit a branch identifier when the business rule allows organization-wide ownership.
+**FR-041** *(Removed)* Records do not carry a branch identifier.
+
+**FR-042** *(Removed)* There is no organization-wide ownership tier; all records are global to the single tenant.
 
 ## 8. Master Data Requirements
 
@@ -244,7 +250,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-051** The system shall support customer, supplier, carrier, broker, and transport-operator roles.
 
-**FR-052** The system shall deactivate master records instead of deleting records referenced by historical transactions.
+**FR-052** The system shall deactivate master records instead of deleting records referenced by historical transactions. Reference records (Master Data and Configuration) expose their status from each list row's action menu, and an active record cannot be deleted until it is deactivated; the API rejects deleting an active reference record with a conflict.
 
 **FR-053** The system shall reject references to inactive records for new transactions unless explicitly permitted.
 
@@ -320,13 +326,15 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-087** Conversion shall be idempotent and shall not create duplicate service orders for the same accepted revision unless explicitly configured.
 
+> Note: the streamlined UI exposes two quotation actions — **Save** (create/edit a draft; a draft with unsaved changes shows Save instead of Accept) and **Accept**. Accepting a saved draft performs send, acceptance and conversion in one explicit user action, then opens the created service order. The underlying revision state machine below is unchanged and remains available through the API.
+
 ## 11. Service-Order Requirements
 
 **FR-088** The system shall create globally unique service-order numbers.
 
-**FR-089** A service order shall preserve customer, trade direction, branch, currency, description, and source-revision snapshots.
+**FR-089** A service order shall preserve customer, trade direction, currency, description, and source-revision snapshots.
 
-**FR-090** A service order shall support draft, open, in-progress, on-hold, completed, cancelled, and closed states.
+**FR-090** A service order shall use a simple `ACTIVE` / `INACTIVE` status. A saved order defaults to `ACTIVE`; the status is changed from the record's row action menu rather than the form. An active order cannot be deleted until it is deactivated, and the API rejects deleting an active order with conflict code `ORDER_ACTIVE`.
 
 **FR-091** The system shall copy quotation container requirements to the service order.
 
@@ -338,7 +346,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-095** The system shall validate gross weight is not lower than net weight when both are present.
 
-**FR-096** Users shall create, update, and complete service components according to permissions and branch scope.
+**FR-096** Users shall create, update, and complete service components according to their permissions.
 
 **FR-097** Users shall attach files to service orders and components.
 
@@ -374,7 +382,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-111** The finance module shall use one reusable financial-document table for invoices, bills, receipts, payments, income, expenses, transfers, and adjustments.
 
-**FR-112** A financial document shall contain document number, type, date, status, party, branch, currency, description, reference, and amount.
+**FR-112** A financial document shall contain document number, type, date, status, party, currency, description, reference, and amount.
 
 **FR-113** A financial document shall support multiple lines.
 
@@ -428,13 +436,13 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 ## 15. Accounting Requirements
 
-**FR-137** The system shall maintain an organization-specific chart of accounts.
+**FR-137** The system shall maintain a single global chart of accounts.
 
 **FR-138** The system shall support account hierarchy and parent accounts.
 
 **FR-139** The system shall distinguish postable and non-postable accounts.
 
-**FR-140** The system shall maintain accounting periods per organization.
+**FR-140** The system shall maintain global accounting periods.
 
 **FR-141** The system shall reject posting into a closed accounting period.
 
@@ -448,9 +456,9 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-146** A journal line shall reference one postable account.
 
-**FR-147** A journal line shall support organization, branch, party, service order, and source-document dimensions.
+**FR-147** A journal line shall support party, service order, and source-document dimensions.
 
-**FR-148** The system shall support base-currency amounts when transaction currency differs from organization currency.
+**FR-148** The system shall support base-currency amounts when the transaction currency differs from the base currency.
 
 **FR-149** The system shall prevent editing posted journal entries.
 
@@ -458,7 +466,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-151** The system shall support revenue, expense, receivable, payable, cash, bank, tax, equity, and adjustment account mappings.
 
-**FR-152** The system shall report ledger balances by account, branch, party, service order, and period.
+**FR-152** The system shall report ledger balances by account, party, service order, and period.
 
 ## 16. Attachments and Documents
 
@@ -472,7 +480,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-157** The system shall support document versions.
 
-**FR-158** The system shall restrict downloads according to organization, branch, and permission scope.
+**FR-158** The system shall restrict downloads according to permission scope.
 
 **FR-159** The system shall audit sensitive downloads where configured.
 
@@ -480,19 +488,19 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-160** The system shall allocate quotation, service-order, charge, financial-document, receipt, payment, and journal numbers using transactional sequences.
 
-**FR-161** Number sequences shall be scoped at least by organization, document type, and year.
+**FR-161** Number sequences shall be scoped by document type and year.
 
 **FR-162** The system shall prevent duplicate numbers under concurrent requests.
 
-**FR-163** Administrators shall configure organization and branch settings.
+**FR-163** Administrators shall configure global application settings.
 
-**FR-164** Branch settings may override organization settings when explicitly supported.
+**FR-164** Global settings shall apply across the platform; there are no organization or branch overrides.
 
 **FR-165** The system shall preserve the configuration used for historical records where required.
 
 ## 18. Reporting Requirements
 
-**FR-166** The system shall report open service orders by organization, branch, customer, direction, and status.
+**FR-166** The system shall report active service orders by customer, direction, and status.
 
 **FR-167** The system shall report service-order charges by fee type and container.
 
@@ -504,21 +512,21 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-171** The system shall report payments, receipts, and unallocated balances.
 
-**FR-172** The system shall report revenue and expenses by account, branch, party, and service order.
+**FR-172** The system shall report revenue and expenses by account, party, and service order.
 
 **FR-173** The system shall provide a general ledger report based on posted journal lines.
 
 **FR-174** The system shall provide trial-balance data for a selected period.
 
-**FR-175** Reports shall enforce the same organization and branch authorization rules as operational screens.
+**FR-175** Reports shall enforce the same permission and date-range filters as operational screens.
 
 ## 19. API Requirements
 
-**FR-176** The API shall expose versioned endpoints.
+**FR-176** The API shall expose versioned endpoints under the base path `/api/v1`.
 
 **FR-177** Protected endpoints shall require authentication.
 
-**FR-178** Endpoints shall enforce permission and scope checks.
+**FR-178** Endpoints shall enforce permission checks.
 
 **FR-179** Write endpoints shall validate request data and business state transitions.
 
@@ -526,9 +534,28 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **FR-181** API errors shall use consistent error structures with a code, message, request ID, and optional field errors.
 
-**FR-182** List endpoints shall support pagination, sorting, filtering, and branch context where applicable.
+**FR-182** List endpoints shall support pagination, sorting, filtering, and date-range filtering where applicable.
 
 **FR-183** API responses shall not expose secrets, password hashes, tokens, or encrypted credential material.
+
+### 19.1 Endpoint groups
+
+The API is a modular monolith. The current endpoint groups are:
+
+| Group | Paths (under `/api/v1`) | Notes |
+|---|---|---|
+| Health | `/health` | Liveness probe returning the `{"data": ...}` envelope |
+| Setup | `/setup/status`, `/setup/initialize` | First-run provisioning; gated on no users existing |
+| Auth, users, roles, permissions | `/auth/*`, `/users`, `/users/{id}`, `/users/{id}/role-assignments`, `/roles`, `/roles/{id}`, `/permissions` | Login/logout/refresh/me, password reset and change, profile/avatar, user and role administration |
+| Quotations | `/quotations`, `/quotations/{id}`, `/quotations/{id}/revisions`, `/quotation-revisions/{id}/send`, `/submit`, `/accept`, `/convert` | Quotation and immutable revision lifecycle |
+| Service orders | `/service-orders`, `/service-orders/{identifier}`, `/service-orders/{identifier}/dynamic-tabs`, `/containers`, `/components`, `/charges`, `/service-order-components`, `/attachments/*` | Dynamic tabs and rows, containers, components, charges, and attachments |
+| Service charges | `/service-charges`, `/service-charges/{id}`, `/service-charges/{id}/issue`, `/service-charges/{id}/create-finance-invoice` | Informational charges and explicit conversion to a finance draft |
+| Finance | `/chart-of-accounts`, `/financial-accounts`, `/accounting-periods` (incl. `/{id}/close`), `/document-sequences`, `/posting-rules`, `/financial-documents` (incl. `/post`, `/allocate`, `/reverse`), `/journal-entries` (aliased as `/journals`, incl. `/post`) | Global chart of accounts, financial accounts, periods, sequences, posting rules, documents, and journals |
+| Master data and generic collections | `/trade-directions`, `/places`, `/container-types`, `/transport-types`, `/transport-assets`, `/fee-types`, `/business-parties`, plus metadata-driven generic collections, `/service-order-tabs`, `/service-order-columns`, `/ui-schemas/{page}` | Reference CRUD, dynamic tab/column configuration, and UI schemas |
+| Settings and search | `/settings/app-info`, `/settings/app-config`, `/settings/reset-data`, `/search`, `/search/ask` | App info/config, email and Telegram connection tests, data reset, and search |
+| Backup | `/backup/status`, `/backup/runs`, `/backup/run`, `/backup/restore`, `/backup/test-connection` | Optional Google Sheets mirror plus restore/test utilities |
+| Audit | `/audit-events` | Searchable audit trail |
+| Reports | `/reports/dashboard`, `/reports/service-orders`, `/reports/quotation-performance`, `/reports/receivables`, `/reports/payables`, `/reports/income`, `/reports/expenses`, `/reports/profitability`, `/reports/financial-summary`, plus `/receivables`, `/payables`, `/profitability` aliases | Backend-served reporting; frontend exposes a catalogue of 12 reports |
 
 ## 20. Non-Functional Requirements
 
@@ -549,6 +576,8 @@ Reads authorized operational, financial, accounting, and audit records without c
 **NFR-006** The API shall expose liveness and readiness health checks.
 
 **NFR-007** PostgreSQL backups shall be scheduled and restore-tested.
+
+> Note: in addition to the PostgreSQL dump, an optional in-app Google Sheets backup mirrors **all** database tables automatically (no per-table configuration). It skips the migration marker and the backup engine's own tables, never exports sensitive columns (password/token/secret/credential), and can be run manually or on a schedule from Settings.
 
 **NFR-008** Object storage shall support retention and recovery appropriate to business requirements.
 
@@ -576,7 +605,7 @@ Reads authorized operational, financial, accounting, and audit records without c
 
 **NFR-017** The UI shall support Khmer and English labels.
 
-**NFR-018** Date, number, currency, and timezone formatting shall be configurable per organization or user.
+**NFR-018** Date, number, currency, and timezone formatting shall be configurable per user.
 
 ### Observability
 
@@ -601,10 +630,12 @@ DRAFT/SENT → CANCELLED
 ### Service order
 
 ```text
-DRAFT → OPEN → IN_PROGRESS → COMPLETED → CLOSED
-OPEN/IN_PROGRESS → ON_HOLD
-DRAFT/OPEN/IN_PROGRESS → CANCELLED
+ACTIVE ⇄ INACTIVE
 ```
+
+Service orders do not use a draft or multi-stage lifecycle. A saved order is
+`ACTIVE`; it may be deactivated and reactivated. Only an `INACTIVE` order may be
+deleted.
 
 ### Financial document
 
@@ -624,9 +655,9 @@ The API shall reject state transitions not listed or explicitly configured.
 
 ## 22. Business Invariants
 
-**INV-001** A branch must belong to the same organization as its record.
+**INV-001** Effective permissions are the union of the permissions granted by a user's active (started and not expired) role assignments.
 
-**INV-002** A user with only branch scope cannot access another branch.
+**INV-002** A request without an active user context or the required permission must be denied server-side; the platform is single-tenant and has no organization or branch scope.
 
 **INV-003** A sent quotation revision cannot be edited.
 
@@ -656,7 +687,7 @@ The API shall reject state transitions not listed or explicitly configured.
 
 The baseline release is acceptable when:
 
-1. Users can authenticate and receive only their assigned organization and branch access.
+1. Users can authenticate and receive only the permissions granted by their active role assignments.
 2. A quotation revision can be created, sent, accepted, and explicitly converted.
 3. A service order can contain dynamic repeatable components and actual containers.
 4. A service charge can be issued without creating a journal.
@@ -665,6 +696,34 @@ The baseline release is acceptable when:
 7. Posting creates a balanced journal entry.
 8. Payments can be partially allocated to invoices or bills.
 9. Posted documents and journals cannot be destructively edited.
-10. Users cannot cross organization or branch boundaries.
-11. Audit logs contain the required actor, scope, action, target, and result data.
+10. Users cannot perform actions their effective permissions do not grant.
+11. Audit logs contain the required actor, action, target, and result data.
 12. Required operational and accounting reports reconcile to stored records.
+
+## Appendix A — Frontend surfaces
+
+The frontend is a Nuxt 4 static SPA (`ssr: false`, built with `nuxt generate`) served by nginx, which also reverse-proxies `/api` so the browser is same-origin. Page access is checked with `useAuthStore().canAccessPage(pageId)`, and all data access goes through `app/repositories/*`, which is backed by `app/utils/api/freight-remote.ts` (`REMOTE_ENDPOINTS`).
+
+| Surface | Routes | Purpose |
+|---|---|---|
+| Public setup and auth | `/setup`, `/auth/login`, `/auth/forget-password`, `/auth/verify-code`, `/auth/reset-password` | First-run provisioning, login, and password reset |
+| Dashboard | `/` | Backend-served dashboard summary |
+| Operations | `/quotations`, `/service-orders`, `/service-charges` | Quotation lifecycle, service-order operations, and informational charges |
+| Finance | `/finance/documents`, `/finance/chart-of-accounts`, `/finance/financial-accounts`, `/finance/journals`, `/finance/accounting-periods` | Financial documents, chart of accounts, financial accounts, journals, and periods |
+| Master data | `/master-data/*` | Trade directions, places, container types, transport types, transport assets, fee types, and business parties |
+| Configuration | `/configuration/*` | Component groups, component templates, service-order tabs, and trade-direction components |
+| Administration | `/administration/users`, `/administration/roles`, `/administration/document-sequences`, `/administration/audit-logs`, `/administration/system-settings` | Users, roles, document sequences, audit logs, and system settings |
+| Reports | `/reports/:area/:slug` | Catalogue of 12 reports grouped into operations and finance |
+| Print | `/print/:collection/:id` | Printable document views |
+
+The report catalogue exposes: Service Order Register, Service Order Status, Containers, Profitability (operations); Revenue & Expense, Accounts Receivable, Accounts Payable, General Ledger, Trial Balance, Profit & Loss, Balance Sheet, and Cash Flow (finance). Reports filter by party, status, currency, and date as applicable, never by organization or branch.
+
+## Appendix B — API conventions
+
+- **Base path:** every endpoint is served under `/api/v1`; interactive documentation is exposed through OpenAPI.
+- **Success envelope:** successful payloads are `{"data": ...}`; list endpoints return `{"data": {"items": [...], "meta": {"page", "page_size", "total"}}}`.
+- **Errors:** failures return `{code, message, request_id, field_errors}`. Authorization is `AUTH_REQUIRED` or `ACCESS_DENIED`; not-found references are `REFERENCE_NOT_FOUND`; request validation is `VALIDATION_ERROR`.
+- **Error codes:** `AUTH_REQUIRED`, `ACCESS_DENIED`, `REFERENCE_NOT_FOUND`, `VALIDATION_ERROR`, `INVALID_STATE_TRANSITION`, `REFERENCE_ACTIVE`, `ORDER_ACTIVE`, `DUPLICATE_NUMBER`, `DUPLICATE_CONVERSION`, `DUPLICATE_USERNAME`, `DUPLICATE_EMAIL`, `DUPLICATE_ROLE`, `INVALID_RESET_CODE`, `BACKUP_RUNNING`, `SETUP_COMPLETED`, `PERIOD_CLOSED`, `JOURNAL_UNBALANCED`, `DOCUMENT_ALREADY_REVERSED`, `ALLOCATION_EXCEEDS_BALANCE`, `CURRENCY_MISMATCH`.
+- **Auth:** the API issues a JWT access token (default 1440 minutes) and a rotating refresh token (default 30 days), accepted as `Authorization: Bearer` or as HttpOnly cookies; cookie-based writes use a CSRF cookie/header pair.
+- **Pagination:** list responses carry `items` plus a `meta` object with `page`, `page_size`, and `total`.
+- **Request tracing:** `request_id` is returned on errors and included in logs alongside a correlation identifier.

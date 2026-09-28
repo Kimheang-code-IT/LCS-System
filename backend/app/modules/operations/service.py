@@ -45,22 +45,24 @@ from app.modules.quotations.models import (
 )
 
 ORDER_STATUS = {
-    "draft": "DRAFT",
-    "open": "OPEN",
-    "in_progress": "IN_PROGRESS",
-    "in progress": "IN_PROGRESS",
-    "on_hold": "ON_HOLD",
-    "on hold": "ON_HOLD",
-    "completed": "COMPLETED",
-    "closed": "CLOSED",
-    "cancelled": "CANCELLED",
+    "active": "ACTIVE",
+    "inactive": "INACTIVE",
 }
 
+# Legacy lifecycle statuses from before the Active/Inactive simplification.
+_LEGACY_INACTIVE = {"cancelled", "canceled", "closed", "inactive", "voided"}
 
-def normalize_order_status(value: Any, default: str = "DRAFT") -> str:
+
+def normalize_order_status(value: Any, default: str = "ACTIVE") -> str:
     if value is None:
         return default
-    return ORDER_STATUS.get(str(value).strip().lower(), str(value).strip().upper() or default)
+    text = str(value).strip()
+    if not text:
+        return default
+    mapped = ORDER_STATUS.get(text.lower())
+    if mapped:
+        return mapped
+    return "INACTIVE" if text.lower() in _LEGACY_INACTIVE else "ACTIVE"
 
 
 def _decimal(value: Any, default: Decimal | None = Decimal("0")) -> Decimal | None:
@@ -177,7 +179,7 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
             service_order_no=str(number),
             customer_party_id=party.id,
             trade_direction_id=direction.id,
-            status=normalize_order_status(data.get("status"), "DRAFT"),
+            status=normalize_order_status(data.get("status"), "ACTIVE"),
             currency_code=data.get("currency") or "USD",
             created_by_user_id=context.user_id,
             data={},
@@ -220,7 +222,7 @@ async def create_service_order_from_quotation(
         quotation_revision_id=revision.id,
         customer_party_id=quotation.customer_party_id,
         trade_direction_id=quotation.trade_direction_id,
-        status="OPEN",
+        status="ACTIVE",
         currency_code=revision.currency_code or "USD",
         description=revision.description,
         created_by_user_id=context.user_id,
@@ -356,8 +358,8 @@ async def list_containers(session: AsyncSession, context: RequestContext, identi
 
 async def add_container(session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]) -> dict:
     order = await resolve_order(session, context, identifier)
-    if order.status in {"CLOSED", "CANCELLED"}:
-        raise InvalidState("Cannot add containers to a closed order.")
+    if order.status == "INACTIVE":
+        raise InvalidState("Cannot add containers to an inactive service order.")
     container_number = str(data.get("containerNumber") or data.get("container_number") or data.get("containerNo") or "").strip()
     if not container_number:
         raise ValidationFailed("Container number is required.", {"containerNumber": "Required"})
@@ -367,13 +369,15 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
         raise Conflict("DUPLICATE_NUMBER", "Container number already exists.", {"containerNumber": "Already in use"})
     container_type_id = data.get("containerTypeId") or data.get("container_type_id")
     if not container_type_id:
-        from app.modules.master_data.service import resolve_reference
+        from app.modules.master_data.service import resolve_or_create_container_type
 
-        container_type_id = await resolve_reference(session, "container_type", data.get("containerType"))
+        container_type_id = await resolve_or_create_container_type(session, data.get("containerType"))
+    if not container_type_id:
+        raise ValidationFailed("Container type is required.", {"containerType": "Required"})
     container = ServiceOrderContainer(
         service_order_id=order.id,
         container_requirement_id=_int_or_none(data.get("containerRequirementId") or data.get("container_requirement_id")),
-        container_type_id=int(container_type_id or 1),
+        container_type_id=int(container_type_id),
         container_number=container_number,
         seal_serial=data.get("sealSerial") or data.get("seal_serial"),
         status=str(data.get("status") or "EXPECTED"),
@@ -697,8 +701,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     if not identifier:
         raise ValidationFailed("A service order is required.", {"jobNo": "Required"})
     order = await resolve_order(session, context, str(identifier))
-    if order.status == "CANCELLED":
-        raise InvalidState("Cannot add charges to a cancelled service order.")
+    if order.status == "INACTIVE":
+        raise InvalidState("Cannot add charges to an inactive service order.")
     if charge is None:
         number = data.get("chargeNo") or data.get("documentNo")
         if not number or not str(number).strip():
@@ -721,6 +725,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     # Only rebuild priced lines when the caller supplied them; a partial update
     # (e.g. just a status change) must not wipe the existing lines and totals.
     if "lines" in data or "chargeLines" in data:
+        from app.modules.master_data.service import resolve_reference_id
+
         lines = data.get("lines") or data.get("chargeLines") or []
         subtotal = Decimal("0")
         discount_total = Decimal("0")
@@ -743,7 +749,12 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                 ServiceOrderChargeLine(
                     service_order_charge_id=charge.id,
                     line_no=index + 1,
-                    fee_type_id=_int_or_none(line.get("feeTypeId")),
+                    fee_type_id=await resolve_reference_id(
+                        session,
+                        "fee_type",
+                        line.get("feeTypeId") or line.get("fee_type_id"),
+                        line.get("feeType") or line.get("fee_type"),
+                    ),
                     service_order_container_id=_int_or_none(line.get("containerId") or line.get("serviceOrderContainerId")),
                     description=str(line.get("description") or line.get("feeType") or "Charge"),
                     quantity=quantity,

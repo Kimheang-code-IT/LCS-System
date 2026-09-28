@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.crypto import encrypt_secret, is_sensitive_field
-from app.core.exceptions import NotFound, ValidationFailed
+from app.core.exceptions import Conflict, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, paged
 from app.core.serialization import jsonable, to_camel
 from app.modules.master_data.models import (
@@ -114,8 +114,63 @@ async def resolve_reference(session: AsyncSession, target: str, value: Any) -> A
     if target not in lookup:
         return None
     model, attribute = lookup[target]
-    row = (await session.execute(select(model).where(getattr(model, attribute) == text))).scalars().first()
+    conditions = [getattr(model, attribute) == text]
+    code_column = getattr(model, "code", None)
+    if code_column is not None:
+        conditions.append(code_column == text)
+    row = (await session.execute(select(model).where(or_(*conditions)))).scalars().first()
     return row.id if row else None
+
+
+async def resolve_reference_id(
+    session: AsyncSession,
+    target: str,
+    raw_id: Any = None,
+    value: Any = None,
+) -> int | None:
+    """Resolve a reference id from an explicit id, falling back to a code/name."""
+    if raw_id not in (None, ""):
+        try:
+            return int(raw_id)
+        except (TypeError, ValueError):
+            pass
+    if value in (None, ""):
+        return None
+    resolved = await resolve_reference(session, target, value)
+    return int(resolved) if resolved is not None else None
+
+
+async def resolve_or_create_container_type(session: AsyncSession, value: Any) -> int | None:
+    """Resolve a container type by id, code or name, creating it when unknown.
+
+    Reference data ships empty and the quotation/job forms submit standard ISO
+    container codes (``40HC`` ...). When the value matches no ``container_types``
+    row we register a minimal ACTIVE record instead of writing a dangling FK —
+    the previous ``or 1`` fallback violated the foreign key on an empty table.
+    """
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        row = await session.get(ContainerType, value)
+        return row.id if row is not None else None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        row = await session.get(ContainerType, int(text))
+        if row is not None:
+            return row.id
+    row = (
+        await session.execute(
+            select(ContainerType).where(or_(ContainerType.code == text, ContainerType.name == text))
+        )
+    ).scalars().first()
+    if row is not None:
+        return row.id
+    created = ContainerType(code=text[:50], name=text[:255], status="ACTIVE")
+    session.add(created)
+    await session.flush()
+    return created.id
 
 
 async def apply_input(spec: Spec, model: Any, data: dict[str, Any], session: AsyncSession) -> None:
@@ -421,6 +476,7 @@ GENERIC_COLLECTIONS = {
     "customerPayments",
     "supplierCosts",
     "supplierPayments",
+    "currencies",
 }
 
 
@@ -487,11 +543,25 @@ async def update_reference(session: AsyncSession, collection: str, record_id: in
 
 
 async def delete_reference(session: AsyncSession, collection: str, ids: list[int]) -> None:
+    """Delete reference rows, but never an active one.
+
+    Master Data / Configuration records follow the activate/deactivate rule:
+    a record must be deactivated from the row "..." menu before it can be
+    removed. This mirrors the UI and guards direct API calls.
+    """
     spec = get_spec(collection)
+    models: list[Any] = []
     for record_id in ids:
         model = await session.get(spec.model, record_id)
         if model is not None:
-            await session.delete(model)
+            models.append(model)
+    if any(str(getattr(model, spec.status_field, "") or "").strip().upper() == "ACTIVE" for model in models):
+        raise Conflict(
+            "REFERENCE_ACTIVE",
+            "Active records cannot be deleted. Deactivate the record first.",
+        )
+    for model in models:
+        await session.delete(model)
     await session.commit()
 
 
