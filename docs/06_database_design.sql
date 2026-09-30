@@ -1165,3 +1165,33 @@ CREATE TABLE service_order_charge_lines (
 );
 CREATE INDEX ix_service_order_charge_lines_service_order_charge_id ON service_order_charge_lines (service_order_charge_id);
 
+-- Archive / recycle-bin additions (migration e3f4a5b6c7d8).
+-- Supported source tables also carry nullable deleted_at and
+-- deleted_by_user_id -> users.id columns, each indexed.
+CREATE TABLE archive_records (
+    id BIGSERIAL NOT NULL,
+    entity_type VARCHAR(64) NOT NULL,
+    entity_id BIGINT NOT NULL,
+    record_reference VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    deleted_by_user_id BIGINT,
+    original_owner_user_id BIGINT,
+    deleted_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    restored_by_user_id BIGINT,
+    restored_at TIMESTAMP WITH TIME ZONE,
+    hard_deleted_by_user_id BIGINT,
+    hard_deleted_at TIMESTAMP WITH TIME ZONE,
+    snapshot_json JSON NOT NULL,
+    CONSTRAINT pk_archive_records PRIMARY KEY (id),
+    CONSTRAINT uq_archive_records_entity UNIQUE (entity_type, entity_id),
+    CONSTRAINT fk_archive_records_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT fk_archive_records_original_owner_user_id_users FOREIGN KEY(original_owner_user_id) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT fk_archive_records_restored_by_user_id_users FOREIGN KEY(restored_by_user_id) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT fk_archive_records_hard_deleted_by_user_id_users FOREIGN KEY(hard_deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_archive_records_entity_type ON archive_records (entity_type);
+CREATE INDEX ix_archive_records_entity_id ON archive_records (entity_id);
+CREATE INDEX ix_archive_records_status ON archive_records (status);
+CREATE INDEX ix_archive_records_deleted_by_user_id ON archive_records (deleted_by_user_id);
+CREATE INDEX ix_archive_records_deleted_at ON archive_records (deleted_at);
+

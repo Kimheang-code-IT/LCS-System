@@ -176,6 +176,14 @@ export type BackupRunStatus = 'idle' | 'running' | 'success' | 'partial' | 'fail
 export interface AppConfigBackup {
   enabled: boolean
   intervalHours: number
+  r2AccountId: string
+  r2AccessKeyId: string
+  /** Write-only: never returned by the API (blank = keep stored value). */
+  r2SecretAccessKey: string
+  r2SecretAccessKeyConfigured?: boolean
+  r2BucketName: string
+  r2Endpoint: string
+  r2Prefix: string
   spreadsheetId: string
   /** Write-only: never returned by the API (blank = keep stored value). */
   serviceAccountJson: string

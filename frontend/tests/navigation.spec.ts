@@ -20,10 +20,10 @@ describe('navigation workspace modules', () => {
       '/master-data/transport-types',
       '/master-data/transport-assets',
       '/master-data/fee-types',
-      '/configuration/component-templates',
       '/administration/users',
       '/administration/roles',
       '/administration/audit-logs',
+      '/administration/archive',
     ]
     for (const path of paths) {
       expect(getFreightModule(path)?.path, path).toBe(path)

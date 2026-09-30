@@ -4,8 +4,6 @@ import {
   ACCOUNT_TYPES,
   ACTIVE_STATUS,
   COUNTRIES,
-  COMPONENT_INSTANCE_MODES,
-  COMPONENT_INSTANCE_MODE_OVERRIDES,
   PERIOD_STATUS,
   PLACE_CATEGORIES,
   TRANSPORT_TYPES,
@@ -115,35 +113,6 @@ export const lcsReferenceModules: FreightModule[] = [
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
 
-  module({
-    path: '/configuration/component-groups', title: 'Component Groups', titleKm: 'ក្រុមសមាសភាគ', singular: 'Component Group', singularKm: 'ក្រុមសមាសភាគ', description: 'Display grouping for dynamic service-order components.', descriptionKm: 'ក្រុមបង្ហាញសម្រាប់សមាសភាគបញ្ជាសេវាកម្ម។',
-    icon: 'i-lucide-folders', group: 'configuration', permission: 'configuration.manage', collection: 'componentGroups', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('description', 'Description', 'បរិយាយ'), column('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ'), column('showOnJobWorkspace', 'Job Tab', 'ផ្ទាំងការងារ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ', 'Display', 'ការបង្ហាញ', 'number'), field('showOnJobWorkspace', 'Show on Service Order', 'បង្ហាញលើបញ្ជាសេវាកម្ម', 'Display', 'ការបង្ហាញ', 'checkbox', YES_NO), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
-  module({
-    path: '/configuration/component-templates', title: 'Component Templates', titleKm: 'គំរូសមាសភាគ', singular: 'Component Template', singularKm: 'គំរូសមាសភាគ', description: 'Versioned dynamic service-order component definitions.', descriptionKm: 'និយមន័យសមាសភាគការងារដែលមានកំណែ។',
-    icon: 'i-lucide-blocks', group: 'configuration', permission: 'configuration.manage', collection: 'componentTemplates', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('group', 'Group', 'ក្រុម'), column('instanceMode', 'Instance Mode', 'របៀបកំណត់ត្រា'), column('version', 'Version', 'កំណែ'), column('description', 'Description', 'បរិយាយ'), column('attributeCount', 'Attribute Count', 'ចំនួនលក្ខណៈ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('group', 'Component Group', 'ក្រុមសមាសភាគ', 'Classification', 'ចំណាត់ថ្នាក់', 'text', undefined, true), field('instanceMode', 'Instance Mode', 'របៀបកំណត់ត្រា', 'Behavior', 'ឥរិយាបថ', 'select', COMPONENT_INSTANCE_MODES, true), field('minimumInstances', 'Minimum Instances', 'ចំនួនអប្បបរមា', 'Behavior', 'ឥរិយាបថ', 'number'), field('maximumInstances', 'Maximum Instances', 'ចំនួនអតិបរមា', 'Behavior', 'ឥរិយាបថ', 'number'), field('version', 'Version', 'កំណែ', 'Version', 'កំណែ', 'text', undefined, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    tables: [{
-      key: 'attributes', title: 'Template Attributes', titleKm: 'លក្ខណៈគំរូ', addLabel: 'Add attribute',
-      columns: [
-        { key: 'code', label: 'Code', labelKm: 'លេខកូដ', required: true }, { key: 'label', label: 'Label', labelKm: 'ស្លាក', required: true }, { key: 'dataType', label: 'Data Type', labelKm: 'ប្រភេទទិន្នន័យ', type: 'select', options: ['Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Reference', 'JSON', 'Table'], required: true },
-        { key: 'inputType', label: 'Input Type', labelKm: 'ប្រភេទបញ្ចូល' }, { key: 'tableColumns', label: 'Table Columns', labelKm: 'ជួរឈរ', type: 'table-columns' }, { key: 'required', label: 'Required', labelKm: 'តម្រូវ', type: 'checkbox', options: YES_NO }, { key: 'repeatable', label: 'Multiple Values', labelKm: 'តម្លៃច្រើន', type: 'checkbox', options: YES_NO }, { key: 'showInSummary', label: 'Show in Summary', labelKm: 'បង្ហាញក្នុងសេចក្តីសង្ខេប', type: 'checkbox', options: YES_NO },
-        { key: 'referenceType', label: 'Reference Type', labelKm: 'ប្រភេទយោង' }, { key: 'displayOrder', label: 'Display Order', labelKm: 'លំដាប់បង្ហាញ', type: 'number' }, { key: 'validationRules', label: 'Validation Rules', labelKm: 'ច្បាប់សុពលភាព', type: 'textarea' }, { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព', type: 'select', options: ACTIVE_STATUS },
-      ],
-    }],
-    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
-  module({
-    path: '/configuration/trade-direction-components', title: 'Trade Direction Components', titleKm: 'សមាសភាគតាមទិសដៅ', singular: 'Direction Component', singularKm: 'សមាសភាគទិសដៅ', description: 'Controls which versioned components appear for each trade direction.', descriptionKm: 'គ្រប់គ្រងសមាសភាគដែលបង្ហាញតាមទិសដៅពាណិជ្ជកម្ម។',
-    icon: 'i-lucide-workflow', group: 'configuration', permission: 'configuration.manage', collection: 'tradeDirectionComponents', titleField: 'componentTemplate', kind: 'standard', canCreate: true,
-    columns: [column('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម'), column('componentGroup', 'Component Group', 'ក្រុមសមាសភាគ'), column('componentTemplate', 'Component Template', 'គំរូសមាសភាគ'), column('templateVersion', 'Template Version', 'កំណែគំរូ'), column('required', 'Required', 'តម្រូវ'), column('instanceModeOverride', 'Instance Mode Override', 'ប្ដូររបៀបកំណត់ត្រា'), column('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', undefined, undefined, 'select', undefined, true), field('componentGroup', 'Component Group', 'ក្រុមសមាសភាគ', undefined, undefined, 'text', undefined, true), field('componentTemplate', 'Component Template', 'គំរូសមាសភាគ', undefined, undefined, 'text', undefined, true), field('templateVersion', 'Template Version', 'កំណែគំរូ', 'Version', 'កំណែ', 'text', undefined, false, { computed: true }), field('required', 'Required', 'តម្រូវ', 'Rules', 'ច្បាប់', 'checkbox', YES_NO), field('instanceModeOverride', 'Instance Mode Override', 'ប្ដូររបៀបកំណត់ត្រា', 'Rules', 'ច្បាប់', 'select', COMPONENT_INSTANCE_MODE_OVERRIDES), field('displayOrder', 'Display Order', 'លំដាប់បង្ហាញ', 'Display', 'ការបង្ហាញ', 'number'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('tradeDirection', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
-  }),
   module({
     path: '/administration/document-sequences', title: 'Document Sequences', titleKm: 'លំដាប់លេខឯកសារ', singular: 'Document Sequence', singularKm: 'លំដាប់ឯកសារ', description: 'Manage automatic document numbering by document type and year.', descriptionKm: 'គ្រប់គ្រងលេខឯកសារស្វ័យប្រវត្តិ តាមប្រភេទឯកសារ និងឆ្នាំ។',
     icon: 'i-lucide-list-ordered', group: 'admin', permission: 'configuration.manage', collection: 'documentSequences', titleField: 'documentType', kind: 'standard', canCreate: true,

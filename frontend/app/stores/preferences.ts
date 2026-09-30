@@ -130,11 +130,12 @@ export const usePreferencesStore = defineStore('preferences', () => {
 
   function syncLocaleWithConfig() {
     const current = i18n.locale.value as AppLocale
-    if (availableLocales.value.includes(current)) return
+    const explicit = import.meta.client && localStorage.getItem(LOCALE_EXPLICIT_KEY) === '1'
+    if (explicit && availableLocales.value.includes(current)) return
     const next = availableLocales.value.includes(appLocalization.localization.value.defaultLanguage)
       ? appLocalization.localization.value.defaultLanguage
       : availableLocales.value[0]!
-    if (import.meta.client) localStorage.removeItem(LOCALE_EXPLICIT_KEY)
+    if (import.meta.client && !availableLocales.value.includes(current)) localStorage.removeItem(LOCALE_EXPLICIT_KEY)
     void i18n.setLocale(next)
   }
 

@@ -3,7 +3,7 @@ import { resolveComponentInstanceMode } from '~/utils/freight/component-instance
 /** Core service-order tabs are fixed Vue sections. Extra tabs come from Component Groups. */
 
 export const JOB_FIXED_WORKSPACE_SECTIONS = ['overview', 'route', 'containers'] as const
-export const JOB_TRAILING_WORKSPACE_SECTIONS = ['finance', 'files'] as const
+export const JOB_TRAILING_WORKSPACE_SECTIONS = ['charges', 'finance', 'files'] as const
 
 export const JOB_CORE_WORKSPACE_SECTIONS = [
   ...JOB_FIXED_WORKSPACE_SECTIONS,
@@ -194,6 +194,7 @@ export function jobWorkspaceSectionIcon(id: string) {
     'shipment-registration': 'i-lucide-clipboard-list',
     bill: 'i-lucide-receipt',
     customs: 'i-lucide-landmark',
+    charges: 'i-lucide-receipt-text',
     finance: 'i-lucide-banknote',
     files: 'i-lucide-paperclip',
   }

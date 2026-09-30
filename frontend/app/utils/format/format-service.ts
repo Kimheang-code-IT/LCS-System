@@ -1,37 +1,79 @@
 import type { AppConfigLocalization } from '~/types/docetra/settings'
+import { shallowRef } from 'vue'
 
 /** Defaults aligned with System Settings → Localization. */
 export const DEFAULT_FORMAT_CONFIG: AppConfigLocalization = {
   defaultLanguage: 'en',
   availableLanguages: ['en', 'km'],
   timezone: 'Asia/Phnom_Penh',
-  dateFormat: 'YYYY-MM-DD',
+  dateFormat: 'DD/MM/YYYY',
   timeFormat: 'HH:mm',
   firstDayOfWeek: 1,
-  numberFormat: '1,234.56',
+  numberFormat: '#,##0.00',
   currency: 'USD',
   locale: 'en-US',
 }
 
-const NUMBER_FORMAT_LOCALES: Record<string, string> = {
-  '1,234.56': 'en-US',
-  '1.234,56': 'de-DE',
-  '1 234,56': 'fr-FR',
+const NUMBER_FORMATS: Record<string, { locale: string, digits: number }> = {
+  '#,##0.00': { locale: 'en-US', digits: 2 },
+  '#.##0,00': { locale: 'de-DE', digits: 2 },
+  '# ##0,00': { locale: 'fr-FR', digits: 2 },
 }
+const LEGACY_NUMBER_FORMATS: Record<string, string> = {
+  '1,234.56': '#,##0.00',
+  '1.234,56': '#.##0,00',
+  '1 234,56': '# ##0,00',
+}
+const DATE_FORMATS = new Set(['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'DD-MM-YYYY', 'D MMM YYYY'])
+const TIME_FORMATS = new Set(['HH:mm', 'HH:mm:ss', 'h:mm A', 'h:mm:ss A'])
+const LANGUAGES = new Set(['en', 'km'])
+const CURRENCIES = new Set(['USD', 'KHR', 'THB', 'VND', 'SGD', 'EUR', 'GBP', 'JPY', 'CNY'])
+const LANGUAGE_LOCALES: Record<string, string> = { en: 'en-US', km: 'km-KH' }
 
 let activeConfig: AppConfigLocalization = {
   ...DEFAULT_FORMAT_CONFIG,
   availableLanguages: [...DEFAULT_FORMAT_CONFIG.availableLanguages],
 }
+export const formatConfigVersion = shallowRef(0)
+
+function supportedTimezone(value: unknown): value is string {
+  if (typeof value !== 'string' || !value) return false
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value }).format()
+    return true
+  }
+  catch {
+    return false
+  }
+}
+
+export function normalizeFormatConfig(next: Partial<AppConfigLocalization> = {}): AppConfigLocalization {
+  const language = LANGUAGES.has(String(next.defaultLanguage))
+    ? next.defaultLanguage as AppConfigLocalization['defaultLanguage']
+    : DEFAULT_FORMAT_CONFIG.defaultLanguage
+  const languages = Array.isArray(next.availableLanguages)
+    ? next.availableLanguages.filter((item): item is 'en' | 'km' => LANGUAGES.has(item))
+    : []
+  const legacyNumberFormat = LEGACY_NUMBER_FORMATS[String(next.numberFormat)] || next.numberFormat
+  const locale = LANGUAGE_LOCALES[language]!
+  return {
+    defaultLanguage: language,
+    availableLanguages: languages.length ? [...new Set(languages)] : [...DEFAULT_FORMAT_CONFIG.availableLanguages],
+    timezone: supportedTimezone(next.timezone) ? next.timezone : DEFAULT_FORMAT_CONFIG.timezone,
+    dateFormat: DATE_FORMATS.has(String(next.dateFormat)) ? String(next.dateFormat) : DEFAULT_FORMAT_CONFIG.dateFormat,
+    timeFormat: TIME_FORMATS.has(String(next.timeFormat)) ? String(next.timeFormat) : DEFAULT_FORMAT_CONFIG.timeFormat,
+    firstDayOfWeek: next.firstDayOfWeek === 0 || next.firstDayOfWeek === 6 ? next.firstDayOfWeek : 1,
+    numberFormat: NUMBER_FORMATS[String(legacyNumberFormat)] ? String(legacyNumberFormat) : DEFAULT_FORMAT_CONFIG.numberFormat,
+    currency: CURRENCIES.has(String(next.currency)) ? String(next.currency) : DEFAULT_FORMAT_CONFIG.currency,
+    locale,
+  }
+}
 
 export function configureFormats(next: Partial<AppConfigLocalization>) {
-  activeConfig = {
-    ...activeConfig,
-    ...next,
-    availableLanguages: next.availableLanguages?.length
-      ? [...next.availableLanguages]
-      : activeConfig.availableLanguages,
-  }
+  const normalized = normalizeFormatConfig({ ...activeConfig, ...next })
+  if (JSON.stringify(normalized) === JSON.stringify(activeConfig)) return
+  activeConfig = normalized
+  formatConfigVersion.value += 1
 }
 
 export function getFormatConfig(): Readonly<AppConfigLocalization> {
@@ -39,7 +81,12 @@ export function getFormatConfig(): Readonly<AppConfigLocalization> {
 }
 
 function numberLocale() {
-  return NUMBER_FORMAT_LOCALES[activeConfig.numberFormat] || activeConfig.locale
+  void formatConfigVersion.value
+  return NUMBER_FORMATS[activeConfig.numberFormat]?.locale || activeConfig.locale
+}
+
+function numberPrecision() {
+  return NUMBER_FORMATS[activeConfig.numberFormat]?.digits ?? 2
 }
 
 function validDate(value: unknown): Date | null {
@@ -50,11 +97,12 @@ function validDate(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date
 }
 
-/** Normalize legacy `YYYY-MM-DD HH:mm` stamps to ISO for parsing. */
+/** Normalize legacy UTC timestamps to explicit ISO instants before parsing. */
 export function normalizeTimestampInput(text: string) {
   const trimmed = text.trim()
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(trimmed)) return trimmed.replace(' ', 'T')
-  return trimmed
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(trimmed) ? trimmed.replace(' ', 'T') : trimmed
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(normalized)) return `${normalized}Z`
+  return normalized
 }
 
 function dateOnlyParts(value: unknown): { year: string, month: string, day: string } | null {
@@ -96,6 +144,7 @@ function formatPattern(
 }
 
 export function formatDate(value: unknown, fallback = '—') {
+  void formatConfigVersion.value
   const rawParts = dateOnlyParts(value)
   const date = rawParts ? null : validDate(value)
   if (!rawParts && !date) return fallback
@@ -109,6 +158,7 @@ export function formatDate(value: unknown, fallback = '—') {
 }
 
 export function formatTime(value: unknown, fallback = '—') {
+  void formatConfigVersion.value
   const date = validDate(value)
   if (!date) return fallback
   const showSeconds = activeConfig.timeFormat.includes('ss')
@@ -119,7 +169,7 @@ export function formatTime(value: unknown, fallback = '—') {
       hour: hour12 ? 'numeric' : '2-digit',
       minute: '2-digit',
       ...(showSeconds ? { second: '2-digit' as const } : {}),
-      hour12,
+      ...(hour12 ? { hour12: true } : { hourCycle: 'h23' as const }),
     }).format(date)
   }
   catch {
@@ -128,6 +178,7 @@ export function formatTime(value: unknown, fallback = '—') {
 }
 
 export function formatDateTime(value: unknown, fallback = '—') {
+  void formatConfigVersion.value
   const date = validDate(value)
   if (!date) return fallback
   // A date-only value (YYYY-MM-DD) has no time to show; don't invent midnight in
@@ -141,6 +192,7 @@ export function formatDatePart(
   options: Intl.DateTimeFormatOptions,
   fallback = '—',
 ) {
+  void formatConfigVersion.value
   const date = validDate(value)
   if (!date) return fallback
   try {
@@ -155,10 +207,17 @@ export function formatDatePart(
 }
 
 export function formatNumber(value: unknown, options: Intl.NumberFormatOptions = {}) {
+  void formatConfigVersion.value
+  if (value == null || value === '') return ''
   const number = Number(value)
   if (!Number.isFinite(number)) return String(value ?? '')
   try {
-    return new Intl.NumberFormat(numberLocale(), options).format(number)
+    const digits = numberPrecision()
+    return new Intl.NumberFormat(numberLocale(), {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+      ...options,
+    }).format(number)
   }
   catch {
     return String(number)
@@ -166,23 +225,33 @@ export function formatNumber(value: unknown, options: Intl.NumberFormatOptions =
 }
 
 export function formatCurrency(value: unknown, currency = activeConfig.currency) {
-  return formatNumber(value, { style: 'currency', currency })
+  if (value == null || value === '') return ''
+  const number = Number(value)
+  if (!Number.isFinite(number)) return String(value)
+  const code = String(currency || activeConfig.currency).trim().toUpperCase() || activeConfig.currency
+  const digits = numberPrecision()
+  try {
+    return new Intl.NumberFormat(numberLocale(), {
+      style: 'currency',
+      currency: code,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(number)
+  }
+  catch {
+    return `${code} ${formatNumber(number)}`
+  }
 }
 
 /** Money display: record currency when provided, otherwise System Settings default. */
 export function formatMoney(value: unknown, currency?: string) {
-  const code = String(currency || activeConfig.currency || 'USD').trim() || activeConfig.currency
-  try {
-    return formatCurrency(value, code)
-  }
-  catch {
-    const amount = Number(value)
-    const safe = Number.isFinite(amount) ? amount : 0
-    return `${code} ${formatNumber(safe, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  }
+  const code = String(currency || activeConfig.currency).trim() || activeConfig.currency
+  return formatCurrency(value, code)
 }
 
 export function formatCompact(value: unknown) {
+  void formatConfigVersion.value
+  if (value == null || value === '') return ''
   const number = Number(value)
   if (!Number.isFinite(number)) return String(value ?? '')
   try {
@@ -249,6 +318,7 @@ export function formatRelativeTime(
 
 /** Format date parts for date-picker placeholders (calendar day, not timezone-shifted). */
 export function formatDateParts(parts: { year: number, month: number, day: number }) {
+  void formatConfigVersion.value
   const yyyy = String(parts.year)
   const mm = String(parts.month).padStart(2, '0')
   const dd = String(parts.day).padStart(2, '0')

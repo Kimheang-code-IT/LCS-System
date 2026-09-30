@@ -9,8 +9,8 @@ vi.mock('#components', () => ({
 }))
 
 describe('shortDay', () => {
-  it('keeps YYYY-MM-DD and falls back when empty', () => {
-    expect(shortDay('2026-08-20T11:40:00')).toBe('2026-08-20')
+  it('uses the configured default date format and falls back when empty', () => {
+    expect(shortDay('2026-08-20T11:40:00')).toBe('20/08/2026')
     expect(shortDay('')).toBe('—')
     expect(shortDay('', '')).toBe('')
   })

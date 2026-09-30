@@ -302,11 +302,6 @@ function quotationTabs(module: FreightModule, options: ModuleDocumentTabsOptions
       sections: [{ id: 'route', fields: [lineTableField(tableOrThrow(module, 'places'), options)] }],
     },
     {
-      id: 'containers',
-      labelKey: 'freight.quotationTabs.containers',
-      sections: [{ id: 'containers', fields: [lineTableField(tableOrThrow(module, 'containerRequirements'), options)] }],
-    },
-    {
       id: 'pricing',
       labelKey: 'freight.quotationTabs.pricing',
       sections: [{ id: 'pricing', fields: [lineTableField(tableOrThrow(module, 'pricingLines'), options)] }],

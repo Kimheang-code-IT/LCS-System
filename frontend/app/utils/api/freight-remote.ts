@@ -54,6 +54,7 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
     itemPath: id => `/api/v1/journal-entries/${id}`,
   },
   auditLogs: { path: '/api/v1/audit-events', readOnly: true },
+  archive: { path: '/api/v1/archive', readOnly: true },
   receivables: { path: '/api/v1/receivables', readOnly: true },
   payables: { path: '/api/v1/payables', readOnly: true },
   profitability: { path: '/api/v1/profitability', readOnly: true },
@@ -71,9 +72,6 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   // Legacy collection aliases still referenced by print/container components.
   chargeTypes: reference('feeTypes'),
   suppliers: reference('businessParties'),
-  componentGroups: reference('componentGroups'),
-  componentTemplates: reference('componentTemplates'),
-  tradeDirectionComponents: reference('tradeDirectionComponents'),
   postingRules: reference('postingRules'),
   chartOfAccounts: reference('chartOfAccounts'),
   financialAccounts: reference('financialAccounts'),
@@ -90,10 +88,6 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   documents: reference('documents'),
   deliveries: reference('deliveries'),
   cashAccounts: { path: '/api/v1/financial-accounts', readOnly: true },
-  serviceComponents: {
-    path: '/api/v1/service-order-components',
-    itemPath: id => `/api/v1/service-order-components/${id}`,
-  },
 }
 
 /** Collections derived from the service-order payload (embedded in `data`). */

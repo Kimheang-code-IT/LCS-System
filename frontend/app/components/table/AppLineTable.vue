@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
-import { CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputNumber, USelect } from '#components'
+import { CommonAppReferenceSelect, CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputNumber } from '#components'
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
 import { useFreightLabel } from '~/composables/freight/useFreight'
 import type { DatePickerGranularity } from '~/utils/date-picker'
@@ -60,9 +60,10 @@ const TableInput = UInput as Component
 const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
 const TableColumnsCell = TableLineTableColumnsCell as Component
-const TableSelect = USelect as Component
+const TableReferenceSelect = CommonAppReferenceSelect as Component
 
 const isFileTable = computed(() => props.table.kind === 'files' || props.table.key === 'attachments')
+const hasDeleteColumn = computed(() => props.table.columns.some(column => column.type === 'delete'))
 const cellSize = 'sm' as const
 const cellInputUi = { base: 'text-sm' }
 const cellNumberInputUi = { base: 'text-sm text-right tabular-nums' }
@@ -244,6 +245,11 @@ function updateCell(index: number, key: string, value: unknown) {
     if (!row) return
     next[index] = { ...row, ...containerPaymentAmounts(row) }
   }
+  if (props.table.key === 'expenses') {
+    const row = next[index]
+    if (!row) return
+    next[index] = { ...row, amount: Number((Number(row.quantity || 0) * Number(row.unitPrice || 0)).toFixed(2)) }
+  }
   rows.value = next
 }
 
@@ -252,7 +258,7 @@ function addRow() {
     openPicker()
     return
   }
-  const blank = Object.fromEntries(props.table.columns.map((column) => {
+  const blank = Object.fromEntries(props.table.columns.filter(column => column.type !== 'delete').map((column) => {
     if (column.type === 'number') return [column.key, 0]
     if (column.type === 'checkbox') return [column.key, String(column.options?.[1] ?? 'No')]
     if (column.type === 'select') {
@@ -281,6 +287,10 @@ function addRow() {
     blank.quantity = 1
     blank.actualQuantity = 0
     blank.remaining = 1
+  }
+  if (props.table.key === 'expenses') {
+    blank.quantity = 1
+    blank.amount = 0
   }
   if (props.table.key === 'actualContainers') {
     blank.status = 'Expected'
@@ -344,6 +354,18 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
+        if (column.type === 'delete') {
+          return h(TableButton, {
+            icon: 'i-lucide-trash-2',
+            color: 'error',
+            variant: 'ghost',
+            size: 'xs',
+            square: true,
+            disabled: props.disabled,
+            'aria-label': t('actions.delete'),
+            onClick: () => removeRow(index),
+          })
+        }
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
           return inlineNumberFieldsCell(column, row.original, index)
         }
@@ -375,9 +397,12 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             : referenceItems
               ? referenceItems
               : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
-          return h(TableSelect, {
+          return h(TableReferenceSelect, {
             'modelValue': String(row.original[column.key] || '') || undefined,
             'items': items,
+            'referenceKey': column.key,
+            'rowIndex': index,
+            'placeholder': fieldLabel(column),
             'disabled': props.disabled || column.computed,
             'size': cellSize,
             'class': ['w-full', columnCellClass(column)],
@@ -419,7 +444,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       },
     })),
   ]
-  if (!props.disabled || props.extraRowMenuItems || props.rowInlineActions) {
+  if (!hasDeleteColumn.value && (!props.disabled || props.extraRowMenuItems || props.rowInlineActions)) {
     cols.push({
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),

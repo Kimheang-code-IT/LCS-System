@@ -23,6 +23,7 @@ export function isMoneyColumnKey(key: string) {
 export function lineTableColumnCellClass(column: FreightLineColumn) {
   if (column.width) return column.width
 
+  if (column.type === 'delete') return 'w-12'
   if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return 'w-36 min-w-28'
   if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') return 'w-20 min-w-20 text-right tabular-nums'
   if (column.key === 'unit') return 'w-24 min-w-24'

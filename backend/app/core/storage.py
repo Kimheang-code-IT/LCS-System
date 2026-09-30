@@ -79,14 +79,36 @@ class S3Storage:
     provider = "s3"
     supports_presign = True
 
-    def __init__(self) -> None:
-        self.bucket = settings.s3_bucket
-        self._client = self._build_client(settings.s3_endpoint_url)
-        self._presign_client = self._build_client(settings.s3_public_endpoint_url or settings.s3_endpoint_url)
-        self._ensure_bucket()
+    def __init__(
+        self,
+        *,
+        bucket: str | None = None,
+        endpoint_url: str | None = None,
+        public_endpoint_url: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
+        region: str | None = None,
+        ensure_bucket: bool = True,
+    ) -> None:
+        """Build an S3-compatible storage client.
 
-    @staticmethod
-    def _build_client(endpoint_url: str | None):
+        Defaults preserve the application upload-storage behavior. Explicit
+        values let callers such as the backup module reuse this abstraction for
+        another S3-compatible destination (Cloudflare R2) without mutating
+        process-wide settings.
+        """
+        self.bucket = bucket or settings.s3_bucket
+        self._access_key = access_key or settings.s3_access_key
+        self._secret_key = secret_key or settings.s3_secret_key
+        self._region = region or settings.s3_region
+        endpoint = endpoint_url if endpoint_url is not None else settings.s3_endpoint_url
+        public_endpoint = public_endpoint_url if public_endpoint_url is not None else settings.s3_public_endpoint_url
+        self._client = self._build_client(endpoint)
+        self._presign_client = self._build_client(public_endpoint or endpoint)
+        if ensure_bucket:
+            self._ensure_bucket()
+
+    def _build_client(self, endpoint_url: str | None):
         # Trust an explicit scheme in the URL: the internal endpoint is usually
         # http://minio:9000 while the browser-facing endpoint is https://...
         if endpoint_url and "://" in endpoint_url:
@@ -96,9 +118,9 @@ class S3Storage:
         return boto3.client(
             "s3",
             endpoint_url=endpoint_url,
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
+            aws_access_key_id=self._access_key,
+            aws_secret_access_key=self._secret_key,
+            region_name=self._region,
             use_ssl=use_ssl,
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
@@ -128,6 +150,11 @@ class S3Storage:
             return True
         except ClientError:
             return False
+
+    def test_connection(self) -> None:
+        """Verify bucket access without creating, deleting, or changing objects."""
+        self._client.head_bucket(Bucket=self.bucket)
+        self._client.list_objects_v2(Bucket=self.bucket, MaxKeys=1)
 
     def presigned_put(self, key: str, content_type: str, expires: int = 3600) -> str | None:
         try:

@@ -4,9 +4,9 @@ import type { FreightTable } from '~/config/freight-modules'
 import {
   JOB_ACTUAL_CONTAINER_TABLE,
   JOB_CONTAINER_PAYMENT_TABLE,
-  JOB_CONTAINER_REQUIREMENT_TABLE,
 } from '~/config/job-workspace-forms'
 import { formatMoney } from '~/composables/freight/useFreight'
+import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { createClientId } from '~/utils/client-id'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import {
@@ -51,12 +51,13 @@ const { t } = useI18n()
 const route = useRoute()
 const store = useFreightStore()
 const toast = useToast()
+const { localization } = useAppLocalization()
 const requirementRows = ref<Array<Record<string, unknown>>>([])
 const actualRows = ref<Array<Record<string, unknown>>>([])
 const paymentRows = ref<Array<Record<string, unknown>>>([])
 
 const totals = computed(() => jobContainerPaymentTotals(paymentRows.value, props.job.vatRate))
-const currency = computed(() => String(props.job.currency || 'USD'))
+const currency = computed(() => String(props.job.currency || localization.value.currency))
 const canEdit = computed(() => props.editable || props.isCreate)
 const canEditPayments = computed(() =>
   props.editablePayments !== undefined ? (props.editablePayments || props.isCreate) : canEdit.value)
@@ -73,8 +74,6 @@ const feeOptions = computed(() => {
   const rows = store.list('feeTypes').length ? store.list('feeTypes') : store.list('chargeTypes')
   return rows.map(row => String(row.name || row.code || '').trim()).filter(Boolean)
 })
-
-const requirementTable = JOB_CONTAINER_REQUIREMENT_TABLE
 
 const actualTable = computed<FreightTable>(() => ({
   ...JOB_ACTUAL_CONTAINER_TABLE,
@@ -188,11 +187,6 @@ function persist() {
   }
 }
 
-function setRequirements(value: Array<Record<string, unknown>>) {
-  requirementRows.value = persistableRequirements(withIds(value, 'cr'))
-  persist()
-}
-
 function setActuals(value: Array<Record<string, unknown>>) {
   const next = withIds(value, 'ac').map((row) => {
     if (row.containerType || row.containerRequirementId) return row
@@ -264,12 +258,6 @@ watch(() => props.job.id, loadRows, { immediate: true })
 
 <template>
   <div class="space-y-6">
-    <FreightJobLineTable
-      :table="requirementTable"
-      :model-value="requirementDisplayRows"
-      :disabled="!canEdit"
-      @update:model-value="setRequirements"
-    />
     <FreightJobLineTable
       :table="actualTable"
       :model-value="actualRows"

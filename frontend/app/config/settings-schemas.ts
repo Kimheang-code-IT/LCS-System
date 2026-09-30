@@ -245,6 +245,29 @@ export const appConfigTabs: DocumentTabSchema[] = [
             type: 'select',
             options: BACKUP_INTERVAL_OPTIONS,
           },
+          { key: 'backup.r2AccountId', labelKey: 'docetra.settings.backup.r2AccountId', type: 'text', required: true },
+          { key: 'backup.r2AccessKeyId', labelKey: 'docetra.settings.backup.r2AccessKeyId', type: 'text', required: true },
+          {
+            key: 'backup.r2SecretAccessKey',
+            labelKey: 'docetra.settings.backup.r2SecretAccessKey',
+            type: 'secret',
+            required: true,
+          },
+          { key: 'backup.r2BucketName', labelKey: 'docetra.settings.backup.r2BucketName', type: 'text', required: true },
+          {
+            key: 'backup.r2Endpoint',
+            labelKey: 'docetra.settings.backup.r2Endpoint',
+            type: 'url',
+            required: true,
+            colSpan: 2,
+          },
+          { key: 'backup.r2Prefix', labelKey: 'docetra.settings.backup.r2Prefix', type: 'text', colSpan: 2 },
+        ],
+      },
+      {
+        id: 'backup-google-sheets',
+        titleKey: 'docetra.settings.backup.googleSheetsLegacy',
+        fields: [
           { key: 'backup.spreadsheetId', labelKey: 'docetra.settings.backup.spreadsheetId', type: 'text', colSpan: 2 },
           {
             key: 'backup.serviceAccountJson',
@@ -288,6 +311,8 @@ const SETTINGS_FIELD_HELP: Record<string, string> = {
   'email.replyToEmail': 'docetra.fieldHelp.replyTo',
   'telegram.enabled': 'docetra.fieldHelp.enableTelegram',
   'backup.enabled': 'docetra.fieldHelp.backupEnabled',
+  'backup.r2SecretAccessKey': 'docetra.fieldHelp.backupR2Secret',
+  'backup.r2Prefix': 'docetra.fieldHelp.backupR2Prefix',
   'backup.serviceAccountJson': 'docetra.fieldHelp.backupServiceAccount',
 }
 

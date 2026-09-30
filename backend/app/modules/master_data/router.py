@@ -7,8 +7,8 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context
 from app.core.pagination import PageParams, page_params
+from app.modules.master_data import component_config as component_config_service
 from app.modules.master_data import service
-from app.modules.master_data import service_order_tabs as tab_config_service
 
 
 def _read_guard(context: RequestContext) -> RequestContext:
@@ -100,7 +100,7 @@ def _register(collection: str) -> None:
         session: AsyncSession = Depends(get_session),
     ) -> dict:
         _write_guard(context)
-        await service.delete_reference(session, collection, [_as_int(item_id)])
+        await service.delete_reference(session, context, collection, [_as_int(item_id)])
         return {"data": {"removed": True}}
 
     async def bulk_delete(
@@ -110,7 +110,7 @@ def _register(collection: str) -> None:
     ) -> dict:
         _write_guard(context)
         raw_ids = payload.get("ids") or []
-        await service.delete_reference(session, collection, [_as_int(value) for value in raw_ids])
+        await service.delete_reference(session, context, collection, [_as_int(value) for value in raw_ids])
         return {"data": {"removed": len(raw_ids)}}
 
     router.add_api_route(f"/{collection}", list_items, methods=["GET"], name=f"list_{collection}")
@@ -182,116 +182,6 @@ def _register_generic(collection: str) -> None:
     router.add_api_route(f"/{collection}/{{item_id}}", update_item, methods=["PUT"], name=f"update_{collection}")
 
 
-@router.get("/service-order-tabs")
-async def list_service_order_tabs(
-    page: PageParams = Depends(page_params),
-    include_archived: bool = False,
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_read_guard(context)
-    return {"data": await tab_config_service.list_tabs(session, context, page, include_archived)}
-
-
-@router.post("/service-order-tabs", status_code=status.HTTP_201_CREATED)
-async def create_service_order_tab(
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "create")
-    return {"data": await tab_config_service.create_tab(session, context, payload)}
-
-
-@router.get("/service-order-tabs/{tab_id}/columns")
-async def list_service_order_columns(
-    tab_id: int,
-    include_archived: bool = False,
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_read_guard(context)
-    return {"data": await tab_config_service.list_columns(session, context, tab_id, include_archived)}
-
-
-@router.post("/service-order-tabs/{tab_id}/columns", status_code=status.HTTP_201_CREATED)
-async def create_service_order_column(
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "create")
-    return {"data": await tab_config_service.create_column(session, context, tab_id, payload)}
-
-
-@router.post("/service-order-tabs/{tab_id}/columns/reorder")
-async def reorder_service_order_columns(
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "update")
-    ordered = [int(value) for value in payload.get("orderedIds") or payload.get("ids") or [] if str(value).isdigit()]
-    return {"data": await tab_config_service.reorder_columns(session, context, tab_id, ordered)}
-
-
-@router.patch("/service-order-tabs/{tab_id}")
-async def update_service_order_tab(
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "update")
-    return {"data": await tab_config_service.update_tab(session, context, tab_id, payload)}
-
-
-@router.delete("/service-order-tabs/{tab_id}")
-async def delete_service_order_tab(
-    tab_id: int,
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "delete")
-    return {"data": await tab_config_service.delete_tab(session, context, tab_id)}
-
-
-@router.patch("/service-order-columns/{column_id}")
-async def update_service_order_column(
-    column_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "update")
-    return {"data": await tab_config_service.update_column(session, context, column_id, payload)}
-
-
-@router.delete("/service-order-columns/{column_id}")
-async def delete_service_order_column(
-    column_id: int,
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "delete")
-    return {"data": await tab_config_service.delete_column(session, context, column_id)}
-
-
-@router.get("/service-order-tabs/meta/column-types")
-async def service_order_column_types(
-    context: RequestContext = Depends(get_current_context),
-) -> dict:
-    _config_read_guard(context)
-    return {
-        "data": {
-            "columnTypes": list(tab_config_service.COLUMN_TYPES),
-            "referenceTypes": list(tab_config_service.REFERENCE_TYPES),
-        }
-    }
-
-
 @router.get("/ui-schemas/{page:path}")
 async def get_ui_schema(
     page: str,
@@ -311,6 +201,268 @@ async def get_ui_schema(
         )
     ).scalars().first()
     return {"data": (row.data if row else None)}
+
+
+@router.get("/component-tabs/meta/types")
+async def component_config_types(
+    context: RequestContext = Depends(get_current_context),
+) -> dict:
+    _config_read_guard(context)
+    return {
+        "data": {
+            "dataTypes": list(component_config_service.DATA_TYPES),
+            "referenceTypes": list(component_config_service.REFERENCE_TYPES),
+            "renderModes": list(component_config_service.RENDER_MODES),
+        }
+    }
+
+
+# --- Component attributes ----------------------------------------------------
+@router.get("/component-attributes")
+async def list_component_attributes(
+    page: PageParams = Depends(page_params),
+    include_archived: bool = False,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service.list_attributes(session, context, page, include_archived)}
+
+
+@router.post("/component-attributes", status_code=status.HTTP_201_CREATED)
+async def create_component_attribute(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "create")
+    return {"data": await component_config_service.create_attribute(session, context, payload)}
+
+
+@router.patch("/component-attributes/{attribute_id}")
+async def update_component_attribute(
+    attribute_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.update_attribute(session, context, attribute_id, payload)}
+
+
+@router.delete("/component-attributes/{attribute_id}")
+async def delete_component_attribute(
+    attribute_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "delete")
+    return {"data": await component_config_service.delete_attribute(session, context, attribute_id)}
+
+
+# --- Component groups --------------------------------------------------------
+@router.get("/component-groups")
+async def list_component_groups(
+    page: PageParams = Depends(page_params),
+    include_archived: bool = False,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service.list_groups(session, context, page, include_archived)}
+
+
+@router.post("/component-groups", status_code=status.HTTP_201_CREATED)
+async def create_component_group(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "create")
+    return {"data": await component_config_service.create_group(session, context, payload)}
+
+
+@router.get("/component-groups/{group_id}/attributes")
+async def list_component_group_attributes(
+    group_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service.list_group_attributes(session, context, group_id)}
+
+
+@router.post("/component-groups/{group_id}/attributes", status_code=status.HTTP_201_CREATED)
+async def add_component_group_attribute(
+    group_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.add_group_attribute(session, context, group_id, payload)}
+
+
+@router.post("/component-groups/{group_id}/attributes/reorder")
+async def reorder_component_group_attributes(
+    group_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    ordered = [int(value) for value in payload.get("orderedIds") or payload.get("ids") or [] if str(value).isdigit()]
+    return {"data": await component_config_service.reorder_group_attributes(session, context, group_id, ordered)}
+
+
+@router.patch("/component-groups/{group_id}")
+async def update_component_group(
+    group_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.update_group(session, context, group_id, payload)}
+
+
+@router.delete("/component-groups/{group_id}")
+async def delete_component_group(
+    group_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "delete")
+    return {"data": await component_config_service.delete_group(session, context, group_id)}
+
+
+@router.patch("/component-group-attributes/{membership_id}")
+async def update_component_group_attribute(
+    membership_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.update_group_attribute(session, context, membership_id, payload)}
+
+
+@router.delete("/component-group-attributes/{membership_id}")
+async def remove_component_group_attribute(
+    membership_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "delete")
+    return {"data": await component_config_service.remove_group_attribute(session, context, membership_id)}
+
+
+# --- Component tabs ----------------------------------------------------------
+@router.get("/component-tabs")
+async def list_component_tabs(
+    page: PageParams = Depends(page_params),
+    include_archived: bool = False,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service.list_tabs(session, context, page, include_archived)}
+
+
+@router.post("/component-tabs", status_code=status.HTTP_201_CREATED)
+async def create_component_tab(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "create")
+    return {"data": await component_config_service.create_tab(session, context, payload)}
+
+
+@router.get("/component-tabs/{tab_id}")
+async def get_component_tab(
+    tab_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service._tab_detail(session, context, tab_id)}
+
+
+@router.patch("/component-tabs/{tab_id}")
+async def update_component_tab(
+    tab_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.update_tab(session, context, tab_id, payload)}
+
+
+@router.delete("/component-tabs/{tab_id}")
+async def delete_component_tab(
+    tab_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "delete")
+    return {"data": await component_config_service.delete_tab(session, context, tab_id)}
+
+
+@router.get("/component-tabs/{tab_id}/groups")
+async def list_component_tab_groups(
+    tab_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await component_config_service.list_tab_groups(session, context, tab_id)}
+
+
+@router.post("/component-tabs/{tab_id}/groups", status_code=status.HTTP_201_CREATED)
+async def add_component_tab_group(
+    tab_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    return {"data": await component_config_service.add_tab_group(session, context, tab_id, payload)}
+
+
+@router.post("/component-tabs/{tab_id}/groups/reorder")
+async def reorder_component_tab_groups(
+    tab_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    ordered = [int(value) for value in payload.get("orderedIds") or payload.get("ids") or [] if str(value).isdigit()]
+    return {"data": await component_config_service.reorder_tab_groups(session, context, tab_id, ordered)}
+
+
+@router.delete("/component-tab-groups/{tab_group_id}")
+async def remove_component_tab_group(
+    tab_group_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "delete")
+    return {"data": await component_config_service.remove_tab_group(session, context, tab_group_id)}
+
+
+@router.post("/component-tabs/{tab_id}/trade-directions")
+async def set_component_tab_directions(
+    tab_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    direction_ids = [int(value) for value in payload.get("tradeDirectionIds") or [] if str(value).isdigit()]
+    return {"data": await component_config_service.set_tab_directions(session, context, tab_id, direction_ids)}
 
 
 for _collection in service.SPECS:

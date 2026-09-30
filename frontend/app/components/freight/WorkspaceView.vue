@@ -223,7 +223,7 @@ function recordPath(id: unknown) {
 
 function cellText(row: Record<string, unknown>, key: string) {
   const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row as FreightRecord) : row
-  return formatFreightCell(source[key], key)
+  return formatFreightCell(source[key], key, String(source.currency || '').trim() || undefined)
 }
 
 function auditEntityLinkFor(row: Record<string, unknown>) {

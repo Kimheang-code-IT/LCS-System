@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
+from app.core.exceptions import ValidationFailed
+from app.core.localization import DEFAULT_LOCALIZATION, normalize_localization, validate_localization_patch
 from app.modules.master_data.models import BusinessParty, ModuleRecord
 
 APP_INFO_COLLECTION = "__app_info__"
@@ -38,17 +41,7 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "enableExport": True,
         "maxUploadSizeMb": 50,
     },
-    "localization": {
-        "defaultLanguage": "en",
-        "availableLanguages": ["en", "km"],
-        "timezone": "Asia/Phnom_Penh",
-        "dateFormat": "DD/MM/YYYY",
-        "timeFormat": "HH:mm",
-        "firstDayOfWeek": 1,
-        "numberFormat": "#,##0.00",
-        "currency": "USD",
-        "locale": "en-US",
-    },
+    "localization": deepcopy(DEFAULT_LOCALIZATION),
     "email": {
         "enabled": False,
         "smtpHost": "",
@@ -101,6 +94,12 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
     "backup": {
         "enabled": False,
         "intervalHours": 24,
+        "r2AccountId": "",
+        "r2AccessKeyId": "",
+        "r2SecretAccessKey": "",
+        "r2BucketName": "",
+        "r2Endpoint": "",
+        "r2Prefix": "backups",
         "spreadsheetId": "",
         "serviceAccountEmail": "",
         "serviceAccountJson": "",
@@ -177,6 +176,7 @@ async def reset_app_info(session: AsyncSession, context: RequestContext) -> dict
 async def get_app_config(session: AsyncSession, context: RequestContext | None = None) -> dict:
     record = await _load_record(session, APP_CONFIG_COLLECTION)
     merged = deep_merge(DEFAULT_APP_CONFIG, record.data if record else {})
+    merged["localization"] = normalize_localization(merged.get("localization"))
     return _with_timestamp(merged, record)
 
 
@@ -186,6 +186,7 @@ def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
     backup = payload.get("backup")
     if isinstance(backup, dict):
         backup["serviceAccountConfigured"] = bool(backup.pop("serviceAccountJson", ""))
+        backup["r2SecretAccessKeyConfigured"] = bool(backup.pop("r2SecretAccessKey", ""))
     email = payload.get("email")
     if isinstance(email, dict) and "password" in email:
         email["passwordConfigured"] = bool(email.get("password"))
@@ -201,9 +202,13 @@ def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
     """A blank secret field means 'leave the stored value unchanged'."""
     cleaned = dict(patch or {})
     backup = cleaned.get("backup")
-    if isinstance(backup, dict) and not str(backup.get("serviceAccountJson") or "").strip():
+    if isinstance(backup, dict):
         backup = dict(backup)
-        backup.pop("serviceAccountJson", None)
+        for key in ("serviceAccountConfigured", "r2SecretAccessKeyConfigured"):
+            backup.pop(key, None)
+        for key in ("serviceAccountJson", "r2SecretAccessKey"):
+            if not str(backup.get(key) or "").strip():
+                backup.pop(key, None)
         cleaned["backup"] = backup
     for section, key in (("email", "password"), ("telegram", "botToken")):
         block = cleaned.get(section)
@@ -214,10 +219,62 @@ def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+def _validate_backup_config(config: dict[str, Any]) -> None:
+    interval = config.get("intervalHours", 24)
+    try:
+        interval_hours = int(interval)
+    except (TypeError, ValueError) as exc:
+        raise ValidationFailed(
+            "Backup interval must be a whole number of hours.",
+            {"backup.intervalHours": "Enter a whole number between 1 and 720."},
+        ) from exc
+    if not 1 <= interval_hours <= 720:
+        raise ValidationFailed(
+            "Backup interval must be between 1 and 720 hours.",
+            {"backup.intervalHours": "Enter a value between 1 and 720."},
+        )
+
+    r2_keys = ("r2AccountId", "r2AccessKeyId", "r2SecretAccessKey", "r2BucketName", "r2Endpoint")
+    has_any_r2_value = any(str(config.get(key) or "").strip() for key in r2_keys)
+    if has_any_r2_value:
+        field_errors = {
+            f"backup.{key}": "This field is required for Cloudflare R2 backups."
+            for key in r2_keys
+            if not str(config.get(key) or "").strip()
+        }
+        endpoint = str(config.get("r2Endpoint") or "").strip()
+        parsed = urlparse(endpoint)
+        if endpoint and (parsed.scheme not in {"http", "https"} or not parsed.netloc):
+            field_errors["backup.r2Endpoint"] = "Enter a valid HTTP or HTTPS S3 endpoint."
+        prefix = str(config.get("r2Prefix") or "").strip()
+        if prefix.startswith("/") or ".." in prefix.split("/"):
+            field_errors["backup.r2Prefix"] = "Use a relative object prefix without '..' segments."
+        if field_errors:
+            raise ValidationFailed("Cloudflare R2 configuration is incomplete or invalid.", field_errors)
+
+    if config.get("enabled"):
+        sheets_configured = bool(config.get("spreadsheetId") and config.get("serviceAccountJson"))
+        r2_configured = all(str(config.get(key) or "").strip() for key in r2_keys)
+        if not sheets_configured and not r2_configured:
+            raise ValidationFailed(
+                "Automatic backup requires a configured destination.",
+                {"backup.r2Endpoint": "Configure Cloudflare R2 before enabling automatic backup."},
+            )
+
+
 async def update_app_config(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
+    patch = dict(patch or {})
     record = await _load_record(session, APP_CONFIG_COLLECTION)
     current = record.data if record else {}
+    if "localization" in patch:
+        localization_patch = patch["localization"]
+        if not isinstance(localization_patch, dict):
+            validate_localization_patch(localization_patch)
+        current_localization = normalize_localization(current.get("localization"))
+        patch["localization"] = validate_localization_patch(deep_merge(current_localization, localization_patch))
     data = deep_merge(current, _without_blank_secrets(patch))
+    if "backup" in patch:
+        _validate_backup_config(deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}))
     if record is None:
         record = ModuleRecord(
             collection=APP_CONFIG_COLLECTION,
@@ -229,7 +286,18 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
         record.data = data
     await session.commit()
     await session.refresh(record)
-    return _with_timestamp(deep_merge(DEFAULT_APP_CONFIG, record.data), record)
+    merged = deep_merge(DEFAULT_APP_CONFIG, record.data)
+    merged["localization"] = normalize_localization(merged.get("localization"))
+    return _with_timestamp(merged, record)
+
+
+async def get_localization(session: AsyncSession) -> dict[str, Any]:
+    config = await get_app_config(session)
+    return config["localization"]
+
+
+async def get_default_currency(session: AsyncSession) -> str:
+    return str((await get_localization(session))["currency"])
 
 
 def connection_result(enabled: bool, label: str) -> dict[str, str]:

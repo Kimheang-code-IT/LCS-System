@@ -97,22 +97,25 @@ const checkboxFalse = computed(() => String(props.field.options?.[1] ?? 'No'))
     :help="help"
     class="min-w-0"
   >
-    <USelect
+    <CommonAppReferenceSelect
       v-if="field.type === 'select'"
-      :model-value="modelValue ? String(modelValue) : undefined"
+      :model-value="modelValue"
       :items="items"
+      :reference-key="field.key"
+      :placeholder="fieldLabel(field)"
       :disabled="disabled || field.computed"
       size="md"
       class="w-full"
-      @update:model-value="emit('update:modelValue', $event ?? '')"
+      @update:model-value="emit('update:modelValue', $event)"
     />
-    <USelect
+    <CommonAppReferenceSelect
       v-else-if="field.type === 'multiselect'"
       multiple
       :model-value="Array.isArray(modelValue) ? modelValue.map(String) : []"
       :items="items"
+      :reference-key="field.key"
+      :placeholder="fieldLabel(field)"
       :disabled="disabled"
-      value-key="value"
       size="md"
       class="w-full"
       @update:model-value="emit('update:modelValue', $event)"

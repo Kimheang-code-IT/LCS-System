@@ -10,95 +10,10 @@ from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
 from app.core.exceptions import Conflict
 from app.core.pagination import PageParams, page_params
+from app.modules.operations import component_tabs as component_tabs_service
 from app.modules.operations import service
-from app.modules.operations import service_order_tabs as dynamic_tabs
 
 router = APIRouter()
-
-
-async def _resolve_order_id(session: AsyncSession, context: RequestContext, identifier: str) -> int:
-    order = await service.resolve_order(session, context, identifier)
-    return order.id
-
-
-@router.get("/service-orders/{identifier}/dynamic-tabs")
-async def list_dynamic_tabs(
-    identifier: str,
-    context: RequestContext = Depends(require_permission("service_order.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    return {"data": await dynamic_tabs.bootstrap(session, context, order_id)}
-
-
-@router.get("/service-orders/{identifier}/dynamic-tabs/{tab_id}/rows")
-async def list_dynamic_rows(
-    identifier: str,
-    tab_id: int,
-    page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("service_order.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    return {"data": await dynamic_tabs.list_rows(session, context, order_id, tab_id, page)}
-
-
-@router.post("/service-orders/{identifier}/dynamic-tabs/{tab_id}/rows", status_code=status.HTTP_201_CREATED)
-async def create_dynamic_row(
-    identifier: str,
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    row = await dynamic_tabs.create_row(session, context, order_id, tab_id, payload)
-    await session.commit()
-    return {"data": row}
-
-
-@router.post("/service-orders/{identifier}/dynamic-tabs/{tab_id}/rows/bulk")
-async def bulk_save_dynamic_rows(
-    identifier: str,
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    rows = payload.get("rows") if isinstance(payload, dict) else None
-    if rows is None and isinstance(payload, dict):
-        rows = payload.get("items") or []
-    result = await dynamic_tabs.bulk_save(session, context, order_id, tab_id, rows or [])
-    await session.commit()
-    return {"data": result}
-
-
-@router.patch("/service-orders/{identifier}/dynamic-tabs/{tab_id}/rows/{row_id}")
-async def update_dynamic_row(
-    identifier: str,
-    tab_id: int,
-    row_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    return {"data": await dynamic_tabs.update_row(session, context, order_id, tab_id, row_id, payload)}
-
-
-@router.delete("/service-orders/{identifier}/dynamic-tabs/{tab_id}/rows/{row_id}")
-async def delete_dynamic_row(
-    identifier: str,
-    tab_id: int,
-    row_id: int,
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    order_id = await _resolve_order_id(session, context, identifier)
-    result = await dynamic_tabs.delete_row(session, context, order_id, tab_id, row_id)
-    await session.commit()
-    return {"data": result}
 
 
 @router.get("/service-orders")
@@ -159,23 +74,44 @@ async def add_container(
     return {"data": container}
 
 
-@router.get("/service-orders/{identifier}/components")
-async def list_components(
+@router.get("/service-orders/{identifier}/component-tabs")
+async def list_component_tabs(
     identifier: str,
+    direction_id: int | None = None,
     context: RequestContext = Depends(require_permission("service_order.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_components(session, context, identifier)}
+    order = await service.resolve_order(session, context, identifier)
+    return {"data": await component_tabs_service.bootstrap(session, context, order.id, direction_id)}
 
 
-@router.post("/service-orders/{identifier}/components", status_code=status.HTTP_201_CREATED)
-async def add_component(
+@router.get("/service-orders/{identifier}/component-tabs/groups/{group_id}/rows")
+async def list_component_group_rows(
     identifier: str,
+    group_id: int,
+    page: PageParams = Depends(page_params),
+    context: RequestContext = Depends(require_permission("service_order.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    order = await service.resolve_order(session, context, identifier)
+    return {"data": await component_tabs_service.list_rows(session, context, order.id, group_id, page)}
+
+
+@router.post("/service-orders/{identifier}/component-tabs/groups/{group_id}/rows/bulk")
+async def bulk_save_component_group_rows(
+    identifier: str,
+    group_id: int,
     payload: dict = Body(default={}),
     context: RequestContext = Depends(require_permission("service_order.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.ensure_component(session, context, identifier, payload)}
+    order = await service.resolve_order(session, context, identifier)
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if rows is None and isinstance(payload, dict):
+        rows = payload.get("items") or []
+    result = await component_tabs_service.bulk_save(session, context, order.id, group_id, rows or [])
+    await session.commit()
+    return {"data": result}
 
 
 @router.get("/service-orders/{identifier}/charges")
@@ -184,15 +120,7 @@ async def list_order_charges(
     context: RequestContext = Depends(require_permission("service_charge.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    order = await service.resolve_order(session, context, identifier)
-    from sqlalchemy import select
-
-    from app.modules.operations.models import ServiceOrderCharge
-
-    rows = (
-        await session.execute(select(ServiceOrderCharge).where(ServiceOrderCharge.service_order_id == order.id))
-    ).scalars().all()
-    return {"data": [service.charge_record(row, row.data or {}) for row in rows]}
+    return {"data": await service.list_order_charges(session, context, identifier)}
 
 
 @router.post("/service-orders/{identifier}/charges", status_code=status.HTTP_201_CREATED)
@@ -203,6 +131,30 @@ async def create_order_charge(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.save_charge(session, context, payload, order_identifier=identifier)}
+
+
+@router.get("/service-orders/{identifier}/invoice")
+async def get_service_order_invoice(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("service_charge.create")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.finance import service as finance_service
+
+    order = await service.resolve_order(session, context, identifier)
+    return {"data": await finance_service.get_service_order_invoice(session, context, order.id)}
+
+
+@router.post("/service-orders/{identifier}/invoice", status_code=status.HTTP_201_CREATED)
+async def create_service_order_invoice(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("service_charge.convert_to_invoice")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.finance import service as finance_service
+
+    order = await service.resolve_order(session, context, identifier)
+    return {"data": await finance_service.create_invoice_from_service_order(session, context, order)}
 
 
 @router.get("/service-orders/{identifier}")
@@ -226,71 +178,13 @@ async def update_service_order(
     return {"data": await service.save_service_order(session, context, payload)}
 
 
-@router.get("/service-order-components")
-async def list_all_components(
-    page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("service_order.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    return {"data": await service.list_all_components(session, context, page)}
-
-
-@router.post("/service-order-components/{component_id}/values")
-async def save_component_values(
-    component_id: str,
-    payload: dict = Body(default={}),
+@router.post("/service-orders/{identifier}/finish")
+async def finish_service_order(
+    identifier: str,
     context: RequestContext = Depends(require_permission("service_order.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.replace_component_values(session, context, component_id, payload.get("values") or [])}
-
-
-@router.put("/service-order-components/{component_id}/values")
-async def put_component_values(
-    component_id: str,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    return {"data": await service.replace_component_values(session, context, component_id, payload.get("values") or [])}
-
-
-@router.post("/service-order-components/{component_id}/complete")
-async def complete_component(
-    component_id: str,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    component = await service.complete_component(session, context, component_id)
-    await session.commit()
-    return {"data": component}
-
-
-@router.get("/service-order-components/{component_id}")
-async def get_component(
-    component_id: str,
-    context: RequestContext = Depends(require_permission("service_order.read")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    from app.modules.operations.models import ServiceOrderComponent
-
-    component = await session.get(ServiceOrderComponent, int(component_id))
-    if component is None:
-        from app.core.exceptions import NotFound
-
-        raise NotFound("Component not found.")
-    return {"data": await service._component_payload(session, component)}
-
-
-@router.delete("/service-order-components/{component_id}")
-async def delete_component(
-    component_id: str,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    context: RequestContext = Depends(require_permission("service_order.update")),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    return {"data": await service.remove_component(session, context, component_id)}
+    return {"data": await service.finish_service_order(session, context, identifier)}
 
 
 @router.get("/service-charges")

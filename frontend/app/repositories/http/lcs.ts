@@ -1,7 +1,6 @@
 import type {
   AttachmentRepository,
   AuditRepository,
-  ComponentRepository,
   FinanceRepository,
   JobRepository,
   QuotationRepository,
@@ -50,24 +49,8 @@ export function createHttpJobRepository(): JobRepository {
     save: async record => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER(record.id), record)),
     addActualContainer: async (serviceOrderId, payload) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_CONTAINERS(serviceOrderId), payload)),
-  }
-}
-
-export function createHttpComponentRepository(): ComponentRepository {
-  const api = useApi()
-  return {
-    listForJob: async (jobNo) => {
-      const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.SERVICE_ORDER_COMPONENTS(jobNo)))
-      return Array.isArray(data) ? data : []
-    },
-    complete: async (componentId, key) =>
-      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.COMPONENT_COMPLETE(componentId), {}, withIdempotency(key))),
-    saveValues: async (componentId, values) =>
-      unwrapApiData(await api.put<ApiResponse<FreightRecord>>(ApiV1Endpoints.COMPONENT_VALUES(componentId), { values })),
-    remove: async (componentId, key) =>
-      unwrapApiData(await api.delete<ApiResponse<FreightRecord>>(ApiV1Endpoints.COMPONENT(componentId), withIdempotency(key))),
-    ensureForJob: async (jobNo, payload) =>
-      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_COMPONENTS(jobNo), payload)),
+    finish: async (id, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_FINISH(id), {}, withIdempotency(key))),
   }
 }
 
@@ -84,6 +67,16 @@ export function createHttpServiceChargeRepository(): ServiceChargeRepository {
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_ISSUE(chargeId), {}, withIdempotency(key))),
     createFinanceInvoice: async (chargeId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_CREATE_INVOICE(chargeId), {}, withIdempotency(key))),
+    listForOrder: async (orderId) => {
+      const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.SERVICE_ORDER_CHARGES(orderId)))
+      return Array.isArray(data) ? data : []
+    },
+    createForOrder: async (orderId, input) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_CHARGES(orderId), stripOfficialNumberFields(input, 'jobCharges'))),
+    getOrderInvoice: async orderId =>
+      unwrapApiData(await api.get<ApiResponse<FreightRecord | null>>(ApiV1Endpoints.SERVICE_ORDER_INVOICE(orderId))),
+    createOrderInvoice: async (orderId, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_INVOICE(orderId), {}, withIdempotency(key))),
   }
 }
 

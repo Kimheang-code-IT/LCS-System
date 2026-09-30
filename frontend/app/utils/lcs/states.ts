@@ -47,6 +47,7 @@ export function quotationDomainStatus(value: unknown): QuotationRevisionStatus {
 
 export function jobDomainStatus(record: Record<string, unknown>): ServiceOrderStatus {
   const value = String(record.status || record.workflowStatus || '').trim().toLowerCase()
+  if (['finished', 'completed', 'complete'].includes(value)) return 'FINISHED'
   return value === 'inactive' || value === 'cancelled' || value === 'canceled' || value === 'closed'
     ? 'INACTIVE'
     : 'ACTIVE'

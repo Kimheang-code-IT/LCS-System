@@ -5,7 +5,6 @@ import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
-import { useDynamicServiceOrderTabs } from '~/composables/freight/useDynamicServiceOrderTabs'
 import { useJobRelated } from '~/composables/freight/useJobRelated'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useLcs } from '~/composables/lcs/useLcs'
@@ -29,10 +28,8 @@ import {
 import {
   JOB_FIXED_WORKSPACE_SECTIONS,
   JOB_TRAILING_WORKSPACE_SECTIONS,
-  firstJobDocumentSection,
-  isFixedJobWorkspaceSection,
-  jobComponentSectionsFromGroups,
 } from '~/utils/freight/job-component-tabs'
+import { useComponentTabs } from '~/composables/freight/useComponentTabs'
 import { jobDomainStatus } from '~/utils/lcs/states'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
@@ -118,52 +115,38 @@ const containersCount = computed(() =>
   jobContainerCount(model.value, paymentRows.value, actualContainers.value)
   || actualContainers.value.length)
 
-const tabOptions = computed(() => ({
-  direction: String(model.value.direction || ''),
-  assignments: store.list('tradeDirectionComponents'),
-}))
-
 /**
- * Operational tabs come from the configurable dynamic tables. Component groups
- * remain a fallback for installations without tab configuration.
+ * Operational tabs come from the configurable component tabs (Attribute ->
+ * Group -> Tab), filtered by the Service Order's trade direction.
  */
-const dynamicTabsState = useDynamicServiceOrderTabs(jobNo)
-const configuredSections = computed(() => dynamicTabsState.sections.value)
-const groupSections = computed(() =>
-  jobComponentSectionsFromGroups(store.list('componentGroups'), tabOptions.value),
-)
-const workspaceSections = computed(() => {
-  const configured = configuredSections.value
-  const operational = configured.length
-    ? [...configured, ...groupSections.value.filter(id => !configured.includes(id))]
-    : groupSections.value
-  return [
-    ...JOB_FIXED_WORKSPACE_SECTIONS,
-    ...operational,
-    ...JOB_TRAILING_WORKSPACE_SECTIONS,
-  ]
+const directionId = computed(() => {
+  const name = String(model.value.direction || '').trim().toLowerCase()
+  if (!name) return undefined
+  const row = store.list('tradeDirections').find(item =>
+    String(item.name || '').toLowerCase() === name || String(item.code || '').toLowerCase() === name,
+  )
+  return row ? String(row.id) : undefined
 })
-const documentSection = computed(() =>
-  configuredSections.value[0] || firstJobDocumentSection(store.list('componentGroups'), tabOptions.value),
-)
-const isDynamicTab = computed(() =>
-  Boolean(activeTab.value) && dynamicTabsState.tabs.value.some(tab => tab.code === activeTab.value),
-)
-const activeDynamicTab = computed(() => dynamicTabsState.tabByCode(activeTab.value))
-const activeDynamicRows = computed<Array<Record<string, unknown>>>(() =>
-  isDynamicTab.value ? dynamicTabsState.rowsFor(activeTab.value) : [],
-)
+const componentTabsState = useComponentTabs(jobNo, directionId)
+const componentSections = computed(() => componentTabsState.sections.value)
+const workspaceSections = computed(() => [
+  ...JOB_FIXED_WORKSPACE_SECTIONS,
+  ...componentSections.value,
+  ...JOB_TRAILING_WORKSPACE_SECTIONS,
+])
+const documentSection = computed(() => componentSections.value[0] || 'overview')
 const isComponentTab = computed(() =>
-  Boolean(activeTab.value) && !isFixedJobWorkspaceSection(activeTab.value) && !isDynamicTab.value,
+  Boolean(activeTab.value) && componentTabsState.tabs.value.some(tab => tab.code === activeTab.value),
 )
+const activeComponentTab = computed(() => componentTabsState.tabByCode(activeTab.value))
 
-function setDynamicRows(rows: Array<Record<string, unknown>>) {
-  dynamicTabsState.setRows(activeTab.value, rows)
+function setComponentRows(groupId: string, rows: Array<Record<string, unknown>>) {
+  componentTabsState.setGroupRows(groupId, rows)
 }
 
-async function saveDynamicTab() {
+async function saveComponentGroup(groupId: string) {
   try {
-    await dynamicTabsState.saveTab(activeTab.value)
+    await componentTabsState.saveGroup(groupId)
   }
   catch {
     toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
@@ -177,14 +160,11 @@ function parseSection(value: unknown) {
 const activeTab = ref<JobWorkspaceSection>('overview')
 
 function sectionLabel(id: string) {
-  const dynamicTab = dynamicTabsState.tabByCode(id)
-  if (dynamicTab) return dynamicTab.name
+  const componentTab = componentTabsState.tabByCode(id)
+  if (componentTab) return componentTab.name
   const key = `freight.jobSections.${id}`
   if (te(key)) return t(key)
-  const group = store.list('componentGroups').find(row =>
-    String(row.code || '').toLowerCase().replace(/_/g, '-') === id,
-  )
-  return String(group?.name || id)
+  return id
 }
 
 const tabs = computed<DocumentTabSchema[]>(() =>
@@ -335,6 +315,30 @@ function openQuotation() {
   void navigateTo(`/quotations/${quotation.id}`)
 }
 
+const jobSaveLabel = computed(() =>
+  isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges'),
+)
+
+const finishing = ref(false)
+
+async function finishJob() {
+  if (!model.value.id) return
+  finishing.value = true
+  try {
+    const saved = await lcs.runCommand('service_order.finish', String(model.value.id), key =>
+      lcs.jobs.finish(String(model.value.id), key),
+    )
+    model.value = { ...model.value, ...saved } as FreightRecord
+    toast.add({ title: t('freight.ui.finished'), color: 'success' })
+  }
+  catch (error) {
+    lcs.reportError(error)
+  }
+  finally {
+    finishing.value = false
+  }
+}
+
 const moreItems = computed<DropdownMenuItem[][]>(() => {
   if (isCreate.value || !model.value.id) return []
   const items: DropdownMenuItem[] = []
@@ -375,10 +379,10 @@ function onTabChange(value: string) {
     :set-field-value="setFieldValue"
     :saving="saving"
     :not-found="notFound"
-    :save-label="t('docetra.common.save')"
+    :save-label="jobSaveLabel"
     :confirm-save="false"
     :show-save="editingOverview || isCreate"
-    :show-cancel="!editingOverview && !isCreate"
+    :show-cancel="false"
     :show-meta-rail="!isCreate"
     show-list-nav
     content-wide
@@ -424,6 +428,13 @@ function onTabChange(value: string) {
         :label="t('freight.ui.edit')"
         @click="startEdit"
       />
+      <CommonAppDocumentActionButton
+        v-if="canEdit && domainStatus === 'ACTIVE'"
+        icon="i-lucide-check-circle"
+        :label="t('freight.ui.finish')"
+        :loading="finishing"
+        @click="finishJob"
+      />
     </template>
 
     <template #form>
@@ -464,31 +475,32 @@ function onTabChange(value: string) {
             :editable-payments="canEditPayments"
             @update:job="patchJob"
           />
-          <FreightDynamicServiceOrderTabs
-            v-else-if="isDynamicTab && activeDynamicTab"
-            :tab="activeDynamicTab"
-            :references="dynamicTabsState.references.value"
-            :model-value="activeDynamicRows"
+          <FreightComponentTabs
+            v-else-if="isComponentTab && activeComponentTab"
+            :tab="activeComponentTab"
+            :references="componentTabsState.references.value"
+            :rows-by-group="componentTabsState.rowsByGroup.value"
             :editable="canEdit"
-            :saving="dynamicTabsState.saving.value"
-            @update:model-value="setDynamicRows"
-            @save="saveDynamicTab"
+            :saving="componentTabsState.saving.value"
+            @update:rows="setComponentRows"
+            @save-group="saveComponentGroup"
           />
-          <FreightJobTasks
-            v-else-if="isComponentTab"
+          <FreightJobCharges
+            v-else-if="activeTab === 'charges'"
+            :job="model"
             :job-no="jobNo"
-            :job-id="String(model.id || '')"
-            :direction="String(model.direction || '')"
-            :is-create="isCreate"
-            :section="activeTab"
+            :editable="canEdit"
           />
           <FreightJobFinance
             v-else-if="activeTab === 'finance'"
+            :job="model"
             :job-no="jobNo"
             :customer="String(model.customer || '')"
             :documents="debitNotes"
             :supplier-costs="supplierCosts"
             :receivables="receivables"
+            :editable="canEdit"
+            @update:job="patchJob"
           />
           <FreightJobFiles
             v-else-if="activeTab === 'files'"

@@ -68,6 +68,9 @@ These gate API endpoints. Every code below is enforced server-side.
 | attachment.upload | attachment | upload |
 | attachment.delete | attachment | delete |
 | audit_log.read | audit_log | read |
+| archive.view | archive | view |
+| archive.restore | archive | restore |
+| archive.hard_delete | archive | hard_delete |
 | report.read | report | read |
 
 ### 2.2 Page and configuration permissions
@@ -108,6 +111,7 @@ These are the action codes stored by the role matrix. The page-level
 | Roles | `admin.roles.view`, `admin.roles.create`, `admin.roles.edit`, `admin.roles.delete` |
 | Document sequences | `admin.document_sequences.view`, `admin.document_sequences.create`, `admin.document_sequences.edit`, `admin.document_sequences.delete` |
 | Audit logs | `admin.audit_logs.view`, `admin.audit_logs.export` |
+| Archive | `admin.archive.view`, `admin.archive.edit`, `admin.archive.delete` |
 | App config | `settings.app_config.view`, `settings.app_config.edit` |
 | Backup | `settings.backup.view`, `settings.backup.edit` |
 
@@ -159,6 +163,9 @@ Granting a page/action also enables the API permissions it implies.
 | admin.document_sequences.* | configuration.manage |
 | admin.audit_logs.view | audit_log.read |
 | admin.audit_logs.export | report.export |
+| admin.archive.view | archive.view |
+| admin.archive.edit | archive.view, archive.restore |
+| admin.archive.delete | archive.view, archive.hard_delete |
 | settings.app_config.view/edit | configuration.manage |
 | settings.backup.view | backup.read |
 | settings.backup.edit | backup.manage |

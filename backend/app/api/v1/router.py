@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.modules.archive.router import router as archive_router
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
 from app.modules.backup.router import router as backup_router
@@ -24,6 +25,7 @@ api_router.include_router(master_data_router, tags=["master-data"])
 api_router.include_router(settings_router, tags=["settings"])
 api_router.include_router(backup_router, tags=["backup"])
 api_router.include_router(audit_router, tags=["audit"])
+api_router.include_router(archive_router, tags=["archive"])
 
 
 @api_router.get("/health")

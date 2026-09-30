@@ -12,10 +12,12 @@ const props = withDefaults(defineProps<{
   cancelLabelKey?: string
   confirmColor?: 'error' | 'primary' | 'neutral' | 'warning'
   loading?: boolean
+  confirmDisabled?: boolean
   ui?: Record<string, unknown>
 }>(), {
   confirmColor: 'error',
   loading: false,
+  confirmDisabled: false,
 })
 
 const emit = defineEmits<{
@@ -87,6 +89,7 @@ function onConfirm() {
             <UButton
               :color="confirmColor"
               :loading="loading"
+              :disabled="confirmDisabled"
               @click="onConfirm"
             >
               {{ resolvedConfirm }}

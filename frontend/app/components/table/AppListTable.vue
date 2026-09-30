@@ -36,6 +36,9 @@ const props = withDefaults(defineProps<{
   emptyTitle?: string
   emptyDescription?: string
   emptyActions?: ListTableEmptyAction[]
+  /** Total row count supplied by a server-paginated endpoint. */
+  serverTotal?: number
+  serverSide?: boolean
 }>(), {
   loading: false,
   getRowId: (row: T) => String(row.id || ''),
@@ -48,6 +51,8 @@ const props = withDefaults(defineProps<{
   emptyTitle: '',
   emptyDescription: '',
   emptyActions: () => [],
+  serverTotal: 0,
+  serverSide: false,
 })
 
 const emit = defineEmits<{
@@ -56,10 +61,13 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const paginationOptions = { getPaginationRowModel: getPaginationRowModel() }
+const paginationOptions = computed(() => props.serverSide
+  ? { manualPagination: true, rowCount: props.serverTotal ?? props.data.length }
+  : { getPaginationRowModel: getPaginationRowModel() })
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
-const total = computed(() => props.data.length)
-const virtualize = computed(() => listTableVirtualize(total.value, pagination.value.pageSize))
+const total = computed(() => props.serverSide ? (props.serverTotal ?? props.data.length) : props.data.length)
+const visibleTotal = computed(() => props.data.length)
+const virtualize = computed(() => listTableVirtualize(visibleTotal.value, pagination.value.pageSize))
 const searchPlaceholderText = computed(() => props.searchPlaceholder || t('freight.ui.search'))
 const dateLabelText = computed(() => props.dateLabel || t('freight.ui.date'))
 const emptyTitleText = computed(() => props.emptyTitle || t('freight.ui.noRecords'))
@@ -114,7 +122,7 @@ function onSelect(event: Event, row: TableRow<T>) {
 
       <div class="min-h-0 flex-1 overflow-hidden">
         <UTable
-          v-if="total"
+          v-if="visibleTotal"
           v-model:row-selection="rowSelection"
           v-model:pagination="pagination"
           :data="data"

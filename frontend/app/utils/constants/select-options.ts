@@ -45,9 +45,9 @@ export const FIRST_DAY_OF_WEEK_OPTIONS: FieldOption[] = [
 ]
 
 export const NUMBER_FORMAT_OPTIONS: FieldOption[] = [
-  { label: '1,234.56', value: '1,234.56' },
-  { label: '1.234,56', value: '1.234,56' },
-  { label: '1 234,56', value: '1 234,56' },
+  { label: '1,234.56', value: '#,##0.00' },
+  { label: '1.234,56', value: '#.##0,00' },
+  { label: '1 234,56', value: '# ##0,00' },
 ]
 
 export const CURRENCY_OPTIONS: FieldOption[] = [

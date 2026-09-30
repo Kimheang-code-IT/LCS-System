@@ -8,7 +8,6 @@ test-suite has a deterministic starting point.
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,17 +30,17 @@ from app.modules.finance.models import (
 )
 from app.modules.master_data.models import (
     BusinessParty,
+    ComponentAttribute,
     ComponentGroup,
-    ComponentTemplate,
+    ComponentGroupAttribute,
+    ComponentTab,
+    ComponentTabGroup,
+    ComponentTabTradeDirection,
     ContainerType,
     FeeType,
     PartyRole,
     Place,
-    ServiceOrderColumnConfig,
-    ServiceOrderTabConfig,
-    TemplateAttribute,
     TradeDirection,
-    TradeDirectionComponent,
     TransportType,
 )
 
@@ -88,100 +87,6 @@ DOCUMENT_SEQUENCES = [
     ("SUPPLIER_PAYMENT", "PAY"),
     ("JOURNAL", "JE"),
 ]
-
-TAB_SEED: list[dict[str, Any]] = [
-    {
-        "code": "invoice",
-        "name": "Invoice",
-        "icon": "i-lucide-file-text",
-        "sort_order": 10,
-        "columns": [
-            {"field_key": "invoice_no", "label": "Invoice No.", "field_type": "text", "is_required": True, "sort_order": 10, "width": "160px"},
-            {"field_key": "invoice_date", "label": "Invoice Date", "field_type": "date", "is_required": True, "sort_order": 20},
-            {"field_key": "seller", "label": "Seller", "field_type": "reference", "reference_type": "business_party", "sort_order": 30},
-            {"field_key": "invoice_amount", "label": "Invoice Amount", "field_type": "money", "sort_order": 40},
-            {"field_key": "currency", "label": "Currency", "field_type": "currency", "sort_order": 50, "options": ["USD", "KHR", "VND"]},
-            {"field_key": "status", "label": "Status", "field_type": "select", "sort_order": 60, "options": ["Pending", "Approved", "Paid", "Cancelled"]},
-            {"field_key": "remark", "label": "Remark", "field_type": "text", "sort_order": 70},
-        ],
-    },
-    {
-        "code": "packing-list",
-        "name": "Packing List",
-        "icon": "i-lucide-list",
-        "sort_order": 20,
-        "columns": [
-            {"field_key": "packing_list_no", "label": "Packing List No.", "field_type": "text", "is_required": True, "sort_order": 10},
-            {"field_key": "date", "label": "Date", "field_type": "date", "sort_order": 20},
-            {"field_key": "package_type", "label": "Package Type", "field_type": "text", "sort_order": 30},
-            {"field_key": "quantity", "label": "Quantity", "field_type": "number", "sort_order": 40},
-            {"field_key": "gross_weight", "label": "Gross Weight (kg)", "field_type": "decimal", "sort_order": 50},
-            {"field_key": "net_weight", "label": "Net Weight (kg)", "field_type": "decimal", "sort_order": 60},
-            {"field_key": "remark", "label": "Remark", "field_type": "textarea", "sort_order": 70},
-        ],
-    },
-    {
-        "code": "shipment-registration",
-        "name": "Shipment Registration No.",
-        "icon": "i-lucide-clipboard-list",
-        "sort_order": 30,
-        "columns": [
-            {"field_key": "registration_no", "label": "Registration No.", "field_type": "text", "is_required": True, "sort_order": 10},
-            {"field_key": "registration_date", "label": "Registration Date", "field_type": "date", "sort_order": 20},
-            {"field_key": "authority", "label": "Authority", "field_type": "text", "sort_order": 30},
-            {"field_key": "reference", "label": "Reference", "field_type": "text", "sort_order": 40},
-            {"field_key": "status", "label": "Status", "field_type": "select", "sort_order": 50, "options": ["Draft", "Submitted", "Registered", "Cancelled"]},
-            {"field_key": "remark", "label": "Remark", "field_type": "text", "sort_order": 60},
-        ],
-    },
-    {
-        "code": "bill",
-        "name": "Bill",
-        "icon": "i-lucide-receipt",
-        "sort_order": 40,
-        "columns": [
-            {"field_key": "bill_no", "label": "Bill No.", "field_type": "text", "is_required": True, "sort_order": 10},
-            {"field_key": "bill_date", "label": "Bill Date", "field_type": "date", "sort_order": 20},
-            {"field_key": "party", "label": "Party", "field_type": "reference", "reference_type": "business_party", "sort_order": 30},
-            {"field_key": "description", "label": "Description", "field_type": "text", "sort_order": 40},
-            {"field_key": "amount", "label": "Amount", "field_type": "money", "sort_order": 50},
-            {"field_key": "currency", "label": "Currency", "field_type": "currency", "sort_order": 60, "options": ["USD", "KHR", "VND"]},
-            {"field_key": "status", "label": "Status", "field_type": "select", "sort_order": 70, "options": ["Pending", "Approved", "Paid", "Overdue", "Cancelled"]},
-        ],
-    },
-    {
-        "code": "customs",
-        "name": "Customs",
-        "icon": "i-lucide-landmark",
-        "sort_order": 50,
-        "columns": [
-            {"field_key": "declaration_no", "label": "Declaration No.", "field_type": "text", "is_required": True, "sort_order": 10},
-            {"field_key": "declaration_date", "label": "Declaration Date", "field_type": "date", "sort_order": 20},
-            {"field_key": "checkpoint", "label": "Checkpoint", "field_type": "reference", "reference_type": "place", "sort_order": 30},
-            {"field_key": "broker", "label": "Broker", "field_type": "reference", "reference_type": "business_party", "sort_order": 40},
-            {"field_key": "status", "label": "Status", "field_type": "select", "sort_order": 50, "options": ["Preparing", "Submitted", "Processing", "On Hold", "Cleared"]},
-            {"field_key": "clearance_date", "label": "Clearance Date", "field_type": "date", "sort_order": 60},
-            {"field_key": "remark", "label": "Remark", "field_type": "text", "sort_order": 70},
-        ],
-    },
-    {
-        "code": "transport",
-        "name": "Transport",
-        "icon": "i-lucide-truck",
-        "sort_order": 60,
-        "columns": [
-            {"field_key": "transport_type", "label": "Transport Type", "field_type": "reference", "reference_type": "transport_type", "sort_order": 10},
-            {"field_key": "vehicle", "label": "Vehicle", "field_type": "reference", "reference_type": "transport_asset", "sort_order": 20},
-            {"field_key": "driver", "label": "Driver", "field_type": "text", "sort_order": 30},
-            {"field_key": "origin", "label": "Origin", "field_type": "reference", "reference_type": "place", "sort_order": 40},
-            {"field_key": "destination", "label": "Destination", "field_type": "reference", "reference_type": "place", "sort_order": 50},
-            {"field_key": "departure", "label": "Departure", "field_type": "datetime", "sort_order": 60},
-            {"field_key": "arrival", "label": "Arrival", "field_type": "datetime", "sort_order": 70},
-            {"field_key": "status", "label": "Status", "field_type": "select", "sort_order": 80, "options": ["Planned", "Loading", "In Transit", "Arrived", "Delivered", "Cancelled"]},
-        ],
-    },
-]
-
 
 async def ensure_seed_data(session: AsyncSession) -> None:
     """Idempotently seed permissions, roles and default role mappings.
@@ -264,50 +169,6 @@ async def _ensure_finance_baseline(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def _seed_service_order_tabs(session: AsyncSession) -> None:
-    for tab_seed in TAB_SEED:
-        tab = (
-            await session.execute(select(ServiceOrderTabConfig).where(ServiceOrderTabConfig.code == tab_seed["code"]))
-        ).scalars().first()
-        if tab is None:
-            tab = ServiceOrderTabConfig(
-                code=tab_seed["code"],
-                name=tab_seed["name"],
-                icon=tab_seed.get("icon"),
-                sort_order=tab_seed.get("sort_order", 0),
-                is_active=True,
-                allow_multiple_rows=True,
-            )
-            session.add(tab)
-            await session.flush()
-        for column_seed in tab_seed["columns"]:
-            exists = (
-                await session.execute(
-                    select(ServiceOrderColumnConfig).where(
-                        ServiceOrderColumnConfig.tab_id == tab.id,
-                        ServiceOrderColumnConfig.field_key == column_seed["field_key"],
-                    )
-                )
-            ).scalars().first()
-            if exists is not None:
-                continue
-            session.add(
-                ServiceOrderColumnConfig(
-                    tab_id=tab.id,
-                    field_key=column_seed["field_key"],
-                    label=column_seed["label"],
-                    field_type=column_seed["field_type"],
-                    reference_type=column_seed.get("reference_type"),
-                    is_required=bool(column_seed.get("is_required", False)),
-                    is_active=True,
-                    sort_order=column_seed.get("sort_order", 0),
-                    width=column_seed.get("width"),
-                    options=column_seed.get("options") or [],
-                )
-            )
-    await session.flush()
-
-
 async def seed_demo_data(session: AsyncSession) -> None:
     place_defs = [
         ("PP", "Phnom Penh", "City", "KH"),
@@ -355,35 +216,42 @@ async def seed_demo_data(session: AsyncSession) -> None:
     ]:
         await _get_or_create(session, FeeType, {"name": name}, code=code)
 
-    group_defs = [
-        ("CARGO", "Cargo", 10),
-        ("TRANSPORT", "Transport", 20),
-        ("CUSTOMS", "Customs", 30),
-        ("SHIPPING_DOCUMENTS", "Shipping Documents", 40),
-        ("MILESTONES", "Milestones", 50),
-        ("FINANCE", "Finance", 60),
+    attribute_defs = [
+        ("declaration_no", "Declaration Number", "text", True, 10),
+        ("clearance_date", "Clearance Date", "date", False, 20),
+        ("duty_amount", "Duty Amount", "number", False, 30),
     ]
-    groups: dict[str, ComponentGroup] = {}
-    for code, name, order in group_defs:
-        groups[code] = await _get_or_create(session, ComponentGroup, {"name": name, "display_order": order}, code=code)
-
-    template = await _get_or_create(
-        session, ComponentTemplate,
-        {"name": "Customs Clearance", "description": "Customs clearance task", "category": groups["CUSTOMS"].code, "instance_mode": "SINGLE"},
-        code="CUSTOMS_CLEARANCE", version=1,
-    )
-    existing_attrs = (
-        await session.execute(select(TemplateAttribute).where(TemplateAttribute.template_id == template.id))
-    ).scalars().all()
-    if not existing_attrs:
-        session.add_all(
-            [
-                TemplateAttribute(template_id=template.id, code="declaration_no", label="Declaration Number", data_type="text", display_order=1),
-                TemplateAttribute(template_id=template.id, code="clearance_date", label="Clearance Date", data_type="date", display_order=2),
-                TemplateAttribute(template_id=template.id, code="duty_amount", label="Duty Amount", data_type="number", display_order=3),
-            ]
+    attributes: dict[str, ComponentAttribute] = {}
+    for code, label, data_type, required, _order in attribute_defs:
+        attributes[code] = await _get_or_create(
+            session, ComponentAttribute, {"label": label, "data_type": data_type, "is_required": required}, code=code
         )
+
+    group = await _get_or_create(
+        session, ComponentGroup, {"name": "Customs", "render_mode": "table", "display_order": 10}, code="CUSTOMS"
+    )
+    existing_memberships = (
+        await session.execute(select(ComponentGroupAttribute).where(ComponentGroupAttribute.group_id == group.id))
+    ).scalars().all()
+    if not existing_memberships:
+        for code, _label, _data_type, _required, order in attribute_defs:
+            session.add(
+                ComponentGroupAttribute(
+                    group_id=group.id, attribute_id=attributes[code].id, display_order=order, status="ACTIVE"
+                )
+            )
         await session.flush()
+
+    tab = await _get_or_create(
+        session, ComponentTab, {"name": "Customs", "icon": "i-lucide-landmark", "display_order": 10}, code="CUSTOMS"
+    )
+    tab_group = (
+        await session.execute(
+            select(ComponentTabGroup).where(ComponentTabGroup.tab_id == tab.id, ComponentTabGroup.group_id == group.id)
+        )
+    ).scalars().first()
+    if tab_group is None:
+        session.add(ComponentTabGroup(tab_id=tab.id, group_id=group.id, display_order=10, status="ACTIVE"))
 
     import_direction = (await session.execute(select(TradeDirection).where(TradeDirection.code == "IMPORT"))).scalars().first()
     export_direction = (await session.execute(select(TradeDirection).where(TradeDirection.code == "EXPORT"))).scalars().first()
@@ -392,22 +260,15 @@ async def seed_demo_data(session: AsyncSession) -> None:
             continue
         exists = (
             await session.execute(
-                select(TradeDirectionComponent).where(
-                    TradeDirectionComponent.trade_direction_id == direction.id,
-                    TradeDirectionComponent.component_template_id == template.id,
+                select(ComponentTabTradeDirection).where(
+                    ComponentTabTradeDirection.tab_id == tab.id,
+                    ComponentTabTradeDirection.trade_direction_id == direction.id,
                 )
             )
         ).scalars().first()
         if exists is None:
             session.add(
-                TradeDirectionComponent(
-                    trade_direction_id=direction.id,
-                    component_group_id=groups["CUSTOMS"].id,
-                    component_template_id=template.id,
-                    display_order=10,
-                    is_required=False,
-                    instance_mode_override="INHERIT",
-                )
+                ComponentTabTradeDirection(tab_id=tab.id, trade_direction_id=direction.id, display_order=10)
             )
     await session.flush()
 
@@ -453,5 +314,4 @@ async def seed_demo_data(session: AsyncSession) -> None:
     await session.flush()
 
     await _ensure_finance_baseline(session)
-    await _seed_service_order_tabs(session)
     await session.flush()

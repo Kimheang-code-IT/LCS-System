@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { DynamicTab } from '~/types/freight/dynamic-tabs'
-import { dynamicTabToFreightTable } from '~/utils/freight/dynamic-tab-columns'
+import type { ComponentTabGroup } from '~/types/freight/component-config'
+import { componentGroupToFreightTable } from '~/utils/freight/component-tabs'
 
 const props = defineProps<{
-  tab: DynamicTab
+  group: ComponentTabGroup
   references: Record<string, Record<string, string>>
   modelValue: Array<Record<string, unknown>>
   editable?: boolean
@@ -15,7 +15,7 @@ const emit = defineEmits<{
   'save': []
 }>()
 
-const table = computed(() => dynamicTabToFreightTable(props.tab, props.references))
+const table = computed(() => componentGroupToFreightTable(props.group, props.references))
 </script>
 
 <template>

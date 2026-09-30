@@ -8,6 +8,7 @@ import {
   type PrintModelContext,
   type PrintViewModel,
 } from '~/utils/freight/print-model'
+import { getFormatConfig } from '~/utils/format/format-service'
 
 type RawLine = Record<string, unknown>
 
@@ -89,7 +90,7 @@ function mapPricingLine(row: RawLine, index: number, reference: string, currency
 }
 
 function pricingLinesForSlot(record: FreightRecord, slot: QuotationContainerSlot): PrintLine[] {
-  const currency = printStr(record.currency) || 'USD'
+  const currency = printStr(record.currency) || getFormatConfig().currency
   const reference = printStr(record.quotationNo) || printStr(record.id)
   const allRows = quotationPricingRows(record)
   const sameTypeSlots = expandQuotationContainerSlots(record)
@@ -113,7 +114,7 @@ function pricingLinesForSlot(record: FreightRecord, slot: QuotationContainerSlot
 }
 
 function pricingLinesForQuotation(record: FreightRecord): PrintLine[] {
-  const currency = printStr(record.currency) || 'USD'
+  const currency = printStr(record.currency) || getFormatConfig().currency
   const reference = printStr(record.quotationNo) || printStr(record.id)
   const rows = quotationPricingRows(record)
   const lines = rows.map((row, index) => mapPricingLine(row, index, reference, currency))

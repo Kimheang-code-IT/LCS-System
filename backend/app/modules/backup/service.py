@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import gzip
 import hashlib
 import json
 import logging
@@ -54,6 +55,7 @@ from sqlalchemy.sql.schema import Column, Table
 
 from app.core.crypto import is_sensitive_field
 from app.core.database import SessionLocal, utcnow
+from app.core.storage import S3Storage
 from app.modules.backup.models import BackupLog, BackupRecord, BackupRun, BackupState
 from app.modules.backup.sheets import (
     META_COLUMNS,
@@ -71,6 +73,10 @@ DEFAULT_BATCH_SIZE = 500
 SHEET_CHUNK_SIZE = 1000
 # Column names that must never be copied to an external spreadsheet.
 SENSITIVE_HINTS = ("password", "secret", "token", "credential", "private")
+
+
+class BackupStorageError(RuntimeError):
+    """Safe, credential-free error for object backup operations."""
 
 
 # --- configuration -----------------------------------------------------------
@@ -102,6 +108,28 @@ def build_client(config: dict[str, Any]) -> GoogleSheetsClient:
     if not credentials:
         raise BackupConfigurationError("Backup is not configured: service account JSON is required.")
     return GoogleSheetsClient(credentials, spreadsheet_id)
+
+
+def sheets_configured(config: dict[str, Any]) -> bool:
+    return bool(config.get("spreadsheetId") and config.get("serviceAccountJson"))
+
+
+def r2_configured(config: dict[str, Any]) -> bool:
+    required = ("r2AccountId", "r2AccessKeyId", "r2SecretAccessKey", "r2BucketName", "r2Endpoint")
+    return all(str(config.get(key) or "").strip() for key in required)
+
+
+def build_r2_storage(config: dict[str, Any]) -> S3Storage:
+    if not r2_configured(config):
+        raise BackupConfigurationError("Cloudflare R2 backup is not fully configured.")
+    return S3Storage(
+        bucket=str(config["r2BucketName"]).strip(),
+        endpoint_url=str(config["r2Endpoint"]).strip(),
+        access_key=str(config["r2AccessKeyId"]).strip(),
+        secret_key=str(config["r2SecretAccessKey"]),
+        region="auto",
+        ensure_bucket=False,
+    )
 
 
 # --- schema discovery --------------------------------------------------------
@@ -238,8 +266,8 @@ async def _log(session: AsyncSession, run_id: int | None, level: str, message: s
 async def start_backup(session: AsyncSession, *, trigger: str, user_id: int | None = None) -> dict[str, Any]:
     """Create a run row and launch processing in the background."""
     config = await _load_backup_config(session)
-    if not config.get("spreadsheetId") or not config.get("serviceAccountJson"):
-        raise BackupConfigurationError("Backup is not configured. Set the spreadsheet ID and service account JSON.")
+    if not sheets_configured(config) and not r2_configured(config):
+        raise BackupConfigurationError("Backup is not configured. Configure Cloudflare R2 or Google Sheets.")
     if _active_run_id is not None:
         raise RuntimeError("A backup is already running.")
 
@@ -247,7 +275,7 @@ async def start_backup(session: AsyncSession, *, trigger: str, user_id: int | No
         session,
         trigger=trigger,
         user_id=user_id,
-        spreadsheet_id=str(config.get("spreadsheetId")),
+        spreadsheet_id=str(config.get("spreadsheetId") or "") or None,
     )
     await _store_backup_status(session, status="running", message="Backup started.", when=utcnow().isoformat())
     asyncio.create_task(execute_run(run.id))
@@ -257,12 +285,15 @@ async def start_backup(session: AsyncSession, *, trigger: str, user_id: int | No
 async def run_now(session: AsyncSession, *, trigger: str, user_id: int | None = None) -> dict[str, Any]:
     """Create and execute a run synchronously (used by the scheduler)."""
     config = await _load_backup_config(session)
-    if not config.get("spreadsheetId") or not config.get("serviceAccountJson"):
-        raise BackupConfigurationError("Backup is not configured. Set the spreadsheet ID and service account JSON.")
+    if not sheets_configured(config) and not r2_configured(config):
+        raise BackupConfigurationError("Backup is not configured. Configure Cloudflare R2 or Google Sheets.")
     if _active_run_id is not None:
         raise RuntimeError("A backup is already running.")
     run = await create_run(
-        session, trigger=trigger, user_id=user_id, spreadsheet_id=str(config.get("spreadsheetId"))
+        session,
+        trigger=trigger,
+        user_id=user_id,
+        spreadsheet_id=str(config.get("spreadsheetId") or "") or None,
     )
     await _store_backup_status(session, status="running", message="Backup started.", when=utcnow().isoformat())
     await execute_run(run.id)
@@ -292,7 +323,10 @@ async def _execute_run(run_id: int) -> None:
 
         try:
             config = await _load_backup_config(session)
-            client = build_client(config)
+            client = build_client(config) if sheets_configured(config) else None
+            r2_storage = build_r2_storage(config) if r2_configured(config) else None
+            if client is None and r2_storage is None:
+                raise BackupConfigurationError("Backup is not configured. Configure Cloudflare R2 or Google Sheets.")
         except BackupConfigurationError as exc:
             run.status = "failed"
             run.message = str(exc)
@@ -310,7 +344,8 @@ async def _execute_run(run_id: int) -> None:
             await session.commit()
 
             # Retry anything a previous run failed to push to Google.
-            await _flush_unsynced(session, client, run, counters)
+            if client is not None:
+                await _flush_unsynced(session, client, run, counters)
 
             for table in tables:
                 try:
@@ -320,6 +355,11 @@ async def _execute_run(run_id: int) -> None:
                     await _log(session, run.id, "error", f"Table '{table.name}' failed: {exc}", table_name=table.name)
                     await session.commit()
                 counters.tables_processed += 1
+
+            if r2_storage is not None:
+                object_key = await _upload_r2_snapshot(session, r2_storage, run, config)
+                await _log(session, run.id, "info", f"Cloudflare R2 snapshot stored at '{object_key}'.")
+                await session.commit()
 
             run.status = "partial" if counters.rows_failed else "success"
             run.message = (
@@ -348,7 +388,7 @@ async def _execute_run(run_id: int) -> None:
 # --- per-table processing ----------------------------------------------------
 async def _process_table(
     session: AsyncSession,
-    client: GoogleSheetsClient,
+    client: GoogleSheetsClient | None,
     run: BackupRun,
     table: Table,
     config: dict[str, Any],
@@ -419,7 +459,7 @@ async def _process_table(
                 counters.rows_updated += 1
         await session.commit()
 
-    if new_records:
+    if new_records and client is not None:
         await _sync_records(session, client, run, new_records, counters)
     await _log(
         session,
@@ -430,6 +470,54 @@ async def _process_table(
         detail={"columns": len(columns)},
     )
     await session.commit()
+
+
+async def _upload_r2_snapshot(
+    session: AsyncSession,
+    storage: S3Storage,
+    run: BackupRun,
+    config: dict[str, Any],
+) -> str:
+    """Upload a compressed latest-record snapshot to the configured prefix."""
+    records = (
+        await session.execute(
+            select(BackupRecord).order_by(
+                BackupRecord.table_name,
+                BackupRecord.record_id,
+                BackupRecord.backup_version,
+            )
+        )
+    ).scalars().all()
+    latest: dict[tuple[str, str], BackupRecord] = {}
+    for record in records:
+        latest[(record.table_name, record.record_id)] = record
+
+    tables: dict[str, list[dict[str, Any]]] = {}
+    for record in latest.values():
+        tables.setdefault(record.table_name, []).append(
+            {
+                "recordId": record.record_id,
+                "backupVersion": record.backup_version,
+                "backupAt": record.backup_at.isoformat() if record.backup_at else "",
+                "data": record.data or {},
+            }
+        )
+    created_at = utcnow()
+    document = {
+        "format": "lcs-r2-backup-v1",
+        "createdAt": created_at.isoformat(),
+        "runId": run.id,
+        "tables": tables,
+    }
+    payload = gzip.compress(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    prefix = str(config.get("r2Prefix") or "backups").strip().strip("/")
+    name = f"backup-run-{run.id}-{created_at.strftime('%Y%m%dT%H%M%SZ')}.json.gz"
+    key = "/".join(part for part in (prefix, created_at.strftime("%Y/%m/%d"), name) if part)
+    try:
+        await asyncio.to_thread(storage.put, key, payload, "application/gzip")
+    except Exception as exc:  # noqa: BLE001 - external SDK errors are intentionally sanitized
+        raise BackupStorageError("Cloudflare R2 backup upload failed. Verify the endpoint and bucket permissions.") from exc
+    return key
 
 
 # --- Google Sheets sync ------------------------------------------------------
@@ -730,6 +818,8 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
     payload = dict(config)
     credentials = str(payload.pop("serviceAccountJson", "") or "")
     payload["serviceAccountConfigured"] = bool(credentials)
+    r2_secret = str(payload.pop("r2SecretAccessKey", "") or "")
+    payload["r2SecretAccessKeyConfigured"] = bool(r2_secret)
     if not payload.get("serviceAccountEmail") and credentials:
         try:
             info = json.loads(credentials)
@@ -743,7 +833,7 @@ def schedule_status(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "enabled": bool(config.get("enabled")),
         "intervalHours": int(config.get("intervalHours") or 24),
-        "configured": bool(config.get("spreadsheetId") and config.get("serviceAccountJson")),
+        "configured": sheets_configured(config) or r2_configured(config),
         "lastRunAt": config.get("lastRunAt") or "",
         "lastRunStatus": config.get("lastRunStatus") or "idle",
         "lastRunMessage": config.get("lastRunMessage") or "",
