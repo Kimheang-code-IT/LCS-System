@@ -59,7 +59,7 @@ onMounted(async () => {
 })
 
 /** Local currency from the app localization default. */
-const localCurrency = computed(() => String(localization.value.currency || 'USD'))
+const localCurrency = computed(() => String(localization.value.currency))
 
 const containerIndex = computed(() => {
   const raw = route.query.container

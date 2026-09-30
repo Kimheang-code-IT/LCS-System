@@ -12,6 +12,7 @@ import {
   formatNumber,
   formatRelativeTime,
   formatTime,
+  normalizeFormatConfig,
   type RelativeTimeLabels,
 } from '~/utils/format/format-service'
 
@@ -36,24 +37,20 @@ export function useAppLocalization() {
 
   async function load(force = false) {
     if (loaded.value && !force) return localization.value
-    if (loading.value && !force) {
+    if (loading.value) {
       await until(loading).toBe(false)
       return localization.value
     }
+    if (!useAuthStore().isLoggedIn) return localization.value
     loading.value = true
     try {
       const config = await useSettingsRepositories().appConfig.get()
-      localization.value = {
-        ...DEFAULT_APP_LOCALIZATION,
-        ...(config.localization || {}),
-        availableLanguages: config.localization?.availableLanguages?.length
-          ? [...config.localization.availableLanguages]
-          : [...DEFAULT_APP_LOCALIZATION.availableLanguages],
-      }
+      localization.value = normalizeFormatConfig(config.localization)
+      syncFormatService(localization.value)
       loaded.value = true
     }
     catch {
-      loaded.value = true
+      localization.value = normalizeFormatConfig(localization.value)
     }
     finally {
       loading.value = false
@@ -62,21 +59,14 @@ export function useAppLocalization() {
   }
 
   function apply(next: Partial<AppConfigLocalization>) {
-    localization.value = {
-      ...localization.value,
-      ...next,
-      availableLanguages: next.availableLanguages?.length
-        ? [...next.availableLanguages]
-        : localization.value.availableLanguages,
-    }
+    localization.value = normalizeFormatConfig({ ...localization.value, ...next })
+    syncFormatService(localization.value)
     loaded.value = true
   }
 
   function relativeTime(value: unknown, labels: RelativeTimeLabels, options?: { absoluteAfterDays?: number, fallback?: string }) {
     return formatRelativeTime(value, labels, options)
   }
-
-  onMounted(() => { void load() })
 
   return {
     localization: readonly(localization),

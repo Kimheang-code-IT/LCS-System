@@ -2,7 +2,6 @@ import type { AppConfigRepository, AppInfoRepository, BackupRepository } from '~
 import type {
   AttachmentRepository,
   AuditRepository,
-  ComponentRepository,
   FinanceRepository,
   JobRepository,
   QuotationRepository,
@@ -11,12 +10,11 @@ import type {
   UiSchemaRepository,
 } from '~/repositories/contracts/lcs'
 import { createHttpAppConfigRepository, createHttpAppInfoRepository, createHttpBackupRepository } from '~/repositories/http/settings'
-import { createHttpDynamicTabsRepository } from '~/repositories/http/dynamic-tabs'
-import type { DynamicTabsRepository } from '~/repositories/contracts/dynamic-tabs'
+import { createHttpComponentConfigRepository } from '~/repositories/http/component-config'
+import type { ComponentConfigRepository } from '~/repositories/contracts/component-config'
 import {
   createHttpAttachmentRepository,
   createHttpAuditRepository,
-  createHttpComponentRepository,
   createHttpFinanceRepository,
   createHttpJobRepository,
   createHttpQuotationRepository,
@@ -27,6 +25,8 @@ import {
 import { createHttpModuleRepository } from '~/repositories/http/module'
 import type { FreightModule } from '~/config/freight-modules'
 import type { ModuleRepository } from '~/repositories/contracts/module'
+import type { ArchiveRepository } from '~/repositories/contracts/archive'
+import { createHttpArchiveRepository } from '~/repositories/http/archive'
 
 let initialized = false
 let appInfoRepo: AppInfoRepository
@@ -34,14 +34,14 @@ let appConfigRepo: AppConfigRepository
 let backupRepo: BackupRepository
 let quotationRepo: QuotationRepository
 let jobRepo: JobRepository
-let componentRepo: ComponentRepository
+let componentConfigRepo: ComponentConfigRepository
 let chargeRepo: ServiceChargeRepository
 let financeRepo: FinanceRepository
 let auditRepo: AuditRepository
 let attachmentRepo: AttachmentRepository
 let uiSchemaRepo: UiSchemaRepository
 let reportsRepo: ReportsRepository
-let dynamicTabsRepo: DynamicTabsRepository
+let archiveRepo: ArchiveRepository
 
 function ensureRepositories() {
   if (initialized) return
@@ -51,14 +51,19 @@ function ensureRepositories() {
   backupRepo = createHttpBackupRepository()
   quotationRepo = createHttpQuotationRepository()
   jobRepo = createHttpJobRepository()
-  componentRepo = createHttpComponentRepository()
+  componentConfigRepo = createHttpComponentConfigRepository()
   chargeRepo = createHttpServiceChargeRepository()
   financeRepo = createHttpFinanceRepository()
   auditRepo = createHttpAuditRepository()
   attachmentRepo = createHttpAttachmentRepository()
   uiSchemaRepo = createHttpUiSchemaRepository()
   reportsRepo = createHttpReportsRepository()
-  dynamicTabsRepo = createHttpDynamicTabsRepository()
+  archiveRepo = createHttpArchiveRepository()
+}
+
+export function useArchiveRepository(): ArchiveRepository {
+  ensureRepositories()
+  return archiveRepo!
 }
 
 export function useSettingsRepositories() {
@@ -71,14 +76,13 @@ export function useLcsRepositories() {
   return {
     quotations: quotationRepo!,
     jobs: jobRepo!,
-    components: componentRepo!,
+    componentConfig: componentConfigRepo!,
     charges: chargeRepo!,
     finance: financeRepo!,
     audit: auditRepo!,
     attachments: attachmentRepo!,
     uiSchema: uiSchemaRepo!,
     reports: reportsRepo!,
-    dynamicTabs: dynamicTabsRepo!,
   }
 }
 

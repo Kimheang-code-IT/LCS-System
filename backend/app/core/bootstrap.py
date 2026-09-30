@@ -219,6 +219,7 @@ async def provision_admin(
 async def reset_all_data(session: AsyncSession) -> None:
     """Delete every row (business data, users, config) — back to setup-required."""
     # Importing the model modules guarantees Base.metadata sees every table.
+    import app.modules.archive.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
     import app.modules.master_data.models  # noqa: F401
     import app.modules.operations.models  # noqa: F401

@@ -955,16 +955,16 @@ function removeDestination(id: string) {
           class="w-full"
           @update:search-term="searchRemoteOptions"
         />
-        <USelect
+        <CommonAppReferenceSelect
           v-else-if="field.type === 'select'"
-          v-model="selectValue"
+          :model-value="selectValue"
           :items="selectItems"
-          value-key="value"
+          :reference-key="field.key"
           :placeholder="placeholderText"
           :disabled="disabled || field.readOnly"
-          :loading="optionsPending"
           size="md"
           class="w-full"
+          @update:model-value="selectValue = String($event ?? '')"
         />
         <CommonAppMentionMultiInput
           v-else-if="field.type === 'multiselect'"

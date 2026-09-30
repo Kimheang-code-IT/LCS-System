@@ -27,6 +27,7 @@ from app.modules.finance.models import (
     PostingRule,
 )
 from app.modules.operations.models import ServiceOrder, ServiceOrderCharge, ServiceOrderChargeLine
+from app.modules.settings.service import get_default_currency
 
 DEFAULT_ACCOUNTS: dict[str, tuple[str, str]] = {
     "CUSTOMER_INVOICE": ("1100", "4010"),
@@ -153,6 +154,7 @@ async def list_financial_accounts(session: AsyncSession, context: RequestContext
 
 
 async def create_financial_account(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    default_currency = await get_default_currency(session)
     ledger_code = data.get("ledgerCode")
     ledger = (
         await session.execute(
@@ -165,7 +167,7 @@ async def create_financial_account(session: AsyncSession, context: RequestContex
         account_id=ledger.id,
         account_name=str(data.get("accountName") or ledger.account_name),
         account_type=str(data.get("accountType") or "Bank").upper(),
-        currency_code=str(data.get("currency") or "USD"),
+        currency_code=str(data.get("currency") or default_currency),
         bank_name=data.get("bankName"),
         account_number_masked=data.get("accountNumberMasked"),
         status=str(data.get("status") or "ACTIVE").upper(),
@@ -399,6 +401,7 @@ async def get_document(session: AsyncSession, context: RequestContext, document_
 
 
 async def save_document(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    default_currency = await get_default_currency(session)
     document_type = str(data.get("documentType") or data.get("document_type") or "CUSTOMER_INVOICE").upper()
     document_id = data.get("id")
     document: FinancialDocument | None = None
@@ -419,7 +422,7 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
             status="DRAFT",
             party_id=_int_or_none(data.get("partyId")),
             service_order_id=_int_or_none(data.get("serviceOrderId")),
-            currency_code=str(data.get("currency") or "USD"),
+            currency_code=str(data.get("currency") or default_currency),
             exchange_rate=_decimal(data.get("exchangeRate"), Decimal("1")),
             description=data.get("description"),
             reference_number=data.get("referenceNumber"),
@@ -892,6 +895,126 @@ async def create_invoice_from_charge(session: AsyncSession, context: RequestCont
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
+async def get_service_order_invoice(session: AsyncSession, context: RequestContext, order_id: int) -> dict | None:
+    """Return the single customer invoice generated for a service order, if any."""
+    source = (
+        await session.execute(
+            select(FinancialDocumentSource).where(
+                FinancialDocumentSource.source_type == "SERVICE_ORDER",
+                FinancialDocumentSource.source_id == order_id,
+            )
+        )
+    ).scalars().first()
+    if source is None:
+        return None
+    document = await session.get(FinancialDocument, source.financial_document_id)
+    if document is None:
+        return None
+    return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+
+
+async def create_invoice_from_service_order(session: AsyncSession, context: RequestContext, order: ServiceOrder) -> dict:
+    default_currency = await get_default_currency(session)
+    """Create one invoice for a Service Order from all of its not-yet-invoiced charges.
+
+    Idempotent per order: the order may only ever have one generated customer
+    invoice, so repeated calls return the existing document.
+    """
+    existing = await get_service_order_invoice(session, context, order.id)
+    if existing is not None:
+        return existing
+    charges = (
+        await session.execute(
+            select(ServiceOrderCharge)
+            .where(ServiceOrderCharge.service_order_id == order.id)
+            .order_by(ServiceOrderCharge.id)
+        )
+    ).scalars().all()
+    if not charges:
+        raise ValidationFailed("No service charges to invoice.")
+    charge_ids = [charge.id for charge in charges]
+    invoiced_ids = set(
+        (
+            await session.execute(
+                select(FinancialDocumentSource.source_id).where(
+                    FinancialDocumentSource.source_type == "SERVICE_ORDER_CHARGE",
+                    FinancialDocumentSource.source_id.in_(charge_ids),
+                )
+            )
+        ).scalars().all()
+    )
+    pending = [charge for charge in charges if charge.id not in invoiced_ids]
+    if not pending:
+        raise ValidationFailed("All service charges for this order are already invoiced.")
+    zero = Decimal("0")
+    subtotal = sum((charge.subtotal_amount or zero for charge in pending), zero)
+    discount = sum((charge.discount_amount or zero for charge in pending), zero)
+    tax = sum((charge.tax_amount or zero for charge in pending), zero)
+    total = sum((charge.total_amount or zero for charge in pending), zero)
+    number = await allocate_number(session, "CUSTOMER_INVOICE")
+    document = FinancialDocument(
+        document_no=number,
+        document_type="CUSTOMER_INVOICE",
+        document_date=date.today(),
+        status="DRAFT",
+        party_id=order.customer_party_id,
+        service_order_id=order.id,
+        currency_code=order.currency_code or default_currency,
+        description=f"Service order {order.service_order_no}",
+        subtotal_amount=subtotal,
+        discount_amount=discount,
+        tax_amount=tax,
+        total_amount=total,
+        created_by_user_id=context.user_id,
+        data={"sourceChargeNos": [charge.charge_no for charge in pending]},
+    )
+    session.add(document)
+    await session.flush()
+    line_no = 1
+    for charge in pending:
+        charge_lines = (
+            await session.execute(
+                select(ServiceOrderChargeLine)
+                .where(ServiceOrderChargeLine.service_order_charge_id == charge.id)
+                .order_by(ServiceOrderChargeLine.line_no)
+            )
+        ).scalars().all()
+        for line in charge_lines:
+            session.add(
+                FinancialDocumentLine(
+                    financial_document_id=document.id,
+                    line_no=line_no,
+                    description=line.description,
+                    fee_type_id=line.fee_type_id,
+                    quantity=line.quantity,
+                    unit_price=line.unit_price,
+                    discount_amount=line.discount_amount,
+                    tax_rate=line.tax_rate,
+                    tax_amount=line.tax_amount,
+                    line_amount=line.line_amount,
+                    service_order_id=order.id,
+                    service_order_container_id=line.service_order_container_id,
+                )
+            )
+            line_no += 1
+        session.add(
+            FinancialDocumentSource(
+                financial_document_id=document.id,
+                source_type="SERVICE_ORDER_CHARGE",
+                source_id=charge.id,
+            )
+        )
+    session.add(
+        FinancialDocumentSource(
+            financial_document_id=document.id,
+            source_type="SERVICE_ORDER",
+            source_id=order.id,
+        )
+    )
+    await session.commit()
+    return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+
+
 # --- Journals ----------------------------------------------------------------
 async def _journal_lines(session: AsyncSession, journal_id: int) -> list[JournalEntryLine]:
     return list(
@@ -960,6 +1083,7 @@ async def get_journal(session: AsyncSession, context: RequestContext, journal_id
 
 
 async def save_journal(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    default_currency = await get_default_currency(session)
     journal_id = data.get("id")
     entry: JournalEntry | None = None
     if journal_id and str(journal_id).isdigit():
@@ -1024,7 +1148,7 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
                 description=line.get("description"),
                 debit_amount=debit_amount,
                 credit_amount=credit_amount,
-                currency_code=str(line.get("currency") or "USD"),
+                currency_code=str(line.get("currency") or default_currency),
                 exchange_rate=exchange_rate,
                 base_debit_amount=debit_amount * exchange_rate,
                 base_credit_amount=credit_amount * exchange_rate,

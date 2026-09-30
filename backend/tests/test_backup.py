@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -54,6 +56,19 @@ class FakeSheets:
         return {"title": "Fake", "sheets": list(self.tabs), "serviceAccountEmail": "sa@example.com"}
 
 
+class FakeR2:
+    def __init__(self, *, fail_test: bool = False) -> None:
+        self.fail_test = fail_test
+        self.objects: dict[str, tuple[bytes, str]] = {}
+
+    def test_connection(self) -> None:
+        if self.fail_test:
+            raise RuntimeError("simulated credential detail")
+
+    def put(self, key: str, data: bytes, content_type: str) -> None:
+        self.objects[key] = (data, content_type)
+
+
 async def _configure(session_factory) -> None:
     async with session_factory() as session:
         await settings_service.update_app_config(
@@ -65,6 +80,26 @@ async def _configure(session_factory) -> None:
                     "intervalHours": 3,
                     "spreadsheetId": "fake-spreadsheet",
                     "serviceAccountJson": '{"client_email": "sa@example.com"}',
+                }
+            },
+        )
+
+
+async def _configure_r2(session_factory) -> None:
+    async with session_factory() as session:
+        await settings_service.update_app_config(
+            session,
+            None,
+            {
+                "backup": {
+                    "enabled": True,
+                    "intervalHours": 3,
+                    "r2AccountId": "account-id",
+                    "r2AccessKeyId": "access-key",
+                    "r2SecretAccessKey": "secret-key",
+                    "r2BucketName": "backups",
+                    "r2Endpoint": "https://account-id.r2.cloudflarestorage.com",
+                    "r2Prefix": "production/database",
                 }
             },
         )
@@ -188,6 +223,95 @@ def test_public_config_redacts_credentials():
     assert "serviceAccountJson" not in payload
     assert payload["serviceAccountConfigured"] is True
     assert payload["serviceAccountEmail"] == "sa@example.com"
+
+
+async def test_r2_backup_uploads_compressed_snapshot(session_factory, monkeypatch):
+    fake_r2 = FakeR2()
+    await _configure_r2(session_factory)
+    monkeypatch.setattr(service, "build_r2_storage", lambda config: fake_r2)
+    monkeypatch.setattr(service, "SessionLocal", session_factory)
+
+    async with session_factory() as session:
+        session.add(TradeDirection(code="R2", name="R2 freight", status="ACTIVE"))
+        await session.commit()
+    async with session_factory() as session:
+        result = await service.run_now(session, trigger="manual")
+
+    assert result["status"] == "success"
+    assert len(fake_r2.objects) == 1
+    key, (compressed, content_type) = next(iter(fake_r2.objects.items()))
+    assert key.startswith("production/database/")
+    assert content_type == "application/gzip"
+    snapshot = json.loads(gzip.decompress(compressed))
+    assert snapshot["format"] == "lcs-r2-backup-v1"
+    assert any(row["data"].get("code") == "R2" for row in snapshot["tables"]["trade_directions"])
+
+
+async def test_r2_settings_save_load_and_redact_secret(client):
+    headers = await login(client)
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={
+            "backup": {
+                "r2AccountId": "account-id",
+                "r2AccessKeyId": "access-key",
+                "r2SecretAccessKey": "super-secret",
+                "r2BucketName": "backups",
+                "r2Endpoint": "https://account-id.r2.cloudflarestorage.com",
+                "r2Prefix": "nightly",
+            }
+        },
+    )
+    assert response.status_code == 200, response.text
+    saved = response.json()["data"]["backup"]
+    assert "r2SecretAccessKey" not in saved
+    assert saved["r2SecretAccessKeyConfigured"] is True
+
+    loaded = (await client.get("/api/v1/settings/app-config", headers=headers)).json()["data"]["backup"]
+    assert loaded["r2AccountId"] == "account-id"
+    assert loaded["r2Prefix"] == "nightly"
+    assert "r2SecretAccessKey" not in loaded
+    assert loaded["r2SecretAccessKeyConfigured"] is True
+
+
+async def test_invalid_r2_settings_are_rejected(client):
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=await login(client),
+        json={"backup": {"r2AccountId": "account-id", "r2Endpoint": "not-a-url"}},
+    )
+    assert response.status_code == 422
+    errors = response.json()["field_errors"]
+    assert "backup.r2SecretAccessKey" in errors
+    assert "backup.r2Endpoint" in errors
+
+
+async def test_r2_connection_success_and_failure(client, session_factory, monkeypatch):
+    await _configure_r2(session_factory)
+    headers = await login(client)
+    monkeypatch.setattr(service, "build_r2_storage", lambda config: FakeR2())
+    response = await client.post("/api/v1/backup/test-connection", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["status"] == "connected"
+    assert response.json()["data"]["bucket"] == "backups"
+
+    monkeypatch.setattr(service, "build_r2_storage", lambda config: FakeR2(fail_test=True))
+    failed = await client.post("/api/v1/backup/test-connection", headers=headers)
+    assert failed.status_code == 422
+    assert "simulated credential detail" not in failed.text
+
+
+async def test_backup_actions_require_permission(client):
+    headers = await login(client, "ops.pp")
+    update = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"backup": {"enabled": False}},
+    )
+    assert update.status_code == 403
+    assert (await client.post("/api/v1/backup/test-connection", headers=headers)).status_code == 403
+    assert (await client.post("/api/v1/backup/run", headers=headers)).status_code == 403
 
 
 async def test_backup_status_endpoint(client):

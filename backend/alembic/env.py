@@ -7,6 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import app.modules.archive.models  # noqa: F401
 import app.modules.audit.models  # noqa: F401
 
 # Import every model module so Base.metadata is complete.

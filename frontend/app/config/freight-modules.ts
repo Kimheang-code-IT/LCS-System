@@ -45,7 +45,7 @@ export type FreightLineColumn = {
   key: string
   label: string
   labelKm?: string
-  type?: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'date' | 'datetime' | 'table-columns'
+  type?: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'date' | 'datetime' | 'table-columns' | 'delete'
   options?: readonly string[] | string[]
   /** Select labels when they differ from stored values (e.g. container requirement id). */
   optionItems?: Array<{ label: string, value: string }>
@@ -1151,6 +1151,32 @@ export const freightModules: FreightModule[] = [
   ...lcsReferenceModules,
 
   createModule({
+    path: '/administration/archive',
+    title: 'Archive',
+    titleKm: 'បណ្ណសារ',
+    singular: 'Archived Record',
+    singularKm: 'កំណត់ត្រាបណ្ណសារ',
+    description: 'Restore or permanently delete supported records removed across the system.',
+    descriptionKm: 'ស្ដារ ឬលុបជាអចិន្ត្រៃយ៍នូវកំណត់ត្រាដែលបានលុប។',
+    icon: 'i-lucide-archive-restore',
+    group: 'admin',
+    permission: 'archive.view',
+    collection: 'archive',
+    titleField: 'reference',
+    readOnly: true,
+    tableOnly: true,
+    columns: [
+      col('module', 'Module / Entity', 'ម៉ូឌុល / អង្គភាព'),
+      col('reference', 'Record / Reference', 'កំណត់ត្រា / យោង'),
+      col('deletedBy', 'Deleted By', 'លុបដោយ'),
+      col('deletedAt', 'Deleted At', 'បានលុបនៅ'),
+      col('originalOwner', 'Original Owner / Creator', 'ម្ចាស់ / អ្នកបង្កើតដើម'),
+      col('status', 'Status', 'ស្ថានភាព'),
+    ],
+    fields: [],
+  }),
+
+  createModule({
     path: '/administration/audit-logs',
     title: 'Audit Logs',
     titleKm: 'កំណត់ហេតុសវនកម្ម',
@@ -1229,7 +1255,7 @@ if (quotationModule) freightModules.push({
   ],
   fields: [
     f('quotationNo', 'Quotation No.', 'លេខសម្រង់', 'Header', 'ក្បាល', 'text', undefined, { required: true, computed: true }),
-    f('customer', 'Customer', 'អតិថិជន', 'Header', 'ក្បាល', 'text', undefined, { required: true }),
+    f('customer', 'Customer', 'អតិថិជន', 'Header', 'ក្បាល', 'select', undefined, { required: true }),
     f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Header', 'ក្បាល', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }), f('revisionNo', 'Revision No.', 'លេខកំណែ', 'Header', 'ក្បាល', 'number', undefined, { computed: true }),
     f('date', 'Quotation Date', 'កាលបរិច្ឆេទសម្រង់', 'Header', 'ក្បាល', 'date', undefined, { required: true }), f('validUntil', 'Valid Until', 'មានសុពលភាពដល់', 'Header', 'ក្បាល', 'date'),
     f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Header', 'ក្បាល', 'select', undefined, { required: true }), f('description', 'Description', 'បរិយាយ', 'Header', 'ក្បាល', 'textarea', undefined, { colSpan: 2 }),
@@ -1238,26 +1264,19 @@ if (quotationModule) freightModules.push({
   ],
   tables: [
     { key: 'places', title: 'Route', titleKm: 'ផ្លូវ', addLabel: 'Add Route', columns: [
-      { key: 'placeRole', label: 'Role', labelKm: 'តួនាទី', type: 'select', required: true }, { key: 'place', label: 'Place', labelKm: 'ទីកន្លែង', type: 'text', required: true }, { key: 'plannedActual', label: 'Planned / Actual', labelKm: 'គ្រោង / ពិត', type: 'date' }, { key: 'notes', label: 'Notes', labelKm: 'កំណត់សម្គាល់' },
+      { key: 'placeRole', label: 'Role', labelKm: 'តួនាទី', type: 'select', required: true }, { key: 'place', label: 'Place', labelKm: 'ទីកន្លែង', type: 'text', required: true }, { key: 'plannedActual', label: 'Planned', labelKm: 'គ្រោង', type: 'date' }, { key: 'notes', label: 'Notes', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.notes' },
+      { key: 'trust', label: '', type: 'delete' },
     ] },
     { key: 'containerRequirements', title: 'Containers', titleKm: 'កុងតឺន័រ', addLabel: 'Add Container', columns: [
-      { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', type: 'select', required: true }, { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', type: 'number', required: true }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' },
+      { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true }, { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', type: 'number', required: true }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' },
     ] },
     { key: 'pricingLines', title: 'Pricing', titleKm: 'តម្លៃ', addLabel: 'Add Pricing Line', columns: [
-      { key: 'feeType', label: 'Service / Fee', labelKm: 'សេវា / ថ្លៃ', type: 'select', required: true }, { key: 'containerRequirement', label: 'Container', labelKm: 'កុងតឺន័រ' },
-      { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', type: 'number', required: true }, { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', type: 'number', required: true },
-      {
-        key: 'lineTotal',
-        label: 'Line Total',
-        labelKm: 'សរុបជួរ',
-        labelKey: 'freight.ui.lineTotal',
-        type: 'number',
-        computed: true,
-        inlineFields: [
-          { key: 'discountAmount', label: 'Disc.', labelKm: 'បញ្ចុះ.', labelKey: 'freight.ui.discountCol' },
-          { key: 'taxAmount', label: 'Tax', labelKm: 'ពន្ធ', labelKey: 'freight.ui.taxCol' },
-        ],
-      },
+      { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true },
+      { key: 'transportBy', label: 'By', labelKm: 'ដោយ', labelKey: 'freight.ui.byCol', type: 'select', options: TRANSPORT_BY, required: true },
+      { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', labelKey: 'freight.ui.qty', type: 'number', required: true },
+      { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true },
+      { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
+      { key: 'trust', label: '', type: 'delete' },
     ] },
     { key: 'attachments', title: 'Files', titleKm: 'ឯកសារ', addLabel: 'Upload File', addLabelKey: 'freight.ui.uploadFile', kind: 'files', columns: FILE_ATTACHMENT_COLUMNS },
     { key: 'revisionHistory', title: 'Revisions', titleKm: 'កំណែ', columns: [
@@ -1297,9 +1316,20 @@ if (jobsModule) freightModules.push({
     col('chargesTotal', 'Total Charges', 'ថ្លៃសរុប', { labelKey: 'freight.ui.totalCharges' }),
     col('status', 'Status', 'ស្ថានភាព', { labelKey: 'freight.ui.status' }),
   ],
+  // The Service Order Overview is intentionally minimal: the quotation-style
+  // header fields, the reference block and a single operational remark.
   fields: [
-    ...jobsModule.fields.filter(field => field.key !== 'jobNo'),
-    f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Job Information', 'ព័ត៌មានការងារ', 'select'), f('description', 'Description', 'បរិយាយ', 'Job Information', 'ព័ត៌មានការងារ', 'textarea', undefined, { colSpan: 2 }), f('createdBy', 'Created By', 'បង្កើតដោយ', 'Audit', 'សវនកម្ម', 'text', undefined, { computed: true }), f('createdAt', 'Created At', 'បង្កើតនៅ', 'Audit', 'សវនកម្ម', 'datetime', undefined, { computed: true }),
+    f('customer', 'Company', 'ក្រុមហ៊ុន', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true }),
+    f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }),
+    f('date', 'Quotation Date', 'កាលបរិច្ឆេទ', 'Job Information', 'ព័ត៌មានការងារ', 'date', undefined, { required: true }),
+    f('validUntil', 'Valid Until', 'មានសុពលភាពដល់', 'Job Information', 'ព័ត៌មានការងារ', 'date'),
+    f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true }),
+    f('description', 'Description', 'បរិយាយ', 'Job Information', 'ព័ត៌មានការងារ', 'textarea', undefined, { colSpan: 2 }),
+    f('internalReference', 'Internal Reference No.', 'លេខយោងផ្ទៃក្នុង', 'Reference', 'លេខយោង'),
+    f('transportReference', 'Transport Reference No.', 'លេខយោងដឹកជញ្ជូន', 'Reference', 'លេខយោង'),
+    f('externalReference', 'External Reference No.', 'លេខយោងខាងក្រៅ', 'Reference', 'លេខយោង'),
+    f('referenceNo', 'Reference No.', 'លេខយោង', 'Reference', 'លេខយោង'),
+    f('operationalRemark', 'Operational Remark', 'កំណត់សម្គាល់ប្រតិបត្តិការ', 'Remarks', 'កំណត់សម្គាល់', 'textarea', undefined, { colSpan: 2 }),
   ],
   filters: [
     f('customer', 'Customer', 'អតិថិជន', '', '', 'select', undefined, { labelKey: 'freight.ui.cols.customer' }),
@@ -1328,7 +1358,7 @@ if (chargesModule) freightModules.push({
   ],
   fields: [
     f('chargeNo', 'Charge No.', 'លេខថ្លៃ', 'General', 'ទូទៅ', 'text', undefined, { required: true, computed: true }), f('documentDate', 'Document Date', 'កាលបរិច្ឆេទ', 'General', 'ទូទៅ', 'date', undefined, { required: true }), f('documentType', 'Document Type', 'ប្រភេទឯកសារ', 'General', 'ទូទៅ', 'select', ['SERVICE_NOTE', 'DEBIT_NOTE', 'PRO_FORMA']), f('status', 'Status', 'ស្ថានភាព', 'General', 'ទូទៅ', 'select', SERVICE_CHARGE_STATUS),
-    f('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម', 'General', 'ទូទៅ', 'text', undefined, { helpKey: 'freight.fieldHelp.chargeJobNo' }), f('customer', 'Customer', 'អតិថិជន', 'General', 'ទូទៅ', 'text', undefined, { required: true }), f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'General', 'ទូទៅ', 'select'), f('remarks', 'Remarks', 'កំណត់សម្គាល់', 'General', 'ទូទៅ', 'textarea', undefined, { colSpan: 2, helpKey: 'freight.fieldHelp.remarks' }),
+    f('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម', 'General', 'ទូទៅ', 'text', undefined, { helpKey: 'freight.fieldHelp.chargeJobNo' }), f('customer', 'Customer', 'អតិថិជន', 'General', 'ទូទៅ', 'select', undefined, { required: true }), f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'General', 'ទូទៅ', 'select'), f('remarks', 'Remarks', 'កំណត់សម្គាល់', 'General', 'ទូទៅ', 'textarea', undefined, { colSpan: 2, helpKey: 'freight.fieldHelp.remarks' }),
     f('invoiceNo', 'Finance Invoice', 'វិក្កយបត្រហិរញ្ញវត្ថុ', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeInvoiceNo' }),
     f('journalId', 'Posted Journal', 'ទិនានុប្បវត្តិបានចុះបញ្ជី', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeJournalId' }),
   ],

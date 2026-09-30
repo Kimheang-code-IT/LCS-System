@@ -9,6 +9,7 @@ import {
   type PrintModelContext,
   type PrintViewModel,
 } from '~/utils/freight/print-model'
+import { getFormatConfig } from '~/utils/format/format-service'
 
 type RawLine = Record<string, unknown>
 
@@ -81,7 +82,7 @@ export function buildChargePrintViewModel(
   options: ChargePrintOptions = {},
 ): PrintViewModel {
   const feeLines = Array.isArray(charge.feeLines) ? charge.feeLines as RawLine[] : []
-  const currency = printStr(charge.currency) || 'USD'
+  const currency = printStr(charge.currency) || getFormatConfig().currency
   const reference = printStr(charge.chargeNo) || printStr(charge.jobNo) || printStr(charge.id)
   const lineIndex = options.lineIndex
   const selectedSource = lineIndex !== undefined && feeLines[lineIndex]

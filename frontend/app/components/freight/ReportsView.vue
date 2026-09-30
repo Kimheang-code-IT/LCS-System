@@ -166,7 +166,7 @@ function actions(row: FreightRecord): DropdownMenuItem[][] {
 const columns=computed<TableColumn<FreightRecord>[]>(()=>{
   const list=report.value.columns.map(column=>{
     const label = columnLabel(column)
-    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:false,meta:column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:undefined,cell:({row}:{row:{original:FreightRecord}})=>{if(column.status)return freightStatusBadge(row.original[column.key],column.key);if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}return formatFreightCell(row.original[column.key],column.key)}}
+    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:false,meta:column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:undefined,cell:({row}:{row:{original:FreightRecord}})=>{if(column.status)return freightStatusBadge(row.original[column.key],column.key);if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)}}
   })
   return [
     listTableSelectColumn<FreightRecord>(t),
@@ -282,16 +282,16 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
                 <h2 class="border-b border-default pb-1.5 text-sm font-semibold">{{ group.type }}</h2>
                 <div v-for="row in group.rows" :key="row.name" class="flex justify-between px-3 py-1.5 text-sm">
                   <span>{{ row.name }}</span>
-                  <span class="tabular-nums">{{ formatMoney(row.amount) }}</span>
+                  <span class="tabular-nums">{{ formatMoney(row.amount, currency.length === 1 ? currency[0] : undefined) }}</span>
                 </div>
                 <div class="flex justify-between border-t border-default px-3 pt-2 text-sm font-semibold">
                   <span>Total {{ group.type }}</span>
-                  <span>{{ formatMoney(group.total) }}</span>
+                  <span>{{ formatMoney(group.total, currency.length === 1 ? currency[0] : undefined) }}</span>
                 </div>
               </div>
               <div class="flex justify-between border-t-2 border-default px-3 pt-3 font-semibold">
                 <span>{{ statementFooterLabel }}</span>
-                <span>{{ formatMoney(statementDifference) }}</span>
+                <span>{{ formatMoney(statementDifference, currency.length === 1 ? currency[0] : undefined) }}</span>
               </div>
             </div>
           </section>
@@ -300,4 +300,3 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
     </template>
   </div>
 </template>
-

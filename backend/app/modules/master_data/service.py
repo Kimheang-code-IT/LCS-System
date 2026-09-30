@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
@@ -14,16 +14,12 @@ from app.core.pagination import PageParams, count_query, paged
 from app.core.serialization import jsonable, to_camel
 from app.modules.master_data.models import (
     BusinessParty,
-    ComponentGroup,
-    ComponentTemplate,
     ContainerType,
     FeeType,
     ModuleRecord,
     PartyRole,
     Place,
-    TemplateAttribute,
     TradeDirection,
-    TradeDirectionComponent,
     TransportAsset,
     TransportType,
 )
@@ -92,16 +88,8 @@ async def resolve_reference(session: AsyncSession, target: str, value: Any) -> A
         "container_type": (ContainerType, "name"),
         "transport_type": (TransportType, "name"),
         "fee_type": (FeeType, "name"),
-        "component_group": (ComponentGroup, "name"),
         "business_party": (BusinessParty, "legal_name"),
     }
-    if target == "component_template":
-        row = (
-            await session.execute(
-                select(ComponentTemplate).where(or_(ComponentTemplate.code == text, ComponentTemplate.name == text)).order_by(ComponentTemplate.version.desc())
-            )
-        ).scalars().first()
-        return row.id if row else None
     if target == "chart_of_account":
         from app.modules.finance.models import ChartOfAccount
 
@@ -118,7 +106,9 @@ async def resolve_reference(session: AsyncSession, target: str, value: Any) -> A
     code_column = getattr(model, "code", None)
     if code_column is not None:
         conditions.append(code_column == text)
-    row = (await session.execute(select(model).where(or_(*conditions)))).scalars().first()
+    row = (
+        await session.execute(select(model).where(or_(*conditions), model.deleted_at.is_(None)))
+    ).scalars().first()
     return row.id if row else None
 
 
@@ -207,87 +197,6 @@ async def _sync_party_roles(model: Any, data: dict[str, Any], session: AsyncSess
         session.add(PartyRole(party_id=model.id, role_type=str(role), is_primary=False))
 
 
-async def _template_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
-    count = await session.scalar(
-        select(func.count()).select_from(TemplateAttribute).where(TemplateAttribute.template_id == model.id)
-    )
-    attributes = (
-        await session.execute(
-            select(TemplateAttribute).where(TemplateAttribute.template_id == model.id).order_by(TemplateAttribute.display_order)
-        )
-    ).scalars().all()
-    return {
-        "templateVersion": model.version,
-        "version": model.version,
-        "attributeCount": int(count or 0),
-        "minimumInstances": model.minimum_instances,
-        "maximumInstances": model.maximum_instances,
-        "group": model.category,
-        "attributes": [
-            {
-                "id": attr.id,
-                "code": attr.code,
-                "label": attr.label,
-                "dataType": attr.data_type,
-                "inputType": attr.input_type,
-                "required": attr.is_required,
-                "repeatable": attr.is_repeatable,
-                "displayOrder": attr.display_order,
-                "referenceType": attr.reference_type,
-                "validationRules": attr.validation_rules,
-                "status": attr.status,
-            }
-            for attr in attributes
-        ],
-    }
-
-
-async def _sync_template_attributes(model: Any, data: dict[str, Any], session: AsyncSession) -> None:
-    if "attributes" not in data:
-        return
-    from sqlalchemy import delete
-
-    await session.execute(delete(TemplateAttribute).where(TemplateAttribute.template_id == model.id))
-    for index, item in enumerate(data["attributes"]):
-        if not isinstance(item, dict):
-            continue
-        rules = item.get("validationRules")
-        if isinstance(rules, str):
-            rules = {"expression": rules}
-        session.add(
-            TemplateAttribute(
-                template_id=model.id,
-                code=str(item.get("code") or f"ATTR{index + 1}"),
-                label=str(item.get("label") or item.get("code") or f"Attribute {index + 1}"),
-                data_type=str(item.get("dataType") or item.get("data_type") or "text").lower(),
-                input_type=item.get("inputType"),
-                is_required=_bool(item.get("required", False)),
-                is_repeatable=_bool(item.get("repeatable", False)),
-                display_order=int(item.get("displayOrder") or index + 1),
-                validation_rules=rules if isinstance(rules, dict) else {},
-                reference_type=item.get("referenceType"),
-                status=str(item.get("status") or "ACTIVE"),
-            )
-        )
-
-
-async def _tdc_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
-    direction = await session.get(TradeDirection, model.trade_direction_id)
-    group = await session.get(ComponentGroup, model.component_group_id) if model.component_group_id else None
-    template = await session.get(ComponentTemplate, model.component_template_id) if model.component_template_id else None
-    return {
-        "tradeDirection": direction.name if direction else None,
-        "tradeDirectionId": model.trade_direction_id,
-        "componentGroup": group.name if group else None,
-        "componentGroupId": model.component_group_id,
-        "componentTemplate": template.name if template else None,
-        "componentTemplateId": model.component_template_id,
-        "templateVersion": template.version if template else None,
-        "required": model.is_required,
-        "instanceModeOverride": model.instance_mode_override,
-    }
-
-
 async def _asset_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
     transport_type = await session.get(TransportType, model.transport_type_id) if model.transport_type_id else None
     owner = await session.get(BusinessParty, model.owner_party_id) if model.owner_party_id else None
@@ -317,10 +226,6 @@ async def _container_computed(model: Any, session: AsyncSession) -> dict[str, An
         "widthMeters": width,
         "heightMeters": height,
     }
-
-
-async def _group_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
-    return {"showOnJobWorkspace": model.show_on_job_workspace, "displayOrder": model.display_order}
 
 
 SPECS: dict[str, Spec] = {
@@ -415,55 +320,6 @@ SPECS: dict[str, Spec] = {
         fields={"code": "code", "name": "name", "description": "description", "status": "status"},
         search=["code", "name"],
     ),
-    "componentGroups": Spec(
-        model=ComponentGroup,
-        title="name",
-        fields={
-            "code": "code",
-            "name": "name",
-            "description": "description",
-            "displayOrder": "display_order",
-            "showOnJobWorkspace": "show_on_job_workspace",
-            "status": "status",
-        },
-        search=["code", "name"],
-        computed=_group_computed,
-    ),
-    "componentTemplates": Spec(
-        model=ComponentTemplate,
-        title="name",
-        fields={
-            "code": "code",
-            "name": "name",
-            "description": "description",
-            "group": "category",
-            "instanceMode": "instance_mode",
-            "version": "version",
-            "minimumInstances": "minimum_instances",
-            "maximumInstances": "maximum_instances",
-            "status": "status",
-        },
-        search=["code", "name"],
-        computed=_template_computed,
-        after_create=_sync_template_attributes,
-    ),
-    "tradeDirectionComponents": Spec(
-        model=TradeDirectionComponent,
-        title="component_template_id",
-        fields={
-            "displayOrder": "display_order",
-            "required": "is_required",
-            "instanceModeOverride": "instance_mode_override",
-            "status": "status",
-        },
-        refs={
-            "tradeDirection": RefSpec("trade_direction", "trade_direction_id"),
-            "componentGroup": RefSpec("component_group", "component_group_id"),
-            "componentTemplate": RefSpec("component_template", "component_template_id"),
-        },
-        search=[],
-        computed=_tdc_computed,
-    ),
 }
 
 # Collection slugs that resolve to the generic record store.
@@ -489,7 +345,7 @@ def get_spec(collection: str) -> Spec:
 
 async def list_reference(session: AsyncSession, context: RequestContext, collection: str, page: PageParams) -> dict:
     spec = get_spec(collection)
-    stmt = select(spec.model)
+    stmt = select(spec.model).where(spec.model.deleted_at.is_(None))
     if page.q:
         pattern = f"%{page.q}%"
         conditions = [getattr(spec.model, column).ilike(pattern) for column in spec.search]
@@ -510,7 +366,7 @@ async def list_reference(session: AsyncSession, context: RequestContext, collect
 async def get_reference(session: AsyncSession, collection: str, record_id: int) -> dict:
     spec = get_spec(collection)
     model = await session.get(spec.model, record_id)
-    if model is None:
+    if model is None or model.deleted_at is not None:
         raise NotFound()
     return await serialize(spec, model, session)
 
@@ -532,7 +388,7 @@ async def create_reference(session: AsyncSession, collection: str, data: dict) -
 async def update_reference(session: AsyncSession, collection: str, record_id: int, data: dict) -> dict:
     spec = get_spec(collection)
     model = await session.get(spec.model, record_id)
-    if model is None:
+    if model is None or model.deleted_at is not None:
         raise NotFound()
     await apply_input(spec, model, data, session)
     if spec.after_create is not None:
@@ -542,7 +398,9 @@ async def update_reference(session: AsyncSession, collection: str, record_id: in
     return await serialize(spec, model, session)
 
 
-async def delete_reference(session: AsyncSession, collection: str, ids: list[int]) -> None:
+async def delete_reference(
+    session: AsyncSession, context: RequestContext, collection: str, ids: list[int]
+) -> None:
     """Delete reference rows, but never an active one.
 
     Master Data / Configuration records follow the activate/deactivate rule:
@@ -560,14 +418,15 @@ async def delete_reference(session: AsyncSession, collection: str, ids: list[int
             "REFERENCE_ACTIVE",
             "Active records cannot be deleted. Deactivate the record first.",
         )
+    from app.modules.archive.service import archive_record
+
     for model in models:
-        await session.delete(model)
-    await session.commit()
+        await archive_record(session, context, collection, model.id)
 
 
 # --- Generic record store -----------------------------------------------------
 async def list_generic(session: AsyncSession, context: RequestContext, collection: str, page: PageParams) -> dict:
-    stmt = select(ModuleRecord).where(ModuleRecord.collection == collection)
+    stmt = select(ModuleRecord).where(ModuleRecord.collection == collection, ModuleRecord.deleted_at.is_(None))
     if page.q:
         stmt = stmt.where(ModuleRecord.data["name"].as_string().ilike(f"%{page.q}%"))
     if page.status:
@@ -607,7 +466,7 @@ def _generic_payload(row: ModuleRecord) -> dict[str, Any]:
 
 async def get_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int) -> dict:
     row = await session.get(ModuleRecord, record_id)
-    if row is None or row.collection != collection:
+    if row is None or row.collection != collection or row.deleted_at is not None:
         raise NotFound()
     return _generic_payload(row)
 
@@ -630,7 +489,7 @@ async def create_generic(session: AsyncSession, context: RequestContext, collect
 
 async def update_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int, data: dict) -> dict:
     row = await session.get(ModuleRecord, record_id)
-    if row is None or row.collection != collection:
+    if row is None or row.collection != collection or row.deleted_at is not None:
         raise NotFound()
     payload = _encrypt_payload(
         {key: value for key, value in data.items() if key not in {"id"}}
@@ -646,11 +505,17 @@ async def update_generic(session: AsyncSession, context: RequestContext, collect
 
 
 async def delete_generic(session: AsyncSession, context: RequestContext, collection: str, ids: list[int]) -> None:
+    from app.modules.archive.service import ARCHIVABLE_GENERIC_COLLECTIONS, archive_record
+
     for record_id in ids:
         row = await session.get(ModuleRecord, record_id)
         if row is not None and row.collection == collection:
-            await session.delete(row)
-    await session.commit()
+            if collection in ARCHIVABLE_GENERIC_COLLECTIONS:
+                await archive_record(session, context, collection, record_id)
+            else:
+                await session.delete(row)
+    if collection not in ARCHIVABLE_GENERIC_COLLECTIONS:
+        await session.commit()
 
 
 async def assert_reference_exists(session: AsyncSession, model: type, record_id: int | None, message: str) -> None:

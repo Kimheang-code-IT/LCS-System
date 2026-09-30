@@ -8,6 +8,7 @@ from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, Numeric,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, PKMixin, TimestampMixin, utcnow
+from app.core.localization import DEFAULT_CURRENCY
 from app.core.types import JSONType
 
 
@@ -32,7 +33,7 @@ class QuotationRevision(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
     quotation_date: Mapped[date] = mapped_column(Date, nullable=False)
     valid_until: Mapped[date | None] = mapped_column(Date)
-    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     description: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
     subtotal_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)

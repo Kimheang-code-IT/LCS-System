@@ -18,11 +18,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base, PKMixin, TimestampMixin
+from app.core.database import Base, PKMixin, SoftDeleteMixin, TimestampMixin
 from app.core.types import JSONType
 
 
-class Place(PKMixin, TimestampMixin, Base):
+class Place(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "places"
 
     code: Mapped[str | None] = mapped_column(String(50), unique=True)
@@ -37,7 +37,7 @@ class Place(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class TradeDirection(PKMixin, TimestampMixin, Base):
+class TradeDirection(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "trade_directions"
 
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -46,7 +46,7 @@ class TradeDirection(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class ContainerType(PKMixin, TimestampMixin, Base):
+class ContainerType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "container_types"
 
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -62,7 +62,7 @@ class ContainerType(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class TransportType(PKMixin, TimestampMixin, Base):
+class TransportType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "transport_types"
 
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -71,7 +71,7 @@ class TransportType(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class FeeType(PKMixin, TimestampMixin, Base):
+class FeeType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "fee_types"
 
     code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -80,7 +80,7 @@ class FeeType(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class BusinessParty(PKMixin, TimestampMixin, Base):
+class BusinessParty(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "business_parties"
 
     party_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -112,7 +112,7 @@ class PartyPlace(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
-class TransportAsset(PKMixin, TimestampMixin, Base):
+class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "transport_assets"
     __table_args__ = (UniqueConstraint("transport_type_id", "identity", name="uq_transport_assets_type_identity"),)
 
@@ -139,95 +139,119 @@ class CustomerCustomsAccount(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class ComponentGroup(PKMixin, TimestampMixin, Base):
-    __tablename__ = "component_groups"
+class ComponentAttribute(PKMixin, TimestampMixin, Base):
+    """Reusable dynamic-form attribute (field) in the global catalog.
 
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    show_on_job_workspace: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    Attributes are defined once and then referenced by one or more component
+    groups, so a field such as "Container No." can be reused everywhere.
+    """
 
+    __tablename__ = "component_attributes"
+    __table_args__ = (UniqueConstraint("code", name="uq_component_attributes_code"),)
 
-class ComponentTemplate(PKMixin, TimestampMixin, Base):
-    __tablename__ = "component_templates"
-    __table_args__ = (UniqueConstraint("code", "version", name="uq_component_templates_code_version"),)
-
-    code: Mapped[str] = mapped_column(String(64), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    category: Mapped[str | None] = mapped_column(String(64))
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_repeatable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    instance_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="SINGLE")
-    minimum_instances: Mapped[int | None] = mapped_column(Integer)
-    maximum_instances: Mapped[int | None] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
-
-
-class TemplateAttribute(PKMixin, TimestampMixin, Base):
-    __tablename__ = "template_attributes"
-    __table_args__ = (UniqueConstraint("template_id", "code", name="uq_template_attributes_template_code"),)
-
-    template_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("component_templates.id", ondelete="CASCADE"), nullable=False)
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
+    label_km: Mapped[str | None] = mapped_column(String(255))
     data_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
     input_type: Mapped[str | None] = mapped_column(String(32))
+    reference_type: Mapped[str | None] = mapped_column(String(32))
     is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_repeatable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    default_value: Mapped[str | None] = mapped_column(String(255))
+    placeholder: Mapped[str | None] = mapped_column(String(255))
+    width: Mapped[str | None] = mapped_column(String(16))
+    options: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
     validation_rules: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
-    reference_type: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class ServiceOrderTabConfig(PKMixin, TimestampMixin, Base):
-    """Configurable Service Order operational tab (renders as a dynamic table)."""
+class ComponentGroup(PKMixin, TimestampMixin, Base):
+    """A group of attributes rendered together.
 
-    __tablename__ = "service_order_tab_configs"
-    __table_args__ = (UniqueConstraint("code", name="uq_so_tab_configs_code"),)
+    ``render_mode`` decides how the group appears on a Service Order:
+    ``table`` = a repeatable editable table (many rows), ``form`` = a single
+    row shown as a form.
+    """
+
+    __tablename__ = "component_groups"
+    __table_args__ = (UniqueConstraint("code", name="uq_component_groups_code"),)
+
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    name_km: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    render_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="table")
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class ComponentGroupAttribute(PKMixin, TimestampMixin, Base):
+    """Membership of a reusable attribute in a component group, with overrides."""
+
+    __tablename__ = "component_group_attributes"
+    __table_args__ = (UniqueConstraint("group_id", "attribute_id", name="uq_component_group_attributes_group_attr"),)
+
+    group_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("component_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    attribute_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("component_attributes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    is_required: Mapped[bool | None] = mapped_column(Boolean)
+    width: Mapped[str | None] = mapped_column(String(16))
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class ComponentTab(PKMixin, TimestampMixin, Base):
+    """A Service Order tab composed of component groups, shown for chosen trade directions."""
+
+    __tablename__ = "component_tabs"
+    __table_args__ = (UniqueConstraint("code", name="uq_component_tabs_code"),)
 
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     name_km: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     icon: Mapped[str | None] = mapped_column(String(64))
-    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    allow_multiple_rows: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
-class ServiceOrderColumnConfig(PKMixin, TimestampMixin, Base):
-    """Configurable table column for a Service Order tab."""
+class ComponentTabGroup(PKMixin, TimestampMixin, Base):
+    """Membership of a component group in a component tab."""
 
-    __tablename__ = "service_order_column_configs"
-    __table_args__ = (UniqueConstraint("tab_id", "field_key", name="uq_so_column_configs_tab_key"),)
+    __tablename__ = "component_tab_groups"
+    __table_args__ = (UniqueConstraint("tab_id", "group_id", name="uq_component_tab_groups_tab_group"),)
 
     tab_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("service_order_tab_configs.id", ondelete="CASCADE"), nullable=False, index=True
+        BigInteger, ForeignKey("component_tabs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    field_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    label: Mapped[str] = mapped_column(String(255), nullable=False)
-    label_km: Mapped[str | None] = mapped_column(String(255))
-    field_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
-    reference_type: Mapped[str | None] = mapped_column(String(32))
-    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    show_in_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    width: Mapped[str | None] = mapped_column(String(16))
-    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    default_value: Mapped[str | None] = mapped_column(String(255))
-    placeholder: Mapped[str | None] = mapped_column(String(255))
-    validation_rules: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
-    options: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
+    group_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("component_groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
-class ModuleRecord(PKMixin, TimestampMixin, Base):
+class ComponentTabTradeDirection(PKMixin, TimestampMixin, Base):
+    """Assignment of a component tab to a trade direction."""
+
+    __tablename__ = "component_tab_trade_directions"
+    __table_args__ = (UniqueConstraint("tab_id", "trade_direction_id", name="uq_component_tab_directions_tab_direction"),)
+
+    tab_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("component_tabs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    trade_direction_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("trade_directions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class ModuleRecord(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Generic record store backing metadata-driven frontend collections.
 
     Used for secondary/legacy collections that the frontend renders from its
@@ -243,19 +267,3 @@ class ModuleRecord(PKMixin, TimestampMixin, Base):
     record_no: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str | None] = mapped_column(String(32))
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
-
-
-class TradeDirectionComponent(PKMixin, TimestampMixin, Base):
-    __tablename__ = "trade_direction_components"
-    __table_args__ = (
-        UniqueConstraint("trade_direction_id", "component_template_id", name="uq_tdc_direction_template"),
-    )
-
-    trade_direction_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("trade_directions.id"), nullable=False)
-    component_group_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("component_groups.id"), nullable=False)
-    component_template_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("component_templates.id"), nullable=False)
-    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_repeatable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    instance_mode_override: Mapped[str] = mapped_column(String(20), nullable=False, default="INHERIT")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")

@@ -39,6 +39,7 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { value: 'admin_roles', labelKey: 'freight.pages.roles', permissionPrefix: 'admin.roles', actions: ADMIN_ACTIONS },
   { value: 'admin_document_sequences', labelKey: 'freight.pages.documentSequences', permissionPrefix: 'admin.document_sequences', actions: ADMIN_ACTIONS },
   { value: 'admin_audit_logs', labelKey: 'freight.pages.auditLogs', permissionPrefix: 'admin.audit_logs', actions: READ_ACTIONS },
+  { value: 'admin_archive', labelKey: 'freight.pages.archive', permissionPrefix: 'admin.archive', actions: ['view', 'edit', 'delete'] },
   { value: 'settings_app_config', labelKey: 'freight.pages.settings', permissionPrefix: 'settings.app_config', actions: SETTINGS_ACTIONS },
   { value: 'settings_backup', labelKey: 'freight.pages.backup', permissionPrefix: 'settings.backup', actions: SETTINGS_ACTIONS },
 ] as const
@@ -75,6 +76,9 @@ const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: stri
   'accounting_period.close': [{ value: 'finance_accounting', action: 'edit' }],
   'chart_of_accounts.manage': [{ value: 'finance_accounting', action: 'edit' }],
   'audit_log.read': [{ value: 'admin_audit_logs', action: 'view' }],
+  'archive.view': [{ value: 'admin_archive', action: 'view' }],
+  'archive.restore': [{ value: 'admin_archive', action: 'edit' }],
+  'archive.hard_delete': [{ value: 'admin_archive', action: 'delete' }],
   'report.read': [{ value: 'operations_reports', action: 'view' }, { value: 'finance_reports', action: 'view' }],
   'report.export': [{ value: 'operations_reports', action: 'export' }, { value: 'finance_reports', action: 'export' }],
   'master.reference.view': [{ value: 'master_reference', action: 'view' }],

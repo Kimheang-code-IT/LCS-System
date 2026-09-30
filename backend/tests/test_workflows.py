@@ -106,12 +106,6 @@ async def test_service_order_components_and_containers(client):
     assert container.status_code == 201, container.text
     assert container.json()["data"]["containerNumber"] == "MSCU1234567"
 
-    # Components created from the trade-direction config on conversion are listable.
-    converted_components = await client.get("/api/v1/service-order-components", headers=headers)
-    assert converted_components.status_code == 200, converted_components.text
-    converted_items = converted_components.json()["data"]["items"]
-    assert any(item["groupCode"] == "CUSTOMS" and item["jobNo"] for item in converted_items)
-
     duplicate = await client.post(
         f"/api/v1/service-orders/{service_order_id}/containers",
         headers=headers,
@@ -119,32 +113,39 @@ async def test_service_order_components_and_containers(client):
     )
     assert duplicate.status_code == 409
 
-    component = await client.post(
-        f"/api/v1/service-orders/{service_order_id}/components",
+    # Component tabs are configured per trade direction; the seed assigns the
+    # Customs tab (a table-mode group) to both IMPORT and EXPORT.
+    tabs = await client.get(f"/api/v1/service-orders/{service_order_id}/component-tabs", headers=headers)
+    assert tabs.status_code == 200, tabs.text
+    tab_items = tabs.json()["data"]["tabs"]
+    assert any(tab["code"] == "CUSTOMS" for tab in tab_items)
+    customs = next(tab for tab in tab_items if tab["code"] == "CUSTOMS")
+    group = customs["groups"][0]
+    assert group["code"] == "CUSTOMS"
+    assert group["renderMode"] == "table"
+    assert {attribute["code"] for attribute in group["attributes"]} >= {
+        "declaration_no",
+        "clearance_date",
+        "duty_amount",
+    }
+
+    rows_url = f"/api/v1/service-orders/{service_order_id}/component-tabs/groups/{group['id']}/rows/bulk"
+
+    missing = await client.post(rows_url, headers=headers, json={"rows": [{"values": {"clearance_date": "2026-09-15"}}]})
+    assert missing.status_code == 422, missing.text
+    assert "1.declaration_no" in missing.json()["field_errors"]
+
+    saved = await client.post(
+        rows_url,
         headers=headers,
-        json={"templateCode": "CUSTOMS_CLEARANCE", "groupCode": "CUSTOMS", "required": True},
+        json={"rows": [{"values": {"declaration_no": "DEC-001", "clearance_date": "2026-09-15", "duty_amount": 120}}]},
     )
-    assert component.status_code == 201, component.text
-    component_id = component.json()["data"]["id"]
-    assert component.json()["data"]["groupCode"] == "CUSTOMS"
-    assert component.json()["data"]["jobNo"]
+    assert saved.status_code == 200, saved.text
+    assert len(saved.json()["data"]["items"]) == 1
 
-    listed_components = await client.get("/api/v1/service-order-components", headers=headers, params={"page_size": 200})
-    assert listed_components.status_code == 200, listed_components.text
-    listed_items = listed_components.json()["data"]["items"]
-    assert any(item["id"] == component_id and item["groupCode"] == "CUSTOMS" for item in listed_items)
-
-    values = await client.put(
-        f"/api/v1/service-order-components/{component_id}/values",
-        headers=headers,
-        json={"values": [{"code": "declaration_no", "value_text": "DEC-001"}]},
-    )
-    assert values.status_code == 200, values.text
-    assert values.json()["data"]["values"][0]["value_text"] == "DEC-001"
-
-    completed = await client.post(f"/api/v1/service-order-components/{component_id}/complete", headers=headers, json={})
-    assert completed.status_code == 200
-    assert completed.json()["data"]["status"] == "COMPLETED"
+    refreshed = await client.get(f"/api/v1/service-orders/{service_order_id}/component-tabs", headers=headers)
+    customs_after = next(tab for tab in refreshed.json()["data"]["tabs"] if tab["code"] == "CUSTOMS")
+    assert len(customs_after["groups"][0]["rows"]) == 1
 
 
 async def _create_and_post_invoice(client, headers, service_order_id: str, amount: float = 1500.0) -> dict:
@@ -186,6 +187,67 @@ async def test_service_charge_to_invoice_and_posting(client):
     for entry in items:
         assert entry["debitTotal"] == entry["creditTotal"]
     return document
+
+
+async def test_service_order_single_invoice_from_charges(client):
+    headers = await login(client)
+    service_order_id = await test_quotation_lifecycle_and_conversion(client)
+
+    first = await client.post(
+        f"/api/v1/service-orders/{service_order_id}/charges",
+        headers=headers,
+        json={
+            "documentType": "SERVICE_NOTE",
+            "documentDate": "2026-09-15",
+            "currency": "USD",
+            "lines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["data"]["feeLines"][0]["description"] == "Freight"
+    assert first.json()["data"]["total"] == 100
+
+    second = await client.post(
+        f"/api/v1/service-orders/{service_order_id}/charges",
+        headers=headers,
+        json={"lines": [{"description": "Documentation", "quantity": 2, "unitPrice": 25}]},
+    )
+    assert second.status_code == 201, second.text
+
+    listed = await client.get(f"/api/v1/service-orders/{service_order_id}/charges", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()["data"]) == 2
+
+    invoice = await client.post(f"/api/v1/service-orders/{service_order_id}/invoice", headers=headers)
+    assert invoice.status_code == 201, invoice.text
+    invoice_id = invoice.json()["data"]["id"]
+    assert invoice.json()["data"]["total"] == 150
+
+    # Only one invoice per service order: a second call returns the same document.
+    again = await client.post(f"/api/v1/service-orders/{service_order_id}/invoice", headers=headers)
+    assert again.status_code == 201, again.text
+    assert again.json()["data"]["id"] == invoice_id
+
+    fetched = await client.get(f"/api/v1/service-orders/{service_order_id}/invoice", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["data"]["id"] == invoice_id
+
+    listed_after = await client.get(f"/api/v1/service-orders/{service_order_id}/charges", headers=headers)
+    assert all(row["financialDocumentId"] == invoice_id for row in listed_after.json()["data"])
+
+
+async def test_service_order_finish(client):
+    headers = await login(client)
+    service_order_id = await test_quotation_lifecycle_and_conversion(client)
+
+    finished = await client.post(f"/api/v1/service-orders/{service_order_id}/finish", headers=headers)
+    assert finished.status_code == 200, finished.text
+    assert finished.json()["data"]["status"] == "Finished"
+    assert finished.json()["data"]["rawStatus"] == "FINISHED"
+
+    again = await client.post(f"/api/v1/service-orders/{service_order_id}/finish", headers=headers)
+    assert again.status_code == 200, again.text
+    assert again.json()["data"]["status"] == "Finished"
 
 
 async def test_payment_allocation_and_receivables(client):
@@ -246,146 +308,6 @@ async def test_document_reversal(client):
     assert any(entry["entryType"] == "REVERSAL" for entry in entries)
     for entry in entries:
         assert entry["debitTotal"] == entry["creditTotal"]
-
-
-async def test_dynamic_service_order_tabs_workflow(client):
-    headers = await login(client)
-    service_order_id = await test_quotation_lifecycle_and_conversion(client)
-
-    bootstrap = await client.get(f"/api/v1/service-orders/{service_order_id}/dynamic-tabs", headers=headers)
-    assert bootstrap.status_code == 200, bootstrap.text
-    data = bootstrap.json()["data"]
-    tabs = {tab["code"]: tab for tab in data["tabs"]}
-    for code in ("invoice", "packing-list", "shipment-registration", "bill", "customs", "transport"):
-        assert code in tabs, code
-    invoice = tabs["invoice"]
-    invoice_tab_id = invoice["id"]
-    assert {column["fieldKey"] for column in invoice["columns"]} >= {"invoice_no", "invoice_date", "seller", "status"}
-    assert "business_party" in data["references"]
-
-    rows_url = f"/api/v1/service-orders/{service_order_id}/dynamic-tabs/{invoice_tab_id}/rows"
-
-    missing = await client.post(rows_url, headers=headers, json={"values": {"invoice_date": "2026-09-15"}})
-    assert missing.status_code == 422
-    assert "invoice_no" in missing.json()["field_errors"]
-
-    bad_date = await client.post(
-        rows_url, headers=headers, json={"values": {"invoice_no": "INV-001", "invoice_date": "not-a-date"}}
-    )
-    assert bad_date.status_code == 422
-    assert "invoice_date" in bad_date.json()["field_errors"]
-
-    bad_amount = await client.post(
-        rows_url,
-        headers=headers,
-        json={"values": {"invoice_no": "INV-001", "invoice_date": "2026-09-15", "invoice_amount": "abc"}},
-    )
-    assert bad_amount.status_code == 422
-    assert "invoice_amount" in bad_amount.json()["field_errors"]
-
-    bad_select = await client.post(
-        rows_url,
-        headers=headers,
-        json={"values": {"invoice_no": "INV-001", "invoice_date": "2026-09-15", "status": "Bogus"}},
-    )
-    assert bad_select.status_code == 422
-    assert "status" in bad_select.json()["field_errors"]
-
-    created = await client.post(
-        rows_url,
-        headers=headers,
-        json={"values": {"invoice_no": "INV-001", "invoice_date": "2026-09-15", "invoice_amount": 500, "status": "Paid"}},
-    )
-    assert created.status_code == 201, created.text
-    row_id = created.json()["data"]["id"]
-
-    bulk = await client.post(
-        rows_url.replace("/rows", "/rows/bulk"),
-        headers=headers,
-        json={
-            "rows": [
-                {"id": row_id, "values": {"invoice_no": "INV-001", "invoice_date": "2026-09-15", "status": "Paid"}},
-                {"values": {"invoice_no": "INV-002", "invoice_date": "2026-09-16", "invoice_amount": 700, "status": "Pending"}},
-            ]
-        },
-    )
-    assert bulk.status_code == 200, bulk.text
-    assert len(bulk.json()["data"]["items"]) == 2
-
-    refreshed = await client.get(f"/api/v1/service-orders/{service_order_id}/dynamic-tabs", headers=headers)
-    invoice_after = next(tab for tab in refreshed.json()["data"]["tabs"] if tab["code"] == "invoice")
-    assert len(invoice_after["rows"]) == 2
-
-    # --- Configuration workflow: add a new tab + columns ------------------
-    tab = await client.post(
-        "/api/v1/service-order-tabs", headers=headers, json={"code": "inspection", "name": "Inspection", "sortOrder": 70}
-    )
-    assert tab.status_code == 201, tab.text
-    inspection_tab_id = tab.json()["data"]["id"]
-
-    required_column = await client.post(
-        f"/api/v1/service-order-tabs/{inspection_tab_id}/columns",
-        headers=headers,
-        json={"fieldKey": "inspection_no", "label": "Inspection No.", "fieldType": "text", "isRequired": True},
-    )
-    assert required_column.status_code == 201, required_column.text
-    required_column_id = required_column.json()["data"]["id"]
-    status_column = await client.post(
-        f"/api/v1/service-order-tabs/{inspection_tab_id}/columns",
-        headers=headers,
-        json={"fieldKey": "status", "label": "Status", "fieldType": "select", "options": ["Pending", "Passed", "Failed"]},
-    )
-    status_column_id = status_column.json()["data"]["id"]
-
-    activated = await client.get(f"/api/v1/service-orders/{service_order_id}/dynamic-tabs", headers=headers)
-    assert any(entry["code"] == "inspection" for entry in activated.json()["data"]["tabs"])
-
-    inspection_rows_url = f"/api/v1/service-orders/{service_order_id}/dynamic-tabs/{inspection_tab_id}/rows"
-    first = await client.post(
-        inspection_rows_url, headers=headers, json={"values": {"inspection_no": "INS-1", "status": "Passed"}}
-    )
-    assert first.status_code == 201, first.text
-
-    bad_option = await client.post(
-        inspection_rows_url, headers=headers, json={"values": {"inspection_no": "INS-2", "status": "Nope"}}
-    )
-    assert bad_option.status_code == 422
-
-    disabled = await client.patch(
-        f"/api/v1/service-order-columns/{status_column_id}", headers=headers, json={"isActive": False}
-    )
-    assert disabled.status_code == 200
-    assert disabled.json()["data"]["isActive"] is False
-
-    archived_column = await client.delete(f"/api/v1/service-order-columns/{required_column_id}", headers=headers)
-    assert archived_column.status_code == 200
-    assert archived_column.json()["data"]["archived"] is True
-
-    unused_column = await client.post(
-        f"/api/v1/service-order-tabs/{inspection_tab_id}/columns",
-        headers=headers,
-        json={"fieldKey": "temp_field", "label": "Temp"},
-    )
-    hard_deleted_column = await client.delete(
-        f"/api/v1/service-order-columns/{unused_column.json()['data']['id']}", headers=headers
-    )
-    assert hard_deleted_column.json()["data"]["archived"] is False
-
-    historical = await client.get(f"/api/v1/service-orders/{service_order_id}/dynamic-tabs", headers=headers)
-    inspection_entry = next(tab for tab in historical.json()["data"]["tabs"] if tab["code"] == "inspection")
-    assert len(inspection_entry["rows"]) == 1
-    assert inspection_entry["rows"][0]["values"].get("inspection_no") == "INS-1"
-
-    archived_tab = await client.delete(f"/api/v1/service-order-tabs/{inspection_tab_id}", headers=headers)
-    assert archived_tab.json()["data"]["archived"] is True
-
-    unused_tab = await client.post(
-        "/api/v1/service-order-tabs", headers=headers, json={"code": "temp-tab", "name": "Temp Tab"}
-    )
-    hard_deleted_tab = await client.delete(
-        f"/api/v1/service-order-tabs/{unused_tab.json()['data']['id']}", headers=headers
-    )
-    assert hard_deleted_tab.json()["data"]["archived"] is False
 
 
 async def test_generic_records_encrypt_credentials(client):

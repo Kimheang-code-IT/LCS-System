@@ -6,7 +6,13 @@ import { getFreightModule } from '~/config/freight-modules'
 import { JOB_CHECKLIST_TYPES } from '~/config/freight-options'
 import { defaultJobRoutePlaces, isMoneyKey } from '~/utils/freight/job-workspace'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
-import { formatMoney as formatMoneyValue, formatNumber as formatNumberValue } from '~/utils/format/format-service'
+import {
+  formatDate as formatDateValue,
+  formatDateTime as formatDateTimeValue,
+  formatMoney as formatMoneyValue,
+  formatNumber as formatNumberValue,
+  getFormatConfig,
+} from '~/utils/format/format-service'
 import { toFiniteNumber } from '~/utils/format/number'
 import { slugify } from '~/utils/text/slug'
 import { codeTitle, labeledStatusOptions, shortDay } from '~/utils/freight/format'
@@ -107,6 +113,9 @@ export function emptyFreightRecord(module: FreightModule) {
   for (const table of module.tables || []) {
     record[table.key] = table.presets ? table.presets.map(row => ({ ...row })) : []
   }
+  if (module.fields.some(field => field.key === 'currency') && !String(record.currency || '').trim()) {
+    record.currency = getFormatConfig().currency
+  }
   if (module.collection === 'roles') {
     record.permissionRows = []
     record.userCount = 0
@@ -147,7 +156,7 @@ export function groupedFields(module: FreightModule) {
 
 export function statusColor(status: string): AppHeaderBadge['color'] {
   const value = status.toLowerCase()
-  if (['active', 'paid', 'cleared', 'delivered', 'approved', 'accepted', 'closed', 'completed', 'pod received', 'posted', 'issued', 'converted'].some(s => value.includes(s))) return 'success'
+  if (['active', 'paid', 'cleared', 'delivered', 'approved', 'accepted', 'closed', 'completed', 'finished', 'pod received', 'posted', 'issued', 'converted'].some(s => value.includes(s))) return 'success'
   if (['pending', 'processing', 'partial', 'in transit', 'arriving', 'submitted', 'sent', 'in_progress', 'open', 'draft'].some(s => value.includes(s))) return 'warning'
   if (['inactive', 'overdue', 'missing', 'on hold', 'expired', 'unpaid', 'reversed', 'rejected', 'cancelled', 'superseded'].some(s => value.includes(s))) return 'error'
   return 'neutral'
@@ -162,6 +171,8 @@ export function formatMoney(value: unknown, currency?: string) {
 export function formatFreightCell(value: unknown, key: string, currency?: string) {
   if (key === 'documentType') return documentSequenceTypeLabel(value)
   if (isMoneyKey(key)) return formatMoney(value, currency)
+  if (/date$/i.test(key) || key === 'date') return formatDateValue(value)
+  if (/(?:At|Activity|Timestamp|DateTime)$/i.test(key)) return formatDateTimeValue(value)
   if (typeof value === 'number') return formatNumberValue(value)
   if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean).join(', ') || '—'
   const text = String(value ?? '').trim()

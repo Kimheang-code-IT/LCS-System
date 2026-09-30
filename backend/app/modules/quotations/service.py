@@ -21,6 +21,7 @@ from app.modules.quotations.models import (
     QuotationRevisionLine,
     QuotationRevisionPlace,
 )
+from app.modules.settings.service import get_default_currency
 
 IMMUTABLE_STATUSES = {"SENT", "ACCEPTED", "CONVERTED", "SUPERSEDED", "REJECTED", "EXPIRED", "CANCELLED"}
 STATUS_MAP = {
@@ -45,13 +46,16 @@ def normalize_status(value: Any, default: str = "DRAFT") -> str:
 async def resolve_party_by_name(session: AsyncSession, name: str | None, context: RequestContext, role: str = "CUSTOMER") -> BusinessParty:
     if name:
         party = (
-            await session.execute(select(BusinessParty).where(BusinessParty.legal_name == name))
+            await session.execute(select(BusinessParty).where(BusinessParty.legal_name == name, BusinessParty.deleted_at.is_(None)))
         ).scalars().first()
         if party is not None:
             return party
     party = (
         await session.execute(
-            select(BusinessParty).join(PartyRole, PartyRole.party_id == BusinessParty.id).where(PartyRole.role_type == role).limit(1)
+            select(BusinessParty)
+            .join(PartyRole, PartyRole.party_id == BusinessParty.id)
+            .where(PartyRole.role_type == role, BusinessParty.deleted_at.is_(None))
+            .limit(1)
         )
     ).scalars().first()
     if party is not None and not name:
@@ -73,12 +77,19 @@ async def resolve_direction(session: AsyncSession, name: str | None) -> TradeDir
     if name:
         direction = (
             await session.execute(
-                select(TradeDirection).where(or_(TradeDirection.name == name, TradeDirection.code == str(name).upper()))
+                select(TradeDirection).where(
+                    or_(TradeDirection.name == name, TradeDirection.code == str(name).upper()),
+                    TradeDirection.deleted_at.is_(None),
+                )
             )
         ).scalars().first()
         if direction is not None:
             return direction
-    direction = (await session.execute(select(TradeDirection).order_by(TradeDirection.id).limit(1))).scalars().first()
+    direction = (
+        await session.execute(
+            select(TradeDirection).where(TradeDirection.deleted_at.is_(None)).order_by(TradeDirection.id).limit(1)
+        )
+    ).scalars().first()
     if direction is None:
         direction = TradeDirection(code="GENERAL", name="General", status="ACTIVE")
         session.add(direction)
@@ -226,6 +237,7 @@ async def get_quotation(session: AsyncSession, context: RequestContext, quotatio
 
 
 async def save_quotation(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    default_currency = await get_default_currency(session)
     quotation_id = data.get("id") or data.get("quotationId")
     quotation: Quotation | None = None
     if quotation_id and str(quotation_id).isdigit():
@@ -263,7 +275,7 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
             status="DRAFT",
             quotation_date=_date(data.get("date")) or date.today(),
             valid_until=_date(data.get("validUntil")),
-            currency_code=data.get("currency") or "USD",
+            currency_code=data.get("currency") or default_currency,
             created_by_user_id=context.user_id,
         )
         session.add(latest)
@@ -360,6 +372,7 @@ async def _clone_revision(session: AsyncSession, quotation: Quotation, source: Q
 
 
 async def create_revision(session: AsyncSession, context: RequestContext, quotation_id: int, data: dict[str, Any]) -> dict:
+    default_currency = await get_default_currency(session)
     quotation = await session.get(Quotation, quotation_id)
     if quotation is None:
         raise NotFound("Quotation not found.")
@@ -371,7 +384,7 @@ async def create_revision(session: AsyncSession, context: RequestContext, quotat
             revision_no=1,
             status="DRAFT",
             quotation_date=date.today(),
-            currency_code=data.get("currency") or "USD",
+            currency_code=data.get("currency") or default_currency,
             created_by_user_id=context.user_id,
         )
         session.add(clone)

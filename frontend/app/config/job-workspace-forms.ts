@@ -81,6 +81,37 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
   addLabelKey: 'freight.ui.addPayment',
 }
 
+export const JOB_CUSTOMER_CHARGE_TABLE: FreightTable = {
+  key: 'customerCharges',
+  title: 'Customer Charges',
+  titleKm: 'ថ្លៃអតិថិជន',
+  columns: [
+    { key: 'containerType', label: 'Container Type', labelKey: 'freight.ui.cols.containerType', type: 'text' },
+    { key: 'transportBy', label: 'By', labelKey: 'freight.ui.byCol', type: 'text' },
+    { key: 'description', label: 'Description', labelKey: 'freight.fields.description', type: 'text' },
+    { key: 'quantity', label: 'Qty', labelKey: 'freight.ui.qty', type: 'number' },
+    { key: 'unitPrice', label: 'Unit Price', labelKey: 'freight.ui.unitPriceCol', type: 'number' },
+    { key: 'lineTotal', label: 'Line Total', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
+  ],
+  addLabel: 'Add charge',
+}
+
+export const JOB_EXPENSE_TABLE: FreightTable = {
+  key: 'expenses',
+  title: 'Supplier Expenses',
+  titleKm: 'ចំណាយអ្នកផ្គត់ផ្គង់',
+  columns: [
+    { key: 'description', label: 'Description', labelKey: 'freight.fields.description', type: 'text', required: true },
+    { key: 'supplier', label: 'Supplier', labelKm: 'អ្នកផ្គត់ផ្គង់', type: 'text' },
+    { key: 'quantity', label: 'Qty', labelKey: 'freight.ui.qty', type: 'number', required: true },
+    { key: 'unitPrice', label: 'Unit Price', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true },
+    { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', type: 'number', computed: true },
+    { key: 'remark', label: 'Remark', labelKm: 'កំណត់សម្គាល់', type: 'text' },
+  ],
+  addLabel: 'Add expense',
+  addLabelKey: 'freight.ui.addExpense',
+}
+
 export const JOB_ROUTE_TABLE: FreightTable = {
   key: 'places',
   title: 'Route',

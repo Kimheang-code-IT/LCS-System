@@ -3,22 +3,71 @@ import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
 import { UBadge, UButton, UDropdownMenu, ULink } from '#components'
 import type { FreightRecord } from '~/types/freight/record'
+import { JOB_CUSTOMER_CHARGE_TABLE, JOB_EXPENSE_TABLE } from '~/config/job-workspace-forms'
 import { codeTitle, formatMoney, freightStatusBadge, shortDay } from '~/composables/freight/useFreight'
+import { createClientId } from '~/utils/client-id'
 import { outstandingOf, postedDocumentTotal } from '~/utils/freight/finance'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { freightTableUiReadonly } from '~/utils/table/theme'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
+  job: FreightRecord
   jobNo: string
   customer: string
   documents: FreightRecord[]
   supplierCosts: FreightRecord[]
   receivables: FreightRecord[]
+  editable?: boolean
+}>(), {
+  editable: false,
+})
+
+const emit = defineEmits<{
+  'update:job': [patch: Record<string, unknown>]
 }>()
 
 const { t } = useI18n()
 const route = useRoute()
 const toast = useToast()
+const store = useFreightStore()
+
+const customerChargeRows = computed(() => {
+  const lines = Array.isArray(props.job.pricingLines) ? props.job.pricingLines as Array<Record<string, unknown>> : []
+  const fallback = Array.isArray(props.job.containerPayments) ? props.job.containerPayments as Array<Record<string, unknown>> : []
+  return (lines.length ? lines : fallback).map(row => ({
+    ...row,
+    lineTotal: Number(row.lineTotal ?? row.total ?? (Number(row.quantity || 0) * Number(row.unitPrice || 0))),
+  }))
+})
+
+const customerChargeTotal = computed(() =>
+  Math.round(customerChargeRows.value.reduce((sum, row) => sum + Number(row.lineTotal || 0), 0) * 100) / 100,
+)
+
+const expenseRows = ref<Array<Record<string, unknown>>>([])
+
+function loadExpenses() {
+  expenseRows.value = (Array.isArray(props.job.expenses) ? props.job.expenses as Array<Record<string, unknown>> : [])
+    .map(row => ({ ...row }))
+}
+
+function setExpenses(value: Array<Record<string, unknown>>) {
+  const rows = value.map(row => ({
+    ...row,
+    quantity: Number(row.quantity || 0),
+    unitPrice: Number(row.unitPrice || 0),
+    amount: Number((Number(row.quantity || 0) * Number(row.unitPrice || 0)).toFixed(2)),
+    id: String(row.id || '').trim() || createClientId('exp'),
+  }))
+  expenseRows.value = rows
+  const patch = { expenses: rows }
+  emit('update:job', patch)
+  if (props.job.id) {
+    store.save('jobs', { ...props.job, ...patch, updatedAt: new Date().toISOString() } as FreightRecord)
+  }
+}
+
+watch(() => props.job.id, loadExpenses, { immediate: true })
 
 const customerInvoices = computed(() =>
   props.documents.filter(row => String(row.documentType || 'CUSTOMER_INVOICE').toUpperCase() === 'CUSTOMER_INVOICE'),
@@ -182,6 +231,38 @@ icon="i-lucide-arrow-up-right"
     </FreightJobSectionHeader>
 
     <FreightJobSummaryStrip :items="summaryItems" />
+
+    <section class="space-y-2">
+      <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
+        {{ t('freight.ui.customerCharges') }}
+      </h4>
+      <FreightJobLineTable
+        v-if="customerChargeRows.length"
+        :table="JOB_CUSTOMER_CHARGE_TABLE"
+        :model-value="customerChargeRows"
+        disabled
+      />
+      <FreightJobEmptyState v-else :title="t('freight.ui.noCustomerCharges')" icon="i-lucide-receipt-text" />
+      <div
+        v-if="customerChargeRows.length"
+        class="ms-auto flex w-full max-w-sm items-center justify-between gap-4 rounded-md border border-default px-3 py-2 text-sm"
+      >
+        <span class="font-medium text-muted">{{ t('freight.fields.total') }}</span>
+        <span class="font-bold tabular-nums text-primary">{{ formatMoney(customerChargeTotal, jobCurrency) }}</span>
+      </div>
+    </section>
+
+    <section class="space-y-2">
+      <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
+        {{ t('freight.ui.supplierExpenses') }}
+      </h4>
+      <FreightJobLineTable
+        :table="JOB_EXPENSE_TABLE"
+        :model-value="expenseRows"
+        :disabled="!editable"
+        @update:model-value="setExpenses"
+      />
+    </section>
 
     <section class="space-y-2">
       <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">

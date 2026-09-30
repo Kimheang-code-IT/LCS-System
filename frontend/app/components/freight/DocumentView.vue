@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
+import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { usePageSeo } from '~/composables/usePageSeo'
 import {
@@ -21,6 +22,7 @@ import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFl
 import type { AppRolePermissionRow } from '~/types/docetra/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { jobForQuotation } from '~/utils/freight/job-workspace'
+import { referenceOptionSource } from '~/utils/freight/reference-options'
 import {
   freightDocumentLineActionKey,
   freightDocumentLineTableHeaderKey,
@@ -58,6 +60,7 @@ const { moduleTitle, moduleSingular, fieldLabel, actionLabel } = useFreightLabel
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
 const { confirm } = useConfirm()
 const lcs = useLcs()
+const { localization } = useAppLocalization()
 const moduleRecord = useModuleRecord(module)
 
 const saving = ref(false)
@@ -309,6 +312,8 @@ const quotationHeaderActions = computed<FreightAction[]>(() => {
 
 const headerActions = computed(() => {
   if (module.value?.collection === 'quotations') return quotationHeaderActions.value
+  // Service charge pages keep a single header action: save/submit.
+  if (module.value?.collection === 'jobCharges') return []
   const collection = module.value?.collection
   const status = String(model.value.status || '')
   return (module.value?.actions || []).filter((action) => {
@@ -352,6 +357,13 @@ const headerActions = computed(() => {
 const splitHeaderActions = computed(() => splitDocumentHeaderActions(headerActions.value))
 const primaryHeaderActions = computed(() => splitHeaderActions.value.primary)
 const overflowHeaderActions = computed(() => splitHeaderActions.value.overflow)
+
+const documentSaveLabel = computed(() => {
+  if (module.value?.collection === 'jobCharges') {
+    return isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges')
+  }
+  return t('docetra.common.save')
+})
 
 /** Role names from the Roles & Permissions page, used by the users role select. */
 const roleFieldOptions = computed(() => store.list('roles')
@@ -549,6 +561,8 @@ const financeCommands = useFinanceCommands({
 })
 
 const moreItems = computed<DropdownMenuItem[][]>(() => {
+  // Service charge pages: no overflow (⋯) actions.
+  if (module.value?.collection === 'jobCharges') return []
   const items: DropdownMenuItem[] = []
   if (module.value?.collection === 'quotations' && !isCreate.value && model.value.id && relatedServiceOrder()) {
     items.push({
@@ -615,7 +629,7 @@ function setField(key: string, value: unknown) {
       : null
     if (job) {
       next.customer = job.customer || next.customer
-      next.currency = job.currency || next.currency || 'USD'
+      next.currency = job.currency || next.currency || localization.value.currency
       delete next.chargeNo
     }
   }
@@ -868,12 +882,28 @@ async function save(status?: string) {
       payload.createdAt ||= new Date().toISOString()
       payload.createdBy ||= String(currentUser.value?.name || 'Current User')
       payload.status ||= module.value.collection === 'journals' ? 'DRAFT' : 'Draft'
-      payload.currency ||= 'USD'
+      payload.currency ||= localization.value.currency
     }
     const isNew = isCreate.value || !payload.id
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
     toast.add({ title: t('freight.ui.save'), color: 'success' })
+    // "Add new" from a reference select: return to the originating document and
+    // hand back the created value so the field can auto-select it.
+    const pickField = String(route.query.pickField || '')
+    const returnTo = String(route.query.returnTo || '')
+    if (pickField && returnTo) {
+      const source = referenceOptionSource(pickField)
+      const record = saved as Record<string, unknown>
+      const raw = record[source?.valueField || 'code'] ?? record.name ?? ''
+      const params = new URLSearchParams(returnTo.split('?')[1] || '')
+      params.set('pickField', pickField)
+      params.set('pickedValue', raw === null || raw === undefined ? '' : String(raw))
+      const pickRow = String(route.query.pickRow || '')
+      if (pickRow) params.set('pickRow', pickRow)
+      await navigateTo(`${returnTo.split('?')[0] || module.value.path}?${params.toString()}`)
+      return
+    }
     // Every save (create or update) returns to the list so the refreshed table
     // is visible immediately.
     await navigateTo(module.value.path)
@@ -972,7 +1002,7 @@ async function confirmReverse() {
 :saving="saving"
 :read-only="readOnly"
       :can-save="!readOnly && module.collection !== 'quotations'"
-:save-label="t('docetra.common.save')"
+      :save-label="documentSaveLabel"
       :confirm-save="false"
 :show-cancel="false"
 :show-comments="showRecordChrome"

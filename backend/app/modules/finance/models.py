@@ -20,6 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, PKMixin, TimestampMixin, utcnow
+from app.core.localization import DEFAULT_CURRENCY
 from app.core.types import JSONType
 
 
@@ -43,7 +44,7 @@ class FinancialAccount(PKMixin, TimestampMixin, Base):
     account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chart_of_accounts.id"), nullable=False)
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)
     account_type: Mapped[str] = mapped_column(String(32), nullable=False, default="BANK")
-    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     bank_name: Mapped[str | None] = mapped_column(String(255))
     account_number_masked: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
@@ -85,7 +86,7 @@ class FinancialDocument(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
     party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     service_order_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_orders.id"))
-    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     exchange_rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False, default=1)
     description: Mapped[str | None] = mapped_column(Text)
     reference_number: Mapped[str | None] = mapped_column(String(128))
@@ -142,7 +143,7 @@ class FinancialDocumentAllocation(PKMixin, Base):
     payment_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("financial_documents.id"), nullable=False, index=True)
     target_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("financial_documents.id"), nullable=False, index=True)
     allocated_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
-    allocated_currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    allocated_currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     exchange_rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False, default=1)
     allocated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
@@ -194,7 +195,7 @@ class JournalEntryLine(PKMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     debit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     credit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
-    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     exchange_rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False, default=1)
     base_debit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     base_credit_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)

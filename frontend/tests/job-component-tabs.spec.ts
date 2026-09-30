@@ -7,7 +7,7 @@ import {
   resolveGroupTemplate,
 } from '../app/utils/freight/job-component-tabs'
 
-const JOB_CORE_IDS = ['overview', 'route', 'containers', 'finance', 'files']
+const JOB_CORE_IDS = ['overview', 'route', 'containers', 'charges', 'finance', 'files']
 
 const groups = [
   { code: 'OVERVIEW', name: 'Overview', displayOrder: 1, showOnJobWorkspace: 'Yes', status: 'Active' },
@@ -23,9 +23,9 @@ const assignments = [
 ]
 
 describe('job workspace core vs component-group tabs', () => {
-  it('always keeps overview, route, containers, finance, and files', () => {
-    expect(jobWorkspaceSectionList([])).toEqual(['overview', 'route', 'containers', 'finance', 'files'])
-    expect(jobWorkspaceSectionList(undefined)).toEqual(['overview', 'route', 'containers', 'finance', 'files'])
+  it('always keeps overview, route, containers, charges, finance, and files', () => {
+    expect(jobWorkspaceSectionList([])).toEqual(['overview', 'route', 'containers', 'charges', 'finance', 'files'])
+    expect(jobWorkspaceSectionList(undefined)).toEqual(['overview', 'route', 'containers', 'charges', 'finance', 'files'])
     expect(JOB_CORE_IDS.every(id => isFixedJobWorkspaceSection(id))).toBe(true)
   })
 
@@ -37,6 +37,7 @@ describe('job workspace core vs component-group tabs', () => {
       'containers',
       'invoice',
       'customs',
+      'charges',
       'finance',
       'files',
     ])

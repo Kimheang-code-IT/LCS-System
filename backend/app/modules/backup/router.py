@@ -105,6 +105,22 @@ async def test_connection(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     config = await service._load_backup_config(session)
+    if service.r2_configured(config):
+        try:
+            storage = service.build_r2_storage(config)
+            await asyncio.to_thread(storage.test_connection)
+        except Exception as exc:  # noqa: BLE001 - do not expose SDK details that may contain credential context
+            raise ValidationFailed(
+                "Cloudflare R2 connection failed. Verify the endpoint, credentials, bucket, and permissions.",
+                {"r2Endpoint": "Could not access the configured R2 bucket."},
+            ) from exc
+        return {
+            "data": {
+                "status": "connected",
+                "message": "Cloudflare R2 connection succeeded.",
+                "bucket": config.get("r2BucketName"),
+            }
+        }
     try:
         client = service.build_client(config)
     except BackupConfigurationError as exc:

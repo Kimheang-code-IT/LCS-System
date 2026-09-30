@@ -1,6 +1,6 @@
 %% Entity Relationship Diagram (generated from the SQLAlchemy models)
 %% Source of truth: backend/app/modules/*/models.py
-%% 63 tables. Organizations and branches were removed; access is user/role/permission based.
+%% 64 tables. Organizations and branches were removed; access is user/role/permission based.
 erDiagram
   %% ---------------------------------------------------------------
   %% Identity and access
@@ -18,6 +18,9 @@ erDiagram
   %% Audit and backup
   %% ---------------------------------------------------------------
   USERS ||--o{ AUDIT_EVENTS : performs
+  USERS ||--o{ ARCHIVE_RECORDS : archives
+  USERS ||--o{ ARCHIVE_RECORDS : restores
+  USERS ||--o{ ARCHIVE_RECORDS : permanently_deletes
   USERS ||--o{ BACKUP_RUNS : triggers
   BACKUP_RUNS ||--o{ BACKUP_LOGS : logs
   BACKUP_RUNS ||--o{ BACKUP_RECORDS : captures

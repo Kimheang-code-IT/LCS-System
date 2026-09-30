@@ -8,7 +8,7 @@ export type QuotationRevisionStatus =
   | 'EXPIRED'
   | 'CANCELLED'
 
-export type ServiceOrderStatus = 'ACTIVE' | 'INACTIVE'
+export type ServiceOrderStatus = 'ACTIVE' | 'INACTIVE' | 'FINISHED'
 
 export type ServiceChargeStatus = 'DRAFT' | 'ISSUED'
 
@@ -159,6 +159,9 @@ export const SOURCE_PERMISSIONS = [
   'attachment.upload',
   'attachment.delete',
   'audit_log.read',
+  'archive.view',
+  'archive.restore',
+  'archive.hard_delete',
   'report.read',
   'report.export',
   'master.reference.view',

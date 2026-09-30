@@ -1068,6 +1068,32 @@ Collections registered in `REMOTE_ENDPOINTS`: `quotations`, `jobs`, `jobCharges`
 
 `JOB_DERIVED_COLLECTIONS = ['containerRequirements', 'actualContainers']` are derived from service orders rather than fetched directly.
 
+### Archive / Recycle Bin
+
+The reusable archive module keeps supported business rows in their source tables
+with `deleted_at` and `deleted_by_user_id` markers. `archive_records` stores the
+cross-module index, readable snapshot, actor, owner and lifecycle state. Normal
+module queries exclude marked rows. Restore clears the markers only after unique
+and parent-dependency checks; permanent delete locks the archive/source rows and
+is rejected whenever any database relationship still references the source row.
+Every delete, restore and permanent-delete attempt is written through the common
+`audit_events` service.
+
+Supported entity types are master references (`businessParties`, `places`,
+`tradeDirections`, `containerTypes`, `transportTypes`, `transportAssets`,
+`feeTypes`) and selected generic records (`companies`, `shipments`, `documents`,
+`deliveries`, `currencies`). Finance/accounting, quotations, service orders,
+service charges, users, roles, attachments and technical configuration records
+are intentionally excluded pending entity-specific lifecycle rules.
+
+| Method | Route | Permission |
+|---|---|---|
+| GET | `/archive` | `archive.view` |
+| GET | `/archive/options` | `archive.view` |
+| GET | `/archive/{entity_type}/{entity_id}` | `archive.view` |
+| POST | `/archive/{entity_type}/{entity_id}/restore` | `archive.restore` |
+| DELETE | `/archive/{entity_type}/{entity_id}` | `archive.hard_delete` |
+
 ### i18n namespaces
 
 | Locale | Top-level namespaces |

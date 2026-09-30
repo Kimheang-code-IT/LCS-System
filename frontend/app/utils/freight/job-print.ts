@@ -9,6 +9,7 @@ import {
   type PrintModelContext,
   type PrintViewModel,
 } from '~/utils/freight/print-model'
+import { getFormatConfig } from '~/utils/format/format-service'
 
 type RawLine = Record<string, unknown>
 
@@ -45,7 +46,7 @@ export function expandJobContainerSlots(job: FreightRecord): JobContainerSlot[] 
 }
 
 function containerPaymentLines(job: FreightRecord, containerNo: string): PrintLine[] {
-  const currency = printStr(job.currency) || 'USD'
+  const currency = printStr(job.currency) || getFormatConfig().currency
   const reference = printStr(job.jobNo) || printStr(job.id)
   const payments = Array.isArray(job.containerPayments) ? job.containerPayments as RawLine[] : []
   const filtered = containerNo

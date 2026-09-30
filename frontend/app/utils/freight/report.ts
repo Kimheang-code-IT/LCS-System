@@ -1,4 +1,5 @@
 import type { FreightRecord } from '~/types/freight/record'
+import { getFormatConfig } from '~/utils/format/format-service'
 
 const DAY_MS = 86_400_000
 
@@ -39,7 +40,7 @@ export function postedJournalLines(journals: FreightRecord[], accounts: FreightR
           description: line.description || journal.description,
           party: line.party || '',
           jobNo: line.serviceOrder || journal.jobNo,
-          currency: line.currency || 'USD',
+          currency: line.currency || getFormatConfig().currency,
           debit,
           credit,
           runningBalance: Number(running.toFixed(2)),

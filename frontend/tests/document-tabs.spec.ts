@@ -96,7 +96,6 @@ describe('moduleDocumentTabs', () => {
     expect(tabs.map(tab => tab.id)).toEqual([
       'overview',
       'route',
-      'containers',
       'pricing',
       'files',
       'revisions',
@@ -195,18 +194,22 @@ describe('moduleDocumentTabs', () => {
     }
   })
 
-  it('puts discount and tax under line total on quotation pricing lines', () => {
-    const inlineFields = [
-      { key: 'discountAmount', label: 'Disc.', labelKm: 'បញ្ចុះ.', labelKey: 'freight.ui.discountCol' },
-      { key: 'taxAmount', label: 'Tax', labelKm: 'ពន្ធ', labelKey: 'freight.ui.taxCol' },
-    ]
+  it('builds quotation pricing lines with container, transport, qty, price and total', () => {
     const field = moduleDocumentTabs(getFreightModule('/quotations')!)
       .find(tab => tab.id === 'pricing')?.sections[0]?.fields[0]
     expect(field?.meta?.showPricingTotals).toBe(true)
-    const lineTotal = (field?.meta?.table as { columns: Array<{ key: string, inlineFields?: unknown[], labelKey?: string }> })
-      .columns.find(column => column.key === 'lineTotal')
-    expect(lineTotal?.labelKey).toBe('freight.ui.lineTotal')
-    expect(lineTotal?.inlineFields).toEqual(inlineFields)
+    const columns = (field?.meta?.table as { columns: Array<{ key: string, type?: string, inlineFields?: unknown[] }> }).columns
+    expect(columns.map(column => column.key)).toEqual([
+      'containerType',
+      'transportBy',
+      'quantity',
+      'unitPrice',
+      'lineTotal',
+      'trust',
+    ])
+    expect(columns.find(column => column.key === 'containerType')?.type).toBe('select')
+    expect(columns.find(column => column.key === 'transportBy')?.type).toBe('select')
+    expect(columns.find(column => column.key === 'lineTotal')?.inlineFields).toBeUndefined()
   })
 
   it('enables charge number input for standalone draft service charges', () => {

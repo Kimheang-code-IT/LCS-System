@@ -1,4 +1,5 @@
 import type { FreightRecord } from '~/types/freight/record'
+import { formatNumber, getFormatConfig } from '~/utils/format/format-service'
 import { DEFAULT_INVOICE_LOGO_URL } from '~/utils/freight/print-navigation'
 
 /**
@@ -221,11 +222,11 @@ const CURRENCY_WORDS: Record<string, CurrencyWordForms> = {
  * Deterministic English amount-in-words with currency names.
  * Unknown currencies fall back to "1,234.50 XYZ" style so nothing is invented.
  */
-export function amountInWords(amount: number, currency = 'USD'): string {
+export function amountInWords(amount: number, currency?: string): string {
   if (!Number.isFinite(amount)) return '-'
-  const code = (currency || 'USD').toUpperCase()
+  const code = (currency || getFormatConfig().currency).toUpperCase()
   const forms = CURRENCY_WORDS[code]
-  if (!forms) return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${code}`
+  if (!forms) return `${formatNumber(amount)} ${code}`
   const singularWhole = forms.singularWhole
   const negative = amount < 0
   const abs = Math.abs(amount)
@@ -240,9 +241,9 @@ export function amountInWords(amount: number, currency = 'USD'): string {
 }
 
 /** DCN-style amount in words: `USD NINE HUNDRED SEVENTY NINE AND CENTS SEVEN`. */
-export function formatDebitNoteAmountInWords(amount: number, currency = 'USD'): string {
+export function formatDebitNoteAmountInWords(amount: number, currency?: string): string {
   if (!Number.isFinite(amount)) return '-'
-  const code = (currency || 'USD').toUpperCase()
+  const code = (currency || getFormatConfig().currency).toUpperCase()
   const negative = amount < 0
   const abs = Math.abs(amount)
   const whole = Math.floor(abs)
@@ -285,7 +286,7 @@ export function feeLinesToPrintLines(feeLines: RawLine[], reference: string, cur
 }
 
 function normalizeDocumentLines(record: FreightRecord, templateId?: string): PrintLine[] {
-  const currency = printStr(record.currency) || 'USD'
+  const currency = printStr(record.currency) || getFormatConfig().currency
   const lineReference = templateId === 'debit-note'
     ? printStr(record.blNo) || printStr(record.jobNo)
     : printStr(record.debitNoteNo) || printStr(record.invoiceNo) || printStr(record.jobNo)
@@ -460,14 +461,14 @@ export function buildPrintViewModel(
   templateId: string,
   context: PrintModelContext = {},
 ): PrintViewModel {
-  const currency = printStr(record.currency) || 'USD'
+  const currency = printStr(record.currency) || getFormatConfig().currency
   const exchangeRate = printNum(record.exchangeRate) || printNum(record.exchangeRateLocal)
   const lines = normalizeDocumentLines(record, templateId)
   const { subtotal, totalDebit, totalCredit } = sumPrintLines(lines)
   const taxRate = printNum(record.vatRate ?? record.taxRate)
   const taxAmount = printNum(record.vat ?? record.taxAmount)
   const grandTotal = printNum(record.total ?? record.grandTotal) || subtotal + taxAmount
-  const localCurrency = printStr(context.localCurrency) || 'KHR'
+  const localCurrency = printStr(context.localCurrency) || getFormatConfig().currency
   const outstanding = printNum(record.outstanding ?? record.amountDue)
   const party = resolveParty(printStr(record.customer) || printStr(record.supplier), context, record)
 

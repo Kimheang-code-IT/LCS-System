@@ -1,4 +1,4 @@
-"""In-process asyncio scheduler for automatic Google Sheets backups.
+"""In-process asyncio scheduler for automatic configured backups.
 
 A single background task wakes on an interval, reads the ``backup`` section of
 the application config and starts a run when the configured number of hours has
@@ -49,7 +49,7 @@ async def maybe_run_due() -> None:
         config = await service._load_backup_config(session)
         if not config.get("enabled"):
             return
-        if not config.get("spreadsheetId") or not config.get("serviceAccountJson"):
+        if not service.sheets_configured(config) and not service.r2_configured(config):
             return
         interval = int(config.get("intervalHours") or 24)
         now = service.utcnow()
