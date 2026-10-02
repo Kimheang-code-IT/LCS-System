@@ -16,6 +16,7 @@ withDefaults(
     clearable?: boolean
   }>(),
   {
+    placeholder: '',
     size: 'sm',
     clearable: true,
   },

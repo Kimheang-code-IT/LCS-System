@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createLcsFreightSeed } from './fixtures/lcs-seed'
-import type { FreightRecord } from '../app/types/freight/record'
+import type { FreightRecord } from '../app/types/record'
 import {
   linkedFinanceInvoiceForCharge,
   resolveDocumentTraceability,

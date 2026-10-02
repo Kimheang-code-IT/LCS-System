@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/docetra/settings'
+import type { AppConfigLocalization } from '~/types/settings'
 import { useSettingsRepositories } from '~/repositories'
 import {
   configureFormats,

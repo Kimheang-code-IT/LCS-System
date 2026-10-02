@@ -7,6 +7,7 @@ withDefaults(defineProps<{
   icon?: string
   actions?: ButtonProps[]
 }>(), {
+  description: '',
   icon: 'i-lucide-inbox',
   actions: () => [],
 })

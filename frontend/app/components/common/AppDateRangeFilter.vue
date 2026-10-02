@@ -24,6 +24,9 @@ const props = withDefaults(defineProps<{
   /** Full-width layout for dialogs/forms. */
   inline?: boolean
 }>(), {
+  label: '',
+  placeholder: '',
+  class: '',
   size: 'sm',
   granularity: 'minute',
 })

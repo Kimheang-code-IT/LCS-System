@@ -1,4 +1,4 @@
-import type { FinancialDocumentStatus, QuotationRevisionStatus, ServiceChargeStatus, ServiceOrderStatus } from '~/types/lcs/domain'
+import type { FinancialDocumentStatus, QuotationRevisionStatus, ServiceChargeStatus, ServiceOrderStatus } from '~/types/domain'
 
 const QUOTATION_LABEL: Record<string, QuotationRevisionStatus> = {
   Draft: 'DRAFT',

@@ -19,6 +19,8 @@ const props = withDefaults(defineProps<{
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
   class?: string
 }>(), {
+  modelValue: '',
+  class: '',
   granularity: 'day',
   size: 'md',
 })

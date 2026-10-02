@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.crypto import encrypt_secret, is_sensitive_field
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.serialization import jsonable, to_camel
 from app.modules.master_data.models import (
     BusinessParty,
@@ -354,10 +354,7 @@ async def list_reference(session: AsyncSession, context: RequestContext, collect
     if page.status:
         stmt = stmt.where(getattr(spec.model, spec.status_field) == page.status)
     total = await count_query(session, stmt)
-    order_column = spec.model.id
-    if page.sort_by and page.sort_by in spec.model.__table__.columns:
-        order_column = getattr(spec.model, page.sort_by)
-    stmt = stmt.order_by(order_column.desc() if page.sort_order == "desc" else order_column.asc())
+    stmt = stmt.order_by(*list_sort_orders(spec.model, page, spec.model.id.desc()))
     rows = (await session.execute(stmt.limit(page.page_size).offset(page.offset))).scalars().all()
     items = [await serialize(spec, row, session) for row in rows]
     return paged(items, page, total)
@@ -433,7 +430,11 @@ async def list_generic(session: AsyncSession, context: RequestContext, collectio
         stmt = stmt.where(ModuleRecord.status == page.status)
     total = await count_query(session, stmt)
     rows = (
-        await session.execute(stmt.order_by(ModuleRecord.id.desc()).limit(page.page_size).offset(page.offset))
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ModuleRecord, page, ModuleRecord.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
     ).scalars().all()
     items = [_generic_payload(row) for row in rows]
     return paged(items, page, total)

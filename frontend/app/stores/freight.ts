@@ -1,5 +1,5 @@
 import { freightModules, type FreightModule } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { unwrapApiData } from '~/repositories/http/response'
 import { createClientId } from '~/utils/client-id'
 import {

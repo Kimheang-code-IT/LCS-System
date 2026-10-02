@@ -1,5 +1,5 @@
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { isTableAttribute } from '~/utils/freight/dynamic-table'
 import {
   applyTaskValue,

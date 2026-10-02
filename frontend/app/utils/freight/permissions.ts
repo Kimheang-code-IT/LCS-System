@@ -1,6 +1,6 @@
-import type { SourcePermission } from '~/types/lcs/domain'
-import { SOURCE_PERMISSIONS } from '~/types/lcs/domain'
-import type { AuthUser } from '~/types/auth-user'
+import type { SourcePermission } from '~/types/domain'
+import { SOURCE_PERMISSIONS } from '~/types/domain'
+import type { AuthUser } from '~/types/api'
 
 export function allSourcePermissions(): SourcePermission[] {
   return [...SOURCE_PERMISSIONS]

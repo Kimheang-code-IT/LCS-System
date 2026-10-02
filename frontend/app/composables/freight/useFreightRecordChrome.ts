@@ -1,5 +1,5 @@
-import type { ActivityEvent, AttachmentMeta, EntityComment, PersonSummary } from '~/types/docetra/common'
-import type { FreightRecord } from '~/types/freight/record'
+import type { ActivityEvent, AttachmentMeta, EntityComment, PersonSummary } from '~/types/common'
+import type { FreightRecord } from '~/types/record'
 import type { FreightModule } from '~/config/freight-modules'
 
 export function useFreightRecordChrome(options: {

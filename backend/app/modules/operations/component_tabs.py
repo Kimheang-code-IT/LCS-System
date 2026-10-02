@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.exceptions import NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.serialization import jsonable
 from app.modules.master_data.models import (
     ComponentAttribute,
@@ -338,11 +338,12 @@ async def list_rows(
         ServiceOrderComponentRow.is_archived.is_(False),
     )
     total = await count_query(session, stmt)
+    orders = list_sort_orders(
+        ServiceOrderComponentRow, page, ServiceOrderComponentRow.row_no, ServiceOrderComponentRow.id
+    )
     rows = (
         await session.execute(
-            stmt.order_by(ServiceOrderComponentRow.row_no, ServiceOrderComponentRow.id)
-            .limit(page.page_size)
-            .offset(page.offset)
+            stmt.order_by(*orders).limit(page.page_size).offset(page.offset)
         )
     ).scalars().all()
     return paged([row_payload(row) for row in rows], page, total)

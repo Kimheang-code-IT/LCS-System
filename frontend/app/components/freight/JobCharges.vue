@@ -1,8 +1,22 @@
 <script setup lang="ts">
-import type { TableColumn } from '@nuxt/ui'
-import type { FreightRecord } from '~/types/freight/record'
-import { useLcs } from '~/composables/lcs/useLcs'
-import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+/**
+ * Service-order Service Charge tab. Renders through the shared `AppLineTable`
+ * via `AppSaveGrid`: one row per charge, edited in place and saved as one
+ * change set. Creating the order's finance invoice stays a header action
+ * because it is an order-level workflow, not a row edit.
+ */
+import type { FreightRecord } from '~/types/record'
+import type { SaveGridChange } from '~/types/save-grid'
+import { useLcs } from '~/composables/freight/useLcs'
+import { useConfirm } from '~/composables/common/useConfirm'
+import { SAVE_GRID_NEW_PREFIX } from '~/types/save-grid'
+import {
+  isDeletableCharge,
+  serviceChargeIsCreatable,
+  serviceChargePayload,
+  serviceChargeRows,
+  serviceChargeTable,
+} from '~/utils/freight/job-charges'
 
 const props = defineProps<{
   job: FreightRecord
@@ -14,46 +28,37 @@ const { t } = useI18n()
 const toast = useToast()
 const lcs = useLcs()
 const route = useRoute()
-const { formatDate, formatMoney, localization } = useAppLocalization()
+const { confirm } = useConfirm()
 
-type Row = FreightRecord & { _draft?: boolean }
-
-const rows = ref<FreightRecord[]>([])
+const charges = ref<FreightRecord[]>([])
 const invoice = ref<FreightRecord | null>(null)
 const loading = ref(false)
 const saving = ref(false)
-const draft = ref<{ description: string, quantity: number, unitPrice: number, tax: number } | null>(null)
 
 const orderId = computed(() => String(props.job.id || props.jobNo || ''))
-const canCreateInvoice = computed(() => props.editable && rows.value.length > 0 && !invoice.value)
-const draftTotal = computed(() => {
-  if (!draft.value) return 0
-  const base = (Number(draft.value.quantity) || 0) * (Number(draft.value.unitPrice) || 0)
-  return base + base * ((Number(draft.value.tax) || 0) / 100)
-})
-const currency = computed(() => String(props.job.currency || localization.value.currency))
+const currency = computed(() => String(props.job.currency || ''))
+const rows = computed(() => serviceChargeRows(charges.value))
+const table = computed(() => serviceChargeTable())
+const canCreateInvoice = computed(() => props.editable === true && rows.value.length > 0 && !invoice.value)
 
-const columns: TableColumn<Row>[] = [
-  { id: 'description', header: 'Description' },
-  { accessorKey: 'documentDate', header: 'Date' },
-  { accessorKey: 'documentType', header: 'Type' },
-  { accessorKey: 'status', header: 'Status' },
-  { accessorKey: 'total', header: 'Total' },
-  { accessorKey: 'invoiceNo', header: 'Invoice' },
-  { id: 'actions', header: '' },
-]
-
-const displayRows = computed<Row[]>(() => (draft.value ? [{ id: '__draft__', _draft: true } as Row, ...rows.value] : rows.value))
+const headerActions = computed(() => (props.editable !== true
+  ? []
+  : [{
+      label: t('freight.ui.createFinanceInvoice'),
+      icon: 'i-lucide-file-plus',
+      disabled: saving.value || !canCreateInvoice.value,
+      onClick: () => { void createInvoice() },
+    }]))
 
 async function load() {
   if (!orderId.value) return
   loading.value = true
   try {
-    rows.value = await lcs.charges.listForOrder(orderId.value)
+    charges.value = await lcs.charges.listForOrder(orderId.value)
     invoice.value = await lcs.charges.getOrderInvoice(orderId.value)
   }
   catch {
-    rows.value = []
+    charges.value = []
     invoice.value = null
   }
   finally {
@@ -63,40 +68,71 @@ async function load() {
 
 watch(() => props.jobNo, () => { void load() }, { immediate: true })
 
-function startAdd() {
-  draft.value = { description: '', quantity: 1, unitPrice: 0, tax: 0 }
+/** Per-row print icon. Hidden for rows that are still being composed locally. */
+function rowAction(action: string, row: Record<string, unknown>) {
+  if (action !== 'print') return null
+  const id = String(row.id ?? '')
+  if (!id || id.startsWith(SAVE_GRID_NEW_PREFIX)) return null
+  return {
+    label: t('freight.ui.printInvoice'),
+    icon: 'i-lucide-printer',
+    color: 'primary' as const,
+    onSelect: () => { void navigateTo(buildPrintRoute({
+      collection: 'jobCharges',
+      recordId: id,
+      template: 'tax-invoice',
+      returnTo: route.fullPath,
+      modulePath: '/service-orders',
+    })) },
+  }
 }
 
-function cancelDraft() {
-  draft.value = null
-}
-
-async function saveDraft() {
-  const current = draft.value
-  if (!current || !current.description.trim()) return
+async function save(change: SaveGridChange) {
+  if (!orderId.value) return
+  const savedById = new Map(charges.value.map(charge => [String(charge.id ?? ''), charge]))
   saving.value = true
   try {
-    await lcs.charges.createForOrder(orderId.value, {
-      documentType: 'SERVICE_NOTE',
-      documentDate: new Date().toISOString().slice(0, 10),
-      currency: currency.value,
-      lines: [{
-        description: current.description,
-        quantity: Number(current.quantity) || 1,
-        unitPrice: Number(current.unitPrice) || 0,
-        tax: Number(current.tax) || 0,
-      }],
-    })
-    draft.value = null
+    for (const id of change.removedIds) {
+      const charge = savedById.get(id)
+      if (charge && await removeCharge(charge)) continue
+      // A refused delete is put back so the grid keeps matching the server.
+      change.rows.push({ ...savedById.get(id) })
+    }
+    for (const row of change.rows) {
+      const id = String(row.id ?? '')
+      const saved = savedById.get(id)
+      const payload = serviceChargePayload(row, currency.value)
+      if (!saved) {
+        // A new row is a one-line charge; the grid already holds its values.
+        if (serviceChargeIsCreatable(row)) await lcs.charges.createForOrder(orderId.value, payload)
+        continue
+      }
+      if (!isDeletableCharge(saved)) continue
+      await lcs.charges.saveDraft({ ...saved, ...payload } as FreightRecord)
+    }
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     await load()
   }
   catch {
     toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+    await load()
   }
   finally {
     saving.value = false
   }
+}
+
+/** Returns false when the user cancels, so the grid can restore the row. */
+async function removeCharge(charge: FreightRecord): Promise<boolean> {
+  const accepted = await confirm({
+    kind: 'delete',
+    descriptionKey: 'freight.ui.delete',
+    descriptionParams: { name: String(charge.chargeNo || charge.id || '') },
+  })
+  if (!accepted) return false
+  await lcs.charges.delete([String(charge.id ?? '')])
+  toast.add({ title: t('actions.delete'), color: 'success' })
+  return true
 }
 
 async function createInvoice() {
@@ -124,153 +160,35 @@ function printInvoice() {
     modulePath: '/service-orders',
   }))
 }
-
-function printCharge(row: FreightRecord) {
-  void navigateTo(buildPrintRoute({
-    collection: 'jobCharges',
-    recordId: String(row.id),
-    template: 'tax-invoice',
-    returnTo: route.fullPath,
-    modulePath: '/service-orders',
-  }))
-}
-
-function chargeDescription(row: FreightRecord): string {
-  const lines = Array.isArray(row.feeLines) ? row.feeLines as Array<Record<string, unknown>> : []
-  return String(lines[0]?.description || row.chargeNo || '')
-}
 </script>
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="flex flex-wrap items-center gap-2">
-        <UButton
-          v-if="editable"
-          icon="i-lucide-plus"
-          color="primary"
-          variant="soft"
-          :label="t('freight.ui.addCharge')"
-          :disabled="Boolean(draft)"
-          @click="startAdd" />
-        <UButton
-          v-if="editable"
-          icon="i-lucide-file-plus"
-          color="primary"
-          :loading="saving"
-          :disabled="!canCreateInvoice"
-          :label="t('freight.ui.createFinanceInvoice')"
-          @click="createInvoice" />
-      </div>
-      <div class="flex items-center gap-2">
-        <UBadge v-if="invoice" color="success" variant="subtle">
-          {{ invoice.documentNo || invoice.invoiceNo }} · {{ invoice.status }}
-        </UBadge>
-        <UButton
-          icon="i-lucide-printer"
-          color="neutral"
-          variant="soft"
-          :disabled="!invoice"
-          :label="t('freight.ui.printInvoice')"
-          @click="printInvoice" />
-      </div>
+    <div class="flex flex-wrap items-center justify-end gap-2">
+      <UBadge v-if="invoice" color="success" variant="subtle">
+        {{ invoice.documentNo || invoice.invoiceNo }} · {{ invoice.status }}
+      </UBadge>
+      <UButton
+        icon="i-lucide-printer"
+        color="neutral"
+        variant="soft"
+        :disabled="!invoice"
+        :label="t('freight.ui.printInvoice')"
+        @click="printInvoice" />
     </div>
 
-    <UTable :data="displayRows" :columns="columns" :loading="loading">
-      <template #description-cell="{ row }">
-        <UInput
-          v-if="row.original._draft"
-          v-model="draft!.description"
-          placeholder="Description"
-          size="sm"
-          class="w-full"
-          @keyup.enter="saveDraft" />
-        <span v-else class="text-sm font-medium text-highlighted">
-          {{ chargeDescription(row.original) }}
-        </span>
-      </template>
-      <template #documentDate-cell="{ row }">
-        <span class="text-sm text-muted">{{ formatDate(row.original._draft ? new Date().toISOString().slice(0, 10) : row.original.documentDate) }}</span>
-      </template>
-      <template #documentType-cell="{ row }">
-        <span v-if="row.original._draft" class="text-xs text-muted">SERVICE NOTE</span>
-        <UBadge
-v-else
-color="neutral"
-variant="subtle"
-size="sm">{{ String(row.original.documentType || '').replace(/_/g, ' ') }}</UBadge>
-      </template>
-      <template #status-cell="{ row }">
-        <UBadge
-v-if="row.original._draft"
-color="neutral"
-variant="subtle"
-size="sm">DRAFT</UBadge>
-        <UBadge
-v-else
-:color="row.original.status === 'ISSUED' ? 'success' : 'neutral'"
-variant="subtle"
-size="sm">{{ row.original.status }}</UBadge>
-      </template>
-      <template #total-cell="{ row }">
-        <span v-if="row.original._draft" class="tabular-nums text-muted">{{ formatMoney(draftTotal, currency) }}</span>
-        <span v-else class="tabular-nums">{{ formatMoney(row.original.total, String(row.original.currency || currency)) }}</span>
-      </template>
-      <template #invoiceNo-cell="{ row }">
-        <span class="text-sm text-muted">{{ row.original.invoiceNo || '—' }}</span>
-      </template>
-      <template #actions-cell="{ row }">
-        <div class="flex items-center justify-end gap-1">
-          <template v-if="row.original._draft">
-            <div class="mr-2 grid grid-cols-3 gap-1">
-              <UInputNumber
-v-model="draft!.quantity"
-:min="0"
-size="sm"
-class="w-20"
-placeholder="Qty" />
-              <UInputNumber
-v-model="draft!.unitPrice"
-:min="0"
-size="sm"
-class="w-24"
-placeholder="Price" />
-              <UInputNumber
-v-model="draft!.tax"
-:min="0"
-size="sm"
-class="w-20"
-placeholder="Tax %" />
-            </div>
-            <UButton
-size="xs"
-color="primary"
-icon="i-lucide-check"
-aria-label="Save"
-:loading="saving"
-@click="saveDraft" />
-            <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-x"
-aria-label="Cancel"
-@click="cancelDraft" />
-          </template>
-          <UButton
-            v-else
-            size="xs"
-            color="neutral"
-            variant="ghost"
-            icon="i-lucide-printer"
-            aria-label="Print"
-            @click="printCharge(row.original)" />
-        </div>
-      </template>
-    </UTable>
+    <TableAppSaveGrid
+      v-if="rows.length || editable"
+      :table="table"
+      :rows="rows"
+      :disabled="editable !== true"
+      :saving="saving"
+      :header-actions="headerActions"
+      :row-actions="rowAction"
+      @save="save" />
 
     <FreightJobEmptyState
-      v-if="!loading && !displayRows.length"
+      v-else-if="!loading"
       :title="t('freight.ui.noServiceCharges')"
       :description="t('freight.ui.addCharge')"
       icon="i-lucide-receipt-text" />

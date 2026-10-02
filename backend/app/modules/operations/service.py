@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
 from app.core.storage import get_storage, guess_content_type
@@ -123,7 +123,13 @@ async def list_service_orders(session: AsyncSession, context: RequestContext, pa
             ServiceOrder.service_order_no.ilike(pattern) | ServiceOrder.data["customer"].as_string().ilike(pattern)
         )
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(ServiceOrder.id.desc()).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ServiceOrder, page, ServiceOrder.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     return paged([order_record(row, row.data or {}) for row in rows], page, total)
 
 
@@ -466,7 +472,13 @@ async def list_charges(session: AsyncSession, context: RequestContext, page: Pag
     if page.status:
         stmt = stmt.where(ServiceOrderCharge.status == str(page.status).upper())
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(ServiceOrderCharge.id.desc()).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ServiceOrderCharge, page, ServiceOrderCharge.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     items = [await _charge_with_details(session, row) for row in rows]
     return paged(items, page, total)
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { VisibilityOperator, VisibilityRule } from '~/types/docetra/configuration'
-import { VISIBILITY_OPERATORS } from '~/types/docetra/configuration'
+import type { VisibilityOperator, VisibilityRule } from '~/types/configuration'
+import { VISIBILITY_OPERATORS } from '~/types/configuration'
 
 const model = defineModel<VisibilityRule | null>({ default: null })
 

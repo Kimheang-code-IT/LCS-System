@@ -42,6 +42,7 @@ export function normalizeActualContainer(
     status: text(row.status) || 'Expected',
     netWeightKg: asNumber(row.netWeightKg ?? row.net_weight_kg),
     grossWeightKg: asNumber(row.grossWeightKg ?? row.gross_weight_kg),
+    note: text(row.note ?? row.remarks ?? row.remark),
     sequence: asNumber(row.sequence) || index + 1,
   }
 }
@@ -90,6 +91,7 @@ export function normalizeContainerPayment(row: Record<string, unknown>): Record<
       unit: text(row.unit),
       blNo: text(row.blNo),
       truckNo: text(row.truckNo),
+      note: text(row.note ?? row.remarks ?? row.remark),
       quantity,
       unitPrice: Number((legacyAmount / quantity).toFixed(2)),
       discountAmount: 0,
@@ -109,6 +111,7 @@ export function normalizeContainerPayment(row: Record<string, unknown>): Record<
     unit: text(row.unit),
     blNo: text(row.blNo),
     truckNo: text(row.truckNo),
+    note: text(row.note ?? row.remarks ?? row.remark),
     ...amounts,
   }
 }

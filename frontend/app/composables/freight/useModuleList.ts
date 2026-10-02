@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { FreightModule } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import type { ModuleListQuery } from '~/repositories/contracts/module'
 import { useModuleRepository } from '~/repositories'
 

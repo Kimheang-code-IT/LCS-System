@@ -7,6 +7,9 @@ const props = withDefaults(defineProps<{
   help?: string
   disabled?: boolean
 }>(), {
+  label: '',
+  labelKey: '',
+  help: '',
   disabled: false,
 })
 

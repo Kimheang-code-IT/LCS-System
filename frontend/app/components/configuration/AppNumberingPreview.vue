@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { RecordTypeNumbering } from '~/types/docetra/configuration'
-import { previewRecordNumber } from '~/types/docetra/configuration'
+import type { RecordTypeNumbering } from '~/types/configuration'
+import { previewRecordNumber } from '~/types/configuration'
 
 const props = defineProps<{
   numbering: RecordTypeNumbering

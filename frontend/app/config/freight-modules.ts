@@ -1,4 +1,4 @@
-import type { DocumentTabSchema } from '~/types/docetra/common'
+import type { DocumentTabSchema } from '~/types/common'
 import {
   ACTIVE_STATUS,
   CUSTOMS_STATUS,
@@ -9,6 +9,7 @@ import {
   DOCUMENT_TYPES,
   PAYMENT_METHODS,
   PAYMENT_STATUS,
+  PLACE_ROLES,
   QUOTATION_CONDITIONS,
   QUOTATION_STATUS,
   SERVICE_CHARGE_STATUS,
@@ -19,6 +20,14 @@ import {
   TRUCK_TYPES,
 } from './freight-options'
 import { lcsReferenceModules } from './lcs-reference-modules'
+import {
+  computeDocumentLine,
+  computeFeeLine,
+  computeOtherChargeLine,
+  computePricingLine,
+  containerRequirementRowDefaults,
+  routePlaceRowDefaults,
+} from '~/utils/table/line-table-rules'
 
 export type FreightFieldType = 'text' | 'date' | 'datetime' | 'number' | 'select' | 'multiselect' | 'textarea' | 'file' | 'password' | 'checkbox'
 
@@ -45,7 +54,7 @@ export type FreightLineColumn = {
   key: string
   label: string
   labelKm?: string
-  type?: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'date' | 'datetime' | 'table-columns' | 'delete'
+  type?: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'date' | 'datetime' | 'table-columns' | 'note' | 'reorder' | 'delete' | 'action'
   options?: readonly string[] | string[]
   /** Select labels when they differ from stored values (e.g. container requirement id). */
   optionItems?: Array<{ label: string, value: string }>
@@ -55,6 +64,31 @@ export type FreightLineColumn = {
   labelKey?: string
   /** Small editable money fields rendered inside the same cell under the main value. */
   inlineFields?: Array<{ key: string, label: string, labelKm?: string, labelKey?: string }>
+  /**
+   * For `type: 'action'`: identifier the renderer hands to its `rowActions`
+   * handler (defaults to `key`). The handler owns the behaviour, so the table
+   * config stays declarative and free of navigation logic.
+   */
+  action?: string
+}
+
+/** Column types that carry no row data, so they are skipped when adding a row. */
+export const FREIGHT_LINE_UTILITY_COLUMN_TYPES: ReadonlySet<FreightLineColumn['type']> = new Set([
+  'delete',
+  'action',
+  'reorder',
+])
+
+export type FreightLineRow = Record<string, unknown>
+
+/** Context handed to a table's `rowDefaults` / `computeRow` hooks. */
+export type FreightTableRowContext = {
+  /** Row being changed, or the row about to be added. */
+  row: FreightLineRow
+  /** Every row in the table, in display order. */
+  rows: FreightLineRow[]
+  /** Position of `row` inside `rows`. */
+  index: number
 }
 
 export type FreightTable = {
@@ -68,6 +102,21 @@ export type FreightTable = {
   lockedPresets?: boolean
   /** Native file picker + File name / By / Created columns. */
   kind?: 'files'
+  /**
+   * Recomputes derived values (line totals, tax, amounts) after a cell edit.
+   * Returned keys are merged onto the row. Declared here so the renderer stays
+   * generic instead of branching on `key`.
+   */
+  computeRow?: (context: FreightTableRowContext) => FreightLineRow
+  /**
+   * Values seeded into a newly added row, merged over the column-derived
+   * blanks. Receives the rows already in the table and the blank row, so a
+   * default can carry state forward (e.g. the previous payment's container) or
+   * fall back to the blank's own column default.
+   */
+  rowDefaults?: (context: { rows: FreightLineRow[], blank: FreightLineRow }) => FreightLineRow
+  /** Renders discount/tax inline fields and the totals block beneath the table. */
+  pricing?: boolean
 }
 
 export const FILE_ATTACHMENT_COLUMNS: FreightLineColumn[] = [
@@ -295,6 +344,7 @@ export const freightModules: FreightModule[] = [
           { key: 'grossWeightKg', label: 'Estimated Gross Weight (kg)', labelKm: 'ទម្ងន់សរុបប៉ាន់ស្មាន', type: 'number' },
           { key: 'remarks', label: 'Remarks', labelKm: 'កំណត់សម្គាល់' },
         ],
+        rowDefaults: containerRequirementRowDefaults,
       },
       {
         key: 'pricingLines',
@@ -321,6 +371,8 @@ export const freightModules: FreightModule[] = [
             ],
           },
         ],
+        computeRow: computePricingLine,
+        pricing: true,
       },
       {
         key: 'otherCharges',
@@ -336,6 +388,7 @@ export const freightModules: FreightModule[] = [
           { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', type: 'number' },
           { key: 'remark', label: 'Remark', labelKm: 'កំណត់សម្គាល់' },
         ],
+        computeRow: computeOtherChargeLine,
       },
       {
         key: 'conditions',
@@ -1264,12 +1317,12 @@ if (quotationModule) freightModules.push({
   ],
   tables: [
     { key: 'places', title: 'Route', titleKm: 'ផ្លូវ', addLabel: 'Add Route', columns: [
-      { key: 'placeRole', label: 'Role', labelKm: 'តួនាទី', type: 'select', required: true }, { key: 'place', label: 'Place', labelKm: 'ទីកន្លែង', type: 'text', required: true }, { key: 'plannedActual', label: 'Planned', labelKm: 'គ្រោង', type: 'date' }, { key: 'notes', label: 'Notes', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.notes' },
+      { key: 'placeRole', label: 'Role', labelKm: 'តួនាទី', type: 'select', options: PLACE_ROLES, required: true }, { key: 'place', label: 'Place', labelKm: 'ទីកន្លែង', type: 'text', required: true }, { key: 'plannedActual', label: 'Planned', labelKm: 'គ្រោង', type: 'date' }, { key: 'notes', label: 'Notes', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.notes' },
       { key: 'trust', label: '', type: 'delete' },
-    ] },
+    ], rowDefaults: routePlaceRowDefaults },
     { key: 'containerRequirements', title: 'Containers', titleKm: 'កុងតឺន័រ', addLabel: 'Add Container', columns: [
       { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true }, { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', type: 'number', required: true }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' },
-    ] },
+    ], rowDefaults: containerRequirementRowDefaults },
     { key: 'pricingLines', title: 'Pricing', titleKm: 'តម្លៃ', addLabel: 'Add Pricing Line', columns: [
       { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true },
       { key: 'transportBy', label: 'By', labelKm: 'ដោយ', labelKey: 'freight.ui.byCol', type: 'select', options: TRANSPORT_BY, required: true },
@@ -1277,7 +1330,7 @@ if (quotationModule) freightModules.push({
       { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true },
       { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
       { key: 'trust', label: '', type: 'delete' },
-    ] },
+    ], computeRow: computePricingLine, pricing: true },
     { key: 'attachments', title: 'Files', titleKm: 'ឯកសារ', addLabel: 'Upload File', addLabelKey: 'freight.ui.uploadFile', kind: 'files', columns: FILE_ATTACHMENT_COLUMNS },
     { key: 'revisionHistory', title: 'Revisions', titleKm: 'កំណែ', columns: [
       { key: 'revisionNo', label: 'Rev', labelKm: 'កំណែ' }, { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព' }, { key: 'quotationDate', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', type: 'date' }, { key: 'validUntil', label: 'Valid Until', labelKm: 'មានសុពលភាពដល់', type: 'date' }, { key: 'total', label: 'Total', labelKm: 'សរុប', type: 'number' }, { key: 'createdBy', label: 'Created By', labelKm: 'បង្កើតដោយ' },
@@ -1354,10 +1407,9 @@ if (chargesModule) freightModules.push({
   descriptionKm: 'ថ្លៃព័ត៌មានអតិថិជនដែលមិនចុះគណនី រហូតដល់បម្លែង និងចុះបញ្ជីដោយច្បាស់លាស់។',
   titleField: 'chargeNo',
   columns: [
-    col('chargeNo', 'Charge No.', 'លេខថ្លៃ'), col('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម'), col('customer', 'Customer', 'អតិថិជន'), col('documentType', 'Document Type', 'ប្រភេទឯកសារ'), col('documentDate', 'Document Date', 'កាលបរិច្ឆេទ'), col('currency', 'Currency', 'រូបិយប័ណ្ណ'), col('subtotal', 'Subtotal', 'សរុបរង'), col('discount', 'Discount', 'បញ្ចុះតម្លៃ'), col('tax', 'Tax', 'ពន្ធ'), col('total', 'Total', 'សរុប'), col('status', 'Status', 'ស្ថានភាព'), col('invoiceNo', 'Invoice', 'វិក្កយបត្រ'), col('createdBy', 'Created By', 'បង្កើតដោយ'), col('createdAt', 'Created At', 'បង្កើតនៅ'),
+    col('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម'), col('customer', 'Customer', 'អតិថិជន'), col('currency', 'Currency', 'រូបិយប័ណ្ណ'), col('subtotal', 'Subtotal', 'សរុបរង'), col('discount', 'Discount', 'បញ្ចុះតម្លៃ'), col('tax', 'Tax', 'ពន្ធ'), col('total', 'Total', 'សរុប'), col('invoiceNo', 'Invoice', 'វិក្កយបត្រ'), col('createdBy', 'Created By', 'បង្កើតដោយ'), col('createdAt', 'Created At', 'បង្កើតនៅ'),
   ],
   fields: [
-    f('chargeNo', 'Charge No.', 'លេខថ្លៃ', 'General', 'ទូទៅ', 'text', undefined, { required: true, computed: true }), f('documentDate', 'Document Date', 'កាលបរិច្ឆេទ', 'General', 'ទូទៅ', 'date', undefined, { required: true }), f('documentType', 'Document Type', 'ប្រភេទឯកសារ', 'General', 'ទូទៅ', 'select', ['SERVICE_NOTE', 'DEBIT_NOTE', 'PRO_FORMA']), f('status', 'Status', 'ស្ថានភាព', 'General', 'ទូទៅ', 'select', SERVICE_CHARGE_STATUS),
     f('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម', 'General', 'ទូទៅ', 'text', undefined, { helpKey: 'freight.fieldHelp.chargeJobNo' }), f('customer', 'Customer', 'អតិថិជន', 'General', 'ទូទៅ', 'select', undefined, { required: true }), f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'General', 'ទូទៅ', 'select'), f('remarks', 'Remarks', 'កំណត់សម្គាល់', 'General', 'ទូទៅ', 'textarea', undefined, { colSpan: 2, helpKey: 'freight.fieldHelp.remarks' }),
     f('invoiceNo', 'Finance Invoice', 'វិក្កយបត្រហិរញ្ញវត្ថុ', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeInvoiceNo' }),
     f('journalId', 'Posted Journal', 'ទិនានុប្បវត្តិបានចុះបញ្ជី', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeJournalId' }),
@@ -1375,6 +1427,8 @@ if (chargesModule) freightModules.push({
         ],
       },
     ],
+    computeRow: computeFeeLine,
+    pricing: true,
   }, {
     key: 'sourceRelationships', title: 'Source Relationships', titleKm: 'ទំនាក់ទំនងប្រភព', columns: SOURCE_RELATIONSHIP_COLUMNS,
   }],
@@ -1429,6 +1483,8 @@ if (invoicesModule) freightModules.push({
           ],
         },
       ],
+      computeRow: computeDocumentLine,
+      pricing: true,
     },
     {
       key: 'allocations', title: 'Payment Allocations', titleKm: 'ការបែងចែកការទូទាត់', addLabel: 'Allocate document',

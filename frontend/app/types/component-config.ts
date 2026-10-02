@@ -200,6 +200,8 @@ export interface ComponentConfigTypes {
   renderModes: ComponentRenderMode[]
 }
 
+
+
 export const COMPONENT_DATA_TYPES: ComponentDataType[] = [
   'text',
   'textarea',

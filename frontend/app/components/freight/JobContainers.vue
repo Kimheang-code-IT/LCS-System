@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import type { FreightTable } from '~/config/freight-modules'
 import {
   JOB_ACTUAL_CONTAINER_TABLE,
@@ -253,6 +253,33 @@ function actualContainerPrintActions(row: Record<string, unknown>) {
   }]
 }
 
+/** Per-row invoice button on the container payment grid. */
+function paymentRowAction(action: string, row: Record<string, unknown>) {
+  if (action !== 'invoice' || props.isCreate || !props.job.id) return null
+
+  const index = Number(row._rowIndex)
+  if (!Number.isInteger(index) || index < 0 || index >= paymentRows.value.length) return null
+
+  return {
+    label: t('freight.print.job.printPaymentInvoice'),
+    icon: 'i-lucide-receipt-text',
+    color: 'primary' as const,
+    onSelect: () => {
+      persist()
+      const { path, query } = buildPrintRoute({
+        collection: 'jobs',
+        recordId: String(props.job.id),
+        template: 'debit-note',
+        returnTo: route.fullPath,
+        modulePath: '/service-orders',
+        lineIndex: index,
+        autoPrint: true,
+      })
+      void navigateTo({ path, query })
+    },
+  }
+}
+
 watch(() => props.job.id, loadRows, { immediate: true })
 </script>
 
@@ -269,6 +296,7 @@ watch(() => props.job.id, loadRows, { immediate: true })
       :table="paymentTable"
       :model-value="paymentRows"
       :disabled="!canEditPayments"
+      :row-actions="paymentRowAction"
       @update:model-value="setPayments"
     />
     <div class="ms-auto grid w-full max-w-sm gap-1 px-1 py-1.5 text-xs">

@@ -27,7 +27,7 @@ const headerActions = computed(() => props.disabled
 
 <template>
   <div class="space-y-3">
-    <TableAppLineTable
+    <FreightAppLineTable
       v-if="table"
       :table="table"
       :model-value="modelValue"

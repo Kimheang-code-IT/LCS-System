@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { createFreightSeed } from './freight-seed'
 import {
   BRANCH_BAVET_ID,

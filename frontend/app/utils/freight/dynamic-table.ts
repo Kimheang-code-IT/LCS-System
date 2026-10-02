@@ -1,5 +1,5 @@
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
-import type { DynamicTableColumnDef } from '~/types/docetra/configuration'
+import type { DynamicTableColumnDef } from '~/types/configuration'
 import { createClientId } from '~/utils/client-id'
 
 export function normalizeTableColumnType(value: unknown): DynamicTableColumnDef['type'] {

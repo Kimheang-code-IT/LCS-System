@@ -1,5 +1,5 @@
 import { DEBIT_CHARGE_TYPES, JOB_CHECKLIST_TYPES, QUOTATION_CONDITIONS } from '~/config/freight-options'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 export type { FreightRecord }
 

@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { daysSince, postedJournalLines } from '~/utils/freight/report'
 
 export function indexRowsByKey<T extends Record<string, unknown>>(

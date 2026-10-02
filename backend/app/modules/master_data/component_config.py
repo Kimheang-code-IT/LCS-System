@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.serialization import jsonable
 from app.modules.master_data.models import (
     ComponentAttribute,
@@ -104,7 +104,11 @@ async def list_attributes(
         stmt = stmt.where(ComponentAttribute.label.ilike(f"%{page.q}%") | ComponentAttribute.code.ilike(f"%{page.q}%"))
     total = await count_query(session, stmt)
     rows = (
-        await session.execute(stmt.order_by(ComponentAttribute.label, ComponentAttribute.id).limit(page.page_size).offset(page.offset))
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ComponentAttribute, page, ComponentAttribute.label, ComponentAttribute.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
     ).scalars().all()
     return paged([attribute_payload(row) for row in rows], page, total)
 
@@ -221,7 +225,11 @@ async def list_groups(session: AsyncSession, context: RequestContext, page: Page
         stmt = stmt.where(ComponentGroup.name.ilike(f"%{page.q}%") | ComponentGroup.code.ilike(f"%{page.q}%"))
     total = await count_query(session, stmt)
     rows = (
-        await session.execute(stmt.order_by(ComponentGroup.display_order, ComponentGroup.id).limit(page.page_size).offset(page.offset))
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ComponentGroup, page, ComponentGroup.display_order, ComponentGroup.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
     ).scalars().all()
     items = []
     for row in rows:
@@ -454,7 +462,11 @@ async def list_tabs(session: AsyncSession, context: RequestContext, page: PagePa
         stmt = stmt.where(ComponentTab.name.ilike(f"%{page.q}%") | ComponentTab.code.ilike(f"%{page.q}%"))
     total = await count_query(session, stmt)
     rows = (
-        await session.execute(stmt.order_by(ComponentTab.display_order, ComponentTab.id).limit(page.page_size).offset(page.offset))
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ComponentTab, page, ComponentTab.display_order, ComponentTab.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
     ).scalars().all()
     items = []
     for row in rows:

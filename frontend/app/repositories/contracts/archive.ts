@@ -1,4 +1,4 @@
-import type { LcsPaged } from '~/types/lcs/domain'
+import type { LcsPaged } from '~/types/domain'
 
 export interface ArchiveRecord {
   [key: string]: unknown
@@ -24,6 +24,8 @@ export interface ArchiveListQuery {
   deleted_by?: number
   dateFrom?: string
   dateTo?: string
+  sortKey?: string
+  sortDir?: 'asc' | 'desc'
 }
 
 export interface ArchiveOptions {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AttributeDataType, ValidationRule } from '~/types/docetra/configuration'
+import type { AttributeDataType, ValidationRule } from '~/types/configuration'
 
 const model = defineModel<ValidationRule>({ default: () => ({}) })
 

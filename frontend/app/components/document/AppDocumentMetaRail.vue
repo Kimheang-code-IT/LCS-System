@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TimelineItem } from '@nuxt/ui'
-import type { ActivityEvent, PersonSummary } from '~/types/docetra/common'
+import type { ActivityEvent, PersonSummary } from '~/types/common'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = defineProps<{

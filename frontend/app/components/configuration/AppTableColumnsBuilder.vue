@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DynamicTableColumnDef, DynamicTableColumnType } from '~/types/docetra/configuration'
+import type { DynamicTableColumnDef, DynamicTableColumnType } from '~/types/configuration'
 import { createClientId } from '~/utils/client-id'
 
 const model = defineModel<DynamicTableColumnDef[]>({ default: () => [] })

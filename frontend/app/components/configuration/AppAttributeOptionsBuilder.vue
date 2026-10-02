@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AttributeOption } from '~/types/docetra/configuration'
+import type { AttributeOption } from '~/types/configuration'
 import { createClientId } from '~/utils/client-id'
 
 const model = defineModel<AttributeOption[]>({ default: () => [] })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { AuthUser } from '../app/types/auth-user'
-import { compactAuthUser, sessionHasPermissionData } from '../app/utils/auth/session'
+import type { AuthUser } from '../app/types/api'
+import { compactAuthUser, normalizeRoutePath, sessionHasPermissionData } from '../app/utils/auth/session'
 
 const adminUser: AuthUser = {
   id: 1,
@@ -49,5 +49,12 @@ describe('auth session cookie', () => {
     const compact = compactAuthUser(standardUser)
     expect(sessionHasPermissionData(compact)).toBe(false)
     expect(sessionHasPermissionData(standardUser)).toBe(true)
+  })
+
+  it('normalizes trailing slashes before public-route checks', () => {
+    expect(normalizeRoutePath('/auth/login/')).toBe('/auth/login')
+    expect(normalizeRoutePath('/setup///')).toBe('/setup')
+    expect(normalizeRoutePath('/dashboard/')).toBe('/dashboard')
+    expect(normalizeRoutePath('/')).toBe('/')
   })
 })

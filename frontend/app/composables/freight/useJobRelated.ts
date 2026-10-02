@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 export function useJobRelated(jobNo: MaybeRefOrGetter<string>) {
   const store = useFreightStore()

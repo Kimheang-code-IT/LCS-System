@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { AppConfig } from '~/types/docetra/settings'
-import type { ConnectionStatusFieldValue } from '~/types/docetra/common'
+import type { AppConfig } from '~/types/settings'
+import type { ConnectionStatusFieldValue } from '~/types/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'

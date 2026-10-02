@@ -7,6 +7,13 @@ export const TRUCK_TYPES = ['1.5T', '2T', '3.5T', '5T', '8T'] as const
 export const TRANSPORT_MODES = ['Road', 'Sea', 'Air', 'Rail'] as const
 export const TRANSPORT_BY = ['Truck', 'Sea', 'Air', 'Rail'] as const
 export const ACTIVE_STATUS = ['Active', 'Inactive'] as const
+
+/**
+ * Route stop roles. These values are stored on `job.places[].placeRole` and are
+ * matched verbatim against the service-order header place keys by
+ * `jobFieldsFromPlaces`, so changing a string here breaks that sync.
+ */
+export const PLACE_ROLES = ['Pickup', 'Port of Loading', 'Transit / Border', 'Destination'] as const
 export const PAYMENT_STATUS = ['Unpaid', 'Partial', 'Paid', 'Overdue'] as const
 export const PAYMENT_METHODS = ['Bank Transfer', 'Cash', 'Cheque'] as const
 export const SERVICE_TYPES = [

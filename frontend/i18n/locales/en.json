@@ -759,6 +759,7 @@
       "containerPayments": "Container payments",
       "actualContainers": "Actual containers",
       "feeLines": "Fee Lines",
+      "financeLines": "Finance Lines",
       "journalEntries": "Journal",
       "lines": "Journal Lines",
       "otherCharges": "Other Charges",
@@ -827,6 +828,7 @@
       },
       "job": {
         "printDebitInvoice": "Print Debit Invoice",
+        "printPaymentInvoice": "Print Invoice",
         "noActualContainers": "Add actual container numbers before printing debit invoices."
       },
       "title": {
@@ -950,6 +952,17 @@
       "searchLedger": "Search account, party, voucher...",
       "clear": "Clear",
       "date": "Date",
+      "sort": "Sort",
+      "sortDefault": "Default order",
+      "sortActive": "Sorted by {column} · {direction}",
+      "sortOldToNew": "Oldest to newest",
+      "sortNewToOld": "Newest to oldest",
+      "sortSmallToLarge": "Smallest to largest",
+      "sortLargeToSmall": "Largest to smallest",
+      "sortAToZ": "A to Z",
+      "sortZToA": "Z to A",
+      "sortNone": "No sort",
+      "sortFilter": "Filter columns...",
       "newEntity": "New {entity}",
       "open": "Open",
       "edit": "Edit",
@@ -979,6 +992,8 @@
       "saveFailed": "Could not save",
       "noColumnsConfigured": "No columns configured",
       "noColumnsConfiguredHint": "Add table columns in Settings → Service Order Tabs.",
+      "assignedAttributes": "Assigned attributes",
+      "assignedGroups": "Assigned groups",
       "addFeeLine": "Add fee line",
       "addRoute": "Add Route",
       "addCharge": "Add charge",
@@ -986,6 +1001,10 @@
       "addRequirement": "Add requirement",
       "addContainer": "Add Container",
       "saveContainer": "Save Container",
+      "rowNote": "Row note",
+      "rowNoteTitle": "Note",
+      "rowNotePlaceholder": "Add a note for this row.",
+      "addRowNote": "Add note",
       "createRevision": "Create Revision",
       "convertServiceOrder": "Convert to Service Order",
       "openServiceOrder": "Open Service Order",
@@ -1175,6 +1194,7 @@
       "openFinance": "Open Finance",
       "viewDocument": "View Document",
       "remainingCol": "Remaining",
+      "plannedCol": "Planned",
       "actualCol": "Actual",
       "requiredCol": "Required",
       "taskName": "Task",
@@ -1212,6 +1232,10 @@
       "noCustomerCharges": "No customer charges yet",
       "supplierExpenses": "Supplier Expenses",
       "addExpense": "Add expense",
+      "financeLines": "Finance Lines",
+      "financeLineCharge": "Charge",
+      "financeLineExpense": "Expense",
+      "financeLineInvoice": "Invoice",
       "createdCol": "Created",
       "uploadFile": "Upload File",
       "fileUploaded": "File uploaded",
@@ -1269,6 +1293,8 @@
         "credit": "Credit",
         "documentType": "Document Type",
         "documentNo": "Document No.",
+        "reference": "Reference",
+        "party": "Party",
         "file": "File",
         "uploadDate": "Upload Date",
         "remark": "Remark",
@@ -1290,6 +1316,7 @@
         "netWeight": "Net Weight (kg)",
         "grossWeight": "Gross Weight (kg)",
         "weightKg": "Weight (kg)",
+        "note": "Note",
         "createdAt": "Created At",
         "bookingNo": "Booking No.",
         "carrier": "Carrier / Shipping Line",
@@ -1484,6 +1511,7 @@
         "period": "Period"
       },
       "errorTitle": "Could not load dashboard",
+      "errorDescription": "Dashboard data is temporarily unavailable. Please try again.",
       "expense": "Expense",
       "overdueInvoices": "{n} overdue",
       "kpis": {
@@ -3035,7 +3063,9 @@
     "add": "Add",
     "cancel": "Cancel",
     "export": "Export",
-    "close": "Close"
+    "close": "Close",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
   },
   "common": {
     "actions": "Actions",
@@ -3131,7 +3161,10 @@
     },
     "error": {
       "title": "Page not found",
-      "description": "We are sorry but this page could not be found."
+      "description": "We are sorry but this page could not be found.",
+      "unexpectedTitle": "Something went wrong",
+      "unexpectedDescription": "The application could not complete your request. Please try again or return home.",
+      "backHome": "Back to home"
     },
     "setup": {
       "title": "Set up your system",

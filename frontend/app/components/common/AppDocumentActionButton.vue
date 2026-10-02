@@ -10,6 +10,9 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   to?: string
 }>(), {
+  icon: '',
+  color: 'neutral',
+  to: '',
   loading: false,
   disabled: false,
 })

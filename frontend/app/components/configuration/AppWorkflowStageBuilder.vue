@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConfigWorkflowStage, WorkflowTransition } from '~/types/docetra/configuration'
+import type { ConfigWorkflowStage, WorkflowTransition } from '~/types/configuration'
 import { createClientId } from '~/utils/client-id'
 
 const stages = defineModel<ConfigWorkflowStage[]>('stages', { default: () => [] })

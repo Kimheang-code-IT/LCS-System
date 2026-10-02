@@ -1,8 +1,8 @@
 import type { Ref } from 'vue'
-import type { FreightRecord } from '~/types/freight/record'
-import type { useLcs } from '~/composables/lcs/useLcs'
+import type { FreightRecord } from '~/types/record'
+import type { useLcs } from '~/composables/freight/useLcs'
 import type { useConfirm } from '~/composables/common/useConfirm'
-import { canConvertQuotation, quotationDomainStatus } from '~/utils/lcs/states'
+import { canConvertQuotation, quotationDomainStatus } from '~/utils/freight/states'
 
 type LcsApi = ReturnType<typeof useLcs>
 

@@ -1,5 +1,5 @@
-import type { FreightRecord } from '~/types/freight/record'
-import { financeDomainStatus } from '~/utils/lcs/states'
+import type { FreightRecord } from '~/types/record'
+import { financeDomainStatus } from '~/utils/freight/states'
 
 /** Sum of posted customer-invoice totals. Posted documents only — never drafts or other doc types. */
 export function postedDocumentTotal(rows: FreightRecord[]) {

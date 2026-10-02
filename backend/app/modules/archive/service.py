@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.database import Base, utcnow
 from app.core.exceptions import Conflict, NotFound
-from app.core.pagination import PageParams, count_query, paged, parse_date
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged, parse_date
 from app.core.serialization import jsonable
 from app.modules.archive.models import ArchiveRecord
 from app.modules.audit.service import write_audit
@@ -210,7 +210,21 @@ async def list_archived_records(
     total = await count_query(session, stmt)
     rows = (
         await session.execute(
-            stmt.order_by(ArchiveRecord.deleted_at.desc(), ArchiveRecord.id.desc())
+            stmt.order_by(
+                *list_sort_orders(
+                    ArchiveRecord,
+                    page,
+                    ArchiveRecord.deleted_at.desc(),
+                    ArchiveRecord.id.desc(),
+                    aliases={
+                        "module": "entity_type",
+                        "reference": "record_reference",
+                        "entityId": "entity_id",
+                        "deletedBy": deleted_user.c.display_name,
+                        "originalOwner": owner_user.c.display_name,
+                    },
+                )
+            )
             .limit(page.page_size)
             .offset(page.offset)
         )
