@@ -3,12 +3,13 @@ import type { TableColumn } from '@nuxt/ui'
 import { h, type Component } from 'vue'
 import { CommonAppReferenceSelect, CommonAppInputDate, UButton, UCheckbox, UDropdownMenu, UIcon, UInput, UInputNumber } from '#components'
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
+import { FREIGHT_LINE_UTILITY_COLUMN_TYPES } from '~/config/freight-modules'
 import { useFreightLabel } from '~/composables/freight/useFreight'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref, revokeFilePreview, useFileAttachments } from '~/utils/freight/attachments'
-import { containerPaymentAmounts } from '~/utils/freight/job-containers'
 import { fileTypeIcon } from '~/utils/file-icon'
 import TableLineTableColumnsCell from '~/components/table/LineTableColumnsCell.vue'
+import TableLineTableNoteCell from '~/components/table/LineTableNoteCell.vue'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
@@ -20,6 +21,8 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   compact?: boolean
   viewOnlyActions?: boolean
+  /** Locks individual rows (not the whole table) — used by mixed read-only/editable grids. */
+  rowDisabled?: (row: Record<string, unknown>) => boolean
   headerActions?: Array<{
     label: string
     icon?: string
@@ -38,9 +41,31 @@ const props = withDefaults(defineProps<{
     color?: 'primary' | 'neutral' | 'error'
     onSelect: () => void
   }>
+  /**
+   * Handler for `type: 'action'` columns. Receives the column's `action`
+   * identifier and the row; returning `null` hides the cell. Unlike data cells
+   * these are not locked by `disabled`, because a read-only grid still needs
+   * its row actions (e.g. printing a document).
+   */
+  rowActions?: (action: string, row: Record<string, unknown>) => {
+    label: string
+    icon: string
+    color?: 'primary' | 'neutral' | 'error'
+    onSelect: () => void
+  } | null
+  /**
+   * Called after a `type: 'reorder'` cell moves a row. Receives the whole row
+   * list in its new order, so the parent can persist display order.
+   */
+  onReorder?: (rows: Array<Record<string, unknown>>) => void
 }>(), {
   compact: false,
+  rowDisabled: undefined,
   headerActions: () => [],
+  extraRowMenuItems: undefined,
+  rowInlineActions: undefined,
+  rowActions: undefined,
+  onReorder: undefined,
 })
 
 const emit = defineEmits<{
@@ -60,9 +85,10 @@ const TableInput = UInput as Component
 const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
 const TableColumnsCell = TableLineTableColumnsCell as Component
+const TableNoteCell = TableLineTableNoteCell as Component
 const TableReferenceSelect = CommonAppReferenceSelect as Component
 
-const isFileTable = computed(() => props.table.kind === 'files' || props.table.key === 'attachments')
+const isFileTable = computed(() => props.table.kind === 'files')
 const hasDeleteColumn = computed(() => props.table.columns.some(column => column.type === 'delete'))
 const cellSize = 'sm' as const
 const cellInputUi = { base: 'text-sm' }
@@ -130,7 +156,7 @@ function columnHeader(column: FreightLineColumn) {
   ])
 }
 
-function inlineNumberFieldsCell(column: FreightLineColumn, row: Record<string, unknown>, index: number) {
+function inlineNumberFieldsCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
   const inlineFields = column.inlineFields || []
   const formatInlineNumber = (value: unknown) =>
     formatNumber(value, { maximumFractionDigits: 2, minimumFractionDigits: 0 })
@@ -142,7 +168,7 @@ function inlineNumberFieldsCell(column: FreightLineColumn, row: Record<string, u
     title: summary,
   }, summary || '—')
   if (!inlineFields.length) return main
-  if (props.disabled) return main
+  if (disabled) return main
   return h('div', { class: 'space-y-0.5 text-right' }, [
     inlineFields.map(field =>
       h('div', { class: 'flex items-center justify-end gap-1' }, [
@@ -162,7 +188,7 @@ function inlineNumberFieldsCell(column: FreightLineColumn, row: Record<string, u
   ])
 }
 
-function inlineMoneyCell(column: FreightLineColumn, row: Record<string, unknown>, index: number) {
+function inlineMoneyCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
   const inlineFields = column.inlineFields || []
   const main = h('span', {
     class: [columnCellClass(column), 'block truncate text-sm'],
@@ -170,7 +196,7 @@ function inlineMoneyCell(column: FreightLineColumn, row: Record<string, unknown>
   }, displayValue(column, row[column.key], row))
   if (!inlineFields.length) return main
   const formatInlineMoney = (value: unknown) => formatMoney(value)
-  if (props.disabled) {
+  if (disabled) {
     const parts = inlineFields
       .map(field => ({ label: fieldLabel(field), value: Number(row[field.key] ?? 0) }))
       .filter(part => Number.isFinite(part.value) && part.value !== 0)
@@ -207,50 +233,20 @@ const rows = computed({
   set: value => emit('update:modelValue', value),
 })
 
+function rowLocked(row: Record<string, unknown>) {
+  return props.disabled || Boolean(props.rowDisabled?.(row))
+}
+
 const tableRows = computed(() => rows.value.map((row, index) => ({ ...row, _rowIndex: index })))
 
 function updateCell(index: number, key: string, value: unknown) {
-  const next = rows.value.map((row, i) => i === index ? { ...row, [key]: value } : row)
-  if (props.table.key === 'otherCharges') {
-    const row = next[index]
-    if (!row) return
-    const qty = Number(row.quantity || 0)
-    const selling = Number(row.sellingRate || 0)
-    next[index] = { ...row, amount: qty * selling }
-  }
-  if (props.table.key === 'feeLines') {
-    const row = next[index]
-    if (!row) return
-    const amount = Math.max(0, Number(row.quantity || 0) * Number(row.unitAmount || 0) - Number(row.discount || 0))
-    next[index] = { ...row, amount: amount + Number(row.taxAmount || 0) }
-  }
-  if (props.table.key === 'pricingLines') {
-    const row = next[index]
-    if (!row) return
-    const subtotal = Number(row.quantity || 0) * Number(row.unitPrice || 0)
-    const discount = Number(row.discountAmount || 0)
-    const taxable = Math.max(0, subtotal - discount)
-    const tax = Number(row.taxAmount || 0)
-    next[index] = { ...row, lineTotal: Number((taxable + tax).toFixed(2)) }
-  }
-  if (props.table.key === 'lines') {
-    const row = next[index]
-    if (!row) return
-    const taxable = Math.max(0, Number(row.quantity || 0) * Number(row.unitAmount || 0) - Number(row.discount || 0))
-    const tax = Number(row.taxAmount || row.tax || 0)
-    next[index] = { ...row, amount: Number((taxable + tax).toFixed(2)) }
-  }
-  if (props.table.key === 'containerPayments') {
-    const row = next[index]
-    if (!row) return
-    next[index] = { ...row, ...containerPaymentAmounts(row) }
-  }
-  if (props.table.key === 'expenses') {
-    const row = next[index]
-    if (!row) return
-    next[index] = { ...row, amount: Number((Number(row.quantity || 0) * Number(row.unitPrice || 0)).toFixed(2)) }
-  }
-  rows.value = next
+  const edited = rows.value.map((row, i) => i === index ? { ...row, [key]: value } : row)
+  const target = edited[index]
+  if (!target) return
+  // Derived values come from the table's own `computeRow`, never from a
+  // table-key branch here.
+  const computed = props.table.computeRow?.({ row: target, rows: edited, index }) || {}
+  rows.value = edited.map((row, i) => i === index ? { ...row, ...computed } : row)
 }
 
 function addRow() {
@@ -258,7 +254,7 @@ function addRow() {
     openPicker()
     return
   }
-  const blank = Object.fromEntries(props.table.columns.filter(column => column.type !== 'delete').map((column) => {
+  const blank = Object.fromEntries(props.table.columns.filter(column => !FREIGHT_LINE_UTILITY_COLUMN_TYPES.has(column.type)).map((column) => {
     if (column.type === 'number') return [column.key, 0]
     if (column.type === 'checkbox') return [column.key, String(column.options?.[1] ?? 'No')]
     if (column.type === 'select') {
@@ -272,39 +268,10 @@ function addRow() {
       if (!(inline.key in blank)) blank[inline.key] = 0
     }
   }
-  if (props.table.key === 'containerPayments') {
-    const last = rows.value[rows.value.length - 1]
-    blank.quantity = Number(last?.quantity || 1) || 1
-    blank.containerNo = String(last?.containerNo || '')
-    blank.feeType = String(last?.feeType || blank.feeType || '')
-    blank.unitPrice = 0
-    blank.discountAmount = 0
-    blank.taxAmount = 0
-    blank.description = ''
-    blank.lineTotal = 0
-  }
-  if (props.table.key === 'containerRequirements') {
-    blank.quantity = 1
-    blank.actualQuantity = 0
-    blank.remaining = 1
-  }
-  if (props.table.key === 'expenses') {
-    blank.quantity = 1
-    blank.amount = 0
-  }
-  if (props.table.key === 'actualContainers') {
-    blank.status = 'Expected'
-    blank.netWeightKg = 0
-    blank.grossWeightKg = 0
-    blank.containerNo = ''
-  }
-  if (props.table.key === 'places') {
-    blank.place = ''
-    blank.plannedActual = ''
-    blank.notes = ''
-    blank.sequence = rows.value.length + 1
-  }
-  rows.value = [...rows.value, blank]
+  // Seed values come from the table's own `rowDefaults` (e.g. carry the previous
+  // payment row's container number), never from a table-key branch here.
+  const seeded = props.table.rowDefaults?.({ rows: rows.value, blank }) || {}
+  rows.value = [...rows.value, { ...blank, ...seeded }]
 }
 
 function onFilesChosen(event: Event) {
@@ -339,6 +306,42 @@ function removeRow(index: number) {
   rows.value = rows.value.filter((_, i) => i !== index)
 }
 
+function reorderCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
+  const move = (direction: -1 | 1) => {
+    const target = index + direction
+    if (target < 0 || target >= rows.value.length) return
+    const next = [...rows.value]
+    const [moved] = next.splice(index, 1)
+    next.splice(target, 0, moved!)
+    rows.value = next
+    props.onReorder?.(next)
+  }
+  return h('div', { class: 'flex items-center gap-0.5' }, [
+    h(TableButton, {
+      'icon': 'i-lucide-arrow-up',
+      'color': 'neutral',
+      'variant': 'ghost',
+      'size': 'xs',
+      'square': true,
+      'disabled': disabled || index === 0,
+      'aria-label': t('actions.moveUp'),
+      'title': t('actions.moveUp'),
+      'onClick': () => move(-1),
+    }),
+    h(TableButton, {
+      'icon': 'i-lucide-arrow-down',
+      'color': 'neutral',
+      'variant': 'ghost',
+      'size': 'xs',
+      'square': true,
+      'disabled': disabled || index === rows.value.length - 1,
+      'aria-label': t('actions.moveDown'),
+      'title': t('actions.moveDown'),
+      'onClick': () => move(1),
+    }),
+  ])
+}
+
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   const cols: TableColumn<Record<string, unknown>>[] = [
     {
@@ -353,6 +356,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       enableSorting: false,
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
+        const disabled = rowLocked(row.original)
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
         if (column.type === 'delete') {
           return h(TableButton, {
@@ -361,32 +365,56 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             variant: 'ghost',
             size: 'xs',
             square: true,
-            disabled: props.disabled,
+            disabled,
             'aria-label': t('actions.delete'),
             onClick: () => removeRow(index),
           })
         }
-        if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
-          return inlineNumberFieldsCell(column, row.original, index)
+        if (column.type === 'reorder') {
+          return reorderCell(column, row.original, index, disabled)
         }
-        if (props.disabled || column.computed || isFileTable.value) {
-          return inlineMoneyCell(column, row.original, index)
+        if (column.type === 'action') {
+          const action = props.rowActions?.(column.action || column.key, row.original)
+          if (!action) return null
+          return h(TableButton, {
+            'icon': action.icon,
+            'color': action.color || 'neutral',
+            'variant': 'ghost',
+            'size': 'xs',
+            'square': true,
+            'aria-label': action.label,
+            'title': action.label,
+            'onClick': action.onSelect,
+          })
+        }
+        if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
+          return inlineNumberFieldsCell(column, row.original, index, disabled)
+        }
+        if (disabled || column.computed || isFileTable.value) {
+          return inlineMoneyCell(column, row.original, index, disabled)
         }
         if (column.type === 'checkbox') {
           return h(TableCheckbox, {
             'modelValue': row.original[column.key],
             'trueValue': String(column.options?.[0] ?? 'Yes'),
             'falseValue': String(column.options?.[1] ?? 'No'),
-            'disabled': props.disabled || column.computed,
+            'disabled': disabled || column.computed,
             'size': cellSize,
             'aria-label': fieldLabel(column),
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
           })
         }
+        if (column.type === 'note') {
+          return h(TableNoteCell, {
+            'modelValue': row.original[column.key],
+            'disabled': disabled || column.computed,
+            'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
+          })
+        }
         if (column.type === 'table-columns') {
           return h(TableColumnsCell, {
             modelValue: row.original[column.key],
-            disabled: props.disabled,
+            disabled,
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
           })
         }
@@ -403,7 +431,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'referenceKey': column.key,
             'rowIndex': index,
             'placeholder': fieldLabel(column),
-            'disabled': props.disabled || column.computed,
+            'disabled': disabled || column.computed,
             'size': cellSize,
             'class': ['w-full', columnCellClass(column)],
             'ui': cellInputUi,
@@ -413,7 +441,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         if (column.type === 'number') {
           return h(TableInputNumber, {
             'modelValue': Number(row.original[column.key] || 0),
-            'disabled': props.disabled || column.computed,
+            'disabled': disabled || column.computed,
             'increment': false,
             'decrement': false,
             'size': cellSize,
@@ -427,7 +455,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           return h(TableDate, {
             'modelValue': String(row.original[column.key] ?? ''),
             'granularity': dateGranularity,
-            'disabled': props.disabled || column.computed,
+            'disabled': disabled || column.computed,
             'size': cellSize,
             'class': `w-full ${columnCellClass(column)}`,
             'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
@@ -435,7 +463,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         }
         return h(TableInput, {
           'modelValue': String(row.original[column.key] ?? ''),
-          'disabled': props.disabled || column.computed,
+          'disabled': disabled || column.computed,
           'size': cellSize,
           'class': `w-full ${columnCellClass(column)}`,
           'ui': cellInputUi,
@@ -444,7 +472,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       },
     })),
   ]
-  if (!hasDeleteColumn.value && (!props.disabled || props.extraRowMenuItems || props.rowInlineActions)) {
+  if (!hasDeleteColumn.value && (!props.disabled || props.rowDisabled || props.extraRowMenuItems || props.rowInlineActions)) {
     cols.push({
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
@@ -482,7 +510,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             },
           })
         }
-        if (!props.disabled) {
+        if (!rowLocked(row.original)) {
           actions.push({
             label: t('actions.delete'),
             icon: 'i-lucide-trash-2',

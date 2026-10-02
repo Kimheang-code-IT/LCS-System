@@ -7,6 +7,7 @@ const props = withDefaults(defineProps<{
   color?: 'primary' | 'neutral' | 'success'
   icon?: string
 }>(), {
+  label: '',
   labelKey: 'docetra.connection.test',
   loading: false,
   disabled: false,

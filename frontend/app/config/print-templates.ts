@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 /** Printable document templates supported by the shared print workflow. */
 export type PrintTemplateId = 'tax-invoice' | 'debit-note'

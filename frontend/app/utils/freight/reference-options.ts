@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 export type ReferenceOptionSource = {
   /** Freight store collection (also a Master Data page). */
@@ -22,7 +22,6 @@ const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
   feeType: { collection: 'feeTypes', valueField: 'name', labelField: 'name' },
   direction: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
   tradeDirection: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
-  placeRole: { collection: 'places', valueField: 'name', labelField: 'name' },
   parentPlace: { collection: 'places', valueField: 'name', labelField: 'name' },
   roles: { collection: 'roles', valueField: 'name', labelField: 'name' },
   currency: { collection: 'currencies', valueField: 'code', labelField: 'name' },

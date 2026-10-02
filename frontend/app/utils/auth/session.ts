@@ -1,6 +1,10 @@
-import type { AuthUser } from '~/types/auth-user'
+import type { AuthUser } from '~/types/api'
 
 export const AUTH_STORAGE_KEY = 'lcs-auth-user'
+
+export function normalizeRoutePath(path: string): string {
+  return path.replace(/\/+$/, '') || '/'
+}
 
 /** Cookie-safe user: identity + scope only. Permissions stay in localStorage. */
 export function compactAuthUser(user: AuthUser): AuthUser {

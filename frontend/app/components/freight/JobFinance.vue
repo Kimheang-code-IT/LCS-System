@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import type { TableColumn } from '@nuxt/ui'
-import { h, type Component } from 'vue'
-import { UBadge, UButton, UDropdownMenu, ULink } from '#components'
-import type { FreightRecord } from '~/types/freight/record'
-import { JOB_CUSTOMER_CHARGE_TABLE, JOB_EXPENSE_TABLE } from '~/config/job-workspace-forms'
-import { codeTitle, formatMoney, freightStatusBadge, shortDay } from '~/composables/freight/useFreight'
+import { UButton } from '#components'
+import type { FreightRecord } from '~/types/record'
+import { JOB_FINANCE_LINES_TABLE } from '~/config/job-workspace-forms'
+import { formatMoney } from '~/composables/freight/useFreight'
 import { createClientId } from '~/utils/client-id'
-import { outstandingOf, postedDocumentTotal } from '~/utils/freight/finance'
+import { postedDocumentTotal } from '~/utils/freight/finance'
+import {
+  JOB_FINANCE_LINE_LABEL_KEYS,
+  isJobFinanceRowEditable,
+  jobFinanceChargeLines,
+  jobFinanceExpenseRows,
+  jobFinanceLineTotals,
+  jobFinanceLines,
+  normalizeJobFinanceExpense,
+  type JobFinanceLine,
+} from '~/utils/freight/job-finance'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
-import { freightTableUiReadonly } from '~/utils/table/theme'
+import { JOB_FINANCE_LINE_KIND, type JobFinanceLineKind } from '~/utils/table/line-table-rules'
 
 const props = withDefaults(defineProps<{
   job: FreightRecord
@@ -31,36 +39,18 @@ const route = useRoute()
 const toast = useToast()
 const store = useFreightStore()
 
-const customerChargeRows = computed(() => {
-  const lines = Array.isArray(props.job.pricingLines) ? props.job.pricingLines as Array<Record<string, unknown>> : []
-  const fallback = Array.isArray(props.job.containerPayments) ? props.job.containerPayments as Array<Record<string, unknown>> : []
-  return (lines.length ? lines : fallback).map(row => ({
-    ...row,
-    lineTotal: Number(row.lineTotal ?? row.total ?? (Number(row.quantity || 0) * Number(row.unitPrice || 0))),
-  }))
-})
-
-const customerChargeTotal = computed(() =>
-  Math.round(customerChargeRows.value.reduce((sum, row) => sum + Number(row.lineTotal || 0), 0) * 100) / 100,
-)
-
-const expenseRows = ref<Array<Record<string, unknown>>>([])
+const expenseRows = ref<JobFinanceLine[]>([])
 
 function loadExpenses() {
-  expenseRows.value = (Array.isArray(props.job.expenses) ? props.job.expenses as Array<Record<string, unknown>> : [])
-    .map(row => ({ ...row }))
+  expenseRows.value = (Array.isArray(props.job.expenses) ? props.job.expenses as JobFinanceLine[] : [])
+    .map(row => ({ ...normalizeJobFinanceExpense(row), id: String(row.id || '').trim() || createClientId('exp') }))
 }
 
-function setExpenses(value: Array<Record<string, unknown>>) {
-  const rows = value.map(row => ({
-    ...row,
-    quantity: Number(row.quantity || 0),
-    unitPrice: Number(row.unitPrice || 0),
-    amount: Number((Number(row.quantity || 0) * Number(row.unitPrice || 0)).toFixed(2)),
-    id: String(row.id || '').trim() || createClientId('exp'),
-  }))
-  expenseRows.value = rows
-  const patch = { expenses: rows }
+function setFinanceLines(value: JobFinanceLine[]) {
+  const expenses = jobFinanceExpenseRows(value)
+    .map(row => ({ ...row, id: String(row.id || '').trim() || createClientId('exp') }))
+  expenseRows.value = expenses
+  const patch = { expenses }
   emit('update:job', patch)
   if (props.job.id) {
     store.save('jobs', { ...props.job, ...patch, updatedAt: new Date().toISOString() } as FreightRecord)
@@ -69,16 +59,33 @@ function setExpenses(value: Array<Record<string, unknown>>) {
 
 watch(() => props.job.id, loadExpenses, { immediate: true })
 
-const customerInvoices = computed(() =>
-  props.documents.filter(row => String(row.documentType || 'CUSTOMER_INVOICE').toUpperCase() === 'CUSTOMER_INVOICE'),
-)
+const charges = computed(() => jobFinanceChargeLines(props.job, String(props.customer || '')))
+
+const lines = computed(() => jobFinanceLines({
+  charges: charges.value,
+  expenses: expenseRows.value,
+  documents: props.documents,
+  typeLabel: kind => (kind ? t(JOB_FINANCE_LINE_LABEL_KEYS[kind]) : ''),
+}))
+
+const rowLocked = (row: JobFinanceLine) => !isJobFinanceRowEditable(row, props.editable)
 
 const latestCustomerInvoice = computed(() => {
-  const rows = [...customerInvoices.value]
+  const rows = [...props.documents]
   if (!rows.length) return null
   rows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')) || String(b.debitNoteNo || '').localeCompare(String(a.debitNoteNo || '')))
   return rows[0] || null
 })
+
+function documentPrintRoute(documentId: string) {
+  return buildPrintRoute({
+    collection: 'debitNotes',
+    recordId: documentId,
+    template: 'tax-invoice',
+    returnTo: route.fullPath,
+    modulePath: '/finance/documents',
+  })
+}
 
 async function printLatestInvoice() {
   const invoice = latestCustomerInvoice.value
@@ -86,23 +93,40 @@ async function printLatestInvoice() {
     toast.add({ title: t('freight.ui.noCustomerInvoicesToPrint'), color: 'warning' })
     return
   }
-  await navigateTo(buildPrintRoute({
-    collection: 'debitNotes',
-    recordId: String(invoice.id),
-    template: 'tax-invoice',
-    returnTo: route.fullPath,
-    modulePath: '/finance/documents',
-  }))
+  await navigateTo(documentPrintRoute(String(invoice.id)))
 }
 
-const TableBadge = UBadge as Component
-const TableButton = UButton as Component
-const TableLink = ULink as Component
-const TableMenu = UDropdownMenu as Component
+/** Per-row actions: only the source documents are navigable / printable. */
+function rowMenuItems(row: JobFinanceLine) {
+  const documentId = String(row._documentId || '')
+  if (row._kind !== JOB_FINANCE_LINE_KIND.document || !documentId) return []
+  const items = [{
+    label: t('freight.ui.viewDocument'),
+    icon: 'i-lucide-eye',
+    onSelect: () => { void navigateTo(`/finance/documents/${documentId}`) },
+  }]
+  const source = props.documents.find(document => String(document.id) === documentId)
+  if (String(source?.documentType || 'CUSTOMER_INVOICE').toUpperCase() === 'CUSTOMER_INVOICE') {
+    items.push({
+      label: t('freight.ui.printInvoice'),
+      icon: 'i-lucide-printer',
+      onSelect: () => { void navigateTo(documentPrintRoute(documentId)) },
+    })
+  }
+  return items
+}
+
+const jobCurrency = computed(() =>
+  String(props.documents[0]?.currency || props.receivables[0]?.currency || props.supplierCosts[0]?.currency || '').trim() || undefined,
+)
+
+const expenseTotal = computed(() => Math.round(expenseRows.value.reduce((sum, row) => sum + Number(row.amount || 0), 0) * 100) / 100)
 
 const summary = computed(() => {
   const revenue = Math.round(postedDocumentTotal(props.documents) * 100) / 100
-  const cost = Math.round(props.supplierCosts.reduce((sum, row) => sum + Number(row.amount || 0), 0) * 100) / 100
+  // Supplier bills are posted costs; the expense grid is the job's manual cost.
+  const supplierBills = props.supplierCosts.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+  const cost = Math.round((supplierBills + expenseTotal.value) * 100) / 100
   const outstanding = Math.round(props.receivables.reduce((sum, row) => sum + Number(row.outstanding || 0), 0) * 100) / 100
   return {
     revenue,
@@ -112,10 +136,6 @@ const summary = computed(() => {
   }
 })
 
-const jobCurrency = computed(() =>
-  String(props.documents[0]?.currency || props.receivables[0]?.currency || props.supplierCosts[0]?.currency || '').trim() || undefined,
-)
-
 const summaryItems = computed(() => [
   { label: t('freight.ui.revenue'), value: formatMoney(summary.value.revenue, jobCurrency.value) },
   { label: t('freight.ui.costLabel'), value: formatMoney(summary.value.cost, jobCurrency.value) },
@@ -123,89 +143,11 @@ const summaryItems = computed(() => [
   { label: t('freight.ui.outstandingAmount'), value: formatMoney(summary.value.outstanding, jobCurrency.value) },
 ])
 
-function rowMenuItems(row: FreightRecord) {
-  const items: Array<{ label: string, icon: string, onSelect: () => void }> = [{
-    label: t('freight.ui.viewDocument'),
-    icon: 'i-lucide-eye',
-    onSelect: () => { void navigateTo(`/finance/documents/${row.id}`) },
-  }]
-  if (String(row.documentType || 'CUSTOMER_INVOICE').toUpperCase() === 'CUSTOMER_INVOICE' && row.id) {
-    items.push({
-      label: t('freight.ui.printInvoice'),
-      icon: 'i-lucide-printer',
-      onSelect: () => {
-        void navigateTo(buildPrintRoute({
-          collection: 'debitNotes',
-          recordId: String(row.id),
-          template: 'tax-invoice',
-          returnTo: route.fullPath,
-          modulePath: '/finance/documents',
-        }))
-      },
-    })
-  }
-  return [items]
-}
-
-const tableColumns = computed<TableColumn<FreightRecord>[]>(() => [
-  {
-    accessorKey: 'debitNoteNo',
-    header: t('freight.ui.cols.documentNo'),
-    cell: ({ row }) => h(TableLink, {
-      to: `/finance/documents/${row.original.id}`,
-      class: 'font-medium text-highlighted hover:text-primary hover:underline',
-    }, () => String(row.original.debitNoteNo || row.original.paymentNo || '—')),
-  },
-  {
-    accessorKey: 'documentType',
-    header: t('freight.ui.cols.type'),
-    cell: ({ row }) => h(TableBadge, {
-      color: 'neutral',
-      variant: 'subtle',
-      size: 'xs',
-    }, () => codeTitle(row.original.documentType)),
-  },
-  {
-    accessorKey: 'date',
-    header: t('freight.ui.cols.date'),
-    cell: ({ row }) => h('span', { class: 'tabular-nums text-muted' }, shortDay(row.original.date)),
-  },
-  {
-    accessorKey: 'total',
-    header: t('freight.ui.cols.total'),
-    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } },
-    cell: ({ row }) => h('span', { class: 'tabular-nums font-medium' }, formatMoney(row.original.total ?? row.original.amount, String(row.original.currency || jobCurrency.value || ''))),
-  },
-  {
-    accessorKey: 'outstanding',
-    header: t('freight.ui.outstandingAmount'),
-    meta: { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } },
-    cell: ({ row }) => h('span', {
-      class: outstandingOf(row.original) > 0 ? 'tabular-nums text-warning' : 'tabular-nums text-muted',
-    }, formatMoney(outstandingOf(row.original), String(row.original.currency || jobCurrency.value || ''))),
-  },
-  {
-    accessorKey: 'status',
-    header: t('freight.ui.status'),
-    cell: ({ row }) => freightStatusBadge(row.original.status),
-  },
-  {
-    id: 'actions',
-    header: '',
-    meta: { class: { th: 'w-12 text-end', td: 'text-end w-12' } },
-    cell: ({ row }) => h(TableMenu, {
-      content: { align: 'end' },
-      items: rowMenuItems(row.original),
-      'aria-label': t('freight.ui.actions'),
-    }, () => h(TableButton, {
-      icon: 'i-lucide-ellipsis',
-      color: 'neutral',
-      variant: 'ghost',
-      size: 'xs',
-      'aria-label': t('freight.ui.actions'),
-    })),
-  },
-])
+const kindTotals = computed(() => {
+  const totals = jobFinanceLineTotals(lines.value)
+  return (Object.keys(JOB_FINANCE_LINE_LABEL_KEYS) as JobFinanceLineKind[])
+    .map(kind => ({ kind, value: totals[kind] }))
+})
 </script>
 
 <template>
@@ -213,72 +155,41 @@ const tableColumns = computed<TableColumn<FreightRecord>[]>(() => [
     <FreightJobSectionHeader :title="t('freight.jobSections.finance')">
       <template #actions>
         <UButton
-size="xs"
-color="neutral"
-variant="soft"
-icon="i-lucide-printer"
+          size="xs"
+          color="neutral"
+          variant="soft"
+          icon="i-lucide-printer"
           :disabled="!latestCustomerInvoice"
-:label="t('freight.ui.printInvoice')"
+          :label="t('freight.ui.printInvoice')"
           @click="printLatestInvoice" />
         <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-arrow-up-right"
+          size="xs"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-arrow-up-right"
           :to="{ path: '/finance/documents', query: { jobNo } }"
-:label="t('freight.ui.openFinance')" />
+          :label="t('freight.ui.openFinance')" />
       </template>
     </FreightJobSectionHeader>
 
     <FreightJobSummaryStrip :items="summaryItems" />
 
-    <section class="space-y-2">
-      <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
-        {{ t('freight.ui.customerCharges') }}
-      </h4>
+    <div class="space-y-2">
       <FreightJobLineTable
-        v-if="customerChargeRows.length"
-        :table="JOB_CUSTOMER_CHARGE_TABLE"
-        :model-value="customerChargeRows"
-        disabled
-      />
-      <FreightJobEmptyState v-else :title="t('freight.ui.noCustomerCharges')" icon="i-lucide-receipt-text" />
+        :table="JOB_FINANCE_LINES_TABLE"
+        :model-value="lines"
+        :row-disabled="rowLocked"
+        :extra-row-menu-items="rowMenuItems"
+        @update:model-value="setFinanceLines" />
       <div
-        v-if="customerChargeRows.length"
-        class="ms-auto flex w-full max-w-sm items-center justify-between gap-4 rounded-md border border-default px-3 py-2 text-sm"
+        v-if="lines.length"
+        class="ms-auto flex w-full max-w-sm flex-wrap items-center justify-end gap-x-4 gap-y-1 rounded-md border border-default px-3 py-2 text-sm"
       >
-        <span class="font-medium text-muted">{{ t('freight.fields.total') }}</span>
-        <span class="font-bold tabular-nums text-primary">{{ formatMoney(customerChargeTotal, jobCurrency) }}</span>
+        <template v-for="entry in kindTotals" :key="entry.kind">
+          <span class="text-muted">{{ t(JOB_FINANCE_LINE_LABEL_KEYS[entry.kind]) }}</span>
+          <span class="font-semibold tabular-nums text-highlighted">{{ formatMoney(entry.value, jobCurrency) }}</span>
+        </template>
       </div>
-    </section>
-
-    <section class="space-y-2">
-      <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
-        {{ t('freight.ui.supplierExpenses') }}
-      </h4>
-      <FreightJobLineTable
-        :table="JOB_EXPENSE_TABLE"
-        :model-value="expenseRows"
-        :disabled="!editable"
-        @update:model-value="setExpenses"
-      />
-    </section>
-
-    <section class="space-y-2">
-      <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
-        {{ t('freight.ui.financialDocuments') }}
-      </h4>
-      <div v-if="documents.length" class="overflow-hidden rounded-md border border-default">
-        <div class="overflow-x-auto">
-          <UTable
-:data="documents"
-:columns="tableColumns"
-:get-row-id="(row: FreightRecord) => String(row.id || '')"
-            class="freight-table min-w-max"
-:ui="freightTableUiReadonly" />
-        </div>
-      </div>
-      <FreightJobEmptyState v-else :title="t('freight.ui.noFinancialDocuments')" icon="i-lucide-banknote" />
-    </section>
+    </div>
   </div>
 </template>

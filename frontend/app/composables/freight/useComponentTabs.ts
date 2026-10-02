@@ -1,4 +1,4 @@
-import type { ComponentTabGroup, ComponentTabRuntime } from '~/types/freight/component-config'
+import type { ComponentTabGroup, ComponentTabRuntime } from '~/types/component-config'
 import { useLcsRepositories } from '~/repositories'
 import {
   componentFlatRowToValues,

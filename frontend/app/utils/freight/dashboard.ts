@@ -19,6 +19,27 @@ export interface DashboardChartBucket {
   expense: number
 }
 
+/** A summary carrying the monthly revenue/expense chart points to filter. */
+export interface DashboardSummaryLike {
+  charts: {
+    revenueExpense: DashboardPoint[]
+  }
+}
+
+/**
+ * Restrict a dashboard summary's monthly revenue/expense points to one calendar
+ * year, leaving the rest of the (backend-served) summary untouched.
+ */
+export function dashboardSummaryForYear<T extends DashboardSummaryLike>(data: T, year: number): T {
+  return {
+    ...data,
+    charts: {
+      ...data.charts,
+      revenueExpense: data.charts.revenueExpense.filter(point => point.month.startsWith(String(year))),
+    },
+  }
+}
+
 function round(value: number): number {
   return Number(value.toFixed(2))
 }

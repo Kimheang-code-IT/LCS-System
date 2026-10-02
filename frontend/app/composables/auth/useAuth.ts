@@ -1,4 +1,4 @@
-import type { AuthUser } from '~/types/auth-user'
+import type { AuthUser } from '~/types/api'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 
 type LoginResult = { user: AuthUser }

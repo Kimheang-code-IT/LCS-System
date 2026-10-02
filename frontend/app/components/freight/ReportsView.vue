@@ -6,7 +6,7 @@ import { ULink } from '#components'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { formatFreightCell, formatMoney, freightStatusBadge, labeledStatusOptions } from '~/composables/freight/useFreight'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { ACTIVE_STATUS, CONTAINER_STATUSES } from '~/config/freight-options'
 import { downloadCsv } from '~/utils/export/csv'
 import { buildStatementGroups, postedJournalLines, reportRowDate, statementDifference as statementDifferenceOf } from '~/utils/freight/report'
@@ -15,6 +15,7 @@ import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { limitFilterSelects, matchesFilter } from '~/utils/filter/values'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary } from '~/utils/table/list-table'
+import { type ListSortKind, type ListSortSelection, listSortKindFor } from '~/utils/table/list-sort'
 import { getFreightReport, type FreightReportDefinition } from '~/config/freight-reports'
 import { useLcsRepositories } from '~/repositories'
 
@@ -46,6 +47,7 @@ const currency = ref<string[]>([])
 const dateFrom = ref('')
 const dateTo = ref('')
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
+const sort = ref<ListSortSelection>(null)
 const rowSelection = ref<Record<string, boolean>>({})
 const postedLines = computed<FreightRecord[]>(() => postedJournalLines(store.list('journals'), store.list('chartOfAccounts')))
 function jobByNo(value: unknown) { return store.list('jobs').find(row => String(row.jobNo) === String(value)) }
@@ -93,7 +95,7 @@ const filtered = computed(() => rows.value.filter((row) => {
     && (!dateFrom.value || day >= dateFrom.value)
     && (!dateTo.value || day <= dateTo.value)
 }))
-watch([q, party, status, currency, dateFrom, dateTo, slug], () => {
+watch([q, party, status, currency, dateFrom, dateTo, slug, sort], () => {
   rowSelection.value = {}
   pagination.value = { ...pagination.value, pageIndex: 0 }
 })
@@ -166,7 +168,8 @@ function actions(row: FreightRecord): DropdownMenuItem[][] {
 const columns=computed<TableColumn<FreightRecord>[]>(()=>{
   const list=report.value.columns.map(column=>{
     const label = columnLabel(column)
-    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:false,meta:column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:undefined,cell:({row}:{row:{original:FreightRecord}})=>{if(column.status)return freightStatusBadge(row.original[column.key],column.key);if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)}}
+    const kind: ListSortKind = column.numeric ? 'number' : listSortKindFor(column.key)
+    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:true,meta:{sortKind:kind,...(column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:{})},cell:({row}:{row:{original:FreightRecord}})=>{if(column.status)return freightStatusBadge(row.original[column.key],column.key);if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)}}
   })
   return [
     listTableSelectColumn<FreightRecord>(t),
@@ -212,6 +215,7 @@ function exportCsv(request:{fieldCodes:string[]}){const statementRows=statementG
         v-model:date-end="dateTo"
         v-model:row-selection="rowSelection"
         v-model:pagination="pagination"
+        v-model:sort="sort"
         :data="filtered"
         :columns="columns"
         :show-date-range="report.filters.includes('date')"

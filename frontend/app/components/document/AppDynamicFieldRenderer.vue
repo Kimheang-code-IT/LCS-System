@@ -3,7 +3,7 @@ import type {
   ConnectionStatusFieldValue,
   DocumentFieldSchema,
   FieldOption,
-} from '~/types/docetra/common'
+} from '~/types/common'
 import type {
   AttributeDataType,
   AttributeOption,
@@ -14,16 +14,16 @@ import type {
   ValidationRule,
   VisibilityRule,
   WorkflowTransition,
-} from '~/types/docetra/configuration'
-import type { AppRolePermissionRow } from '~/types/docetra/entities'
-import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/docetra/settings'
-import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/docetra/settings'
+} from '~/types/configuration'
+import type { AppRolePermissionRow } from '~/types/entities'
+import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/settings'
+import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/settings'
 import { createClientId } from '~/utils/client-id'
 import { TELEGRAM_DESTINATION_TYPE_OPTIONS } from '~/utils/constants/select-options'
 import { resolveFieldHelp } from '~/utils/field-help'
 import { useReferenceOptions } from '~/composables/common/useReferenceOptions'
 import type { FreightRelated, FreightTable } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { asNumber } from '~/composables/freight/useFreight'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
@@ -332,10 +332,6 @@ const searchAttributes = computed(() =>
   props.field.meta?.searchAttributes as ((query: string) => void) | undefined,
 )
 
-function goCreateAttribute() {}
-
-function goOpenAttribute(_attributeId: string) {}
-
 const workflowValue = computed({
   get: () => {
     const raw = props.modelValue as { stages?: ConfigWorkflowStage[], transitions?: WorkflowTransition[] } | null
@@ -503,7 +499,7 @@ function removeDestination(id: string) {
     v-else-if="isLineTable && lineTable"
     class="space-y-6 md:col-span-2"
   >
-    <TableAppLineTable
+    <FreightAppLineTable
       :table="lineTable"
       :model-value="lineRows"
       :disabled="disabled || lineViewOnly"
@@ -656,15 +652,6 @@ function removeDestination(id: string) {
       >
         {{ t('docetra.config.addAttribute') }}
       </UButton>
-      <UButton
-        icon="i-lucide-list-plus"
-        color="neutral"
-        variant="outline"
-        :disabled="disabled || field.readOnly"
-        @click="goCreateAttribute"
-      >
-        {{ t('docetra.config.createAttribute') }}
-      </UButton>
     </div>
 
     <CommonAppSortableList
@@ -683,14 +670,6 @@ function removeDestination(id: string) {
               </p>
             </div>
             <div class="flex items-center gap-1">
-              <UButton
-                icon="i-lucide-external-link"
-                color="neutral"
-                variant="ghost"
-                size="xs"
-                :aria-label="t('docetra.config.openAttribute')"
-                @click="goOpenAttribute(item.attributeId)"
-              />
               <UButton
                 icon="i-lucide-trash-2"
                 color="error"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExportFieldOption, ExportRequest, ExportScope } from '~/types/docetra/export'
+import type { ExportFieldOption, ExportRequest, ExportScope } from '~/types/export'
 
 const open = defineModel<boolean>('open', { default: false })
 

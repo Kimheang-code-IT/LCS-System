@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import AuthRequired, Conflict, NotFound, ValidationFailed
+from app.core.pagination import PageParams, list_sort_orders
 from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
@@ -343,8 +344,9 @@ async def change_password(session: AsyncSession, user: User, current_password: s
     await session.commit()
 
 
-async def list_users(session: AsyncSession) -> list[dict]:
-    users = (await session.execute(select(User).order_by(User.id))).scalars().all()
+async def list_users(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
+    orders = list_sort_orders(User, page, User.id) if page else [User.id]
+    users = (await session.execute(select(User).order_by(*orders))).scalars().all()
     output = []
     for user in users:
         assignments = (
@@ -490,8 +492,9 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
     return assignment
 
 
-async def list_roles(session: AsyncSession) -> list[dict]:
-    roles = (await session.execute(select(Role).order_by(Role.id))).scalars().all()
+async def list_roles(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
+    orders = list_sort_orders(Role, page, Role.id) if page else [Role.id]
+    roles = (await session.execute(select(Role).order_by(*orders))).scalars().all()
     output = []
     for role in roles:
         perms = (

@@ -15,6 +15,15 @@ const props = withDefaults(defineProps<{
   confirmDisabled?: boolean
   ui?: Record<string, unknown>
 }>(), {
+  title: '',
+  titleKey: '',
+  description: '',
+  descriptionKey: '',
+  confirmLabel: '',
+  confirmLabelKey: '',
+  cancelLabel: '',
+  cancelLabelKey: '',
+  ui: undefined,
   confirmColor: 'error',
   loading: false,
   confirmDisabled: false,

@@ -47,7 +47,11 @@ let refreshAccessTokenPromise: Promise<boolean> | null = null
  */
 export function useApi() {
     const toast = useToast()
-    const { t } = useI18n()
+    // Repositories are initialized during the client startup plugin as well as
+    // from components. The Nuxt-provided global composer is valid in both
+    // contexts; `useI18n()` requires an active component setup instance.
+    const { $i18n } = useNuxtApp()
+    const t = $i18n.t
     const config = useRuntimeConfig()
     const authStore = useAuthStore()
     const activeRequests = ref(0)

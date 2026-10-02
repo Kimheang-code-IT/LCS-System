@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
-import type { FreightRecord } from '~/types/freight/record'
-import type { useLcs } from '~/composables/lcs/useLcs'
+import type { FreightRecord } from '~/types/record'
+import type { useLcs } from '~/composables/freight/useLcs'
 import { asNumber } from '~/composables/freight/useFreight'
 import type { TraceLink, TraceLinkKind } from '~/utils/freight/traceability'
 

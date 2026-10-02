@@ -1,11 +1,11 @@
 import type { Ref } from 'vue'
 import type { FreightModule } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import type { PrintTemplateId } from '~/config/print-templates'
 import { PRINT_SUPPORTED_COLLECTIONS } from '~/config/print-templates'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { useModuleRepository } from '~/repositories'
-import type { useLcs } from '~/composables/lcs/useLcs'
+import type { useLcs } from '~/composables/freight/useLcs'
 import type { useConfirm } from '~/composables/common/useConfirm'
 
 const NUMBERED_COLLECTIONS = new Set(['quotations', 'jobCharges', 'debitNotes', 'journals'])

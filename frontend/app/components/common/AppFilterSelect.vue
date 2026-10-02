@@ -18,6 +18,7 @@ withDefaults(defineProps<{
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
 }>(), {
   items: () => [],
+  placeholder: '',
   size: 'sm',
 })
 

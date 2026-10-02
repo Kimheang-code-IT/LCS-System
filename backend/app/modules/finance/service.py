@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
 from app.modules.finance.models import (
@@ -84,7 +84,13 @@ async def list_accounts(session: AsyncSession, context: RequestContext, page: Pa
     if page.status:
         stmt = stmt.where(ChartOfAccount.status == str(page.status).upper())
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(ChartOfAccount.account_code).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(ChartOfAccount, page, ChartOfAccount.account_code))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     codes = {row.id: row.account_code for row in rows}
     items = [account_payload(row, codes.get(row.parent_account_id)) for row in rows]
     return paged(items, page, total)
@@ -148,7 +154,13 @@ async def financial_account_payload(session: AsyncSession, account: FinancialAcc
 async def list_financial_accounts(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
     stmt = select(FinancialAccount)
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(FinancialAccount.id).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(FinancialAccount, page, FinancialAccount.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     items = [await financial_account_payload(session, row) for row in rows]
     return paged(items, page, total)
 
@@ -192,13 +204,15 @@ def period_payload(period: AccountingPeriod, closed_by: str | None = None, posti
     }
 
 
-async def list_periods(session: AsyncSession, context: RequestContext) -> list[dict]:
-    rows = (
-        await session.execute(
-            select(AccountingPeriod)
-            .order_by(AccountingPeriod.period_year.desc(), AccountingPeriod.period_month.desc())
-        )
-    ).scalars().all()
+async def list_periods(
+    session: AsyncSession,
+    context: RequestContext,
+    page: PageParams | None = None,
+) -> list[dict]:
+    default_order = (AccountingPeriod.period_year.desc(), AccountingPeriod.period_month.desc())
+    aliases = {"startDate": "start_date", "endDate": "end_date"}
+    orders = list_sort_orders(AccountingPeriod, page, *default_order, aliases=aliases) if page else list(default_order)
+    rows = (await session.execute(select(AccountingPeriod).order_by(*orders))).scalars().all()
     return [period_payload(row) for row in rows]
 
 
@@ -273,7 +287,13 @@ def sequence_payload(sequence: DocumentSequence) -> dict[str, Any]:
 async def list_sequences(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
     stmt = select(DocumentSequence)
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(DocumentSequence.id).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(DocumentSequence, page, DocumentSequence.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     return paged([sequence_payload(row) for row in rows], page, total)
 
 
@@ -389,7 +409,13 @@ async def list_documents(
             FinancialDocument.document_no.ilike(pattern) | FinancialDocument.description.ilike(pattern)
         )
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(FinancialDocument.id.desc()).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(FinancialDocument, page, FinancialDocument.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     return paged([document_payload(row, row.data or {}, await _document_lines(session, row.id)) for row in rows], page, total)
 
 
@@ -1070,7 +1096,13 @@ async def list_journals(session: AsyncSession, context: RequestContext, page: Pa
     if page.status:
         stmt = stmt.where(JournalEntry.status == str(page.status).upper())
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(JournalEntry.id.desc()).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(JournalEntry, page, JournalEntry.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     items = [await journal_payload(session, row) for row in rows]
     return paged(items, page, total)
 
@@ -1191,7 +1223,13 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
 async def list_posting_rules(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
     stmt = select(PostingRule)
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(PostingRule.id).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(PostingRule, page, PostingRule.id))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     items = []
     for rule in rows:
         debit = await session.get(ChartOfAccount, rule.debit_account_id)

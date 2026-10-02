@@ -7,7 +7,7 @@ import type {
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabInput,
-} from '~/types/freight/component-config'
+} from '~/types/component-config'
 import type { ComponentGroupAttributeInput } from '~/repositories/contracts/component-config'
 import { useLcsRepositories } from '~/repositories'
 

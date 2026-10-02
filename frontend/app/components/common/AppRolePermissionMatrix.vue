@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppRolePermissionRow } from '~/types/docetra/entities'
+import type { AppRolePermissionRow } from '~/types/entities'
 import {
   ROLE_DOCUMENT_TYPES,
   ROLE_PERMISSION_ACTIONS,

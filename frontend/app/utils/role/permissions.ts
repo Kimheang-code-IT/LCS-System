@@ -1,4 +1,4 @@
-import type { AppRolePermissionRow } from '~/types/docetra/entities'
+import type { AppRolePermissionRow } from '~/types/entities'
 
 /** Actions exposed per page in the role permission matrix. */
 export const ROLE_PERMISSION_ACTIONS = ['view', 'create', 'edit', 'delete', 'export'] as const

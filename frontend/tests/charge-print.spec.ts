@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FreightRecord } from '../app/types/freight/record'
+import type { FreightRecord } from '../app/types/record'
 import { buildChargePrintViewModel } from '../app/utils/freight/charge-print'
 
 const context = {

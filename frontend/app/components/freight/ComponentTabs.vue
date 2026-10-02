@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ComponentTabRuntime } from '~/types/freight/component-config'
+import type { ComponentTabRuntime } from '~/types/component-config'
 
 defineProps<{
   tab: ComponentTabRuntime

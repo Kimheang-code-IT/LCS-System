@@ -2,12 +2,14 @@
 import { en, km } from '@nuxt/ui/locale'
 import { useSettingsRepositories } from '~/repositories'
 import { useAppBranding } from '~/composables/settings/useAppBranding'
+import { useSeoAbsoluteUrl } from '~/composables/freight/useSeoAbsoluteUrl'
 import { usePreferencesStore } from '~/stores/preferences'
 
 const colorMode = useColorMode()
 const { locale, t } = useI18n()
 const { applyFromAppInfo } = useAppBranding()
 const preferences = usePreferencesStore()
+const auth = useAuthStore()
 
 const uiLocales: Record<string, typeof en> = { en, km }
 
@@ -22,12 +24,28 @@ const { absoluteUrl, absolutePageUrl } = useSeoAbsoluteUrl()
 const defaultOgImage = computed(() => absoluteUrl('/og-image.png'))
 const pageUrl = computed(() => absolutePageUrl())
 
+async function loadBranding() {
+  if (!auth.isLoggedIn) {
+    applyFromAppInfo(null)
+    return
+  }
+  try {
+    applyFromAppInfo(await useSettingsRepositories().appInfo.get())
+  }
+  catch {
+    applyFromAppInfo(null)
+  }
+}
+
 onMounted(() => {
   void preferences.hydrate()
-  // Non-blocking branding hydrate — do not stall first paint
-  void useSettingsRepositories().appInfo.get()
-    .then(info => applyFromAppInfo(info))
-    .catch(() => applyFromAppInfo(null))
+  // Branding is protected configuration. Do not start a refresh-token flow
+  // from the public login screen.
+  void loadBranding()
+})
+
+watch(() => auth.isLoggedIn, (loggedIn) => {
+  if (loggedIn) void loadBranding()
 })
 
 useHead({

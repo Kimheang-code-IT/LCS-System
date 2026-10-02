@@ -6,9 +6,10 @@ import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
   bucketDashboardRevenueExpense,
   dashboardChartYearRange,
+  dashboardSummaryForYear,
   type DashboardChartPeriodFilter,
   type DashboardChartYearFilter,
-} from '~/utils/lcs/dashboard'
+} from '~/utils/freight/dashboard'
 import type { DashboardSummary } from '~/repositories/contracts/lcs'
 import { freightReportPath, getFreightReport } from '~/config/freight-reports'
 import { useLcsRepositories } from '~/repositories'
@@ -41,16 +42,6 @@ const revenuePeriod = ref<DashboardChartPeriodFilter>('monthly')
 const ordersYear = ref<DashboardChartYearFilter>('thisYear')
 const ordersPeriod = ref<DashboardChartPeriodFilter>('monthly')
 
-function filterByYear(data: DashboardSummary, year: number): DashboardSummary {
-  return {
-    ...data,
-    charts: {
-      ...data.charts,
-      revenueExpense: data.charts.revenueExpense.filter(point => point.month.startsWith(String(year))),
-    },
-  }
-}
-
 const canSeeServiceOrders = computed(() => auth.canAccessPage('operations.service_orders.view'))
 
 async function load() {
@@ -60,7 +51,7 @@ async function load() {
   try {
     const data = await reports.dashboard()
     summary.value = data
-    revenueSummary.value = filterByYear(data, dashboardChartYearRange(revenueYear.value).year)
+    revenueSummary.value = dashboardSummaryForYear(data, dashboardChartYearRange(revenueYear.value).year)
     if (canSeeServiceOrders.value) {
       ordersSummary.value = data
     }
@@ -69,7 +60,8 @@ async function load() {
     }
   }
   catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    console.error('Failed to load dashboard summary', cause)
+    error.value = t('freight.dashboard.errorDescription')
   }
   finally {
     pending.value = false
@@ -78,7 +70,7 @@ async function load() {
 
 watch(revenueYear, year => {
   if (summary.value) {
-    revenueSummary.value = filterByYear(summary.value, dashboardChartYearRange(year).year)
+    revenueSummary.value = dashboardSummaryForYear(summary.value, dashboardChartYearRange(year).year)
   }
 })
 watch(ordersYear, () => {

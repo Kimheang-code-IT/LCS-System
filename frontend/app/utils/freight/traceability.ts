@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 export type TraceLinkKind = 'quotation' | 'serviceOrder' | 'serviceCharge' | 'financeInvoice' | 'postedJournal'
 

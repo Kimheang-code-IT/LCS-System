@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { DocumentTabSchema } from '~/types/docetra/common'
+import type { DocumentTabSchema } from '~/types/common'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useJobRelated } from '~/composables/freight/useJobRelated'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
-import { useLcs } from '~/composables/lcs/useLcs'
+import { useLcs } from '~/composables/freight/useLcs'
 import {
   emptyFreightRecord,
   groupedFields,
@@ -15,22 +15,17 @@ import {
   useFreightLabel,
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import {
   parseJobWorkspaceSection,
   type JobWorkspaceSection,
 } from '~/utils/freight/job-workspace'
 import {
-  jobContainerCount,
-  jobContainerPaymentRows,
-  jobContainerPaymentTotals,
-} from '~/utils/freight/job-containers'
-import {
   JOB_FIXED_WORKSPACE_SECTIONS,
   JOB_TRAILING_WORKSPACE_SECTIONS,
 } from '~/utils/freight/job-component-tabs'
 import { useComponentTabs } from '~/composables/freight/useComponentTabs'
-import { jobDomainStatus } from '~/utils/lcs/states'
+import { jobDomainStatus } from '~/utils/freight/states'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const moduleRecord = useModuleRecord(module)
@@ -44,7 +39,6 @@ const { confirm } = useConfirm()
 const lcs = useLcs()
 
 const saving = ref(false)
-const editingOverview = ref(false)
 const model = ref<FreightRecord>({} as FreightRecord)
 const notFound = ref(false)
 
@@ -87,34 +81,6 @@ const {
   containerRequirements,
 } = useJobRelated(jobNo)
 
-const quotation = computed(() => {
-  const no = String(model.value.quotationNo || '').trim()
-  if (!no) return null
-  return store.list('quotations').find(row => String(row.quotationNo || '') === no) || null
-})
-
-/** Task progress comes straight from the scoped collection — no extra request. */
-const taskRows = computed<FreightRecord[]>(() =>
-  jobNo.value
-    ? store.list('serviceComponents').filter(row => String(row.jobNo || '') === jobNo.value)
-    : [])
-const tasksDone = computed(() => taskRows.value.filter(row => row.status === 'COMPLETED').length)
-const paymentRows = computed(() => jobContainerPaymentRows(model.value, {
-  shipments: shipments.value,
-  charges: charges.value,
-  quotation: quotation.value,
-}))
-const chargesTotals = computed(() => {
-  const totals = jobContainerPaymentTotals(paymentRows.value, model.value.vatRate)
-  const invoiced = charges.value
-    .filter(row => String(row.financialDocumentId || '').trim())
-    .reduce((sum, row) => sum + Number(row.total || row.amount || 0), 0)
-  return { total: totals.total, invoiced }
-})
-const containersCount = computed(() =>
-  jobContainerCount(model.value, paymentRows.value, actualContainers.value)
-  || actualContainers.value.length)
-
 /**
  * Operational tabs come from the configurable component tabs (Attribute ->
  * Group -> Tab), filtered by the Service Order's trade direction.
@@ -134,7 +100,6 @@ const workspaceSections = computed(() => [
   ...componentSections.value,
   ...JOB_TRAILING_WORKSPACE_SECTIONS,
 ])
-const documentSection = computed(() => componentSections.value[0] || 'overview')
 const isComponentTab = computed(() =>
   Boolean(activeTab.value) && componentTabsState.tabs.value.some(tab => tab.code === activeTab.value),
 )
@@ -178,7 +143,6 @@ const tabs = computed<DocumentTabSchema[]>(() =>
 
 function load() {
   if (!module.value) return
-  editingOverview.value = isCreate.value
   if (isCreate.value) {
     model.value = emptyFreightRecord(module.value) as FreightRecord
     notFound.value = false
@@ -272,23 +236,12 @@ async function save() {
     if (isCreate.value || !payload.id) await moduleRecord.create(payload)
     else await moduleRecord.update(String(payload.id), payload)
     toast.add({ title: t('freight.ui.save'), color: 'success' })
-    editingOverview.value = false
     // Return to the service-order list after saving.
     await navigateTo(module.value.path)
   }
   finally {
     saving.value = false
   }
-}
-
-async function startEdit() {
-  activeTab.value = 'overview'
-  editingOverview.value = true
-}
-
-function discardEdit() {
-  editingOverview.value = false
-  load()
 }
 
 async function setJobStatus(next: 'ACTIVE' | 'INACTIVE') {
@@ -381,7 +334,7 @@ function onTabChange(value: string) {
     :not-found="notFound"
     :save-label="jobSaveLabel"
     :confirm-save="false"
-    :show-save="editingOverview || isCreate"
+    :show-save="canEdit || isCreate"
     :show-cancel="false"
     :show-meta-rail="!isCreate"
     show-list-nav
@@ -423,12 +376,6 @@ function onTabChange(value: string) {
   >
     <template #actions>
       <CommonAppDocumentActionButton
-        v-if="canEdit"
-        icon="i-lucide-pencil"
-        :label="t('freight.ui.edit')"
-        @click="startEdit"
-      />
-      <CommonAppDocumentActionButton
         v-if="canEdit && domainStatus === 'ACTIVE'"
         icon="i-lucide-check-circle"
         :label="t('freight.ui.finish')"
@@ -443,18 +390,8 @@ function onTabChange(value: string) {
           <FreightJobOverview
             v-if="activeTab === 'overview'"
             :model="model"
-            :is-create="isCreate"
-            :editing="editingOverview"
             :sections="jobSections"
-            :containers-count="containersCount"
-            :tasks-done="tasksDone"
-            :tasks-total="taskRows.length"
-            :document-tab="documentSection"
-            :charges-total="chargesTotals.total"
-            :invoiced-total="chargesTotals.invoiced"
             @update:field="setField"
-            @edit="startEdit"
-            @cancel-edit="discardEdit"
           />
           <FreightJobRoute
             v-else-if="activeTab === 'route'"

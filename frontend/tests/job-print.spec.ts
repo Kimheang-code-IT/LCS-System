@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FreightRecord } from '../app/types/freight/record'
+import type { FreightRecord } from '../app/types/record'
 import {
   buildJobPrintViewModel,
   expandJobContainerSlots,
@@ -71,5 +71,32 @@ describe('job print helpers', () => {
     expect(second.document.number).toBe('LCS-IM-260821/2')
     expect(first.lines[0]?.amount).toBe(1200)
     expect(second.lines[0]?.amount).toBe(980)
+  })
+
+  it('prints a single payment row as its own document', () => {
+    const model = buildJobPrintViewModel(job(), 'debit-note', context, { lineIndex: 1 })
+    expect(model.document.number).toBe('LCS-IM-260821/2')
+    expect(model.lines).toHaveLength(1)
+    expect(model.lines[0]?.amount).toBe(980)
+    // The row's own container drives the slot, so the header is not the first box.
+    expect(model.shipment.containerNo).toBe('TGHU 771923-4')
+  })
+
+  it('keeps a payment row without a container number on the default slot', () => {
+    const model = buildJobPrintViewModel(
+      job({ containerPayments: [{ feeType: 'DOC_FEE', quantity: 1, unitPrice: 50, lineTotal: 50 }] }),
+      'debit-note',
+      context,
+      { lineIndex: 0 },
+    )
+    expect(model.document.number).toBe('LCS-IM-260821/1')
+    expect(model.lines).toHaveLength(1)
+  })
+
+  it('falls back to the whole job when the payment row index is gone', () => {
+    const model = buildJobPrintViewModel(job(), 'debit-note', context, { lineIndex: 9 })
+    expect(model.document.number).toBe('LCS-IM-260821/1')
+    expect(model.lines).toHaveLength(1)
+    expect(model.lines[0]?.amount).toBe(1200)
   })
 })

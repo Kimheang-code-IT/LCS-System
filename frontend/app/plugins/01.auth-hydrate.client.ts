@@ -1,4 +1,4 @@
-import { safeInternalPath } from '~/utils/auth/session'
+import { normalizeRoutePath, safeInternalPath } from '~/utils/auth/session'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { usePreferencesStore } from '~/stores/preferences'
 
@@ -25,7 +25,7 @@ export default defineNuxtPlugin(async () => {
   })
 
   const route = useRoute()
-  if (auth.isLoggedIn && AUTH_PUBLIC_PATHS.has(route.path)) {
+  if (auth.isLoggedIn && AUTH_PUBLIC_PATHS.has(normalizeRoutePath(route.path))) {
     void navigateTo(safeInternalPath(route.query.redirect) || '/', { replace: true })
   }
 })

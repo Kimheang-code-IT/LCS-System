@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed } from 'vue'
-import type { AppFontSize } from '~/types/docetra/settings'
+import type { AppFontSize } from '~/types/settings'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const THEME_PRIMARY_KEY = 'ui:theme:primary'
@@ -33,7 +33,10 @@ function normalizeFontSize(value: string | null | undefined): AppFontSize {
  */
 export const usePreferencesStore = defineStore('preferences', () => {
   const appConfig = useAppConfig()
-  const i18n = useI18n()
+  // This store is first created by the client startup plugin, before a Vue
+  // component instance exists. `useI18n()` is component-scoped and throws
+  // I18nErrorCodes.MUST_BE_CALL_SETUP_TOP (26) in that context.
+  const i18n = useNuxtApp().$i18n
   const appLocalization = useAppLocalization()
 
   const isThemeLoaded = useState('ui-theme-loaded', () => false)

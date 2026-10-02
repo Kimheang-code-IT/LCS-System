@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import type { TableColumn } from '@nuxt/ui'
-import type { ComponentGroup, ComponentGroupAttribute, ComponentRenderMode } from '~/types/freight/component-config'
+import type { ComponentGroup, ComponentRenderMode } from '~/types/component-config'
+import type { SaveGridChange } from '~/types/save-grid'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
+import {
+  componentConfigTable,
+  componentGroupAttributeColumns,
+  componentGroupAttributeRows,
+} from '~/utils/freight/component-config-tables'
 
 definePageMeta({
   titleKey: 'freight.pages.componentGroups',
@@ -33,12 +38,15 @@ const availableAttributes = computed(() => {
     .map(attribute => ({ label: attribute.label, value: attribute.id }))
 })
 
-const columns: TableColumn<ComponentGroupAttribute>[] = [
-  { accessorKey: 'code', header: 'Attribute' },
-  { accessorKey: 'dataType', header: 'Type' },
-  { accessorKey: 'isRequired', header: 'Required' },
-  { id: 'actions', header: '' },
-]
+/** Grid rows are projected from the loaded memberships so edits stay local. */
+const membershipRows = computed(() => componentGroupAttributeRows(config.groupAttributes.value))
+
+const membershipTable = computed(() => componentConfigTable({
+  key: 'componentGroupAttributes',
+  title: t('freight.ui.assignedAttributes'),
+  titleKm: 'គំលេងដែលបានចូលរួម',
+  columns: componentGroupAttributeColumns(),
+}))
 
 onMounted(async () => {
   await Promise.all([config.loadGroups(true), config.loadAttributes(false)])
@@ -113,22 +121,37 @@ async function addAttribute() {
   addAttributeId.value = undefined
 }
 
-function removeMembership(item: ComponentGroupAttribute) {
+async function removeMembership(id: string) {
   if (!selectedGroupId.value) return
-  void config.removeGroupAttribute(item.id)
+  await config.removeGroupAttribute(id)
 }
 
-async function moveMembership(index: number, direction: -1 | 1) {
-  const rows = [...config.groupAttributes.value]
-  const target = index + direction
-  if (target < 0 || target >= rows.length) return
-  const [item] = rows.splice(index, 1)
-  rows.splice(target, 0, item!)
-  await config.reorderGroupAttributes(selectedGroupId.value, rows.map(row => row.id))
-}
-
-function toggleRequired(item: ComponentGroupAttribute, value: boolean) {
-  void config.updateGroupAttribute(item.id, { isRequired: value })
+/**
+ * `reorder` and the delete column both change only the row list, so they save
+ * through the grid's single Save action: removals first, then edits, then order.
+ */
+async function saveMembership(change: SaveGridChange) {
+  const groupId = selectedGroupId.value
+  if (!groupId) return
+  const savedById = new Map(config.groupAttributes.value.map(item => [item.id, item]))
+  try {
+    for (const id of change.removedIds) removeMembership(id)
+    for (const row of change.rows) {
+      const id = String(row.id ?? '')
+      const saved = savedById.get(id)
+      if (!saved || Boolean(saved.isRequired) === Boolean(row.isRequired)) continue
+      await config.updateGroupAttribute(id, { isRequired: Boolean(row.isRequired) })
+    }
+    // Display order is the grid's row order, so it is always sent last.
+    await config.reorderGroupAttributes(groupId, change.rows
+      .map(row => String(row.id ?? ''))
+      .filter(id => savedById.has(id)))
+    toast.add({ title: t('freight.ui.save'), color: 'success' })
+  }
+  catch {
+    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+    await config.loadGroupAttributes(groupId)
+  }
 }
 </script>
 
@@ -257,45 +280,11 @@ icon="i-lucide-plus"
 @click="addAttribute">Add</UButton>
         </div>
 
-        <UTable :data="config.groupAttributes.value" :columns="columns">
-          <template #code-cell="{ row }">
-            <div class="flex flex-col">
-              <span class="text-sm font-medium text-highlighted">{{ row.original.label }}</span>
-              <span class="text-[11px] text-muted">{{ row.original.code }}</span>
-            </div>
-          </template>
-          <template #dataType-cell="{ row }">
-            <UBadge color="neutral" variant="subtle" size="sm">{{ String(row.original.dataType).replace('_', ' ') }}</UBadge>
-          </template>
-          <template #isRequired-cell="{ row }">
-            <USwitch :model-value="row.original.isRequired" @update:model-value="toggleRequired(row.original, Boolean($event))" />
-          </template>
-          <template #actions-cell="{ row }">
-            <div class="flex items-center justify-end gap-1">
-              <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-arrow-up"
-aria-label="Move up"
-@click="moveMembership(row.index, -1)" />
-              <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-arrow-down"
-aria-label="Move down"
-@click="moveMembership(row.index, 1)" />
-              <UButton
-size="xs"
-color="error"
-variant="ghost"
-icon="i-lucide-trash-2"
-aria-label="Remove"
-@click="removeMembership(row.original)" />
-            </div>
-          </template>
-        </UTable>
+        <TableAppSaveGrid
+          :table="membershipTable"
+          :rows="membershipRows"
+          :saving="config.saving.value"
+          @save="saveMembership" />
       </section>
       <section v-else class="rounded-lg border border-default bg-default p-3">
         <UEmpty

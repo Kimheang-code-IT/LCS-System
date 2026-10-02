@@ -35,6 +35,10 @@ const props = withDefaults(defineProps<{
   icons?: string[]
   disabled?: boolean
 }>(), {
+  label: '',
+  labelKey: '',
+  help: '',
+  icons: () => [],
   disabled: false,
 })
 

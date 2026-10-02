@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
 from app.modules.master_data.models import BusinessParty, PartyRole, TradeDirection
@@ -220,7 +220,13 @@ async def list_quotations(session: AsyncSession, context: RequestContext, page: 
         pattern = f"%{page.q}%"
         stmt = stmt.where(Quotation.quotation_no.ilike(pattern) | Quotation.data["customer"].as_string().ilike(pattern))
     total = await count_query(session, stmt)
-    rows = (await session.execute(stmt.order_by(Quotation.id.desc()).limit(page.page_size).offset(page.offset))).scalars().all()
+    rows = (
+        await session.execute(
+            stmt.order_by(*list_sort_orders(Quotation, page, Quotation.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
+        )
+    ).scalars().all()
     items = []
     for quotation in rows:
         revision = await get_latest_revision(session, quotation)

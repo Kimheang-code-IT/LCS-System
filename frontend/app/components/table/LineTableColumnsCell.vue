@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DynamicTableColumnDef } from '~/types/docetra/configuration'
+import type { DynamicTableColumnDef } from '~/types/configuration'
 import { parseDynamicTableColumns } from '~/utils/freight/dynamic-table'
 
 const props = defineProps<{

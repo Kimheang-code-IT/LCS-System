@@ -10,6 +10,11 @@ const props = withDefaults(defineProps<{
   autocomplete?: string
 }>(), {
   modelValue: '',
+  label: '',
+  labelKey: '',
+  placeholder: '',
+  help: '',
+  helpKey: '',
   autocomplete: 'new-password',
   disabled: false,
 })

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { AuthUser } from '~/types/auth-user'
+import type { AuthUser } from '~/types/api'
 import { AUTH_STORAGE_KEY, compactAuthUser } from '~/utils/auth/session'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 

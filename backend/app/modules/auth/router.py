@@ -10,6 +10,7 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
 from app.core.exceptions import AuthRequired, ValidationFailed
+from app.core.pagination import PageParams, page_params
 from app.modules.audit.service import write_audit
 from app.modules.auth import service
 from app.modules.auth.models import User
@@ -231,10 +232,11 @@ async def remove_profile_avatar(
 
 @router.get("/users")
 async def list_users(
+    page: PageParams = Depends(page_params),
     context: RequestContext = Depends(require_permission("user.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_users(session)}
+    return {"data": await service.list_users(session, page)}
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
@@ -304,10 +306,11 @@ async def assign_role(
 
 @router.get("/roles")
 async def list_roles(
+    page: PageParams = Depends(page_params),
     context: RequestContext = Depends(require_permission("role.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_roles(session)}
+    return {"data": await service.list_roles(session, page)}
 
 
 @router.post("/roles", status_code=status.HTTP_201_CREATED)

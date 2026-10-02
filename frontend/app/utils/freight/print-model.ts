@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { formatNumber, getFormatConfig } from '~/utils/format/format-service'
 import { DEFAULT_INVOICE_LOGO_URL } from '~/utils/freight/print-navigation'
 

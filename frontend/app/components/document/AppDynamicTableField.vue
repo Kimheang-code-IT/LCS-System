@@ -19,7 +19,7 @@ const rows = computed({
 
 <template>
   <div class="space-y-3">
-    <TableAppLineTable
+    <FreightAppLineTable
       :table="table"
       :model-value="rows"
       :disabled="disabled"

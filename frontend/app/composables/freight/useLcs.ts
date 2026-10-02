@@ -1,8 +1,8 @@
 import { useLcsRepositories } from '~/repositories'
-import { isLcsDomainError } from '~/utils/lcs/errors'
-import { hasSourcePermission } from '~/utils/lcs/permissions'
-import { rememberIdempotencyKey, clearIdempotencyKey } from '~/utils/lcs/idempotency'
-import type { SourcePermission } from '~/types/lcs/domain'
+import { isLcsDomainError } from '~/utils/freight/errors'
+import { hasSourcePermission } from '~/utils/freight/permissions'
+import { rememberIdempotencyKey, clearIdempotencyKey } from '~/utils/freight/idempotency'
+import type { SourcePermission } from '~/types/domain'
 
 export function useLcs() {
   const repos = useLcsRepositories()

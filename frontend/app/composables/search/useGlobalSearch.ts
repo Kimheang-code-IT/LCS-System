@@ -2,7 +2,7 @@
  * Cmd+K global search: keyword / semantic modes, Ask AI on demand, source links.
  */
 import type { CommandPaletteItem, CommandPaletteGroup } from '@nuxt/ui'
-import type { SearchHit, SearchMode } from '~/types/docetra/search'
+import type { SearchHit, SearchMode } from '~/types/search'
 import { useMenu } from '~/composables/layout/useMenu'
 import { useSearch } from '~/composables/search/useSearch'
 
