@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ConnectionStatus } from '~/types/docetra/settings'
+import type { ConnectionStatus } from '~/types/lcs/settings'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = defineProps<{
@@ -17,16 +17,16 @@ const { formatDateTime } = useAppLocalization()
 const titleText = computed(() => {
   if (props.title) return props.title
   if (props.titleKey && te(props.titleKey)) return t(props.titleKey)
-  return t('docetra.connection.title')
+  return t('lcs.connection.title')
 })
 
 const statusMeta = computed(() => {
   const map: Record<ConnectionStatus, { color: 'neutral' | 'primary' | 'success' | 'error' | 'warning', icon: string, labelKey: string }> = {
-    not_tested: { color: 'neutral', icon: 'i-lucide-circle-dashed', labelKey: 'docetra.connection.notTested' },
-    testing: { color: 'primary', icon: 'i-lucide-loader-circle', labelKey: 'docetra.connection.testing' },
-    connected: { color: 'success', icon: 'i-lucide-circle-check', labelKey: 'docetra.connection.connected' },
-    failed: { color: 'error', icon: 'i-lucide-circle-x', labelKey: 'docetra.connection.failed' },
-    disabled: { color: 'warning', icon: 'i-lucide-ban', labelKey: 'docetra.connection.disabled' },
+    not_tested: { color: 'neutral', icon: 'i-lucide-circle-dashed', labelKey: 'lcs.connection.notTested' },
+    testing: { color: 'primary', icon: 'i-lucide-loader-circle', labelKey: 'lcs.connection.testing' },
+    connected: { color: 'success', icon: 'i-lucide-circle-check', labelKey: 'lcs.connection.connected' },
+    failed: { color: 'error', icon: 'i-lucide-circle-x', labelKey: 'lcs.connection.failed' },
+    disabled: { color: 'warning', icon: 'i-lucide-ban', labelKey: 'lcs.connection.disabled' },
   }
   return map[props.status]
 })
@@ -51,7 +51,7 @@ const statusMeta = computed(() => {
     </p>
 
     <p v-if="lastTestedAt" class="text-xs text-muted">
-      {{ t('docetra.connection.lastTested') }}:
+      {{ t('lcs.connection.lastTested') }}:
       {{ formatDateTime(lastTestedAt) }}
     </p>
 

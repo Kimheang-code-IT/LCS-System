@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,10 +15,11 @@ router = APIRouter()
 
 @router.get("/reports/dashboard")
 async def dashboard(
+    granularity: Literal["day", "month", "year"] = "month",
     context: RequestContext = Depends(require_permission("report.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.dashboard(session, context)}
+    return {"data": await service.dashboard(session, context, granularity)}
 
 
 @router.get("/reports/service-orders")

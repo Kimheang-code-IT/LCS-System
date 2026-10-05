@@ -283,8 +283,20 @@ def _bucketize(aging: list[dict], due_date: Any, today: Any, outstanding: float)
             item["amount"] = round(item["amount"] + max(outstanding, 0), 4)
 
 
-async def _service_order_status_counts(session: AsyncSession, context: RequestContext) -> dict:
+async def _service_order_status_counts(
+    session: AsyncSession, context: RequestContext, granularity: str | None = None
+) -> dict:
     stmt = select(ServiceOrder.status, func.count())
+    if granularity is not None:
+        from datetime import UTC, datetime
+        now = datetime.now(UTC)
+        start: datetime | None = None
+        if granularity == "day":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif granularity == "month":
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        if start is not None:
+            stmt = stmt.where(ServiceOrder.created_at >= start)
     rows = (await session.execute(stmt.group_by(ServiceOrder.status))).all()
     counts = {status: int(count) for status, count in rows}
     return {
@@ -299,7 +311,14 @@ async def _service_order_status_counts(session: AsyncSession, context: RequestCo
     }
 
 
-async def _journal_revenue_expense_by_month(session: AsyncSession, context: RequestContext) -> tuple[float, float, list[dict]]:
+async def _journal_revenue_expense(
+    session: AsyncSession, context: RequestContext, granularity: str = "month"
+) -> tuple[float, float, list[dict]]:
+    from datetime import date as _date
+    today = _date.today()
+    current_month = today.isoformat()[:7]
+    current_year = today.isoformat()[:4]
+
     stmt = (
         select(
             JournalEntryLine,
@@ -314,13 +333,21 @@ async def _journal_revenue_expense_by_month(session: AsyncSession, context: Requ
         )
     )
     rows = (await session.execute(stmt)).all()
-    by_month: dict[str, dict[str, float]] = {}
+    by_bucket: dict[str, dict[str, float]] = {}
     total_revenue = 0.0
     total_expense = 0.0
     for line, account_type, posting_date in rows:
         if not posting_date:
             continue
-        month = posting_date.isoformat()[:7] if hasattr(posting_date, "isoformat") else str(posting_date)[:7]
+        iso = posting_date.isoformat() if hasattr(posting_date, "isoformat") else str(posting_date)
+        if granularity == "day":
+            # Daily view covers the current month only.
+            key: str | None = iso[:10] if iso[:7] == current_month else None
+        elif granularity == "year":
+            key = iso[:4]
+        else:
+            # Monthly view covers the current year only.
+            key = iso[:7] if iso[:4] == current_year else None
         debit = _f(line.base_debit_amount)
         credit = _f(line.base_credit_amount)
         if account_type == "REVENUE":
@@ -329,14 +356,16 @@ async def _journal_revenue_expense_by_month(session: AsyncSession, context: Requ
         else:
             amount = round(debit - credit, 4)
             total_expense = round(total_expense + amount, 4)
-        bucket = by_month.setdefault(month, {"revenue": 0.0, "expense": 0.0})
+        if key is None:
+            continue
+        bucket = by_bucket.setdefault(key, {"revenue": 0.0, "expense": 0.0})
         if account_type == "REVENUE":
             bucket["revenue"] = round(bucket["revenue"] + amount, 4)
         else:
             bucket["expense"] = round(bucket["expense"] + amount, 4)
     points = [
-        {"month": month, "revenue": bucket["revenue"], "expense": bucket["expense"]}
-        for month, bucket in sorted(by_month.items())
+        {"period": key, "revenue": bucket["revenue"], "expense": bucket["expense"]}
+        for key, bucket in sorted(by_bucket.items())
     ]
     return total_revenue, total_expense, points
 
@@ -353,14 +382,17 @@ async def _customers(session: AsyncSession, context: RequestContext) -> list[str
     return sorted([str(r) for r in rows if r])
 
 
-async def dashboard(session: AsyncSession, context: RequestContext) -> dict:
+async def dashboard(session: AsyncSession, context: RequestContext, granularity: str = "month") -> dict:
     from datetime import date as _date
     today = _date.today().isoformat()
 
     status_counts = await _service_order_status_counts(session, context)
+    chart_status_counts = await _service_order_status_counts(session, context, granularity)
     receivable_rows = await receivables(session, context)
     payable_rows = await payables(session, context)
-    total_revenue, total_expense, revenue_expense_points = await _journal_revenue_expense_by_month(session, context)
+    total_revenue, total_expense, revenue_expense_points = await _journal_revenue_expense(
+        session, context, granularity
+    )
     customer_list = await _customers(session, context)
 
     receivables_total = round(sum(row["balance"] for row in receivable_rows), 4)
@@ -399,7 +431,7 @@ async def dashboard(session: AsyncSession, context: RequestContext) -> dict:
         },
         "charts": {
             "revenueExpense": revenue_expense_points,
-            "ordersByStatus": status_counts["byStatus"],
+            "ordersByStatus": chart_status_counts["byStatus"],
             "receivablesAging": receivables_aging,
             "payablesAging": payables_aging,
         },

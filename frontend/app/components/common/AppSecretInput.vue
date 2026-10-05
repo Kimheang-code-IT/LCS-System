@@ -57,7 +57,7 @@ const value = computed({
           color="neutral"
           variant="link"
           size="sm"
-          :aria-label="revealed ? t('docetra.common.hideSecret') : t('docetra.common.showSecret')"
+          :aria-label="revealed ? t('lcs.common.hideSecret') : t('lcs.common.showSecret')"
           :disabled="disabled"
           @click="revealed = !revealed"
         />

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { ExportFieldOption, ExportRequest } from '~/types/docetra/export'
+import type { ExportFieldOption, ExportRequest } from '~/types/lcs/export'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { headerListNavDisabled } from '~/utils/layout/header-actions'
 
@@ -33,8 +33,6 @@ const props = withDefaults(defineProps<{
   saving?: boolean
   showCancel?: boolean
   cancelTo?: string
-  showMetaRailToggle?: boolean
-  metaRailOpen?: boolean
 }>(), {
   canCreate: false,
   createLabel: '',
@@ -57,8 +55,6 @@ const props = withDefaults(defineProps<{
   saving: false,
   showCancel: false,
   cancelTo: '',
-  showMetaRailToggle: false,
-  metaRailOpen: false,
 })
 
 const emit = defineEmits<{
@@ -70,7 +66,6 @@ const emit = defineEmits<{
   navigateNext: []
   save: []
   cancel: []
-  toggleMetaRail: []
 }>()
 
 const { t } = useI18n()
@@ -83,7 +78,7 @@ const exportOpen = ref(false)
 const headerTeleportActive = ref(true)
 
 const resolvedCreateLabel = computed(() =>
-  props.createLabel || t('docetra.actions.addItem'),
+  props.createLabel || t('lcs.actions.addItem'),
 )
 
 const defaultMoreItems = computed<DropdownMenuItem[][]>(() => [[
@@ -107,7 +102,7 @@ function submitExport(request: ExportRequest) {
   emit('export', request)
   if (!props.exporting) {
     exportOpen.value = false
-    toast.add({ title: t('docetra.exportDialog.requestReady'), color: 'success' })
+    toast.add({ title: t('lcs.exportDialog.requestReady'), color: 'success' })
   }
 }
 
@@ -130,9 +125,9 @@ function syncActions() {
     listNav: props.showListNav
       ? {
           listTo: props.listTo || undefined,
-          listLabel: t('docetra.document.listView'),
-          previousLabel: t('docetra.document.previous'),
-          nextLabel: t('docetra.document.next'),
+          listLabel: t('lcs.document.listView'),
+          previousLabel: t('lcs.document.previous'),
+          nextLabel: t('lcs.document.next'),
           previousDisabled: headerListNavDisabled({
             isCreate: props.isCreate,
             canNavigate: props.canNavigatePrevious,
@@ -153,7 +148,7 @@ function syncActions() {
       : undefined,
     save: props.showSave
       ? {
-          label: props.saveLabel || t('docetra.common.save'),
+          label: props.saveLabel || t('lcs.common.save'),
           loading: Boolean(props.saving),
           onClick: () => emit('save'),
         }
@@ -163,13 +158,6 @@ function syncActions() {
           label: t('actions.cancel'),
           to: props.cancelTo || undefined,
           onClick: () => emit('cancel'),
-        }
-      : undefined,
-    metaRail: props.showMetaRailToggle
-      ? {
-          open: Boolean(props.metaRailOpen),
-          label: t('docetra.tabs.details'),
-          onToggle: () => emit('toggleMetaRail'),
         }
       : undefined,
     onCreate: () => emit('create'),
@@ -197,8 +185,6 @@ watch(
     props.saving,
     props.showCancel,
     props.cancelTo,
-    props.showMetaRailToggle,
-    props.metaRailOpen,
   ] as const,
   () => syncActions(),
   { immediate: true, deep: true },

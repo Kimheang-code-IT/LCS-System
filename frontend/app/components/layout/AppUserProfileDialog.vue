@@ -20,9 +20,9 @@ const photoPreviewOpen = ref(false)
 const profile = computed(() => {
   const user = auth.user
   return {
-    name: user?.name || t('docetra.userProfile.unknownUser'),
+    name: user?.name || t('lcs.userProfile.unknownUser'),
     email: user?.email || '—',
-    role: user?.role || t('docetra.userProfile.noRole'),
+    role: user?.role || t('lcs.userProfile.noRole'),
     avatar: {
       src: resolveUserAvatar(user),
       alt: user?.name || 'User',
@@ -33,7 +33,7 @@ const profile = computed(() => {
 const hasCustomAvatar = computed(() => Boolean(auth.user?.avatar))
 
 const passwordSchema = computed(() => z.object({
-  currentPassword: z.string().min(1, { error: t('docetra.userProfile.currentPasswordRequired') }),
+  currentPassword: z.string().min(1, { error: t('lcs.userProfile.currentPasswordRequired') }),
   password: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
   passwordConfirmation: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
 }).refine(data => data.password === data.passwordConfirmation, {
@@ -80,11 +80,11 @@ async function onAvatarPick(event: Event) {
   if (!file || avatarSubmitting.value) return
 
   if (!SAFE_RASTER_IMAGE_TYPES.includes(file.type as (typeof SAFE_RASTER_IMAGE_TYPES)[number])) {
-    toast.add({ title: t('docetra.common.imageInvalidType'), color: 'error' })
+    toast.add({ title: t('lcs.common.imageInvalidType'), color: 'error' })
     return
   }
   if (!isSafeRasterImage(file, 2)) {
-    toast.add({ title: t('docetra.common.imageTooLarge', { size: 2 }), color: 'error' })
+    toast.add({ title: t('lcs.common.imageTooLarge', { size: 2 }), color: 'error' })
     return
   }
 
@@ -99,15 +99,15 @@ async function onAvatarPick(event: Event) {
     await updateProfileAvatar(dataUrl)
     photoPreviewOpen.value = true
     toast.add({
-      title: t('docetra.userProfile.photoUpdated'),
-      description: t('docetra.userProfile.photoUpdatedDesc'),
+      title: t('lcs.userProfile.photoUpdated'),
+      description: t('lcs.userProfile.photoUpdatedDesc'),
       color: 'success',
     })
   }
   catch {
     toast.add({
-      title: t('docetra.userProfile.photoUpdateFailed'),
-      description: t('docetra.userProfile.photoUpdateFailedDesc'),
+      title: t('lcs.userProfile.photoUpdateFailed'),
+      description: t('lcs.userProfile.photoUpdateFailedDesc'),
       color: 'error',
     })
   }
@@ -123,15 +123,15 @@ async function onRemoveAvatar() {
     await removeProfileAvatar()
     photoPreviewOpen.value = false
     toast.add({
-      title: t('docetra.userProfile.photoRemoved'),
-      description: t('docetra.userProfile.photoRemovedDesc'),
+      title: t('lcs.userProfile.photoRemoved'),
+      description: t('lcs.userProfile.photoRemovedDesc'),
       color: 'success',
     })
   }
   catch {
     toast.add({
-      title: t('docetra.userProfile.photoRemoveFailed'),
-      description: t('docetra.userProfile.photoRemoveFailedDesc'),
+      title: t('lcs.userProfile.photoRemoveFailed'),
+      description: t('lcs.userProfile.photoRemoveFailedDesc'),
       color: 'error',
     })
   }
@@ -150,8 +150,8 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
       passwordConfirmation: event.data.passwordConfirmation,
     })
     toast.add({
-      title: t('docetra.userProfile.passwordChanged'),
-      description: t('docetra.userProfile.passwordChangedDesc'),
+      title: t('lcs.userProfile.passwordChanged'),
+      description: t('lcs.userProfile.passwordChangedDesc'),
       color: 'success',
     })
     passwordState.currentPassword = ''
@@ -160,8 +160,8 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
   }
   catch {
     toast.add({
-      title: t('docetra.userProfile.passwordChangeFailed'),
-      description: t('docetra.userProfile.passwordChangeFailedDesc'),
+      title: t('lcs.userProfile.passwordChangeFailed'),
+      description: t('lcs.userProfile.passwordChangeFailedDesc'),
       color: 'error',
     })
   }
@@ -175,7 +175,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
   <UModal
     v-model:open="open"
     scrollable
-    :title="t('docetra.userProfile.title')"
+    :title="t('lcs.userProfile.title')"
     :dismissible="false"
     :close="{ color: 'primary', variant: 'outline', class: 'rounded-full' }"
     :ui="{
@@ -190,7 +190,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
             <button
               type="button"
               class="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-              :aria-label="t('docetra.userProfile.viewPhoto')"
+              :aria-label="t('lcs.userProfile.viewPhoto')"
               @click="openPhotoPreview"
             >
               <img
@@ -209,7 +209,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
             <button
               type="button"
               class="absolute -bottom-1 -end-1 z-10 inline-flex size-7 items-center justify-center rounded-full border-2 border-default bg-default text-highlighted shadow-sm transition hover:bg-elevated disabled:opacity-60"
-              :aria-label="t('docetra.userProfile.changePhoto')"
+              :aria-label="t('lcs.userProfile.changePhoto')"
               :disabled="avatarSubmitting"
               @click="onCameraClick"
             >
@@ -239,7 +239,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
 
         <div class="space-y-4 border-t border-default pt-4">
           <h4 class="text-sm font-semibold text-highlighted">
-            {{ t('docetra.userProfile.tabs.password') }}
+            {{ t('lcs.userProfile.tabs.password') }}
           </h4>
 
           <UForm
@@ -249,10 +249,10 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
             @submit="onPasswordSubmit"
           >
             <UFormField
-              :label="t('docetra.userProfile.currentPassword')"
+              :label="t('lcs.userProfile.currentPassword')"
               name="currentPassword"
               required
-              :help="t('docetra.userProfile.currentPasswordHelp')"
+              :help="t('lcs.userProfile.currentPasswordHelp')"
             >
               <UInput
                 v-model="passwordState.currentPassword"
@@ -266,7 +266,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
               :label="t('pages.forgetPassword.newPassword')"
               name="password"
               required
-              :help="t('docetra.userProfile.newPasswordHelp')"
+              :help="t('lcs.userProfile.newPasswordHelp')"
             >
               <UInput
                 v-model="passwordState.password"
@@ -280,7 +280,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
               :label="t('pages.forgetPassword.confirmPassword')"
               name="passwordConfirmation"
               required
-              :help="t('docetra.userProfile.confirmPasswordHelp')"
+              :help="t('lcs.userProfile.confirmPasswordHelp')"
             >
               <UInput
                 v-model="passwordState.passwordConfirmation"
@@ -296,7 +296,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
                 color="primary"
                 :loading="submitting"
               >
-                {{ t('docetra.userProfile.updatePassword') }}
+                {{ t('lcs.userProfile.updatePassword') }}
               </UButton>
             </div>
           </UForm>
@@ -327,7 +327,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
           v-if="hasCustomAvatar"
           type="button"
           class="absolute top-2 end-2 inline-flex size-9 items-center justify-center rounded-full bg-error text-white shadow-md transition hover:bg-error/90 disabled:opacity-60"
-          :aria-label="t('docetra.userProfile.removePhoto')"
+          :aria-label="t('lcs.userProfile.removePhoto')"
           :disabled="avatarSubmitting"
           @click="onRemoveAvatar"
         >

@@ -1,14 +1,14 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { usePreferencesStore } from '~/stores/preferences'
 import type { AppLocale } from '~/stores/preferences'
-import type { AppFontSize } from '~/types/docetra/settings'
+import type { AppFontSize } from '~/types/lcs/settings'
 import { resolveUserAvatar } from '~/utils/auth/user-avatar'
 
 const FONT_SIZE_OPTIONS: Array<{ value: AppFontSize, labelKey: string, icon: string }> = [
-  { value: 'sm', labelKey: 'docetra.settings.fontSizeSm', icon: 'i-lucide-a-arrow-down' },
-  { value: 'md', labelKey: 'docetra.settings.fontSizeMd', icon: 'i-lucide-type' },
-  { value: 'lg', labelKey: 'docetra.settings.fontSizeLg', icon: 'i-lucide-a-arrow-up' },
-  { value: 'xl', labelKey: 'docetra.settings.fontSizeXl', icon: 'i-lucide-fullscreen' },
+  { value: 'sm', labelKey: 'lcs.settings.fontSizeSm', icon: 'i-lucide-a-arrow-down' },
+  { value: 'md', labelKey: 'lcs.settings.fontSizeMd', icon: 'i-lucide-type' },
+  { value: 'lg', labelKey: 'lcs.settings.fontSizeLg', icon: 'i-lucide-a-arrow-up' },
+  { value: 'xl', labelKey: 'lcs.settings.fontSizeXl', icon: 'i-lucide-fullscreen' },
 ]
 
 export function useUserMenu() {
@@ -64,7 +64,7 @@ export function useUserMenu() {
         })),
       },
       {
-        label: t('docetra.settings.fontSize'),
+        label: t('lcs.settings.fontSize'),
         icon: 'i-lucide-a-large-small',
         children: FONT_SIZE_OPTIONS.map(option => ({
           label: t(option.labelKey),

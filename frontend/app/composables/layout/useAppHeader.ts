@@ -44,12 +44,6 @@ export type AppHeaderCancelConfig = {
   onClick?: () => void
 }
 
-export type AppHeaderMetaRailConfig = {
-  open: boolean
-  label: string
-  onToggle: () => void
-}
-
 export type AppHeaderActionsConfig = {
   /** Opt-in: only list pages that support create should set true. */
   canCreate: boolean
@@ -62,7 +56,6 @@ export type AppHeaderActionsConfig = {
   listNav?: AppHeaderListNavConfig
   save?: AppHeaderSaveConfig
   cancel?: AppHeaderCancelConfig
-  metaRail?: AppHeaderMetaRailConfig
   onCreate?: () => void
   onRefresh?: () => void
 }

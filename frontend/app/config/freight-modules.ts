@@ -1,4 +1,4 @@
-import type { DocumentTabSchema } from '~/types/docetra/common'
+import type { DocumentTabSchema } from '~/types/lcs/common'
 import {
   ACTIVE_STATUS,
   CUSTOMS_STATUS,

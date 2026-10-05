@@ -84,6 +84,17 @@ info/config — no finance or business data. Admin CLI:
   every referenced `/api/v1/...` path and collection verb exists on the FastAPI app.
   Adding a frontend endpoint without the matching backend route (or vice versa)
   fails this test, not the browser.
+- **Docker-only fallback (when `uv` is not on PATH):** run the backend test suite
+  from the repo root against the built backend image, mounting the whole repo so
+  the contract test can read `frontend/app` (the image ships no tests/dev deps):
+
+  ```powershell
+  docker run --rm -v "<repo>:/repo" -w /repo/backend freight_forwarding-backend:latest `
+    sh -c "uv sync --frozen --extra dev && uv run pytest tests/test_frontend_api_contract.py -q"
+  ```
+
+  Drop the path argument to run the full suite. Verify the live API from the
+  running stack with `docker exec ff-api curl -fsS http://localhost:8000/health`.
 
 ## Frontend
 

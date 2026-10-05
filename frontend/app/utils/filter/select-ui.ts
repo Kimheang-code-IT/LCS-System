@@ -3,7 +3,7 @@
  * Active border uses default grey (`ring-default`), not inverted/black.
  */
 
-import type { AppFontSize } from '~/types/docetra/settings'
+import type { AppFontSize } from '~/types/lcs/settings'
 
 const selectChrome = 'rounded-lg bg-elevated/70 font-medium text-highlighted'
 const selectIdle = `${selectChrome} ring-0`

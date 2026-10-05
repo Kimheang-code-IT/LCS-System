@@ -1,4 +1,4 @@
-import type { FieldOption } from '~/types/docetra/common'
+import type { FieldOption } from '~/types/lcs/common'
 
 /** Shared select options for settings / forms with fixed choice lists. */
 

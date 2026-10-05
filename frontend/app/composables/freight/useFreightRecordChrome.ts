@@ -1,4 +1,4 @@
-import type { ActivityEvent, AttachmentMeta, EntityComment, PersonSummary } from '~/types/docetra/common'
+import type { ActivityEvent, AttachmentMeta, EntityComment, PersonSummary } from '~/types/lcs/common'
 import type { FreightRecord } from '~/types/freight/record'
 import type { FreightModule } from '~/config/freight-modules'
 
@@ -51,13 +51,6 @@ export function useFreightRecordChrome(options: {
     return Array.isArray(rows) ? rows as AttachmentMeta[] : []
   })
 
-  const tags = computed<string[]>(() => {
-    const rows = options.model.value.tags
-    if (Array.isArray(rows)) return rows.map(String)
-    const text = String(options.model.value.tags || '').trim()
-    return text ? text.split(',').map(part => part.trim()).filter(Boolean) : []
-  })
-
   const activity = computed<ActivityEvent[]>(() => {
     const entityId = String(options.model.value.id || '')
     const entityType = options.module.value?.collection || 'record'
@@ -97,18 +90,6 @@ export function useFreightRecordChrome(options: {
         },
       }))
     return [...fromRecord, ...fromAudit].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
-  })
-
-  const metaOwner = computed<PersonSummary>(() => ({
-    id: 'owner',
-    name: String(options.model.value.createdBy || options.model.value.assignedStaff || currentUser.value.name),
-  }))
-
-  const metaAssignee = computed<PersonSummary | null>(() => {
-    const raw = options.model.value.assignee
-    if (raw && typeof raw === 'object' && 'name' in (raw as object)) return raw as PersonSummary
-    const name = String(options.model.value.assignedStaff || options.model.value.contact || '')
-    return name ? { id: 'assignee', name } : null
   })
 
   function patch(partial: Record<string, unknown>) {
@@ -187,10 +168,7 @@ export function useFreightRecordChrome(options: {
     navigateNext,
     comments,
     attachments,
-    tags,
     activity,
-    metaOwner,
-    metaAssignee,
     setChromeField,
     submitComment,
     updateComment,

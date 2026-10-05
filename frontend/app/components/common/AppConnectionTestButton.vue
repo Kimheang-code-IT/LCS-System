@@ -7,7 +7,7 @@ const props = withDefaults(defineProps<{
   color?: 'primary' | 'neutral' | 'success'
   icon?: string
 }>(), {
-  labelKey: 'docetra.connection.test',
+  labelKey: 'lcs.connection.test',
   loading: false,
   disabled: false,
   color: 'neutral',
@@ -23,7 +23,7 @@ const { t, te } = useI18n()
 const labelText = computed(() => {
   if (props.label) return props.label
   if (props.labelKey && te(props.labelKey)) return t(props.labelKey)
-  return t('docetra.connection.test')
+  return t('lcs.connection.test')
 })
 </script>
 

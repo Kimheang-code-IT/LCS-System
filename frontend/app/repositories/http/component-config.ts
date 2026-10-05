@@ -1,5 +1,5 @@
 import type { ComponentConfigRepository } from '~/repositories/contracts/component-config'
-import type { ApiResponse } from '~/types/docetra/common'
+import type { ApiResponse } from '~/types/lcs/common'
 import type {
   ComponentAttribute,
   ComponentGroup,

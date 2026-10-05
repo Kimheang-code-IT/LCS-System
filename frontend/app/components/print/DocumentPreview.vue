@@ -218,10 +218,10 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="accessDenied" class="p-6 text-sm text-muted">
-      {{ t('docetra.errors.forbidden') || t('freight.print.back') }}
+      {{ t('lcs.errors.forbidden') || t('freight.print.back') }}
     </div>
     <div v-else-if="notFound || !viewModel" class="p-6 text-sm text-muted">
-      {{ t('docetra.document.notFound') || 'Record not found.' }}
+      {{ t('lcs.document.notFound') || 'Record not found.' }}
     </div>
 
     <div

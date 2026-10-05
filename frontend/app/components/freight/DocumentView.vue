@@ -19,7 +19,7 @@ import { useLcs } from '~/composables/lcs/useLcs'
 import { isLcsDomainError } from '~/utils/lcs/errors'
 import { financeDomainStatus, isRecordReadOnly, quotationDomainStatus } from '~/utils/lcs/states'
 import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys } from '~/utils/role/permissions'
-import type { AppRolePermissionRow } from '~/types/docetra/entities'
+import type { AppRolePermissionRow } from '~/types/lcs/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { jobForQuotation } from '~/utils/freight/job-workspace'
 import { referenceOptionSource } from '~/utils/freight/reference-options'
@@ -81,10 +81,7 @@ const {
   navigateNext,
   comments,
   attachments,
-  tags,
   activity,
-  metaOwner,
-  metaAssignee,
   setChromeField,
   submitComment,
   updateComment,
@@ -362,7 +359,7 @@ const documentSaveLabel = computed(() => {
   if (module.value?.collection === 'jobCharges') {
     return isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges')
   }
-  return t('docetra.common.save')
+  return t('lcs.common.save')
 })
 
 /** Role names from the Roles & Permissions page, used by the users role select. */
@@ -516,7 +513,7 @@ function relatedServiceOrder() {
 async function openRelatedServiceOrder() {
   const job = relatedServiceOrder()
   if (!job?.id) {
-    toast.add({ title: t('docetra.states.notFound'), color: 'warning' })
+    toast.add({ title: t('lcs.states.notFound'), color: 'warning' })
     return
   }
   await navigateTo(`/service-orders/${String(job.id)}`)
@@ -925,7 +922,7 @@ async function setRecordStatus(next: 'ACTIVE' | 'INACTIVE') {
   model.value = { ...model.value, status } as FreightRecord
   await moduleRecord.update(String(model.value.id || ''), model.value)
   originalModel.value = { ...model.value }
-  toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
+  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
 }
 
 async function openPrint(templateId: PrintTemplateId) {
@@ -1020,17 +1017,6 @@ content-wide
 :comment-body="commentBody"
 :submitting-comment="submittingComment"
       :current-user="currentUser"
-:meta-title="title"
-:meta-subtitle="module.collection === 'quotations'
-        ? [model.customer, model.direction, model.currency].filter(Boolean).join(' · ')
-        : moduleSingular(module)"
-:meta-icon="module.icon"
-:meta-status="String(model.status || '')"
-      :meta-owner="metaOwner"
-:meta-assignee="metaAssignee"
-:meta-tags="tags"
-      :meta-created-at="String(model.createdAt || '')"
-:meta-updated-at="String(model.updatedAt || '')"
       :more-items="moreItems"
 :can-export="false"
 @update:active-tab="activeTab = $event"
@@ -1099,7 +1085,7 @@ variant="subtle"
       :ui="{ content: 'w-[calc(100%-2rem)] max-w-md sm:max-w-md' }"
       @update:open="value => !value && (reverseOpen = false)">
       <template #body>
-        <FreightFieldGrid
+        <DocumentAppFieldGrid
 :fields="FINANCE_REVERSE_FORM_FIELDS"
 :model="reverseDraft"
           @update="(key, value) => { reverseDraft[key] = value }" />
@@ -1128,5 +1114,5 @@ v-model:open="printOpen"
 :record="model"
       @print="openPrint" />
   </template>
-  <div v-else class="p-6 text-sm text-muted">{{ t('docetra.document.notFound') || 'Record not found.' }}</div>
+  <div v-else class="p-6 text-sm text-muted">{{ t('lcs.document.notFound') || 'Record not found.' }}</div>
 </template>

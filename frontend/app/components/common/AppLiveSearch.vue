@@ -62,8 +62,8 @@ function clearSearch(event: MouseEvent) {
         :size="size"
         icon="i-lucide-circle-x"
         class="px-0"
-        :aria-label="t('docetra.common.clear')"
-        :title="t('docetra.common.clear')"
+        :aria-label="t('lcs.common.clear')"
+        :title="t('lcs.common.clear')"
         @mousedown.prevent
         @click="clearSearch"
       />

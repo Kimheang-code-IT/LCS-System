@@ -24,13 +24,13 @@ const previewSource = computed(() => safeImageSource(model.value))
 const labelText = computed(() => {
   if (props.label) return props.label
   if (props.labelKey && te(props.labelKey)) return t(props.labelKey)
-  return t('docetra.common.image')
+  return t('lcs.common.image')
 })
 
 const helpText = computed(() => {
   if (props.help) return props.help
   if (props.helpKey && te(props.helpKey)) return t(props.helpKey)
-  return t('docetra.common.imageHelp', { size: props.maxSizeMb })
+  return t('lcs.common.imageHelp', { size: props.maxSizeMb })
 })
 
 function openPicker() {
@@ -44,11 +44,11 @@ function clear() {
 
 async function readFile(file: File) {
   if (!SAFE_RASTER_IMAGE_TYPES.includes(file.type as (typeof SAFE_RASTER_IMAGE_TYPES)[number])) {
-    toast.add({ title: t('docetra.common.imageInvalidType'), color: 'error' })
+    toast.add({ title: t('lcs.common.imageInvalidType'), color: 'error' })
     return
   }
   if (!isSafeRasterImage(file, props.maxSizeMb)) {
-    toast.add({ title: t('docetra.common.imageTooLarge', { size: props.maxSizeMb }), color: 'error' })
+    toast.add({ title: t('lcs.common.imageTooLarge', { size: props.maxSizeMb }), color: 'error' })
     return
   }
   const reader = new FileReader()
@@ -101,14 +101,14 @@ size="xs"
 color="neutral"
 variant="soft"
 @click.stop="openPicker">
-            {{ t('docetra.common.replace') }}
+            {{ t('lcs.common.replace') }}
           </UButton>
           <UButton
 size="xs"
 color="error"
 variant="ghost"
 @click.stop="clear">
-            {{ t('docetra.common.remove') }}
+            {{ t('lcs.common.remove') }}
           </UButton>
         </div>
       </template>
@@ -117,7 +117,7 @@ variant="ghost"
           <UIcon name="i-lucide-image-up" class="size-6 text-primary" />
         </div>
         <p class="text-sm font-medium text-highlighted">
-          {{ t('docetra.common.dropImage') }}
+          {{ t('lcs.common.dropImage') }}
         </p>
       </template>
     </div>

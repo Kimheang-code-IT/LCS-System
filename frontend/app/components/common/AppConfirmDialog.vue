@@ -30,7 +30,7 @@ const { t, te } = useI18n()
 const resolvedTitle = computed(() => {
   if (props.title) return props.title
   if (props.titleKey && te(props.titleKey)) return t(props.titleKey)
-  return t('docetra.common.confirmTitle')
+  return t('lcs.common.confirmTitle')
 })
 
 const resolvedDescription = computed(() => {
@@ -42,13 +42,13 @@ const resolvedDescription = computed(() => {
 const resolvedConfirm = computed(() => {
   if (props.confirmLabel) return props.confirmLabel
   if (props.confirmLabelKey && te(props.confirmLabelKey)) return t(props.confirmLabelKey)
-  return t('docetra.common.confirm')
+  return t('lcs.common.confirm')
 })
 
 const resolvedCancel = computed(() => {
   if (props.cancelLabel) return props.cancelLabel
   if (props.cancelLabelKey && te(props.cancelLabelKey)) return t(props.cancelLabelKey)
-  return t('docetra.common.cancel')
+  return t('lcs.common.cancel')
 })
 
 function onCancel() {

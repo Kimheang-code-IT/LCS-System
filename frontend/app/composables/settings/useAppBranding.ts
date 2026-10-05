@@ -1,4 +1,4 @@
-import type { AppBranding, AppInfo } from '~/types/docetra/settings'
+import type { AppBranding, AppInfo } from '~/types/lcs/settings'
 
 const DEFAULT_PRIMARY = '#e8472a'
 

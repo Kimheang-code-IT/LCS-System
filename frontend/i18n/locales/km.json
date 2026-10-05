@@ -1475,6 +1475,7 @@
       "chartFilters": {
         "thisYear": "ឆ្នាំនេះ",
         "lastYear": "ឆ្នាំមុន",
+        "today": "ថ្ងៃនេះ",
         "monthly": "ប្រចាំខែ",
         "quarterly": "ប្រចាំត្រីមាស",
         "yearly": "ប្រចាំឆ្នាំ",
@@ -1676,9 +1677,7 @@
     },
     "auth": {
       "demoHint": "សាកល្បង: admin{'@'}gmail.com / 123456 · ops.bavet{'@'}lcs.local · finance{'@'}lcs.local · auditor{'@'}lcs.local · demo{'@'}other.local"
-    }
-  },
-  "docetra": {
+    },
     "brand": {
       "name": "LCS Freight",
       "tagline": "ប្រព័ន្ធគ្រប់គ្រងដឹកជញ្ជូនទំនិញ",

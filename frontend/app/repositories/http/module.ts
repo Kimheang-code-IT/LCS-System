@@ -3,7 +3,7 @@ import type { FreightRecord } from '~/types/freight/record'
 import type { ModuleRepository } from '~/repositories/contracts/module'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
-import type { ApiResponse } from '~/types/docetra/common'
+import type { ApiResponse } from '~/types/lcs/common'
 import type { LcsPaged } from '~/types/lcs/domain'
 import { stripOfficialNumberFields } from '~/utils/lcs/sequences'
 

@@ -17,7 +17,7 @@ function firstExistingHelp(t: Translate, te: TranslateExists, keys: string[]): s
 
 /**
  * ERPNext-style helper text under every form field.
- * Order: literal help → helpKey → freight.fieldHelp → docetra.fieldHelp → calculated → default.
+ * Order: literal help → helpKey → freight.fieldHelp → lcs.fieldHelp → calculated → default.
  */
 export function resolveFormFieldHelp(
   field: FormFieldHelpSource,
@@ -32,9 +32,9 @@ export function resolveFormFieldHelp(
   const leaf = key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key
   const found = firstExistingHelp(t, te, [
     `freight.fieldHelp.${key}`,
-    `docetra.fieldHelp.${key}`,
+    `lcs.fieldHelp.${key}`,
     `freight.fieldHelp.${leaf}`,
-    `docetra.fieldHelp.${leaf}`,
+    `lcs.fieldHelp.${leaf}`,
   ])
   if (found) return found
 
@@ -43,7 +43,7 @@ export function resolveFormFieldHelp(
   }
 
   const label = String(field.label || leaf || key || '').trim()
-  if (te('docetra.fieldHelp.default')) return t('docetra.fieldHelp.default', { field: label })
+  if (te('lcs.fieldHelp.default')) return t('lcs.fieldHelp.default', { field: label })
   return t('freight.ui.enterFieldHelp', { field: label })
 }
 

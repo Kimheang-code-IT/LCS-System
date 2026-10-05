@@ -1,6 +1,6 @@
 import type { AppConfigRepository, AppInfoRepository, BackupRepository } from '~/repositories/contracts/settings'
-import type { ApiResponse } from '~/types/docetra/common'
-import type { AppConfig, AppInfo, BackupRunSummary, BackupStatus, ConnectionStatus } from '~/types/docetra/settings'
+import type { ApiResponse } from '~/types/lcs/common'
+import type { AppConfig, AppInfo, BackupRunSummary, BackupStatus, ConnectionStatus } from '~/types/lcs/settings'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 import { unwrapApiData } from './response'
 

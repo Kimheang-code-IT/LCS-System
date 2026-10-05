@@ -1,4 +1,4 @@
-import type { ApiResponse, FieldOption } from '~/types/docetra/common'
+import type { ApiResponse, FieldOption } from '~/types/lcs/common'
 
 const OPTIONS_CACHE_TTL_MS = 60_000
 const optionsCache = new Map<string, {

@@ -8,7 +8,6 @@ import type { DatePickerGranularity } from '~/utils/date-picker'
 import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref, revokeFilePreview, useFileAttachments } from '~/utils/freight/attachments'
 import { containerPaymentAmounts } from '~/utils/freight/job-containers'
 import { fileTypeIcon } from '~/utils/file-icon'
-import TableLineTableColumnsCell from '~/components/table/LineTableColumnsCell.vue'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
@@ -59,7 +58,6 @@ const TableIcon = UIcon as Component
 const TableInput = UInput as Component
 const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
-const TableColumnsCell = TableLineTableColumnsCell as Component
 const TableReferenceSelect = CommonAppReferenceSelect as Component
 
 const isFileTable = computed(() => props.table.kind === 'files' || props.table.key === 'attachments')
@@ -380,13 +378,6 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'disabled': props.disabled || column.computed,
             'size': cellSize,
             'aria-label': fieldLabel(column),
-            'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
-          })
-        }
-        if (column.type === 'table-columns') {
-          return h(TableColumnsCell, {
-            modelValue: row.original[column.key],
-            disabled: props.disabled,
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
           })
         }

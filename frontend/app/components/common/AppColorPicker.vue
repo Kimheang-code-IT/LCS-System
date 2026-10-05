@@ -15,7 +15,7 @@ const { t, te } = useI18n()
 const labelText = computed(() => {
   if (props.label) return props.label
   if (props.labelKey && te(props.labelKey)) return t(props.labelKey)
-  return t('docetra.common.color')
+  return t('lcs.common.color')
 })
 
 const PRESETS = [

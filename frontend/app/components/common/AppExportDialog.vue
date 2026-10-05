@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExportFieldOption, ExportRequest, ExportScope } from '~/types/docetra/export'
+import type { ExportFieldOption, ExportRequest, ExportScope } from '~/types/lcs/export'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -24,10 +24,10 @@ const scope = ref<ExportScope>('all_matching')
 const selectedFields = ref<string[]>([])
 
 const scopeItems = computed(() => [
-  { label: t('docetra.exportDialog.allMatching'), value: 'all_matching' },
-  { label: t('docetra.exportDialog.currentPage'), value: 'current_page' },
+  { label: t('lcs.exportDialog.allMatching'), value: 'all_matching' },
+  { label: t('lcs.exportDialog.currentPage'), value: 'current_page' },
   {
-    label: t('docetra.exportDialog.selectedRows', { n: props.selectedCount }),
+    label: t('lcs.exportDialog.selectedRows', { n: props.selectedCount }),
     value: 'selected',
     disabled: props.selectedCount < 1,
   },
@@ -71,8 +71,8 @@ function submit() {
 <template>
   <UModal
     v-model:open="open"
-    :title="$t('docetra.exportDialog.title')"
-    :description="$t('docetra.exportDialog.description')"
+    :title="$t('lcs.exportDialog.title')"
+    :description="$t('lcs.exportDialog.description')"
     :dismissible="false"
     :close="{ color: 'primary', variant: 'outline', class: 'rounded-full' }"
     :ui="{ content: 'w-[calc(100%-2rem)] max-w-2xl sm:max-w-2xl' }"
@@ -81,13 +81,13 @@ function submit() {
       <div class="space-y-5">
         <div>
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormField :label="$t('docetra.exportDialog.startDate')">
+            <UFormField :label="$t('lcs.exportDialog.startDate')">
               <CommonAppInputDate
                 v-model="startDate"
                 class="w-full"
               />
             </UFormField>
-            <UFormField :label="$t('docetra.exportDialog.endDate')">
+            <UFormField :label="$t('lcs.exportDialog.endDate')">
               <CommonAppInputDate
                 v-model="endDate"
                 class="w-full"
@@ -95,14 +95,14 @@ function submit() {
             </UFormField>
           </div>
           <p v-if="invalidRange" class="mt-1 text-xs text-error">
-            {{ $t('docetra.exportDialog.invalidRange') }}
+            {{ $t('lcs.exportDialog.invalidRange') }}
           </p>
           <p v-else class="mt-1 text-xs text-muted">
-            {{ $t('docetra.exportDialog.dateRangeHelp') }}
+            {{ $t('lcs.exportDialog.dateRangeHelp') }}
           </p>
         </div>
 
-        <UFormField :label="$t('docetra.exportDialog.scope')" :help="$t('docetra.exportDialog.scopeHelp')">
+        <UFormField :label="$t('lcs.exportDialog.scope')" :help="$t('lcs.exportDialog.scopeHelp')">
           <USelect
             v-model="scope"
             :items="scopeItems"
@@ -113,9 +113,9 @@ function submit() {
 
         <fieldset v-if="fields.length" class="rounded-lg border border-default p-3">
           <legend class="px-1 text-sm font-medium text-highlighted">
-            {{ $t('docetra.exportDialog.fields') }}
+            {{ $t('lcs.exportDialog.fields') }}
           </legend>
-          <p class="mb-3 text-xs text-muted">{{ $t('docetra.exportDialog.fieldsHint') }}</p>
+          <p class="mb-3 text-xs text-muted">{{ $t('lcs.exportDialog.fieldsHint') }}</p>
           <div class="grid gap-2 sm:grid-cols-2">
             <UCheckbox
               v-for="field in fields"
@@ -126,7 +126,7 @@ function submit() {
             />
           </div>
           <p v-if="noFields" class="mt-2 text-xs text-error">
-            {{ $t('docetra.exportDialog.fieldRequired') }}
+            {{ $t('lcs.exportDialog.fieldRequired') }}
           </p>
         </fieldset>
       </div>

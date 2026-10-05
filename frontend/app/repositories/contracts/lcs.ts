@@ -87,7 +87,7 @@ export type DashboardSummary = {
     expense: number
   }
   charts: {
-    revenueExpense: Array<{ month: string, revenue: number, expense: number }>
+    revenueExpense: Array<{ period: string, revenue: number, expense: number }>
     ordersByStatus: Array<{ status: string, count: number }>
     receivablesAging: Array<{ key: string, amount: number }>
     payablesAging: Array<{ key: string, amount: number }>
@@ -98,7 +98,7 @@ export type DashboardSummary = {
 }
 
 export interface ReportsRepository {
-  dashboard: () => Promise<DashboardSummary>
+  dashboard: (granularity?: 'day' | 'month' | 'year') => Promise<DashboardSummary>
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>
   profitability: () => Promise<FreightRecord[]>

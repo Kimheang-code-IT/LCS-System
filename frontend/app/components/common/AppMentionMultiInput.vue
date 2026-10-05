@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FieldOption } from '~/types/docetra/common'
+import type { FieldOption } from '~/types/lcs/common'
 
 const model = defineModel<string[]>({ default: () => [] })
 
@@ -107,7 +107,7 @@ function moveActive(offset: number) {
         v-model="query"
         type="text"
         class="min-w-28 flex-1 border-0 bg-transparent px-0.5 py-0.5 text-base text-highlighted outline-none placeholder:text-dimmed disabled:cursor-not-allowed"
-        :placeholder="model.length ? $t('docetra.fields.mentionSearchMore') : placeholder"
+        :placeholder="model.length ? $t('lcs.fields.mentionSearchMore') : placeholder"
         :disabled="disabled"
         autocomplete="off"
         @focus="open = true"
@@ -148,7 +148,7 @@ function moveActive(offset: number) {
         @mousedown.prevent="add(normalizedQuery)"
       >
         <UIcon name="i-lucide-plus" class="size-4" />
-        {{ $t('docetra.fields.mentionAdd', { name: normalizedQuery }) }}
+        {{ $t('lcs.fields.mentionAdd', { name: normalizedQuery }) }}
       </button>
     </div>
   </div>

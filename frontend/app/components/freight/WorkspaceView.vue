@@ -251,7 +251,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   const collection = current.value?.collection
   if (collection === 'documentSequences') {
     items[0] = {
-      label: t('docetra.rowActions.detail'),
+      label: t('lcs.rowActions.detail'),
       icon: 'i-lucide-eye',
       onSelect: () => openRow(row),
     }
@@ -479,7 +479,7 @@ async function deleteIds(ids: string[]) {
   if (!ok) return
   await moduleRecord.remove(ids)
   rowSelection.value = {}
-  toast.add({ title: t('docetra.actions.deletedItems', { n: ids.length }), color: 'success' })
+  toast.add({ title: t('lcs.actions.deletedItems', { n: ids.length }), color: 'success' })
   await refreshList()
 }
 
@@ -506,7 +506,7 @@ async function setRecordStatus(row: Record<string, unknown>, next: 'ACTIVE' | 'I
     : (next === 'ACTIVE' ? 'Active' : 'Inactive')
   await moduleRecord.update(String(row.id || ''), { ...row, status })
   rowSelection.value = {}
-  toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
+  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
   await refreshList()
 }
 

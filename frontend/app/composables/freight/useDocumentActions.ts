@@ -102,7 +102,7 @@ export function useDocumentActions(options: {
     const ok = await confirm({ kind: 'delete', count: 1 })
     if (!ok) return
     store.remove(module.value.collection, [String(model.value.id)])
-    toast({ title: t('docetra.actions.deletedItems', { n: 1 }), color: 'success' })
+    toast({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
     await navigateTo(module.value.path)
   }
 

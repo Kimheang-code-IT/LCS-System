@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DocumentTabSchema } from '~/types/docetra/common'
+import type { DocumentTabSchema } from '~/types/lcs/common'
 
 const props = defineProps<{
   tabs: DocumentTabSchema[]

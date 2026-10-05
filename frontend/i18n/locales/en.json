@@ -1475,6 +1475,7 @@
       "chartFilters": {
         "thisYear": "This Year",
         "lastYear": "Last Year",
+        "today": "Today",
         "monthly": "Monthly",
         "quarterly": "Quarterly",
         "yearly": "Yearly",
@@ -1794,9 +1795,7 @@
     },
     "auth": {
       "demoHint": "Demo: admin{'@'}gmail.com / 123456 · ops.bavet{'@'}lcs.local · finance{'@'}lcs.local · auditor{'@'}lcs.local · demo{'@'}other.local"
-    }
-  },
-  "docetra": {
+    },
     "brand": {
       "name": "LCS Freight",
       "tagline": "Freight forwarding management",

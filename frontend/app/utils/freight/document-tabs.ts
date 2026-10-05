@@ -5,7 +5,7 @@ import type {
   DocumentTabSchema,
   FieldOption,
   FieldType,
-} from '~/types/docetra/common'
+} from '~/types/lcs/common'
 import { slugify } from '~/utils/text/slug'
 import type {
   FreightField,
@@ -425,15 +425,15 @@ function rolesTabs(module: FreightModule, options: ModuleDocumentTabsOptions): D
     sections: [
       {
         id: 'main',
-        titleKey: 'docetra.sections.main',
+        titleKey: 'lcs.sections.main',
         fields: mapFields(module.fields, options.readOnlyKeys),
       },
       {
         id: 'permissions',
-        titleKey: 'docetra.sections.permissions',
+        titleKey: 'lcs.sections.permissions',
         fields: [{
           key: 'permissionRows',
-          labelKey: 'docetra.sections.permissions',
+          labelKey: 'lcs.sections.permissions',
           type: 'permission-matrix',
           colSpan: 2,
         }],

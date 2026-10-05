@@ -9,7 +9,7 @@ import type {
 } from '~/repositories/contracts/lcs'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
-import type { ApiResponse } from '~/types/docetra/common'
+import type { ApiResponse } from '~/types/lcs/common'
 import type { FreightRecord } from '~/types/freight/record'
 import type { LcsPaged } from '~/types/lcs/domain'
 import { stripOfficialNumberFields } from '~/utils/lcs/sequences'
@@ -140,7 +140,7 @@ export function createHttpUiSchemaRepository(): UiSchemaRepository {
 export function createHttpReportsRepository(): import('~/repositories/contracts/lcs').ReportsRepository {
   const api = useApi()
   return {
-    dashboard: async () => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD)),
+    dashboard: async granularity => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD, { query: { granularity: granularity ?? 'month' } })),
     receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
     payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
     profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),

@@ -1098,5 +1098,5 @@ are intentionally excluded pending entity-specific lifecycle rules.
 
 | Locale | Top-level namespaces |
 |---|---|
-| `en.json` | `freight`, `lcs`, `docetra`, `actions`, `common`, `components`, `pages`, `settings`, `api`, `app` |
-| `km.json` | `freight`, `lcs`, `docetra`, `actions`, `common`, `api`, `app`, `components`, `pages`, `settings` |
+| `en.json` | `freight`, `lcs`, `actions`, `common`, `components`, `pages`, `settings`, `api`, `app` |
+| `km.json` | `freight`, `lcs`, `actions`, `common`, `api`, `app`, `components`, `pages`, `settings` |

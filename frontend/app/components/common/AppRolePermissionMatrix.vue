@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AppRolePermissionRow } from '~/types/docetra/entities'
+import type { AppRolePermissionRow } from '~/types/lcs/entities'
 import {
   ROLE_DOCUMENT_TYPES,
   ROLE_PERMISSION_ACTIONS,
@@ -46,7 +46,7 @@ function documentTypeLabel(value: string) {
 }
 
 function actionLabel(action: string) {
-  const key = `docetra.rolePermissions.actions.${action}`
+  const key = `lcs.rolePermissions.actions.${action}`
   return te(key) ? t(key) : action
 }
 
@@ -97,9 +97,9 @@ function toggleAll(checked: boolean) {
   <div class="overflow-hidden rounded-lg border border-default">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-default bg-elevated/70 px-3 py-2.5">
       <div>
-        <p class="text-sm font-semibold text-highlighted">{{ $t('docetra.rolePermissions.matrixTitle') }}</p>
+        <p class="text-sm font-semibold text-highlighted">{{ $t('lcs.rolePermissions.matrixTitle') }}</p>
         <p class="text-xs text-muted">
-          {{ $t('docetra.rolePermissions.grantedCount', { granted: grantedCount, total: totalCount }) }}
+          {{ $t('lcs.rolePermissions.grantedCount', { granted: grantedCount, total: totalCount }) }}
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -111,7 +111,7 @@ function toggleAll(checked: boolean) {
           :disabled="disabled || grantedCount === 0"
           @click="toggleAll(false)"
         >
-          {{ $t('docetra.rolePermissions.clearAll') }}
+          {{ $t('lcs.rolePermissions.clearAll') }}
         </UButton>
         <UButton
           color="error"
@@ -121,7 +121,7 @@ function toggleAll(checked: boolean) {
           :disabled="disabled || allGranted"
           @click="toggleAll(true)"
         >
-          {{ $t('docetra.rolePermissions.grantAll') }}
+          {{ $t('lcs.rolePermissions.grantAll') }}
         </UButton>
       </div>
     </div>
@@ -134,14 +134,14 @@ function toggleAll(checked: boolean) {
               <UCheckbox
                 :model-value="allGranted ? true : someGranted ? 'indeterminate' : false"
                 :disabled="disabled"
-                :aria-label="$t('docetra.rolePermissions.grantAll')"
+                :aria-label="$t('lcs.rolePermissions.grantAll')"
                 @update:model-value="toggleAll($event === true)"
               />
             </th>
             <th class="w-[22%] whitespace-nowrap px-3 py-2.5 font-semibold">
-              {{ $t('docetra.rolePermissions.documentType') }}
+              {{ $t('lcs.rolePermissions.documentType') }}
             </th>
-            <th class="px-3 py-2.5 font-semibold">{{ $t('docetra.fields.permissions') }}</th>
+            <th class="px-3 py-2.5 font-semibold">{{ $t('lcs.fields.permissions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -150,7 +150,7 @@ function toggleAll(checked: boolean) {
               <UCheckbox
                 :model-value="row.actions.length === allowedActions(row.documentType).length"
                 :disabled="disabled"
-                :aria-label="$t('docetra.rolePermissions.toggleRow', { entity: documentTypeLabel(row.documentType) })"
+                :aria-label="$t('lcs.rolePermissions.toggleRow', { entity: documentTypeLabel(row.documentType) })"
                 @update:model-value="toggleRow(row.documentType, $event)"
               />
             </td>
@@ -182,7 +182,7 @@ function toggleAll(checked: boolean) {
     </div>
 
     <div class="border-t border-default bg-muted/30 px-3 py-2 text-xs text-muted">
-      {{ $t('docetra.rolePermissions.dependencyHint') }}
+      {{ $t('lcs.rolePermissions.dependencyHint') }}
     </div>
   </div>
 </template>

@@ -110,16 +110,11 @@ const detailItems = computed(() => [
         <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
           {{ groupTitle(section.title) }}
         </h4>
-        <div class="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
-          <FreightFieldInput
-            v-for="field in section.fields"
-            :key="field.key"
-            :field="field"
-            :model-value="model[field.key]"
-            :class="field.colSpan === 2 || field.type === 'textarea' ? 'sm:col-span-2' : ''"
-            @update:model-value="emit('update:field', field.key, $event)"
-          />
-        </div>
+        <DocumentAppFieldGrid
+          :fields="section.fields"
+          :model="model"
+          @update="(key, value) => emit('update:field', key, value)"
+        />
       </section>
     </div>
 

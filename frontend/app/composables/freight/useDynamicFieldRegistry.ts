@@ -1,4 +1,4 @@
-import type { DocumentFieldSchema } from '~/types/docetra/common'
+import type { DocumentFieldSchema } from '~/types/lcs/common'
 
 export type DynamicFieldKind =
   | 'permissionMatrix'

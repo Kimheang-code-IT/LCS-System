@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TimelineItem } from '@nuxt/ui'
-import type { ActivityEvent, EntityComment, PersonSummary } from '~/types/docetra/common'
+import type { ActivityEvent, EntityComment, PersonSummary } from '~/types/lcs/common'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = withDefaults(defineProps<{
@@ -39,13 +39,13 @@ const { t } = useI18n()
 const { relativeTime } = useAppLocalization()
 
 const relativeLabels = computed(() => ({
-  justNow: t('docetra.meta.justNow'),
-  minuteAgo: t('docetra.meta.minuteAgo'),
-  minutesAgo: (n: number) => t('docetra.meta.minutesAgo', { n }),
-  hourAgo: t('docetra.meta.hourAgo'),
-  hoursAgo: (n: number) => t('docetra.meta.hoursAgo', { n }),
-  dayAgo: t('docetra.meta.dayAgo'),
-  daysAgo: (n: number) => t('docetra.meta.daysAgo', { n }),
+  justNow: t('lcs.meta.justNow'),
+  minuteAgo: t('lcs.meta.minuteAgo'),
+  minutesAgo: (n: number) => t('lcs.meta.minutesAgo', { n }),
+  hourAgo: t('lcs.meta.hourAgo'),
+  hoursAgo: (n: number) => t('lcs.meta.hoursAgo', { n }),
+  dayAgo: t('lcs.meta.dayAgo'),
+  daysAgo: (n: number) => t('lcs.meta.daysAgo', { n }),
 }))
 
 function formatRelativeStamp(value: string) {
@@ -73,7 +73,7 @@ const timelineItems = computed<ActivityTimelineItem[]>(() => {
     at: new Date(comment.createdAt).getTime(),
     comment,
     icon: 'i-lucide-message-square',
-    title: `${personLabel(comment.author.name)} ${t('docetra.comments.commented')}`,
+    title: `${personLabel(comment.author.name)} ${t('lcs.comments.commented')}`,
     date: formatRelativeStamp(comment.createdAt),
     slot: 'comment' as const,
   }))
@@ -100,9 +100,9 @@ const timelineItems = computed<ActivityTimelineItem[]>(() => {
 
 function personLabel(name?: string) {
   const current = props.currentUser?.name
-  if (!name) return t('docetra.activity.system')
-  if (current && name === current) return t('docetra.meta.you')
-  if (name === 'You' || name === t('docetra.meta.you')) return t('docetra.meta.you')
+  if (!name) return t('lcs.activity.system')
+  if (current && name === current) return t('lcs.meta.you')
+  if (name === 'You' || name === t('lcs.meta.you')) return t('lcs.meta.you')
   return name
 }
 
@@ -123,13 +123,13 @@ function eventPrefix(event: ActivityEvent) {
   const action = event.action.toLowerCase()
 
   if (action.includes('attach')) {
-    return `${actor} ${t('docetra.activity.attached')}`
+    return `${actor} ${t('lcs.activity.attached')}`
   }
   if (action.includes('creat')) {
-    return `${actor} ${t('docetra.activity.createdThis')}`
+    return `${actor} ${t('lcs.activity.createdThis')}`
   }
   if (action.includes('updat') || action.includes('edit')) {
-    return `${actor} ${t('docetra.activity.lastEditedThis')}`
+    return `${actor} ${t('lcs.activity.lastEditedThis')}`
   }
   if (action.includes('assign')) {
     return event.summary
@@ -205,18 +205,18 @@ function commentActions(comment: EntityComment) {
     <!-- Comments -->
     <section class="space-y-3">
       <h2 class="text-base font-semibold text-highlighted">
-        {{ $t('docetra.comments.title') }}
+        {{ $t('lcs.comments.title') }}
         <span class="font-normal text-muted">({{ comments.length }})</span>
       </h2>
 
       <div v-if="showInput" class="flex items-center gap-3">
         <UAvatar
-          :alt="currentUser?.name || $t('docetra.meta.you')"
+          :alt="currentUser?.name || $t('lcs.meta.you')"
           size="sm"
         />
         <UInput
           :model-value="commentBody"
-          :placeholder="$t('docetra.comments.placeholder')"
+          :placeholder="$t('lcs.comments.placeholder')"
           color="neutral"
           variant="soft"
           size="md"
@@ -232,7 +232,7 @@ function commentActions(comment: EntityComment) {
               variant="ghost"
               size="xs"
               square
-              :aria-label="$t('docetra.confirm.submit')"
+              :aria-label="$t('lcs.confirm.submit')"
               :loading="submitting"
               :disabled="!commentBody.trim() || submitting"
               @click="onSubmit"
@@ -246,7 +246,7 @@ function commentActions(comment: EntityComment) {
     <section class="space-y-4">
       <div class="flex items-center justify-between gap-3">
         <h2 class="text-base font-semibold text-highlighted">
-          {{ $t('docetra.activity.title') }}
+          {{ $t('lcs.activity.title') }}
         </h2>
       </div>
 
@@ -315,7 +315,7 @@ function commentActions(comment: EntityComment) {
             <div v-if="editingCommentId === asFeedItem(item).comment?.id" class="space-y-2">
               <UTextarea
                 v-model="editingBody"
-                :placeholder="$t('docetra.comments.editPlaceholder')"
+                :placeholder="$t('lcs.comments.editPlaceholder')"
                 :rows="3"
                 autoresize
                 autofocus
@@ -347,7 +347,7 @@ function commentActions(comment: EntityComment) {
             <p v-else class="whitespace-pre-wrap text-sm text-highlighted">
               {{ asFeedItem(item).comment?.body }}
               <span v-if="asFeedItem(item).comment?.editedAt" class="ms-1 text-xs text-muted">
-                ({{ $t('docetra.comments.edited') }})
+                ({{ $t('lcs.comments.edited') }})
               </span>
             </p>
           </UCard>
@@ -379,7 +379,7 @@ function commentActions(comment: EntityComment) {
         </template>
       </UTimeline>
 
-      <p v-else class="text-sm text-muted">{{ $t('docetra.activity.empty') }}</p>
+      <p v-else class="text-sm text-muted">{{ $t('lcs.activity.empty') }}</p>
 
       <div v-if="hasMore" class="flex justify-center pt-2">
         <UButton
@@ -389,7 +389,7 @@ function commentActions(comment: EntityComment) {
           :loading="loadingMore"
           @click="emit('loadMore')"
         >
-          {{ $t('docetra.actions.loadMore') }}
+          {{ $t('lcs.actions.loadMore') }}
         </UButton>
       </div>
     </section>

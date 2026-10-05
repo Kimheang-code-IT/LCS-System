@@ -2,7 +2,7 @@
  * Cmd+K global search: keyword / semantic modes, Ask AI on demand, source links.
  */
 import type { CommandPaletteItem, CommandPaletteGroup } from '@nuxt/ui'
-import type { SearchHit, SearchMode } from '~/types/docetra/search'
+import type { SearchHit, SearchMode } from '~/types/lcs/search'
 import { useMenu } from '~/composables/layout/useMenu'
 import { useSearch } from '~/composables/search/useSearch'
 
@@ -129,8 +129,8 @@ export function useGlobalSearch() {
     if (!searchTerm.value.trim()) return []
     return [{
       id: 'action:ask-ai',
-      label: asking.value ? t('docetra.search.asking') : t('docetra.search.askAi'),
-      description: t('docetra.search.askAiHint'),
+      label: asking.value ? t('lcs.search.asking') : t('lcs.search.askAi'),
+      description: t('lcs.search.askAiHint'),
       icon: 'i-lucide-sparkles',
       disabled: asking.value || loading.value,
       onSelect: async (e: Event) => {
@@ -144,7 +144,7 @@ export function useGlobalSearch() {
     aiCitations.value.map(hit => ({
       id: `cite:${hit.id}`,
       label: hit.title,
-      description: `${t('docetra.search.source')}: ${hit.sourceLabel} · ${hit.url}`,
+      description: `${t('lcs.search.source')}: ${hit.sourceLabel} · ${hit.url}`,
       icon: 'i-lucide-link',
       to: hit.url,
       onSelect: () => {
@@ -160,7 +160,7 @@ export function useGlobalSearch() {
     if (askAiItems.value.length) {
       out.push({
         id: 'ask-ai',
-        label: t('docetra.search.askAiGroup'),
+        label: t('lcs.search.askAiGroup'),
         ignoreFilter: true,
         items: askAiItems.value,
       })
@@ -169,11 +169,11 @@ export function useGlobalSearch() {
     if (aiAnswer.value) {
       out.push({
         id: 'ai-answer',
-        label: t('docetra.search.aiAnswer'),
+        label: t('lcs.search.aiAnswer'),
         ignoreFilter: true,
         items: [{
           id: 'ai-answer-body',
-          label: aiAnswer.value.split('\n')[0] || t('docetra.search.aiAnswer'),
+          label: aiAnswer.value.split('\n')[0] || t('lcs.search.aiAnswer'),
           description: aiAnswer.value,
           icon: 'i-lucide-bot',
           disabled: true,
@@ -182,7 +182,7 @@ export function useGlobalSearch() {
       if (citationItems.value.length) {
         out.push({
           id: 'ai-sources',
-          label: t('docetra.search.sources'),
+          label: t('lcs.search.sources'),
           ignoreFilter: true,
           items: citationItems.value,
         })
@@ -192,7 +192,7 @@ export function useGlobalSearch() {
     if (resultItems.value.length) {
       out.push({
         id: 'records-files',
-        label: t('docetra.search.recordsAndFiles'),
+        label: t('lcs.search.recordsAndFiles'),
         ignoreFilter: true,
         items: resultItems.value,
       })
@@ -209,8 +209,8 @@ export function useGlobalSearch() {
 
   const placeholder = computed(() =>
     mode.value === 'semantic'
-      ? t('docetra.search.placeholderSemantic')
-      : t('docetra.search.placeholderKeyword'),
+      ? t('lcs.search.placeholderSemantic')
+      : t('lcs.search.placeholderKeyword'),
   )
 
   return {

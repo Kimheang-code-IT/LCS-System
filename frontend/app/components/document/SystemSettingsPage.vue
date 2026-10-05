@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { AppConfig } from '~/types/docetra/settings'
-import type { ConnectionStatusFieldValue } from '~/types/docetra/common'
+import type { AppConfig } from '~/types/lcs/settings'
+import type { ConnectionStatusFieldValue } from '~/types/lcs/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
@@ -34,11 +34,11 @@ async function runBackup() {
   try {
     if (model.value) await appConfig.update(model.value)
     const run = await backup.run()
-    toast.add({ title: t('docetra.settings.backup.runStarted', { id: run.id }), color: 'success' })
+    toast.add({ title: t('lcs.settings.backup.runStarted', { id: run.id }), color: 'success' })
   }
   catch (error) {
     const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('docetra.settings.backup.runFailed'), color: 'error' })
+    toast.add({ title: message || t('lcs.settings.backup.runFailed'), color: 'error' })
   }
   finally {
     runningBackup.value = false
@@ -58,7 +58,7 @@ async function testBackupConnection() {
   }
   catch (error) {
     const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('docetra.settings.backup.testFailed'), color: 'error' })
+    toast.add({ title: message || t('lcs.settings.backup.testFailed'), color: 'error' })
   }
   finally {
     testingBackup.value = false
@@ -73,14 +73,14 @@ async function submitRestore() {
     restoreOpen.value = false
     restorePhrase.value = ''
     toast.add({
-      title: t('docetra.settings.backup.restoreDone', { restored: result.restored }),
+      title: t('lcs.settings.backup.restoreDone', { restored: result.restored }),
       color: 'success',
     })
     await load()
   }
   catch (error) {
     const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('docetra.settings.backup.restoreFailed'), color: 'error' })
+    toast.add({ title: message || t('lcs.settings.backup.restoreFailed'), color: 'error' })
   }
   finally {
     restoringBackup.value = false
@@ -100,12 +100,12 @@ async function submitReset() {
     resetPhrase.value = ''
     auth.clearSession()
     await setup.refresh(true)
-    toast.add({ title: t('docetra.settings.resetDataDone'), color: 'success' })
-    await navigateTo('/setup', { replace: true })
+    toast.add({ title: t('lcs.settings.resetDataDone'), color: 'success' })
+    await navigateTo('/auth/setup', { replace: true })
   }
   catch (error) {
     const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('docetra.settings.resetDataFailed'), color: 'error' })
+    toast.add({ title: message || t('lcs.settings.resetDataFailed'), color: 'error' })
   }
   finally {
     resetting.value = false
@@ -125,7 +125,7 @@ async function load() {
     model.value = await appConfig.get()
   }
   catch (e) {
-    toast.add({ title: e instanceof Error ? e.message : t('docetra.common.loadFailed'), color: 'error' })
+    toast.add({ title: e instanceof Error ? e.message : t('lcs.common.loadFailed'), color: 'error' })
   }
   finally {
     pending.value = false
@@ -150,7 +150,7 @@ function fieldValue(key: string): unknown {
       message: model.value.telegram.lastTestMessage,
       lastTestedAt: model.value.telegram.lastTestedAt,
       details: model.value.telegram.botUsername
-        ? [{ label: t('docetra.settings.botUsername'), value: model.value.telegram.botUsername }]
+        ? [{ label: t('lcs.settings.botUsername'), value: model.value.telegram.botUsername }]
         : [],
     }
     return value
@@ -178,8 +178,8 @@ async function setFieldValue(key: string, value: unknown) {
     if (value === true) {
       const ok = await confirm({
         kind: 'update',
-        titleKey: 'docetra.settings.confirmModeTitle',
-        descriptionKey: 'docetra.settings.confirmModeHelp',
+        titleKey: 'lcs.settings.confirmModeTitle',
+        descriptionKey: 'lcs.settings.confirmModeHelp',
         confirmColor: 'warning',
       })
       if (!ok) return
@@ -205,10 +205,10 @@ async function save() {
     model.value = await appConfig.update(model.value)
     appLocalization.apply(model.value.localization)
     usePreferencesStore().syncLocaleWithConfig()
-    toast.add({ title: t('docetra.common.saved'), color: 'success' })
+    toast.add({ title: t('lcs.common.saved'), color: 'success' })
   }
   catch (e) {
-    toast.add({ title: e instanceof Error ? e.message : t('docetra.common.saveFailed'), color: 'error' })
+    toast.add({ title: e instanceof Error ? e.message : t('lcs.common.saveFailed'), color: 'error' })
   }
   finally {
     saving.value = false
@@ -253,7 +253,7 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
 
   if (activeTab.value === 'email' && canConfigure.value) {
     actions.push({
-      label: t('docetra.connection.test'),
+      label: t('lcs.connection.test'),
       icon: 'i-lucide-plug-zap',
       disabled: testingEmail.value,
       onSelect: () => { void testEmail() },
@@ -261,7 +261,7 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   }
   if (activeTab.value === 'telegram' && canConfigure.value) {
     actions.push({
-      label: t('docetra.connection.test'),
+      label: t('lcs.connection.test'),
       icon: 'i-lucide-plug-zap',
       disabled: testingTelegram.value,
       onSelect: () => { void testTelegram() },
@@ -269,13 +269,13 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   }
   if (activeTab.value === 'backup' && canManageBackup.value) {
     actions.push({
-      label: t('docetra.connection.test'),
+      label: t('lcs.connection.test'),
       icon: 'i-lucide-plug-zap',
       disabled: testingBackup.value,
       onSelect: () => { void testBackupConnection() },
     })
     actions.push({
-      label: t('docetra.settings.backup.runNow'),
+      label: t('lcs.settings.backup.runNow'),
       icon: 'i-lucide-play',
       disabled: runningBackup.value,
       onSelect: () => { void runBackup() },
@@ -283,14 +283,14 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   }
   if (activeTab.value === 'backup' && canReset.value) {
     actions.push({
-      label: t('docetra.settings.backup.restore'),
+      label: t('lcs.settings.backup.restore'),
       icon: 'i-lucide-history',
       onSelect: () => { restoreOpen.value = true },
     })
   }
   if (canReset.value) {
     danger.push({
-      label: t('docetra.settings.resetData'),
+      label: t('lcs.settings.resetData'),
       icon: 'i-lucide-trash-2',
       color: 'error',
       onSelect: () => { resetOpen.value = true },
@@ -324,7 +324,7 @@ useAppPageTitle(() => t('freight.pages.settings'))
 
   <UModal
     v-model:open="resetOpen"
-    :title="t('docetra.settings.resetDataConfirmTitle')"
+    :title="t('lcs.settings.resetDataConfirmTitle')"
     :dismissible="!resetting"
   >
     <template #body>
@@ -333,12 +333,12 @@ useAppPageTitle(() => t('freight.pages.settings'))
           color="error"
           variant="subtle"
           icon="i-lucide-triangle-alert"
-          :description="t('docetra.settings.resetDataHint')"
+          :description="t('lcs.settings.resetDataHint')"
         />
-        <p class="text-sm text-muted">{{ t('docetra.settings.resetDataConfirmHelp') }}</p>
+        <p class="text-sm text-muted">{{ t('lcs.settings.resetDataConfirmHelp') }}</p>
         <UInput
           v-model="resetPhrase"
-          :placeholder="t('docetra.settings.resetDataPlaceholder')"
+          :placeholder="t('lcs.settings.resetDataPlaceholder')"
           class="w-full"
           autofocus
         />
@@ -349,13 +349,13 @@ useAppPageTitle(() => t('freight.pages.settings'))
         <UButton
           color="neutral"
           variant="ghost"
-          :label="t('docetra.common.cancel')"
+          :label="t('lcs.common.cancel')"
           :disabled="resetting"
           @click="resetOpen = false; resetPhrase = ''"
         />
         <UButton
           color="error"
-          :label="t('docetra.settings.resetDataConfirm')"
+          :label="t('lcs.settings.resetDataConfirm')"
           :loading="resetting"
           :disabled="resetPhrase.trim().toUpperCase() !== 'RESET'"
           @click="submitReset"
@@ -366,7 +366,7 @@ useAppPageTitle(() => t('freight.pages.settings'))
 
   <UModal
     v-model:open="restoreOpen"
-    :title="t('docetra.settings.backup.restoreConfirmTitle')"
+    :title="t('lcs.settings.backup.restoreConfirmTitle')"
     :dismissible="!restoringBackup"
   >
     <template #body>
@@ -375,12 +375,12 @@ useAppPageTitle(() => t('freight.pages.settings'))
           color="warning"
           variant="subtle"
           icon="i-lucide-triangle-alert"
-          :description="t('docetra.settings.backup.restoreHint')"
+          :description="t('lcs.settings.backup.restoreHint')"
         />
-        <p class="text-sm text-muted">{{ t('docetra.settings.backup.restoreConfirmHelp') }}</p>
+        <p class="text-sm text-muted">{{ t('lcs.settings.backup.restoreConfirmHelp') }}</p>
         <UInput
           v-model="restorePhrase"
-          :placeholder="t('docetra.settings.backup.restorePlaceholder')"
+          :placeholder="t('lcs.settings.backup.restorePlaceholder')"
           class="w-full"
           autofocus
         />
@@ -391,13 +391,13 @@ useAppPageTitle(() => t('freight.pages.settings'))
         <UButton
           color="neutral"
           variant="ghost"
-          :label="t('docetra.common.cancel')"
+          :label="t('lcs.common.cancel')"
           :disabled="restoringBackup"
           @click="restoreOpen = false; restorePhrase = ''"
         />
         <UButton
           color="warning"
-          :label="t('docetra.settings.backup.restoreConfirm')"
+          :label="t('lcs.settings.backup.restoreConfirm')"
           :loading="restoringBackup"
           :disabled="restorePhrase.trim().toUpperCase() !== 'RESTORE'"
           @click="submitRestore"

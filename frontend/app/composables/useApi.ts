@@ -25,6 +25,9 @@ type ApiErrorPayload = {
 type ApiFetchError = Error & {
     name: string
     data?: ApiErrorPayload
+    // ofetch wraps a cancelled fetch in a FetchError and keeps the original
+    // AbortError (or TimeoutError) on the wrapped error's `cause`.
+    cause?: { name?: string }
 }
 
 // Shared across every useApi() consumer so a later request can cancel an older
@@ -47,7 +50,11 @@ let refreshAccessTokenPromise: Promise<boolean> | null = null
  */
 export function useApi() {
     const toast = useToast()
-    const { t } = useI18n()
+    // Repositories are initialized during the client startup plugin as well as
+    // from components. The Nuxt-provided global composer is valid in both
+    // contexts; `useI18n()` requires an active component setup instance.
+    const { $i18n } = useNuxtApp()
+    const t = $i18n.t
     const config = useRuntimeConfig()
     const authStore = useAuthStore()
     const activeRequests = ref(0)
@@ -146,7 +153,7 @@ export function useApi() {
                 }
                 useState<boolean | null>('setup-required').value = requiresSetup
                 if (requiresSetup) {
-                    await navigateTo('/setup', { replace: true })
+                    await navigateTo('/auth/setup', { replace: true })
                 }
                 else {
                     await navigateTo('/auth/login', { replace: true })
@@ -208,9 +215,12 @@ export function useApi() {
             })
         }
         catch (err: unknown) {
-            // Network or parsing errors
+            // Network, parsing, or cancellation errors
             const fetchError = err as ApiFetchError
-            if (fetchError.name === 'AbortError') {
+            // A request cancelled by `cancelPrevious` / `cancelRequest` surfaces as
+            // an ofetch FetchError whose cause is an AbortError. Treat it as silent
+            // instead of reporting a bogus "could not reach the server" failure.
+            if (fetchError.name === 'AbortError' || fetchError.cause?.name === 'AbortError') {
                 return Promise.reject(err)
             }
 

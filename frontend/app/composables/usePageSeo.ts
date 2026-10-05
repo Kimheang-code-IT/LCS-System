@@ -24,7 +24,7 @@ export function usePageSeo(options: PageSeoOptions) {
 
   const title = computed(() => {
     const value = toValue(options.title)?.trim()
-    return value || t('docetra.brand.name')
+    return value || t('lcs.brand.name')
   })
 
   const description = computed(() => {

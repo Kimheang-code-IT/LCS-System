@@ -18,7 +18,7 @@ const open = computed({
 const title = computed(() => {
   if (confirmState.title) return confirmState.title
   if (confirmState.titleKey && te(confirmState.titleKey)) return t(confirmState.titleKey)
-  return t('docetra.common.confirmTitle')
+  return t('lcs.common.confirmTitle')
 })
 
 const description = computed(() => {
@@ -34,7 +34,7 @@ const confirmLabel = computed(() => {
   if (confirmState.confirmLabelKey && te(confirmState.confirmLabelKey)) {
     return t(confirmState.confirmLabelKey)
   }
-  return t('docetra.common.confirm')
+  return t('lcs.common.confirm')
 })
 
 const cancelLabel = computed(() => {
@@ -42,7 +42,7 @@ const cancelLabel = computed(() => {
   if (confirmState.cancelLabelKey && te(confirmState.cancelLabelKey)) {
     return t(confirmState.cancelLabelKey)
   }
-  return t('docetra.common.cancel')
+  return t('lcs.common.cancel')
 })
 </script>
 

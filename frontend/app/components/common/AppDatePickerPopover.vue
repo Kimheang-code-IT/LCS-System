@@ -253,7 +253,7 @@ const dayRangeCalendar = computed({
       >
         <div class="min-w-34 flex-1 space-y-1">
           <label class="block text-xs font-medium text-muted">
-            {{ t('docetra.common.startTime') }}
+            {{ t('lcs.common.startTime') }}
           </label>
           <UInputTime
             v-model="rangeStartTime"
@@ -266,7 +266,7 @@ const dayRangeCalendar = computed({
         </div>
         <div class="min-w-34 flex-1 space-y-1">
           <label class="block text-xs font-medium text-muted">
-            {{ t('docetra.common.endTime') }}
+            {{ t('lcs.common.endTime') }}
           </label>
           <UInputTime
             v-model="rangeEndTime"
@@ -287,7 +287,7 @@ const dayRangeCalendar = computed({
         :disabled="disabled"
         @click="goToday"
       >
-        {{ t('docetra.common.today') }}
+        {{ t('lcs.common.today') }}
       </UButton>
     </div>
   </div>
