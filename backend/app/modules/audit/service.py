@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
-from app.core.pagination import PageParams, count_query, paged
+from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.modules.audit.models import AuditEvent
 from app.modules.auth.models import User
 
@@ -80,7 +80,9 @@ async def list_events(
     total = await count_query(session, stmt)
     rows = (
         await session.execute(
-            stmt.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
+            stmt.order_by(
+                *list_sort_orders(AuditEvent, page, AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
+            )
             .limit(page.page_size)
             .offset(page.offset)
         )

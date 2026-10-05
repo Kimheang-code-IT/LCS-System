@@ -2,7 +2,7 @@ import type {
   AiSearchAnswer,
   SearchHit,
   SearchQueryOptions,
-} from '~/types/lcs/search'
+} from '~/types/search'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 
 export function useSearch() {

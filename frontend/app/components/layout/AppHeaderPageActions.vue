@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
-import type { ExportFieldOption, ExportRequest } from '~/types/lcs/export'
+import type { ExportFieldOption, ExportRequest } from '~/types/export'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { headerListNavDisabled } from '~/utils/layout/header-actions'
 

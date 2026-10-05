@@ -1,4 +1,4 @@
-import type { DocumentFieldSchema, FieldOption, FieldType } from '~/types/lcs/common'
+import type { DocumentFieldSchema, FieldOption, FieldType } from '~/types/common'
 import { isConfigFlagYes } from '~/utils/freight/job-component-tabs'
 import {
   dynamicTableColumnsToFreightTable,

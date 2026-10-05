@@ -1,11 +1,11 @@
 import type { FreightModule } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import type { ModuleRepository } from '~/repositories/contracts/module'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
-import type { ApiResponse } from '~/types/lcs/common'
-import type { LcsPaged } from '~/types/lcs/domain'
-import { stripOfficialNumberFields } from '~/utils/lcs/sequences'
+import type { ApiResponse } from '~/types/common'
+import type { LcsPaged } from '~/types/domain'
+import { stripOfficialNumberFields } from '~/utils/freight/sequences'
 
 function asPaged(data: FreightRecord[] | LcsPaged<FreightRecord>): LcsPaged<FreightRecord> {
   if (Array.isArray(data)) {

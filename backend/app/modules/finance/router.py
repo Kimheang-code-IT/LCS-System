@@ -125,10 +125,11 @@ async def delete_financial_accounts(
 @router.get("/accounting-periods")
 @router.get("/accountingPeriods")
 async def list_periods(
+    page: PageParams = Depends(page_params),
     context: RequestContext = Depends(require_permission("accounting_period.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_periods(session, context)}
+    return {"data": await service.list_periods(session, context, page)}
 
 
 @router.get("/accounting-periods/{period_id}")

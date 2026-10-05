@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import type { PrintTemplateId } from '~/config/print-templates'
 import {
   buildPrintViewModel,

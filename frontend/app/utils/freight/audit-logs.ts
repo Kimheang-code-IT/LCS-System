@@ -1,5 +1,5 @@
 import type { FreightModule } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 const CANONICAL_COLLECTION_PATHS: Record<string, string> = {
   jobs: '/service-orders',

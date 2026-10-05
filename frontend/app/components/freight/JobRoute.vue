@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { JOB_ROUTE_TABLE } from '~/config/job-workspace-forms'
 import { jobFieldsFromPlaces, jobRoutePlaces } from '~/utils/freight/job-workspace'
 

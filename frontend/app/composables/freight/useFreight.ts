@@ -4,7 +4,7 @@ import type { AppHeaderBadge } from '~/composables/layout/useAppHeader'
 import type { FreightAction, FreightField, FreightModule, FreightRelated, FreightTable } from '~/config/freight-modules'
 import { getFreightModule } from '~/config/freight-modules'
 import { JOB_CHECKLIST_TYPES } from '~/config/freight-options'
-import { defaultJobRoutePlaces, isMoneyKey } from '~/utils/freight/job-workspace'
+import { isMoneyKey } from '~/utils/freight/job-workspace'
 import { documentSequenceTypeLabel } from '~/utils/document-sequences'
 import {
   formatDate as formatDateValue,
@@ -130,7 +130,7 @@ export function emptyFreightRecord(module: FreightModule) {
   if (module.kind === 'job') {
     record.checklist = JOB_CHECKLIST_TYPES.map(type => ({ type, required: true, status: 'Missing', remark: '' }))
     record.activity = []
-    record.places = defaultJobRoutePlaces()
+    record.places = []
     record.containerRequirements = []
     record.actualContainers = []
     record.containerPayments = []

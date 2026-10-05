@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/lcs/settings'
+import type { AppConfigLocalization } from '~/types/settings'
 import { useSettingsRepositories } from '~/repositories'
 import {
   configureFormats,

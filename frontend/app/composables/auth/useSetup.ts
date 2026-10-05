@@ -44,9 +44,10 @@ export function useSetup() {
         timeout: timeout(),
       })
       requiresSetup.value = Boolean(payloadOf(response).requiresSetup)
-    }
-    catch {
-      requiresSetup.value = false
+    } catch (cause) {
+      requiresSetup.value = null
+      console.error('Failed to determine whether first-run setup is required', cause)
+      throw cause
     }
     return requiresSetup.value
   }

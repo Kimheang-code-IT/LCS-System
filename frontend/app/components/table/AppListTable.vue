@@ -1,10 +1,21 @@
 <script setup lang="ts" generic="T extends Record<string, unknown>">
-import type { TableColumn, TableRow } from '@nuxt/ui'
-import type { PaginationState } from '@tanstack/vue-table'
+import type { DropdownMenuItem, TableColumn, TableRow } from '@nuxt/ui'
+import type { PaginationState, SortingState } from '@tanstack/vue-table'
 import { getPaginationRowModel } from '@tanstack/vue-table'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { parsePageLimit, TABLE_PAGE_SIZES } from '~/utils/pagination'
 import { listTableSelectedIds, listTableVirtualize } from '~/utils/table/list-table'
+import {
+  listSortActive,
+  listSortColumns,
+  listSortDirectionLabel,
+  listSortFromSelection,
+  type ListSortOption,
+  type ListSortSelection,
+  listSortSelectionOf,
+  listSortSummary,
+  listSortToState,
+} from '~/utils/table/list-sort'
 import { freightTableFillUi } from '~/utils/table/theme'
 
 export type ListTableEmptyAction = {
@@ -13,6 +24,13 @@ export type ListTableEmptyAction = {
   onClick: () => void
 }
 
+/** Icons live here because `app/utils` is outside the icon client-bundle scan. */
+const LIST_SORT_ICONS = {
+  idle: 'i-lucide-arrow-up-down',
+  asc: 'i-lucide-arrow-up-narrow-wide',
+  desc: 'i-lucide-arrow-down-narrow-wide',
+} as const
+
 const search = defineModel<string>('search', { default: '' })
 const dateStart = defineModel<string>('dateStart', { default: '' })
 const dateEnd = defineModel<string>('dateEnd', { default: '' })
@@ -20,6 +38,8 @@ const rowSelection = defineModel<Record<string, boolean>>('rowSelection', { defa
 const pagination = defineModel<PaginationState>('pagination', {
   default: () => ({ pageIndex: 0, pageSize: 20 }),
 })
+/** Optional parent-owned sort, so a page can seed, clear or restore the selection. */
+const sortModel = defineModel<ListSortSelection | null>('sort', { default: null })
 
 const props = withDefaults(defineProps<{
   data: T[]
@@ -57,12 +77,82 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   select: [event: Event, row: TableRow<T>]
+  /** Fired when the toolbar sort menu changes (null clears the sort). */
+  sort: [sort: ListSortSelection]
 }>()
 
 const { t } = useI18n()
 
+const sorting = ref<SortingState>([])
+const sortColumns = computed(() => listSortColumns(props.columns))
+const sortOptions = computed(() => sortColumns.value.flatMap(column => column.options))
+const activeSort = computed(() => listSortActive(sortOptions.value, sorting.value))
+const sortLabel = computed(() => t('freight.ui.sort'))
+const sortSummary = computed(() => listSortSummary(activeSort.value, t))
+const sortIcon = computed(() => {
+  if (activeSort.value?.dir === 'asc') return LIST_SORT_ICONS.asc
+  if (activeSort.value?.dir === 'desc') return LIST_SORT_ICONS.desc
+  return LIST_SORT_ICONS.idle
+})
+/** Wide tables get a type-to-narrow field so every column is not listed at once. */
+const sortFilter = computed(() => (sortColumns.value.length > 6
+  ? { placeholder: t('freight.ui.sortFilter') }
+  : false))
+
+function applySort(option: ListSortOption | null) {
+  sorting.value = listSortToState(option)
+  const next = listSortSelectionOf(option)
+  sortModel.value = next
+  emit('sort', next)
+}
+
+// Keep the TanStack state, the parent model and the columns in sync. A sort whose
+// column disappeared (e.g. the workspace switched module) is dropped everywhere.
+watch([sortModel, sortOptions], ([selection, options]) => {
+  const resolved = selection ? listSortFromSelection(options, selection) : null
+  const active = listSortActive(options, sorting.value)
+  if ((resolved?.id ?? null) === (active?.id ?? null)) return
+  sorting.value = listSortToState(resolved)
+  if (selection && !resolved) {
+    sortModel.value = null
+    emit('sort', null)
+  }
+})
+
+/**
+ * Column-first menu: the top level lists one entry per sortable column and each
+ * entry opens a submenu with just its two directions, so the user never has to
+ * scroll a flat list of every column × direction. The active column shows its
+ * current direction as a description and is tinted.
+ */
+const sortMenuItems = computed<DropdownMenuItem[][]>(() => {
+  if (!sortColumns.value.length) return []
+  const columns: DropdownMenuItem[] = sortColumns.value.map((column) => {
+    const activeOption = column.options.find(option => option.id === activeSort.value?.id)
+    return {
+      label: column.header,
+      description: activeOption ? listSortDirectionLabel(column.kind, activeOption.dir, t) : undefined,
+      color: activeOption ? 'primary' : undefined,
+      children: column.options.map((option): DropdownMenuItem => ({
+        type: 'checkbox',
+        label: listSortDirectionLabel(option.kind, option.dir, t),
+        checked: activeSort.value?.id === option.id,
+        onSelect: () => applySort(activeSort.value?.id === option.id ? null : option),
+      })),
+    }
+  })
+  return [
+    columns,
+    [{
+      label: t('freight.ui.sortDefault'),
+      icon: LIST_SORT_ICONS.idle,
+      onSelect: () => applySort(null),
+    }],
+  ]
+})
+
 const paginationOptions = computed(() => props.serverSide
-  ? { manualPagination: true, rowCount: props.serverTotal ?? props.data.length }
+  ? { manualPagination: true, manualSorting: true, rowCount: props.serverTotal ?? props.data.length }
   : { getPaginationRowModel: getPaginationRowModel() })
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
 const total = computed(() => props.serverSide ? (props.serverTotal ?? props.data.length) : props.data.length)
@@ -116,6 +206,25 @@ function onSelect(event: Event, row: TableRow<T>) {
             </template>
           </CommonAppFilterMenu>
 
+          <UDropdownMenu
+            v-if="sortMenuItems.length"
+            :items="sortMenuItems"
+            :filter="sortFilter"
+            :content="{ align: 'end' }"
+            :aria-label="sortLabel"
+          >
+            <UButton
+              :color="activeSort ? 'primary' : 'neutral'"
+              :variant="activeSort ? 'soft' : 'outline'"
+              :icon="sortIcon"
+              size="sm"
+              square
+              class="shrink-0"
+              :aria-label="`${sortLabel} · ${sortSummary}`"
+              :title="`${sortLabel} · ${sortSummary}`"
+            />
+          </UDropdownMenu>
+
           <slot name="actions" :selected-ids="selectedIds" />
         </div>
       </div>
@@ -125,6 +234,7 @@ function onSelect(event: Event, row: TableRow<T>) {
           v-if="visibleTotal"
           v-model:row-selection="rowSelection"
           v-model:pagination="pagination"
+          v-model:sorting="sorting"
           :data="data"
           :columns="columns"
           :loading="loading"

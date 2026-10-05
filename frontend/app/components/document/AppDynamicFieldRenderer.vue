@@ -3,21 +3,21 @@ import type {
   ConnectionStatusFieldValue,
   DocumentFieldSchema,
   FieldOption,
-} from '~/types/lcs/common'
+} from '~/types/common'
 import type {
   ConfigWorkflowStage,
   RecordAttribute,
   RecordTypeAttribute,
-} from '~/types/lcs/configuration'
-import type { AppRolePermissionRow } from '~/types/lcs/entities'
-import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/lcs/settings'
-import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/lcs/settings'
+} from '~/types/configuration'
+import type { AppRolePermissionRow } from '~/types/entities'
+import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/settings'
+import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/settings'
 import { createClientId } from '~/utils/client-id'
 import { TELEGRAM_DESTINATION_TYPE_OPTIONS } from '~/utils/constants/select-options'
 import { resolveFieldHelp } from '~/utils/field-help'
 import { useReferenceOptions } from '~/composables/common/useReferenceOptions'
 import type { FreightRelated, FreightTable } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { asNumber } from '~/composables/freight/useFreight'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
@@ -429,7 +429,7 @@ function removeDestination(id: string) {
     v-else-if="isLineTable && lineTable"
     class="space-y-6 md:col-span-2"
   >
-    <TableAppLineTable
+    <FreightAppLineTable
       :table="lineTable"
       :model-value="lineRows"
       :disabled="disabled || lineViewOnly"

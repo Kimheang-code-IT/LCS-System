@@ -1,3 +1,5 @@
+import { useSeoAbsoluteUrl } from '~/composables/freight/useSeoAbsoluteUrl'
+
 type PageSeoOptions = {
   /** Browser tab / document title — page name only (no brand suffix). */
   title: MaybeRefOrGetter<string>

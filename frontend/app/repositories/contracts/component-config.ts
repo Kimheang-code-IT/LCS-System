@@ -9,7 +9,7 @@ import type {
   ComponentTabGroupLink,
   ComponentTabInput,
   ComponentTabsBootstrap,
-} from '~/types/freight/component-config'
+} from '~/types/component-config'
 
 export interface ComponentGroupAttributeInput {
   attributeId?: string

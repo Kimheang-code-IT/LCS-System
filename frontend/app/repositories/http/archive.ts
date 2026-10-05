@@ -1,7 +1,7 @@
 import type { ArchiveOptions, ArchiveRecord, ArchiveRepository } from '~/repositories/contracts/archive'
 import { unwrapApiData } from '~/repositories/http/response'
-import type { ApiResponse } from '~/types/lcs/common'
-import type { LcsPaged } from '~/types/lcs/domain'
+import type { ApiResponse } from '~/types/common'
+import type { LcsPaged } from '~/types/domain'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 
 export function createHttpArchiveRepository(): ArchiveRepository {

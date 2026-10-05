@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isManualServiceChargeNumber,
   stripOfficialNumberFields,
-} from '../app/utils/lcs/sequences'
+} from '../app/utils/freight/sequences'
 
 describe('official number stripping', () => {
   it('strips a client-supplied official number so the backend allocates it', () => {

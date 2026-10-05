@@ -1,5 +1,5 @@
-import type { FreightRecord } from '~/types/freight/record'
-import type { LcsPaged } from '~/types/lcs/domain'
+import type { FreightRecord } from '~/types/record'
+import type { LcsPaged } from '~/types/domain'
 
 export interface ModuleListQuery {
   q?: string

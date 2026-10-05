@@ -5,7 +5,7 @@ import type {
   DocumentTabSchema,
   FieldOption,
   FieldType,
-} from '~/types/lcs/common'
+} from '~/types/common'
 import { slugify } from '~/utils/text/slug'
 import type {
   FreightField,
@@ -13,7 +13,7 @@ import type {
   FreightModule,
   FreightTable,
 } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 
 export const RELATED_FIELD_KEY = '__related'
 
@@ -199,8 +199,8 @@ export function lineTableField(
       table: resolved,
       compact: options.compact,
       viewOnly: VIEW_ONLY_TABLES.has(table.key),
-      showPricingTotals: table.key === 'pricingLines' || table.key === 'feeLines',
-      includeTax: table.key === 'pricingLines' || table.key === 'feeLines',
+      showPricingTotals: Boolean(table.pricing),
+      includeTax: Boolean(table.pricing),
     },
   }
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, TypeVar
@@ -58,6 +59,59 @@ def page_params(
 
 def page_meta(page: PageParams, total: int) -> dict[str, int]:
     return {"page": page.page, "page_size": page.page_size, "total": total}
+
+
+def _snake_case(name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def resolve_sort_column(model: Any, sort_by: str | None, aliases: dict[str, Any] | None = None) -> Any:
+    """Map a client sort key (camelCase API field) to a model column.
+
+    ``aliases`` maps API fields that are derived (or renamed) to either a
+    column name or an already-built ORDER BY expression. Returns the SQLAlchemy
+    column when the key is whitelisted for the model, otherwise None so callers
+    fall back to their default ordering.
+    """
+    if not sort_by:
+        return None
+    key = str(sort_by).strip()
+    if not key:
+        return None
+    if aliases and key in aliases:
+        alias = aliases[key]
+        if not isinstance(alias, str):
+            return alias
+        columns = model.__table__.columns
+        if alias in columns:
+            return columns[alias]
+        return None
+    columns = model.__table__.columns
+    candidates = (key, _snake_case(key), key.lower())
+    for candidate in candidates:
+        if candidate in columns:
+            return columns[candidate]
+    return None
+
+
+def list_sort_orders(
+    model: Any,
+    page: PageParams,
+    *default_order: Any,
+    aliases: dict[str, Any] | None = None,
+) -> list[Any]:
+    """ORDER BY expressions for a paginated list query.
+
+    Applies the user sort (``page.sort_by`` + ``page.sort_order``) when the key
+    maps to a real column of ``model``; otherwise the endpoint's default order
+    is kept. The default order is appended as a tiebreaker so pagination stays
+    stable when sorted values are equal.
+    """
+    column = resolve_sort_column(model, page.sort_by, aliases)
+    if column is None:
+        return list(default_order)
+    ordered = column.desc() if page.sort_order == "desc" else column.asc()
+    return [ordered, *default_order]
 
 
 def paged(items: list[Any], page: PageParams, total: int) -> dict[str, Any]:

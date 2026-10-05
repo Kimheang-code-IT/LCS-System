@@ -1,5 +1,5 @@
-import type { FreightRecord } from '~/types/freight/record'
-import type { LcsPaged } from '~/types/lcs/domain'
+import type { FreightRecord } from '~/types/record'
+import type { LcsPaged } from '~/types/domain'
 
 export type LcsListQuery = {
   q?: string
@@ -37,6 +37,8 @@ export interface ServiceChargeRepository {
   saveDraft: (record: FreightRecord) => Promise<FreightRecord>
   issue: (chargeId: string, idempotencyKey: string) => Promise<FreightRecord>
   createFinanceInvoice: (chargeId: string, idempotencyKey: string) => Promise<FreightRecord>
+  /** Bulk delete. The backend only removes charges still in DRAFT. */
+  delete: (ids: string[]) => Promise<{ removed: number }>
   listForOrder: (orderId: string) => Promise<FreightRecord[]>
   createForOrder: (orderId: string, input: CreateRecordInput) => Promise<FreightRecord>
   getOrderInvoice: (orderId: string) => Promise<FreightRecord | null>

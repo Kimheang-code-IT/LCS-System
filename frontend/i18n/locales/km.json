@@ -759,6 +759,7 @@
       "containerPayments": "ការទូទាត់តាមកុងតឺន័រ",
       "actualContainers": "កុងតឺន័រពិត",
       "feeLines": "ជួរថ្លៃ",
+      "financeLines": "បន្ទាត់ហិរញ្ញវត្ថុ",
       "journalEntries": "ទិនានុប្បវត្តិ",
       "lines": "ជួរទិនានុប្បវត្តិ",
       "otherCharges": "ថ្លៃផ្សេងទៀត",
@@ -827,6 +828,7 @@
       },
       "job": {
         "printDebitInvoice": "បោះពុម្ពប័ណ្ណឥណពន្ធ",
+        "printPaymentInvoice": "បោះពុម្ពវិក្កយបត្រពន្ធ",
         "noActualContainers": "បន្ថែមលេខកុងតឺនែរជាក់ស្តែង មុនពេលបោះពុម្ពប័ណ្ណឥណពន្ធ។"
       },
       "title": {
@@ -950,6 +952,17 @@
       "searchLedger": "ស្វែងរកគណនី, ភាគី, ប័ណ្ណ...",
       "clear": "សម្អាត",
       "date": "កាលបរិច្ឆេទ",
+      "sort": "តម្រៀប",
+      "sortDefault": "លំដាប់ល្អតិចតា",
+      "sortActive": "តម្រៀបតាម {column} · {direction}",
+      "sortOldToNew": "ចាសចាសនៃ → ថ្មីបំផុត",
+      "sortNewToOld": "ថ្មីបំផុត → ចាសចាសនៃ",
+      "sortSmallToLarge": "តូចបំផុត → ធំបំផុត",
+      "sortLargeToSmall": "ធំបំផុត → តូចបំផុត",
+      "sortAToZ": "ក ដល់ ស",
+      "sortZToA": "ស ដល់ ក",
+      "sortNone": "មិនតម្រៀប",
+      "sortFilter": "ច្រោះជួរឈរ...",
       "newEntity": "បង្កើត {entity}",
       "open": "បើក",
       "edit": "កែ",
@@ -979,6 +992,8 @@
       "saveFailed": "មិនអាចរក្សាទុកបានទេ",
       "noColumnsConfigured": "មិនមានជួរឈរកំណត់",
       "noColumnsConfiguredHint": "បន្ថែមជួរឈរនៅក្នុងការកំណត់ → ផ្ទាំងបញ្ជាសេវាកម្ម។",
+      "assignedAttributes": "គំលេងដែលបានចូលរួម",
+      "assignedGroups": "ក្រុមដែលបានចូលរួម",
       "addFeeLine": "បន្ថែមជួរថ្លៃ",
       "addRoute": "បន្ថែមផ្លូវ",
       "addCharge": "បន្ថែមថ្លៃ",
@@ -986,6 +1001,10 @@
       "addRequirement": "បន្ថែមតម្រូវការ",
       "addContainer": "បន្ថែមកុងតឺន័រ",
       "saveContainer": "រក្សាទុក",
+      "rowNote": "កំណត់សម្គាល់ជួរ",
+      "rowNoteTitle": "កំណត់សម្គាល់",
+      "rowNotePlaceholder": "បន្ថែមកំណត់សម្គាល់សម្រាប់ជួរនេះ។",
+      "addRowNote": "បន្ថែមកំណត់សម្គាល់",
       "createRevision": "បង្កើតកំណែ",
       "convertServiceOrder": "បម្លែងទៅបញ្ជាសេវាកម្ម",
       "openServiceOrder": "បើកបញ្ជាសេវាកម្ម",
@@ -1175,6 +1194,7 @@
       "openFinance": "បើកហិរញ្ញវត្ថុ",
       "viewDocument": "មើលឯកសារ",
       "remainingCol": "នៅសល់",
+      "plannedCol": "ផែនកាល្បង",
       "actualCol": "ជាក់ស្តែង",
       "requiredCol": "តម្រូវ",
       "taskName": "តួនាទី",
@@ -1212,6 +1232,10 @@
       "noCustomerCharges": "មិនទាន់មានថ្លៃអតិថិជន",
       "supplierExpenses": "ចំណាយអ្នកផ្គត់ផ្គង់",
       "addExpense": "បន្ថែមចំណាយ",
+      "financeLines": "បន្ទាត់ហិរញ្ញវត្ថុ",
+      "financeLineCharge": "ថ្លៃ",
+      "financeLineExpense": "ចំណាយ",
+      "financeLineInvoice": "វិក្កយបត្រ",
       "createdCol": "បង្កើត",
       "uploadFile": "ផ្ទុកឯកសារឡើង",
       "fileUploaded": "ផ្ទុកឯកសារជោគជ័យ",
@@ -1269,6 +1293,8 @@
         "credit": "ឥណទាន",
         "documentType": "ប្រភេទ",
         "documentNo": "លេខឯកសារ",
+        "reference": "លេខយោង",
+        "party": "ភាគី",
         "file": "ឯកសារ",
         "uploadDate": "កាលបរិច្ឆេទផ្ទុក",
         "remark": "កំណត់សម្គាល់",
@@ -1290,6 +1316,7 @@
         "netWeight": "ទម្ងន់សុទ្ធ",
         "grossWeight": "ទម្ងន់សរុប",
         "weightKg": "ទម្ងន់ (គក)",
+        "note": "កំណត់សម្គាល់",
         "createdAt": "បង្កើតនៅ",
         "bookingNo": "លេខកក់ / ដឹក",
         "carrier": "ក្រុមហ៊ុនដឹក",
@@ -1485,6 +1512,7 @@
         "period": "រយៈពេល"
       },
       "errorTitle": "មិនអាចផ្ទុកផ្ទាំងគ្រប់គ្រងបានទេ",
+      "errorDescription": "ទិន្នន័យផ្ទាំងគ្រប់គ្រងមិនអាចប្រើបានបណ្ដោះអាសន្នទេ។ សូមព្យាយាមម្ដងទៀត។",
       "expense": "ចំណាយ",
       "overdueInvoices": "{n} ហួសកំណត់",
       "kpis": {
@@ -2823,7 +2851,9 @@
     "add": "បន្ថែម",
     "cancel": "បោះបង់",
     "export": "នាំចេញ",
-    "close": "បិទ"
+    "close": "បិទ",
+    "moveUp": "ផ្លាស់ទីឡើងលើ",
+    "moveDown": "ផ្លាស់ទីចូលក្រោម"
   },
   "common": {
     "actions": "សកម្មភាព",
@@ -2855,7 +2885,10 @@
   "pages": {
     "error": {
       "title": "រកមិនឃើញទំព័រ",
-      "description": "សូមអភ័យទោស ទំព័រនេះមិនអាចរកឃើញបានទេ។"
+      "description": "សូមអភ័យទោស ទំព័រនេះមិនអាចរកឃើញបានទេ។",
+      "unexpectedTitle": "មានបញ្ហាកើតឡើង",
+      "unexpectedDescription": "កម្មវិធីមិនអាចបំពេញសំណើរបស់អ្នកបានទេ។ សូមព្យាយាមម្ដងទៀត ឬត្រឡប់ទៅទំព័រដើម។",
+      "backHome": "ត្រឡប់ទៅទំព័រដើម"
     },
     "auth": {
       "loginTitle": "ចូលគណនី",

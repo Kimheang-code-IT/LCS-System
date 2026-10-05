@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { JOB_FILE_TABLE } from '~/config/job-workspace-forms'
 import { jobFileAttachments } from '~/utils/freight/attachments'
 

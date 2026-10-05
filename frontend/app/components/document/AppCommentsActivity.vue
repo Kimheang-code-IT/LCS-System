@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TimelineItem } from '@nuxt/ui'
-import type { ActivityEvent, EntityComment, PersonSummary } from '~/types/lcs/common'
+import type { ActivityEvent, EntityComment, PersonSummary } from '~/types/common'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const props = withDefaults(defineProps<{
@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<{
   hasMore?: boolean
   loadingMore?: boolean
 }>(), {
+  currentUser: undefined,
   canComment: true,
   showComposer: true,
   showNewEmail: true,

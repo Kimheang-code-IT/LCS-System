@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ComponentTabAttribute, ComponentTabGroup, ComponentTabRuntime } from '~/types/freight/component-config'
+import type { ComponentTabAttribute, ComponentTabGroup, ComponentTabRuntime } from '~/types/component-config'
 import { componentGroupToFreightTable } from '~/utils/freight/component-tabs'
 
 const props = defineProps<{

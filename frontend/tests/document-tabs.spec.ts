@@ -212,19 +212,24 @@ describe('moduleDocumentTabs', () => {
     expect(columns.find(column => column.key === 'lineTotal')?.inlineFields).toBeUndefined()
   })
 
-  it('enables charge number input for standalone draft service charges', () => {
-    const manual = moduleDocumentTabs(getFreightModule('/service-charges')!, {
+  it('hides charge-managed fields on the service charge overview', () => {
+    const module = getFreightModule('/service-charges')!
+    const fields = moduleDocumentTabs(module, {
       chargeManualNumber: true,
-    }).find(tab => tab.id === 'general')?.sections[0]?.fields.find(field => field.key === 'chargeNo')
-    const linked = moduleDocumentTabs(getFreightModule('/service-charges')!, {
-      chargeLinkedToJob: true,
-      chargeManualNumber: false,
-    }).find(tab => tab.id === 'general')?.sections[0]?.fields.find(field => field.key === 'chargeNo')
+    }).find(tab => tab.id === 'general')?.sections[0]?.fields ?? []
+    const keys = fields.map(field => field.key)
 
-    expect(manual?.readOnly).toBe(false)
-    expect(manual?.helpKey).toBe('freight.fieldHelp.chargeNoManual')
-    expect(linked?.readOnly).toBe(true)
-    expect(linked?.helpKey).toBe('freight.fieldHelp.chargeNo')
+    expect(keys).not.toContain('chargeNo')
+    expect(keys).not.toContain('documentDate')
+    expect(keys).not.toContain('documentType')
+    expect(keys).not.toContain('status')
+    // The service order link stays: the backend rejects a charge without it.
+    expect(keys).toContain('jobNo')
+
+    const columnKeys = module.columns.map(column => column.key)
+    for (const hidden of ['chargeNo', 'documentDate', 'documentType', 'status']) {
+      expect(columnKeys, hidden).not.toContain(hidden)
+    }
   })
 
   it('puts discount and tax under grand total on charge fee lines with or without a job', () => {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn, TableRow } from '@nuxt/ui'
 import type { FreightRelated } from '~/config/freight-modules'
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { useFreightLabel } from '~/composables/freight/useFreight'
 import { freightTableUiCompact } from '~/utils/table/theme'
 

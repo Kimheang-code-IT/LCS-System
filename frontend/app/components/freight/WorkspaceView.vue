@@ -12,16 +12,17 @@ import {
   useFreightLabel,
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
-import { useLcs } from '~/composables/lcs/useLcs'
-import type { FreightRecord } from '~/types/freight/record'
-import { freightModules, type FreightSelectOption } from '~/config/freight-modules'
-import { chargeDomainStatus, financeDomainStatus, quotationDomainStatus } from '~/utils/lcs/states'
+import { useLcs } from '~/composables/freight/useLcs'
+import type { FreightRecord } from '~/types/record'
+import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
+import { chargeDomainStatus, financeDomainStatus, quotationDomainStatus } from '~/utils/freight/states'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
 import { enrichJobListRows } from '~/utils/freight/job-list'
 import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
+import { type ListSortKind, type ListSortSelection, listSortKindFor } from '~/utils/table/list-sort'
 import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
 import { useModuleList } from '~/composables/freight/useModuleList'
@@ -47,6 +48,7 @@ const pending = ref(false)
 const busyId = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
+const sort = ref<ListSortSelection>(null)
 
 const current = computed(() => module.value)
 const moduleList = useModuleList(current)
@@ -57,6 +59,13 @@ const dateField = computed(() => {
   return fields.find(field => field.type === 'date' || field.type === 'datetime' || field.key === 'date' || /date$/i.test(field.key))?.key
     || current.value?.columns.find(column => /date/i.test(column.key))?.key
 })
+/** The sort key must exist on the current module or the backend would ignore it. */
+const sortKey = computed(() => {
+  const active = sort.value
+  if (!active || !current.value) return undefined
+  return current.value.columns.some(column => column.key === active.key) ? active.key : undefined
+})
+const sortDir = computed(() => (sortKey.value ? sort.value?.dir : undefined))
 
 async function refreshList() {
   if (!current.value) return
@@ -69,6 +78,8 @@ async function refreshList() {
       dateField: dateField.value,
       dateFrom: dateFrom.value,
       dateTo: dateTo.value,
+      sortKey: sortKey.value,
+      sortDir: sortDir.value,
     })
   }
   finally {
@@ -76,7 +87,7 @@ async function refreshList() {
   }
 }
 
-watch([current, q, filters, dateFrom, dateTo, dateField], () => { void refreshList() }, { immediate: true, deep: true })
+watch([current, q, filters, dateFrom, dateTo, dateField, sort], () => { void refreshList() }, { immediate: true, deep: true })
 
 function rowMatchesToolbarFilters(row: FreightRecord): boolean {
   const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row) : row
@@ -196,7 +207,7 @@ usePageSeo({
   title: () => current.value ? moduleTitle(current.value) : t('freight.pages.dashboard'),
 })
 
-watch([q, filters, dateFrom, dateTo], () => {
+watch([q, filters, dateFrom, dateTo, sort], () => {
   rowSelection.value = {}
   pagination.value = { ...pagination.value, pageIndex: 0 }
 }, { deep: true })
@@ -390,16 +401,27 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
   }
 }
 
+/** Declared field type wins; otherwise infer from the column key (dates, sequence numbers…). */
+function columnSortKind(column: FreightField): ListSortKind {
+  const declared = column.type || current.value?.fields.find(field => field.key === column.key)?.type
+  if (declared === 'date' || declared === 'datetime') return 'date'
+  if (declared === 'number') return 'number'
+  return listSortKindFor(column.key)
+}
+
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   if (!current.value) return []
   const titleKey = current.value.titleField
   const dataColumns = current.value.columns.map((column, index) => ({
     accessorKey: column.key,
-    enableSorting: false,
+    enableSorting: true,
     header: fieldLabel(column),
-    meta: isNumericKey(column.key) || isMoneyKey(column.key) || column.key === 'tasksProgress' || column.key === 'containersCount'
-      ? { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } }
-      : undefined,
+    meta: {
+      sortKind: columnSortKind(column),
+      ...(isNumericKey(column.key) || isMoneyKey(column.key) || column.key === 'tasksProgress' || column.key === 'containersCount'
+        ? { class: { td: 'text-end tabular-nums whitespace-nowrap', th: 'text-end' } }
+        : {}),
+    },
     cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
       const text = cellText(row.original, column.key)
       const isTitle = column.key === titleKey || (index === 0 && !current.value!.columns.some(item => item.key === titleKey))
@@ -557,6 +579,7 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       v-model:date-end="dateTo"
       v-model:row-selection="rowSelection"
       v-model:pagination="pagination"
+      v-model:sort="sort"
       :data="result.all"
       :columns="columns"
       :loading="pending"

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed } from 'vue'
-import type { AppFontSize } from '~/types/lcs/settings'
+import type { AppFontSize } from '~/types/settings'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
 const THEME_PRIMARY_KEY = 'ui:theme:primary'

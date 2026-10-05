@@ -7,7 +7,7 @@ import {
   buildDashboardBuckets,
   granularityForPeriod,
   type DashboardChartPeriod,
-} from '~/utils/lcs/dashboard'
+} from '~/utils/freight/dashboard'
 import type { DashboardSummary } from '~/repositories/contracts/lcs'
 import { freightReportPath, getFreightReport } from '~/config/freight-reports'
 import { useLcsRepositories } from '~/repositories'

@@ -1,4 +1,4 @@
-import type { LcsApiErrorBody, LcsErrorCode } from '~/types/lcs/domain'
+import type { LcsApiErrorBody, LcsErrorCode } from '~/types/domain'
 
 export class LcsDomainError extends Error {
   readonly code: string

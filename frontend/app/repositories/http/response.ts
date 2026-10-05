@@ -1,4 +1,4 @@
-import type { ApiResponse } from '~/types/lcs/common'
+import type { ApiResponse } from '~/types/common'
 
 export function unwrapApiData<T>(response: T | ApiResponse<T>): T {
   if (

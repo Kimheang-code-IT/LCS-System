@@ -1,4 +1,4 @@
-import type { AppConfig, AppInfo, BackupRunSummary, BackupStatus, ConnectionStatus } from '~/types/lcs/settings'
+import type { AppConfig, AppInfo, BackupRunSummary, BackupStatus, ConnectionStatus } from '~/types/settings'
 
 export interface AppInfoRepository {
   get: () => Promise<AppInfo>

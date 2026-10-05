@@ -12,8 +12,14 @@ export const JOB_WORKSPACE_SECTION_META: Record<string, { icon: string }> = Obje
   [...JOB_WORKSPACE_SECTIONS, ...JOB_DEFAULT_COMPONENT_SECTIONS].map(id => [id, { icon: jobWorkspaceSectionIcon(id) }]),
 )
 
+/**
+ * Leading overview group. Its heading is redundant — the tab is already titled
+ * "Overview" — so the overview form renders the fields without a label.
+ */
+export const JOB_OVERVIEW_LEAD_SECTION = 'Job Information'
+
 export const JOB_OVERVIEW_SECTIONS = new Set([
-  'Job Information',
+  JOB_OVERVIEW_LEAD_SECTION,
   'Dates',
   'Reference',
   'Remarks',
@@ -98,23 +104,27 @@ function routePlaceRow(row: Record<string, unknown>, index: number): Record<stri
     sequence: Number(row.sequence || index + 1) || index + 1,
     placeRole: String(row.placeRole || 'Pickup').trim() || 'Pickup',
     place: String(row.place || '').trim(),
-    plannedActual: String(row.plannedActual || '').slice(0, 10),
+    // `plannedActual` was the single date column before Planned/Actual split.
+    planned: String(row.planned || row.plannedActual || '').slice(0, 10),
+    actual: String(row.actual || '').slice(0, 10),
     notes: String(row.notes || '').trim(),
   }
 }
 
-export function defaultJobRoutePlaces(): Array<Record<string, unknown>> {
-  return JOB_ROUTE_STOPS.map((stop, index) => routePlaceRow({ placeRole: stop.placeRole }, index))
-}
-
-/** Route tab lines. Stored on `job.places`; falls back to header pickup/port/border/destination. */
+/**
+ * Route tab lines. Stored on `job.places`; falls back to header
+ * pickup/port/border/destination for orders saved without route lines. An order
+ * that has no id yet is still being created, so it stays empty — otherwise the
+ * header date defaults would seed four blank-looking stops.
+ */
 export function jobRoutePlaces(job: Record<string, unknown>): Array<Record<string, unknown>> {
   const stored = Array.isArray(job.places) ? job.places : []
   if (stored.length) return stored.map((row, index) => routePlaceRow(row as Record<string, unknown>, index))
+  if (!String(job.id ?? '').trim()) return []
   return JOB_ROUTE_STOPS.map((stop, index) => routePlaceRow({
     placeRole: stop.placeRole,
     place: stop.placeKeys.map(key => String(job[key] ?? '').trim()).find(Boolean) || '',
-    plannedActual: job[stop.dateKey],
+    planned: job[stop.dateKey],
   }, index))
 }
 
@@ -125,7 +135,7 @@ export function jobFieldsFromPlaces(places: Array<Record<string, unknown>>) {
     const row = rows.find(item => String(item.placeRole) === stop.placeRole)
     if (!row) continue
     patch[stop.placeKeys[0]] = row.place
-    patch[stop.dateKey] = row.plannedActual
+    patch[stop.dateKey] = row.planned
   }
   return patch
 }

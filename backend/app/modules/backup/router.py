@@ -10,7 +10,7 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_permission
 from app.core.exceptions import AccessDenied, Conflict, ValidationFailed
-from app.core.pagination import PageParams, page_params, paged
+from app.core.pagination import PageParams, list_sort_orders, page_params, paged
 from app.modules.backup import service
 from app.modules.backup.models import BackupRun
 from app.modules.backup.sheets import BackupConfigurationError, SheetsApiError
@@ -46,7 +46,10 @@ async def list_runs(
     total = int(await session.scalar(select(func.count()).select_from(BackupRun)) or 0)
     runs = (
         await session.execute(
-            select(BackupRun).order_by(BackupRun.id.desc()).limit(page.page_size).offset(page.offset)
+            select(BackupRun)
+            .order_by(*list_sort_orders(BackupRun, page, BackupRun.id.desc()))
+            .limit(page.page_size)
+            .offset(page.offset)
         )
     ).scalars().all()
     return {"data": paged([service.serialize_run(run) for run in runs], page, total)}

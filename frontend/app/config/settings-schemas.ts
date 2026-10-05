@@ -1,4 +1,4 @@
-import type { DocumentTabSchema } from '~/types/lcs/common'
+import type { DocumentTabSchema } from '~/types/common'
 import {
   AWS_REGION_OPTIONS,
   BACKUP_INTERVAL_OPTIONS,

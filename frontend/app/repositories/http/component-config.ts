@@ -1,5 +1,5 @@
 import type { ComponentConfigRepository } from '~/repositories/contracts/component-config'
-import type { ApiResponse } from '~/types/lcs/common'
+import type { ApiResponse } from '~/types/common'
 import type {
   ComponentAttribute,
   ComponentGroup,
@@ -8,7 +8,7 @@ import type {
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabsBootstrap,
-} from '~/types/freight/component-config'
+} from '~/types/component-config'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
 

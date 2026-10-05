@@ -5,9 +5,9 @@ import type {
   AttachmentMeta,
   DocumentTabSchema,
   EntityComment,
-} from '~/types/lcs/common'
+} from '~/types/common'
 import { useConfirm } from '~/composables/common/useConfirm'
-import type { ExportRequest } from '~/types/lcs/export'
+import type { ExportRequest } from '~/types/export'
 
 const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
@@ -50,6 +50,19 @@ const props = withDefaults(defineProps<{
   confirmSave?: boolean
   showCancel?: boolean
 }>(), {
+  saveLabel: '',
+  listTo: '',
+  currentUser: undefined,
+  metaTitle: '',
+  metaSubtitle: '',
+  metaIcon: '',
+  metaStatus: '',
+  metaStage: '',
+  metaOwner: undefined,
+  metaAssignee: undefined,
+  metaCreatedAt: '',
+  metaUpdatedAt: '',
+  moreItems: () => [],
   pending: false,
   saving: false,
   error: null,

@@ -1,4 +1,4 @@
-import type { AppConfigLocalization } from '~/types/lcs/settings'
+import type { AppConfigLocalization } from '~/types/settings'
 import { shallowRef } from 'vue'
 
 /** Defaults aligned with System Settings → Localization. */

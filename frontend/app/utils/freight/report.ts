@@ -1,4 +1,4 @@
-import type { FreightRecord } from '~/types/freight/record'
+import type { FreightRecord } from '~/types/record'
 import { getFormatConfig } from '~/utils/format/format-service'
 
 const DAY_MS = 86_400_000

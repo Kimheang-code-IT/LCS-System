@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FieldOption } from '~/types/lcs/common'
+import type { FieldOption } from '~/types/common'
 
 const model = defineModel<string[]>({ default: () => [] })
 
@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   allowCustom?: boolean
 }>(), {
   items: () => [],
+  placeholder: '',
   allowCustom: false,
 })
 

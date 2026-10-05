@@ -1,8 +1,13 @@
 <script setup lang="ts">
-import type { TableColumn } from '@nuxt/ui'
-import type { ComponentTab, ComponentTabGroupLink } from '~/types/freight/component-config'
+import type { ComponentTab } from '~/types/component-config'
+import type { SaveGridChange } from '~/types/save-grid'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
+import {
+  componentConfigTable,
+  componentTabGroupColumns,
+  componentTabGroupRows,
+} from '~/utils/freight/component-config-tables'
 
 definePageMeta({
   titleKey: 'freight.pages.componentTabs',
@@ -30,11 +35,14 @@ const directionOptions = computed(() => store.list('tradeDirections')
   .map(row => ({ label: String(row.name || row.code || ''), value: String(row.id) })))
 const selectedDirections = computed(() => (selectedTab.value?.tradeDirectionIds || []).map(String))
 
-const columns: TableColumn<ComponentTabGroupLink>[] = [
-  { accessorKey: 'name', header: 'Group' },
-  { accessorKey: 'renderMode', header: 'Render' },
-  { id: 'actions', header: '' },
-]
+const groupRows = computed(() => componentTabGroupRows(config.tabGroups.value))
+
+const groupTable = computed(() => componentConfigTable({
+  key: 'componentTabGroups',
+  title: t('freight.ui.assignedGroups'),
+  titleKm: 'ក្រុមដែលបានចូលរួម',
+  columns: componentTabGroupColumns(),
+}))
 
 onMounted(async () => {
   await Promise.all([config.loadTabs(true), config.loadGroups(false)])
@@ -104,18 +112,27 @@ async function addGroup() {
   addGroupId.value = undefined
 }
 
-function removeGroup(link: ComponentTabGroupLink) {
-  if (!selectedTabId.value) return
-  void config.removeTabGroup(link.tabGroupId, selectedTabId.value)
-}
-
-async function moveGroup(index: number, direction: -1 | 1) {
-  const rows = [...config.tabGroups.value]
-  const target = index + direction
-  if (target < 0 || target >= rows.length) return
-  const [item] = rows.splice(index, 1)
-  rows.splice(target, 0, item!)
-  await config.reorderTabGroups(selectedTabId.value, rows.map(row => row.tabGroupId))
+/** Tab groups carry no editable columns, so Save only persists removals + order. */
+async function saveGroups(change: SaveGridChange) {
+  const tabId = selectedTabId.value
+  if (!tabId) return
+  // The grid keys rows by group id, while the API removes by the link id.
+  const linkByGroupId = new Map(config.tabGroups.value.map(link => [String(link.id), link]))
+  try {
+    for (const groupId of change.removedIds) {
+      const link = linkByGroupId.get(groupId)
+      if (link) await config.removeTabGroup(link.tabGroupId, tabId)
+    }
+    const order = change.rows
+      .map(row => String(row.tabGroupId ?? ''))
+      .filter(Boolean)
+    if (order.length) await config.reorderTabGroups(tabId, order)
+    toast.add({ title: t('freight.ui.save'), color: 'success' })
+  }
+  catch {
+    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+    await config.loadTabGroups(tabId)
+  }
 }
 
 function setDirections(values: string[]) {
@@ -255,42 +272,11 @@ icon="i-lucide-plus"
 @click="addGroup">Add</UButton>
         </div>
 
-        <UTable :data="config.tabGroups.value" :columns="columns">
-          <template #name-cell="{ row }">
-            <div class="flex flex-col">
-              <span class="text-sm font-medium text-highlighted">{{ row.original.name }}</span>
-              <span class="text-[11px] text-muted">{{ row.original.code }}</span>
-            </div>
-          </template>
-          <template #renderMode-cell="{ row }">
-            <UBadge color="neutral" variant="subtle" size="sm">{{ row.original.renderMode }}</UBadge>
-          </template>
-          <template #actions-cell="{ row }">
-            <div class="flex items-center justify-end gap-1">
-              <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-arrow-up"
-aria-label="Move up"
-@click="moveGroup(row.index, -1)" />
-              <UButton
-size="xs"
-color="neutral"
-variant="ghost"
-icon="i-lucide-arrow-down"
-aria-label="Move down"
-@click="moveGroup(row.index, 1)" />
-              <UButton
-size="xs"
-color="error"
-variant="ghost"
-icon="i-lucide-trash-2"
-aria-label="Remove"
-@click="removeGroup(row.original)" />
-            </div>
-          </template>
-        </UTable>
+        <TableAppSaveGrid
+          :table="groupTable"
+          :rows="groupRows"
+          :saving="config.saving.value"
+          @save="saveGroups" />
       </section>
       <section v-else class="rounded-lg border border-default bg-default p-3">
         <UEmpty

@@ -8,6 +8,7 @@ import { useConfirm } from '~/composables/common/useConfirm'
 import { useArchiveRepository } from '~/repositories'
 import type { ArchiveOptions, ArchiveRecord } from '~/repositories/contracts/archive'
 import { confirmsArchiveHardDelete, hasArchivePermission } from '~/utils/archive/access'
+import type { ListSortSelection } from '~/utils/table/list-sort'
 
 definePageMeta({ titleKey: 'freight.pages.archive', permission: 'archive.view' })
 
@@ -27,6 +28,7 @@ const dateTo = ref('')
 const entityTypes = ref<string[]>([])
 const deletedByUsers = ref<string[]>([])
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
+const sort = ref<ListSortSelection>(null)
 const options = ref<ArchiveOptions>({ entityTypes: [], deletedByUsers: [] })
 const detailOpen = ref(false)
 const detailLoading = ref(false)
@@ -56,6 +58,8 @@ async function refresh() {
       deleted_by: deletedByUsers.value[0] ? Number(deletedByUsers.value[0]) : undefined,
       dateFrom: dateFrom.value || undefined,
       dateTo: dateTo.value || undefined,
+      sortKey: sort.value?.key,
+      sortDir: sort.value?.dir,
     })
     rows.value = result.items
     total.value = result.meta.total
@@ -69,7 +73,7 @@ async function refreshOptions() {
   options.value = await repository.options()
 }
 
-watch([q, entityTypes, deletedByUsers, dateFrom, dateTo], () => {
+watch([q, entityTypes, deletedByUsers, dateFrom, dateTo, sort], () => {
   if (pagination.value.pageIndex !== 0) pagination.value = { ...pagination.value, pageIndex: 0 }
   else void refresh()
 }, { deep: true })
@@ -124,18 +128,20 @@ async function hardDelete() {
 }
 
 const columns: TableColumn<ArchiveRecord>[] = [
-  { accessorKey: 'module', header: 'Module / Entity' },
-  { accessorKey: 'reference', header: 'Record / Reference' },
-  { accessorKey: 'deletedBy', header: 'Deleted By' },
+  { accessorKey: 'module', header: 'Module / Entity', meta: { sortKind: 'text' } },
+  { accessorKey: 'reference', header: 'Record / Reference', meta: { sortKind: 'text' } },
+  { accessorKey: 'deletedBy', header: 'Deleted By', meta: { sortKind: 'text' } },
   {
     accessorKey: 'deletedAt',
     header: 'Deleted At',
+    meta: { sortKind: 'date' },
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap text-sm' }, formatDate(row.original.deletedAt)),
   },
-  { accessorKey: 'originalOwner', header: 'Original Owner / Creator' },
+  { accessorKey: 'originalOwner', header: 'Original Owner / Creator', meta: { sortKind: 'text' } },
   {
     accessorKey: 'status',
     header: 'Status',
+    meta: { sortKind: 'text' },
     cell: ({ row }) => h(UBadge, { color: 'warning', variant: 'subtle', size: 'sm' }, () => row.original.status),
   },
   {
@@ -184,6 +190,7 @@ onBeforeUnmount(clear)
       v-model:date-start="dateFrom"
       v-model:date-end="dateTo"
       v-model:pagination="pagination"
+      v-model:sort="sort"
       :data="rows"
       :columns="columns"
       :loading="loading"

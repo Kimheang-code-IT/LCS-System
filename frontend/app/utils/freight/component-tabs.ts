@@ -1,5 +1,5 @@
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
-import type { ComponentGroupRow, ComponentTabAttribute, ComponentTabGroup } from '~/types/freight/component-config'
+import type { ComponentGroupRow, ComponentTabAttribute, ComponentTabGroup } from '~/types/component-config'
 
 export function componentAttributeCellType(attribute: ComponentTabAttribute): FreightLineColumn['type'] {
   switch (attribute.fieldType) {

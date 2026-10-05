@@ -1,5 +1,5 @@
 import { useSetup } from '~/composables/auth/useSetup'
-import { safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
+import { normalizeRoutePath, safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
 import { requiredPagePermissionForPath } from '~/utils/freight/page-access'
 
 const PERMITTED_LANDING_ROUTES = [
@@ -17,6 +17,7 @@ const SETUP_PATH = '/auth/setup'
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
   if (import.meta.client) auth.hydrateClient()
+  const routePath = normalizeRoutePath(to.path)
 
   const publicPaths = [
     '/auth/login',
@@ -24,11 +25,20 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
     '/auth/verify-code',
     '/auth/reset-password',
   ]
-  const isSetupPage = to.path === SETUP_PATH
-  const isPublicPage = publicPaths.includes(to.path) || isSetupPage
+  const isSetupPage = routePath === SETUP_PATH
+  const isPublicPage = publicPaths.includes(routePath) || isSetupPage
 
   // A freshly migrated (or reset) database has no users: route to first-run setup.
-  const setupRequired = import.meta.client ? await useSetup().refresh() : false
+  // A failing probe must not abort navigation, so fall back to the last safe answer.
+  let setupRequired = false
+  if (import.meta.client) {
+    try {
+      setupRequired = await useSetup().refresh()
+    }
+    catch {
+      setupRequired = false
+    }
+  }
   if (setupRequired) {
     if (!isSetupPage) return navigateTo(SETUP_PATH, { replace: true })
     // A stale cookie must not present a logged-in shell while setup is required.
@@ -52,7 +62,7 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
 
   const permission = typeof to.meta.permission === 'string' && to.meta.permission
     ? to.meta.permission
-    : requiredPagePermissionForPath(to.path)
+    : requiredPagePermissionForPath(routePath)
   const canEnforcePermissions = !import.meta.server || sessionHasPermissionData(auth.user)
   if (canEnforcePermissions && auth.isLoggedIn && permission && !auth.canAccessPage(permission)) {
     // Keep the current authorized page when denial happens during navigation.

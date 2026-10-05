@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DocumentTabSchema } from '~/types/lcs/common'
+import type { DocumentTabSchema } from '~/types/common'
 import { freightDocumentRecordKey } from '~/utils/freight/document-tabs'
 
 const props = withDefaults(defineProps<{

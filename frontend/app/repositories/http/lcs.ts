@@ -9,10 +9,10 @@ import type {
 } from '~/repositories/contracts/lcs'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
-import type { ApiResponse } from '~/types/lcs/common'
-import type { FreightRecord } from '~/types/freight/record'
-import type { LcsPaged } from '~/types/lcs/domain'
-import { stripOfficialNumberFields } from '~/utils/lcs/sequences'
+import type { ApiResponse } from '~/types/common'
+import type { FreightRecord } from '~/types/record'
+import type { LcsPaged } from '~/types/domain'
+import { stripOfficialNumberFields } from '~/utils/freight/sequences'
 
 function withIdempotency(key: string) {
   return { headers: { 'Idempotency-Key': key } }
@@ -67,6 +67,8 @@ export function createHttpServiceChargeRepository(): ServiceChargeRepository {
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_ISSUE(chargeId), {}, withIdempotency(key))),
     createFinanceInvoice: async (chargeId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_CREATE_INVOICE(chargeId), {}, withIdempotency(key))),
+    delete: async ids =>
+      unwrapApiData(await api.delete<ApiResponse<{ removed: number }>>(ApiV1Endpoints.SERVICE_CHARGES, { body: { ids } })),
     listForOrder: async (orderId) => {
       const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.SERVICE_ORDER_CHARGES(orderId)))
       return Array.isArray(data) ? data : []

@@ -1,4 +1,4 @@
-import type { AppBranding, AppInfo } from '~/types/lcs/settings'
+import type { AppBranding, AppInfo } from '~/types/settings'
 
 const DEFAULT_PRIMARY = '#e8472a'
 

@@ -9,7 +9,7 @@ import VChart from 'vue-echarts'
 import 'vue-echarts/style.css'
 import { getFilterSelectUi } from '~/utils/filter/select-ui'
 import { slugify } from '~/utils/text/slug'
-import type { DashboardChartPeriod } from '~/utils/lcs/dashboard'
+import type { DashboardChartPeriod } from '~/utils/freight/dashboard'
 
 /**
  * Combined dashboard chart grid + panel + ECharts wrapper.

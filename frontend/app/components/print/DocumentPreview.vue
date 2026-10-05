@@ -94,6 +94,7 @@ const viewModel = computed<PrintViewModel | null>(() => {
   if (collection.value === 'jobs') {
     return buildJobPrintViewModel(record.value, templateId.value, context, {
       containerIndex: containerIndex.value,
+      lineIndex: lineIndex.value,
     })
   }
   if (collection.value === 'jobCharges') {

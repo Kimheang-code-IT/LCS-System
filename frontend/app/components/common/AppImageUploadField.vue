@@ -10,6 +10,10 @@ const props = withDefaults(defineProps<{
   maxSizeMb?: number
   disabled?: boolean
 }>(), {
+  label: '',
+  labelKey: '',
+  help: '',
+  helpKey: '',
   accept: SAFE_RASTER_IMAGE_ACCEPT,
   maxSizeMb: 2,
   disabled: false,

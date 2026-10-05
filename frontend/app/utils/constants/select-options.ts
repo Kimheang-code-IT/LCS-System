@@ -1,4 +1,4 @@
-import type { FieldOption } from '~/types/lcs/common'
+import type { FieldOption } from '~/types/common'
 
 /** Shared select options for settings / forms with fixed choice lists. */
 
