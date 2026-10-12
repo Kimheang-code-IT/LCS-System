@@ -47,12 +47,20 @@ class SoftDeleteMixin:
     )
 
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    pool_pre_ping=True,
-    future=True,
-)
+_engine_options: dict = {
+    "echo": False,
+    "pool_pre_ping": True,
+    "future": True,
+}
+if not settings.database_url.startswith("sqlite"):
+    _engine_options.update(
+        pool_size=settings.database_pool_size,
+        max_overflow=settings.database_max_overflow,
+        pool_recycle=settings.database_pool_recycle_seconds,
+        pool_timeout=30,
+    )
+
+engine = create_async_engine(settings.database_url, **_engine_options)
 
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False, autoflush=False)
 

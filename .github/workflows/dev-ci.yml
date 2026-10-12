@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (ruff + pytest)
+    name: Backend (pytest + ruff + security)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,8 +34,11 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - run: uv python install 3.12
       - run: uv sync --extra dev
-      - run: uv run ruff check .
       - run: uv run pytest -q
+      - run: uv run ruff check .
+      - run: uv run bandit -r app -q --severity-level medium
+      - run: uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file requirements-audit.txt
+      - run: uv run pip-audit -r requirements-audit.txt
 
   frontend:
     name: Frontend (lint + typecheck + test)
@@ -57,6 +60,28 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm audit:security
+
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Reject committed credential formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          pattern='AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|sk-(proj-)?[A-Za-z0-9_-]{20,}'
+          if git grep -n -I -E "$pattern" -- .; then
+            echo "::error::A likely credential or private key is committed in the current tree."
+            exit 1
+          fi
+          if git log --all -p --no-ext-diff -- . | grep -n -E "$pattern"; then
+            echo "::error::A likely credential or private key exists in Git history. Rotate it and purge the history."
+            exit 1
+          fi
 
   # Verify both images build (no push, no registry login).
   docker:
@@ -83,6 +108,7 @@ jobs:
           build-args: |
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL || 'https://lcslog.minidev.in' }}
             NUXT_PUBLIC_AUTH_MODE=cookie
+            NUXT_PUBLIC_CSRF_COOKIE_NAME=__Host-XSRF-TOKEN
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
@@ -90,22 +116,20 @@ jobs:
   # (status check name: "Dev CI").
   dev-ci-ok:
     name: Dev CI
-    needs: [backend, frontend, docker]
+    needs: [backend, frontend, secrets, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         run: |
           set -euo pipefail
-          echo "backend=${{ needs.backend.result }} frontend=${{ needs.frontend.result }} docker=${{ needs.docker.result }}"
-          # A "cancelled" job means this run was superseded in the same
-          # concurrency group; the newer run reports the real result, so it is
-          # not treated as a failure here.
+          echo "backend=${{ needs.backend.result }} frontend=${{ needs.frontend.result }} secrets=${{ needs.secrets.result }} docker=${{ needs.docker.result }}"
           for result in \
             "${{ needs.backend.result }}" \
             "${{ needs.frontend.result }}" \
+            "${{ needs.secrets.result }}" \
             "${{ needs.docker.result }}"; do
-            if [ "$result" = "failure" ]; then
+            if [ "$result" != "success" ]; then
               echo "::error::A required Dev CI job did not succeed."
               exit 1
             fi

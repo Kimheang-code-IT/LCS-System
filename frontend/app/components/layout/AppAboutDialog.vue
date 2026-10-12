@@ -36,7 +36,7 @@ const socials = [
           <div class="relative inline-flex">
             <img
               :src="logo"
-              :alt="t('docetra.brand.logoAlt')"
+              :alt="t('lcs.brand.logoAlt')"
               class="size-14 object-contain"
             >
             <span
@@ -47,10 +47,10 @@ const socials = [
           </div>
 
           <h2 class="text-2xl font-semibold tracking-tight text-highlighted">
-            {{ t('docetra.brand.name') }}
+            {{ t('lcs.brand.name') }}
           </h2>
           <p class="max-w-xs text-sm text-muted">
-            {{ t('docetra.brand.tagline') }}
+            {{ t('lcs.brand.tagline') }}
           </p>
         </div>
 

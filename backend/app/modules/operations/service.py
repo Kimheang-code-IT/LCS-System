@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
-from app.core.storage import get_storage, guess_content_type
+from app.core.storage import get_storage
 from app.modules.master_data.models import BusinessParty
 from app.modules.operations.models import (
     Attachment,
@@ -29,6 +33,7 @@ from app.modules.operations.models import (
     ServiceOrderPricing,
     ServiceOrderPricingLine,
 )
+from app.modules.operations.repository import OperationsRepository
 from app.modules.quotations.models import (
     Quotation,
     QuotationRevision,
@@ -100,49 +105,23 @@ def order_record(order: ServiceOrder, data: dict[str, Any], extra: dict[str, Any
 
 
 async def resolve_order(session: AsyncSession, context: RequestContext, identifier: str | int) -> ServiceOrder:
-    order: ServiceOrder | None = None
-    text = str(identifier)
-    if text.isdigit():
-        order = await session.get(ServiceOrder, int(text))
-    if order is None:
-        order = (
-            await session.execute(select(ServiceOrder).where(ServiceOrder.service_order_no == text))
-        ).scalars().first()
+    order = await OperationsRepository(session).resolve_order(identifier)
     if order is None:
         raise NotFound("Service order not found.")
     return order
 
 
 async def list_service_orders(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(ServiceOrder)
-    if page.status:
-        stmt = stmt.where(ServiceOrder.status == normalize_order_status(page.status))
-    if page.q:
-        pattern = f"%{page.q}%"
-        stmt = stmt.where(
-            ServiceOrder.service_order_no.ilike(pattern) | ServiceOrder.data["customer"].as_string().ilike(pattern)
-        )
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(ServiceOrder, page, ServiceOrder.id.desc()))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
+    rows, total = await OperationsRepository(session).order_page(
+        page,
+        status=normalize_order_status(page.status) if page.status else None,
+    )
     return paged([order_record(row, row.data or {}) for row in rows], page, total)
 
 
 async def get_service_order(session: AsyncSession, context: RequestContext, identifier: str) -> dict:
     order = await resolve_order(session, context, identifier)
-    containers = (
-        await session.execute(select(ServiceOrderContainer).where(ServiceOrderContainer.service_order_id == order.id))
-    ).scalars().all()
-    requirements = (
-        await session.execute(
-            select(ServiceOrderContainerRequirement).where(ServiceOrderContainerRequirement.service_order_id == order.id)
-        )
-    ).scalars().all()
+    containers, requirements = await OperationsRepository(session).order_containers(order.id)
     return order_record(
         order,
         order.data or {},
@@ -202,15 +181,7 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
     # Merge so a partial update does not discard previously stored fields.
     order.data = jsonable({**(order.data or {}), **payload})
     await session.commit()
-    return order_record(order, order.data or {})
-
-
-async def update_status(session: AsyncSession, context: RequestContext, order_id: int, status_value: str) -> dict:
-    order = await session.get(ServiceOrder, order_id)
-    if order is None:
-        raise NotFound("Service order not found.")
-    order.status = normalize_order_status(status_value)
-    await session.commit()
+    await cache.bump("reports")
     return order_record(order, order.data or {})
 
 
@@ -222,7 +193,19 @@ async def finish_service_order(session: AsyncSession, context: RequestContext, i
     if order.status != "FINISHED":
         order.status = "FINISHED"
         await session.commit()
+        await cache.bump("reports")
     return order_record(order, order.data or {})
+
+
+async def delete_service_orders(session: AsyncSession, ids: list[int]) -> int:
+    orders = await OperationsRepository(session).orders_by_ids(ids)
+    if any(str(order.status).upper() != "INACTIVE" for order in orders):
+        raise Conflict("ORDER_ACTIVE", "Active service orders cannot be deleted. Deactivate the order first.")
+    for order in orders:
+        await session.delete(order)
+    await session.commit()
+    await cache.bump("reports")
+    return len(orders)
 
 
 async def create_service_order_from_quotation(
@@ -513,6 +496,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     order = await resolve_order(session, context, str(identifier))
     if order.status == "INACTIVE":
         raise InvalidState("Cannot add charges to an inactive service order.")
+    if charge is not None and charge.status != "DRAFT":
+        raise InvalidState("Only draft service charges can be edited.")
     if charge is None:
         number = data.get("chargeNo") or data.get("documentNo")
         if not number or not str(number).strip():
@@ -523,15 +508,12 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
             document_type=str(data.get("documentType") or "SERVICE_NOTE"),
             document_date=_date(data.get("documentDate")) or date.today(),
             currency_code=data.get("currency") or order.currency_code,
-            status=str(data.get("status") or "DRAFT").upper(),
+            status="DRAFT",
             created_by_user_id=context.user_id,
             data={},
         )
         session.add(charge)
         await session.flush()
-    else:
-        charge.status = str(data.get("status") or charge.status).upper()
-
     # Only rebuild priced lines when the caller supplied them; a partial update
     # (e.g. just a status change) must not wipe the existing lines and totals.
     if "lines" in data or "chargeLines" in data:
@@ -549,9 +531,28 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
             unit_price = _decimal(line.get("unitPrice"), Decimal("0")) or Decimal("0")
             discount = _decimal(line.get("discount"), Decimal("0")) or Decimal("0")
             tax_rate = _decimal(line.get("tax"), Decimal("0")) or Decimal("0")
+            if quantity <= 0:
+                raise ValidationFailed("Charge quantity must be greater than zero.", {f"lines.{index}.quantity": "Must be positive"})
+            if unit_price < 0:
+                raise ValidationFailed("Charge unit price cannot be negative.", {f"lines.{index}.unitPrice": "Cannot be negative"})
             base = quantity * unit_price
+            if discount < 0 or discount > base:
+                raise ValidationFailed(
+                    "Charge discount must be between zero and the line subtotal.",
+                    {f"lines.{index}.discount": "Invalid discount"},
+                )
+            if tax_rate < 0 or tax_rate > 100:
+                raise ValidationFailed("Charge tax rate must be between 0 and 100.", {f"lines.{index}.tax": "Invalid tax rate"})
             tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
-            line_total = _decimal(line.get("total"), base - discount + tax_amount) or (base - discount + tax_amount)
+            line_total = base - discount + tax_amount
+            container_id = _int_or_none(line.get("containerId") or line.get("serviceOrderContainerId"))
+            if container_id is not None:
+                container = await session.get(ServiceOrderContainer, container_id)
+                if container is None or container.service_order_id != order.id:
+                    raise ValidationFailed(
+                        "A charge line container must belong to the service order.",
+                        {f"lines.{index}.containerId": "Container does not belong to this service order"},
+                    )
             subtotal += base
             discount_total += discount
             tax_total += tax_amount
@@ -565,7 +566,7 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                         line.get("feeTypeId") or line.get("fee_type_id"),
                         line.get("feeType") or line.get("fee_type"),
                     ),
-                    service_order_container_id=_int_or_none(line.get("containerId") or line.get("serviceOrderContainerId")),
+                    service_order_container_id=container_id,
                     description=str(line.get("description") or line.get("feeType") or "Charge"),
                     quantity=quantity,
                     unit_code=line.get("unit"),
@@ -587,20 +588,48 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         **{key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}},
     })
     await session.commit()
+    await cache.bump("reports")
     return await _charge_with_details(session, charge)
 
 
 async def issue_charge(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
-    charge = await session.get(ServiceOrderCharge, charge_id)
+    charge = (
+        await session.execute(
+            select(ServiceOrderCharge).where(ServiceOrderCharge.id == charge_id).with_for_update()
+        )
+    ).scalars().first()
     if charge is None:
         raise NotFound("Service charge not found.")
-    if charge.status == "ISSUED":
-        return await _charge_with_details(session, charge)
-    if charge.status != "DRAFT":
+    if charge.status not in {"DRAFT", "ISSUED"}:
         raise InvalidState(f"Cannot issue a charge in status {charge.status}.")
+    lines = (
+        await session.execute(
+            select(ServiceOrderChargeLine).where(ServiceOrderChargeLine.service_order_charge_id == charge.id)
+        )
+    ).scalars().all()
+    if not lines or (charge.total_amount or Decimal("0")) <= 0:
+        raise ValidationFailed("A service charge must have at least one positive line before it can be issued.")
+
+    # Issuing confirms the commercial charge and automatically prepares the
+    # accounting draft. Posting remains a separate finance-authorized action.
     charge.status = "ISSUED"
+    from app.modules.finance import service as finance_service
+
+    await finance_service.create_invoice_from_charge(session, context, charge, commit=False)
     await session.commit()
+    await cache.bump("reports")
     return await _charge_with_details(session, charge)
+
+
+async def delete_charges(session: AsyncSession, ids: list[int]) -> int:
+    charges = await OperationsRepository(session).charges_by_ids(ids)
+    drafts = [charge for charge in charges if charge.status == "DRAFT"]
+    for charge in drafts:
+        await session.delete(charge)
+    await session.commit()
+    if drafts:
+        await cache.bump("reports")
+    return len(drafts)
 
 
 async def charge_to_invoice(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
@@ -631,7 +660,11 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
 
 def _attachment_payload(attachment: Attachment) -> dict[str, Any]:
     storage = get_storage()
-    url = storage.presigned_get(attachment.storage_key) if storage.supports_presign else None
+    url = (
+        storage.presigned_get(attachment.storage_key, settings.presigned_url_expire_seconds)
+        if storage.supports_presign
+        else None
+    )
     if not url:
         url = f"{settings.storage_public_base_url}/{attachment.storage_key}"
     return {
@@ -647,33 +680,96 @@ def _attachment_payload(attachment: Attachment) -> dict[str, Any]:
     }
 
 
+_UPLOAD_TYPES = {
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def _upload_metadata(file_name: str) -> tuple[str, str, str]:
+    clean_name = os.path.basename(str(file_name or "").replace("\\", "/")).strip()
+    if not clean_name or len(clean_name) > 255 or clean_name in {".", ".."}:
+        raise ValidationFailed("The file name is invalid.", {"file": "Invalid file name"})
+    extension = os.path.splitext(clean_name)[1].lower().lstrip(".")
+    if extension not in settings.upload_allowed_extension_set or extension not in _UPLOAD_TYPES:
+        raise ValidationFailed("This file type is not allowed.", {"file": "Unsupported file type"})
+    return clean_name, extension, _UPLOAD_TYPES[extension]
+
+
+def _validate_upload_content(extension: str, content: bytes) -> None:
+    signatures = {
+        "pdf": lambda value: value.startswith(b"%PDF-"),
+        "png": lambda value: value.startswith(b"\x89PNG\r\n\x1a\n"),
+        "jpg": lambda value: value.startswith(b"\xff\xd8\xff"),
+        "jpeg": lambda value: value.startswith(b"\xff\xd8\xff"),
+        "gif": lambda value: value.startswith((b"GIF87a", b"GIF89a")),
+        "webp": lambda value: len(value) >= 12 and value[:4] == b"RIFF" and value[8:12] == b"WEBP",
+    }
+    if extension in signatures and not signatures[extension](content):
+        raise ValidationFailed("The file content does not match its extension.", {"file": "Invalid content"})
+    if extension in {"txt", "csv"}:
+        try:
+            content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValidationFailed("Text uploads must use UTF-8 encoding.", {"file": "Invalid encoding"}) from exc
+        if b"\x00" in content:
+            raise ValidationFailed("The text file contains invalid binary data.", {"file": "Invalid content"})
+    if extension in {"docx", "xlsx"}:
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as archive:
+                names = set(archive.namelist())
+                expected_prefix = "word/" if extension == "docx" else "xl/"
+                valid = "[Content_Types].xml" in names and any(name.startswith(expected_prefix) for name in names)
+        except (zipfile.BadZipFile, OSError):
+            valid = False
+        if not valid:
+            raise ValidationFailed("The Office document is invalid.", {"file": "Invalid content"})
+
+
 def presign(file_name: str, mime_type: str = "") -> dict[str, Any]:
     storage = get_storage()
-    key = f"{uuid.uuid4().hex}-{os.path.basename(file_name)}"
-    content_type = guess_content_type(file_name, mime_type or None)
-    if storage.supports_presign:
-        upload_url = storage.presigned_put(key, content_type)
+    clean_name, _, content_type = _upload_metadata(file_name)
+    key = f"{uuid.uuid4().hex}-{clean_name}"
+    if storage.supports_presign and settings.storage_presigned_uploads_enabled:
+        upload_url = storage.presigned_put(key, content_type, settings.presigned_url_expire_seconds)
         if upload_url:
             return {
                 "upload_url": upload_url,
-                "file_name": file_name,
+                "file_name": clean_name,
                 "storage_key": key,
                 "method": "PUT",
                 "headers": {"Content-Type": content_type},
                 "provider": storage.provider,
             }
-    return {"upload_url": f"/api/v1/attachments/upload?storage_key={key}", "file_name": file_name, "storage_key": key, "method": "POST", "provider": storage.provider}
+    return {"upload_url": f"/api/v1/attachments/upload?storage_key={key}", "file_name": clean_name, "storage_key": key, "method": "POST", "provider": storage.provider}
 
 
 async def store_upload(
     session: AsyncSession, context: RequestContext, file_name: str, mime_type: str, content: bytes, storage_key: str | None = None
 ) -> dict:
     storage = get_storage()
-    key = storage_key or f"{uuid.uuid4().hex}-{os.path.basename(file_name)}"
-    content_type = guess_content_type(file_name, mime_type or None)
+    clean_name, extension, content_type = _upload_metadata(file_name)
+    max_bytes = settings.upload_max_size_mb * 1024 * 1024
+    if not content or len(content) > max_bytes:
+        raise ValidationFailed(
+            f"File size must be between 1 byte and {settings.upload_max_size_mb} MB.",
+            {"file": "Invalid file size"},
+        )
+    _validate_upload_content(extension, content)
+    key = storage_key or f"{uuid.uuid4().hex}-{clean_name}"
+    if not re.fullmatch(r"[0-9a-f]{32}-[^/\\]{1,255}", key) or storage.exists(key):
+        raise ValidationFailed("The storage key is invalid or already used.", {"file": "Invalid storage key"})
     storage.put(key, content, content_type)
     attachment = Attachment(
-        file_name=file_name,
+        file_name=clean_name,
         storage_key=key,
         mime_type=content_type,
         file_size_bytes=len(content),

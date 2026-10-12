@@ -66,10 +66,6 @@ export function isQuotationImmutable(status: unknown) {
   return value !== 'DRAFT'
 }
 
-export function canConvertQuotation(status: unknown) {
-  return quotationDomainStatus(status) === 'ACCEPTED'
-}
-
 export function isFinancePosted(status: unknown) {
   const value = financeDomainStatus(status)
   return value === 'POSTED' || value === 'REVERSED'

@@ -81,9 +81,7 @@ describe('moduleDocumentTabs', () => {
     // Status is managed from the row "..." menu, so it is not a form field.
     expect(tabs[0]?.sections.map(section => section.id)).toEqual([
       'general',
-      'classification',
       'location',
-      'coordinates',
     ])
     const fieldKeys = tabs[0]?.sections.flatMap(section => section.fields.map(field => field.key)) ?? []
     expect(fieldKeys).toContain('code')
@@ -101,6 +99,7 @@ describe('moduleDocumentTabs', () => {
       'revisions',
     ])
     expect(tabs[0]?.sections[0]?.fields.map(field => field.key)).toEqual([
+      'customerPartyId',
       'customer',
       'direction',
       'date',
@@ -175,6 +174,7 @@ describe('moduleDocumentTabs', () => {
     const fills: Record<string, Record<string, unknown>> = {
       '/master-data/places': { code: 'PPAP', name: 'Phnom Penh Autonomous Port' },
       '/quotations': {
+        customerPartyId: '1',
         customer: 'Acme',
         direction: 'Import',
         date: '2026-08-27',

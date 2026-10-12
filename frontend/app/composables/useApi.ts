@@ -25,6 +25,9 @@ type ApiErrorPayload = {
 type ApiFetchError = Error & {
     name: string
     data?: ApiErrorPayload
+    // ofetch wraps a cancelled fetch in a FetchError and keeps the original
+    // AbortError (or TimeoutError) on the wrapped error's `cause`.
+    cause?: { name?: string }
 }
 
 // Shared across every useApi() consumer so a later request can cancel an older
@@ -53,6 +56,7 @@ export function useApi() {
     const { $i18n } = useNuxtApp()
     const t = $i18n.t
     const config = useRuntimeConfig()
+    const bearerMode = String(config.public.authMode) === 'bearer'
     const authStore = useAuthStore()
     const activeRequests = ref(0)
     const pending = computed(() => activeRequests.value > 0)
@@ -93,9 +97,9 @@ export function useApi() {
                         },
                     },
                 )
-                const token = response?.data?.access_token
-                if (!token) return false
-                authStore.setTokens(token, response?.data?.refresh_token ?? null)
+                const token = response?.data?.access_token ?? null
+                if (bearerMode && !token) return false
+                if (bearerMode) authStore.setTokens(token, response?.data?.refresh_token ?? null)
                 return true
             }
             catch {
@@ -140,7 +144,7 @@ export function useApi() {
                 let requiresSetup = false
                 try {
                     const status = await $fetch<{ data?: { requiresSetup?: boolean } }>(
-                        '/api/v1/setup/status',
+                        '/api/v1/auth/setup/status',
                         { baseURL, timeout: 10000 },
                     )
                     requiresSetup = Boolean(status?.data?.requiresSetup)
@@ -150,7 +154,7 @@ export function useApi() {
                 }
                 useState<boolean | null>('setup-required').value = requiresSetup
                 if (requiresSetup) {
-                    await navigateTo('/setup', { replace: true })
+                    await navigateTo('/auth/setup', { replace: true })
                 }
                 else {
                     await navigateTo('/auth/login', { replace: true })
@@ -182,7 +186,7 @@ export function useApi() {
                 credentials: 'include',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
+                    ...(bearerMode && authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
                     ...csrfRequestHeaders(
                         method,
                         String(config.public.csrfCookieName),
@@ -212,9 +216,12 @@ export function useApi() {
             })
         }
         catch (err: unknown) {
-            // Network or parsing errors
+            // Network, parsing, or cancellation errors
             const fetchError = err as ApiFetchError
-            if (fetchError.name === 'AbortError') {
+            // A request cancelled by `cancelPrevious` / `cancelRequest` surfaces as
+            // an ofetch FetchError whose cause is an AbortError. Treat it as silent
+            // instead of reporting a bogus "could not reach the server" failure.
+            if (fetchError.name === 'AbortError' || fetchError.cause?.name === 'AbortError') {
                 return Promise.reject(err)
             }
 

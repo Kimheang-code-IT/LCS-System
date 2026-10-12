@@ -7,12 +7,13 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, list_sort_orders, paged
+from app.core.pagination import PageParams, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
-from app.modules.master_data.models import BusinessParty, PartyRole, TradeDirection
+from app.modules.master_data.models import BusinessParty, TradeDirection
 from app.modules.quotations.models import (
     Quotation,
     QuotationConversion,
@@ -21,6 +22,7 @@ from app.modules.quotations.models import (
     QuotationRevisionLine,
     QuotationRevisionPlace,
 )
+from app.modules.quotations.repository import QuotationRepository
 from app.modules.settings.service import get_default_currency
 
 IMMUTABLE_STATUSES = {"SENT", "ACCEPTED", "CONVERTED", "SUPERSEDED", "REJECTED", "EXPIRED", "CANCELLED"}
@@ -43,6 +45,24 @@ def normalize_status(value: Any, default: str = "DRAFT") -> str:
     return STATUS_MAP.get(text, str(value).strip().upper() or default)
 
 
+async def resolve_party_by_id(session: AsyncSession, party_id: Any) -> BusinessParty:
+    """Resolve a Business Party by primary key, rejecting unknown or inactive rows.
+
+    ``customerPartyId`` comes from the company picker; an invalid id must never
+    reach the FK column, so callers get a field-scoped validation error.
+    """
+    try:
+        numeric = int(party_id)
+    except (TypeError, ValueError) as exc:
+        raise ValidationFailed("The selected company is invalid.", {"customerPartyId": "Must be a company id."}) from exc
+    party = await session.get(BusinessParty, numeric)
+    if party is None or party.deleted_at is not None:
+        raise ValidationFailed("The selected company does not exist.", {"customerPartyId": "Unknown company."})
+    if str(party.status or "ACTIVE").upper() != "ACTIVE":
+        raise ValidationFailed("The selected company is not active.", {"customerPartyId": "Inactive company."})
+    return party
+
+
 async def resolve_party_by_name(session: AsyncSession, name: str | None, context: RequestContext, role: str = "CUSTOMER") -> BusinessParty:
     if name:
         party = (
@@ -50,25 +70,21 @@ async def resolve_party_by_name(session: AsyncSession, name: str | None, context
         ).scalars().first()
         if party is not None:
             return party
-    party = (
-        await session.execute(
-            select(BusinessParty)
-            .join(PartyRole, PartyRole.party_id == BusinessParty.id)
-            .where(PartyRole.role_type == role, BusinessParty.deleted_at.is_(None))
-            .limit(1)
-        )
-    ).scalars().first()
-    if party is not None and not name:
-        return party
+    else:
+        # No customer supplied: reuse any active party to satisfy the FK.
+        party = (
+            await session.execute(select(BusinessParty).where(BusinessParty.deleted_at.is_(None)).limit(1))
+        ).scalars().first()
+        if party is not None:
+            return party
     created = BusinessParty(
         party_code=f"P-{datetime.now(UTC).strftime('%y%m%d%H%M%S')}",
         legal_name=name or "Unnamed Party",
         display_name=name or "Unnamed Party",
+        roles=[role.strip().title() or "Customer"],
         status="ACTIVE",
     )
     session.add(created)
-    await session.flush()
-    session.add(PartyRole(party_id=created.id, role_type=role, is_primary=True))
     await session.flush()
     return created
 
@@ -113,13 +129,19 @@ def _payload_amount(data: dict[str, Any]) -> Decimal:
     return Decimal("0")
 
 
-def quotation_record(quotation: Quotation, revision: QuotationRevision | None, data: dict[str, Any]) -> dict[str, Any]:
+def quotation_record(
+    quotation: Quotation,
+    revision: QuotationRevision | None,
+    data: dict[str, Any],
+    conversion: tuple[str, str] | None = None,
+) -> dict[str, Any]:
     payload = dict(data or {})
     payload.update(
         {
             "id": str(quotation.id),
             "quotationId": str(quotation.id),
             "quotationNo": quotation.quotation_no,
+            "customerPartyId": str(quotation.customer_party_id) if quotation.customer_party_id else None,
             "status": quotation.status.capitalize() if quotation.status.isupper() else quotation.status,
             "rawStatus": quotation.status,
             "revisionNo": quotation.current_revision_no,
@@ -127,6 +149,9 @@ def quotation_record(quotation: Quotation, revision: QuotationRevision | None, d
             "updatedAt": quotation.updated_at.isoformat() if quotation.updated_at else None,
         }
     )
+    if conversion is not None:
+        payload["serviceOrderId"] = conversion[0]
+        payload["serviceOrderNo"] = conversion[1]
     if revision is not None:
         payload.setdefault("date", revision.quotation_date.isoformat() if revision.quotation_date else None)
         payload["validUntil"] = revision.valid_until.isoformat() if revision.valid_until else payload.get("validUntil")
@@ -137,15 +162,17 @@ def quotation_record(quotation: Quotation, revision: QuotationRevision | None, d
     return payload
 
 
+async def _conversions_for(session: AsyncSession, quotation_ids: list[int]) -> dict[int, tuple[str, str]]:
+    """Map quotation id -> (service order id, service order no) for converted quotations."""
+    return await QuotationRepository(session).conversion_map(quotation_ids)
+
+
+async def _party_names(session: AsyncSession, party_ids: list[int]) -> dict[int, str]:
+    return await QuotationRepository(session).party_names(party_ids)
+
+
 async def get_latest_revision(session: AsyncSession, quotation: Quotation) -> QuotationRevision | None:
-    return (
-        await session.execute(
-            select(QuotationRevision)
-            .where(QuotationRevision.quotation_id == quotation.id)
-            .order_by(QuotationRevision.revision_no.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    return await QuotationRepository(session).latest_revision(quotation.id)
 
 
 async def _save_revision_children(session: AsyncSession, revision: QuotationRevision, data: dict[str, Any]) -> None:
@@ -213,24 +240,21 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
 
 
 async def list_quotations(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(Quotation)
-    if page.status:
-        stmt = stmt.where(Quotation.status == normalize_status(page.status))
-    if page.q:
-        pattern = f"%{page.q}%"
-        stmt = stmt.where(Quotation.quotation_no.ilike(pattern) | Quotation.data["customer"].as_string().ilike(pattern))
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(Quotation, page, Quotation.id.desc()))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
+    repository = QuotationRepository(session)
+    rows, total = await repository.page(
+        page,
+        status=normalize_status(page.status) if page.status else None,
+    )
+    conversions = await _conversions_for(session, [row.id for row in rows])
+    party_names = await _party_names(session, [row.customer_party_id for row in rows if row.customer_party_id])
+    latest_revisions = await repository.latest_revisions([row.id for row in rows])
     items = []
     for quotation in rows:
-        revision = await get_latest_revision(session, quotation)
-        items.append(quotation_record(quotation, revision, quotation.data or {}))
+        revision = latest_revisions.get(quotation.id)
+        record = quotation_record(quotation, revision, quotation.data or {}, conversions.get(quotation.id))
+        if not record.get("customer"):
+            record["customer"] = party_names.get(quotation.customer_party_id)
+        items.append(record)
     return paged(items, page, total)
 
 
@@ -239,7 +263,12 @@ async def get_quotation(session: AsyncSession, context: RequestContext, quotatio
     if quotation is None:
         raise NotFound("Quotation not found.")
     revision = await get_latest_revision(session, quotation)
-    return quotation_record(quotation, revision, quotation.data or {})
+    conversions = await _conversions_for(session, [quotation.id])
+    record = quotation_record(quotation, revision, quotation.data or {}, conversions.get(quotation.id))
+    if not record.get("customer") and quotation.customer_party_id:
+        party_names = await _party_names(session, [quotation.customer_party_id])
+        record["customer"] = party_names.get(quotation.customer_party_id)
+    return record
 
 
 async def save_quotation(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
@@ -250,7 +279,12 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
         quotation = await session.get(Quotation, int(quotation_id))
 
     if quotation is None:
-        party = await resolve_party_by_name(session, data.get("customer"), context)
+        party_id = data.get("customerPartyId")
+        party = (
+            await resolve_party_by_id(session, party_id)
+            if party_id not in (None, "")
+            else await resolve_party_by_name(session, data.get("customer"), context)
+        )
         direction = await resolve_direction(session, data.get("direction"))
         number = data.get("quotationNo")
         if not number or not str(number).strip():
@@ -267,8 +301,14 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
         await session.flush()
     else:
         # Only reassign when supplied so a partial save cannot repoint the party.
-        if "customer" in data:
-            quotation.customer_party_id = (await resolve_party_by_name(session, data.get("customer"), context)).id
+        party_id = data.get("customerPartyId")
+        party = None
+        if party_id not in (None, ""):
+            party = await resolve_party_by_id(session, party_id)
+            quotation.customer_party_id = party.id
+        elif "customer" in data:
+            party = await resolve_party_by_name(session, data.get("customer"), context)
+            quotation.customer_party_id = party.id
         if "direction" in data:
             quotation.trade_direction_id = (await resolve_direction(session, data.get("direction"))).id
         quotation.status = normalize_status(data.get("status"), quotation.status)
@@ -289,7 +329,7 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
 
     if latest.status in IMMUTABLE_STATUSES:
         # A new revision is required instead of overwriting a sent revision.
-        latest = await _clone_revision(session, quotation, latest)
+        latest = await _clone_revision(session, quotation, latest, context.user_id)
         quotation.current_revision_no = latest.revision_no
         # Cloning opens a fresh draft revision, so the quotation becomes editable.
         if "status" not in data:
@@ -305,6 +345,9 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
     await _save_revision_children(session, latest, data)
 
     payload = {key: value for key, value in data.items() if key not in {"id", "quotationId", "createdAt", "updatedAt"}}
+    if party is not None:
+        # Keep the denormalised display name in sync with the selected party.
+        payload["customer"] = party.legal_name
     quotation.data = jsonable({**(quotation.data or {}), **payload})
     await session.commit()
     return quotation_record(quotation, latest, quotation.data or {})
@@ -319,7 +362,12 @@ def _date(value: Any) -> date | None:
         return None
 
 
-async def _clone_revision(session: AsyncSession, quotation: Quotation, source: QuotationRevision) -> QuotationRevision:
+async def _clone_revision(
+    session: AsyncSession,
+    quotation: Quotation,
+    source: QuotationRevision,
+    created_by_user_id: int | None = None,
+) -> QuotationRevision:
     next_no = (
         await session.scalar(select(func.max(QuotationRevision.revision_no)).where(QuotationRevision.quotation_id == quotation.id)) or 0
     ) + 1
@@ -336,6 +384,7 @@ async def _clone_revision(session: AsyncSession, quotation: Quotation, source: Q
         discount_amount=source.discount_amount,
         tax_amount=source.tax_amount,
         total_amount=source.total_amount,
+        created_by_user_id=created_by_user_id or source.created_by_user_id,
         data=dict(source.data or {}),
     )
     session.add(clone)
@@ -383,7 +432,7 @@ async def create_revision(session: AsyncSession, context: RequestContext, quotat
     if quotation is None:
         raise NotFound("Quotation not found.")
     latest = await get_latest_revision(session, quotation)
-    clone = await _clone_revision(session, quotation, latest) if latest else None
+    clone = await _clone_revision(session, quotation, latest, context.user_id) if latest else None
     if clone is None:
         clone = QuotationRevision(
             quotation_id=quotation.id,
@@ -396,8 +445,49 @@ async def create_revision(session: AsyncSession, context: RequestContext, quotat
         session.add(clone)
         await session.flush()
     quotation.current_revision_no = clone.revision_no
+    if latest is not None and latest.status != "DRAFT":
+        # Re-quotation reopens the quotation as an editable draft while the
+        # original (sent/accepted/converted) revision is preserved for history.
+        quotation.status = "DRAFT"
     await session.commit()
     return quotation_record(quotation, clone, quotation.data or {})
+
+
+async def list_revisions(session: AsyncSession, context: RequestContext, quotation_id: int) -> list[dict[str, Any]]:
+    quotation = await session.get(Quotation, quotation_id)
+    if quotation is None:
+        raise NotFound("Quotation not found.")
+    revisions = await QuotationRepository(session).revisions(quotation.id)
+    names: dict[int, str] = {}
+    user_ids = [row.created_by_user_id for row in revisions if row.created_by_user_id]
+    if user_ids:
+        from app.modules.auth.models import User
+
+        names = {
+            row[0]: row[1]
+            for row in (
+                await session.execute(select(User.id, User.display_name).where(User.id.in_(user_ids)))
+            ).all()
+        }
+    return [
+        {
+            "id": str(revision.id),
+            "revisionId": str(revision.id),
+            "revisionNo": revision.revision_no,
+            "status": revision.status.capitalize() if revision.status.isupper() else revision.status,
+            "rawStatus": revision.status,
+            "quotationDate": revision.quotation_date.isoformat() if revision.quotation_date else None,
+            "validUntil": revision.valid_until.isoformat() if revision.valid_until else None,
+            "currency": revision.currency_code,
+            "total": float(revision.total_amount or 0),
+            "createdBy": names.get(revision.created_by_user_id) or revision.created_by_user_id,
+            "createdAt": revision.created_at.isoformat() if revision.created_at else None,
+            "sentAt": revision.sent_at.isoformat() if revision.sent_at else None,
+            "acceptedAt": revision.accepted_at.isoformat() if revision.accepted_at else None,
+            "isCurrent": revision.revision_no == quotation.current_revision_no,
+        }
+        for revision in revisions
+    ]
 
 
 async def _revision_with_quotation(session: AsyncSession, revision_id: int) -> tuple[Quotation, QuotationRevision]:
@@ -445,15 +535,7 @@ async def accept_revision(session: AsyncSession, context: RequestContext, revisi
     revision.status = "ACCEPTED"
     revision.accepted_at = datetime.now(UTC)
     quotation.status = "ACCEPTED"
-    competing = (
-        await session.execute(
-            select(QuotationRevision).where(
-                QuotationRevision.quotation_id == quotation.id,
-                QuotationRevision.id != revision.id,
-                QuotationRevision.status.in_(("SENT", "ACCEPTED")),
-            )
-        )
-    ).scalars().all()
+    competing = await QuotationRepository(session).competing_revisions(quotation.id, revision.id)
     for other in competing:
         other.status = "SUPERSEDED"
     await session.commit()
@@ -464,13 +546,7 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
     from app.modules.operations.service import create_service_order_from_quotation
 
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    prior_conversion = (
-        await session.execute(
-            select(QuotationConversion)
-            .join(QuotationRevision, QuotationRevision.id == QuotationConversion.quotation_revision_id)
-            .where(QuotationRevision.quotation_id == quotation.id)
-        )
-    ).scalars().first()
+    prior_conversion = await QuotationRepository(session).conversion_for_quotation(quotation.id)
     if prior_conversion is not None:
         raise Conflict("DUPLICATE_CONVERSION", "This quotation was already converted to a service order.")
     if revision.status != "ACCEPTED":
@@ -486,6 +562,7 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
     revision.status = "CONVERTED"
     quotation.status = "CONVERTED"
     await session.commit()
+    await cache.bump("reports")
     payload = quotation_record(quotation, revision, quotation.data or {})
     payload["serviceOrderId"] = str(service_order.id)
     payload["serviceOrderNo"] = service_order.service_order_no
@@ -495,6 +572,14 @@ async def convert_revision(session: AsyncSession, context: RequestContext, revis
 async def delete_quotations(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
     for quotation_id in ids:
         quotation = await session.get(Quotation, quotation_id)
-        if quotation is not None:
-            await session.delete(quotation)
+        if quotation is None:
+            continue
+        conversion = await QuotationRepository(session).conversion_for_quotation(quotation.id)
+        if conversion is not None or quotation.status == "CONVERTED":
+            # A converted quotation is the audit trail behind a service order.
+            raise Conflict(
+                "QUOTATION_HAS_SERVICE_ORDER",
+                f"{quotation.quotation_no} is linked to a service order and cannot be deleted.",
+            )
+        await session.delete(quotation)
     await session.commit()

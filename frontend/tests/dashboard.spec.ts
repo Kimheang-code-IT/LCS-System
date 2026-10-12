@@ -1,32 +1,48 @@
 import { describe, expect, it } from 'vitest'
-import { dashboardSummaryForYear } from '../app/utils/freight/dashboard'
+import { buildDashboardBuckets, granularityForPeriod } from '../app/utils/freight/dashboard'
 
-describe('dashboard summary shaping', () => {
-  const summary = {
-    generatedAt: '2026-10-02T00:00:00Z',
-    summary: { revenue: 100 },
-    charts: {
-      revenueExpense: [
-        { month: '2025-12', revenue: 5, expense: 1 },
-        { month: '2026-01', revenue: 10, expense: 2 },
-        { month: '2026-02', revenue: 20, expense: 3 },
-      ],
-      ordersByStatus: [{ status: 'OPEN', count: 2 }],
-    },
-  }
+describe('dashboard chart shaping', () => {
+  const today = new Date(2026, 2, 15)
 
-  it('keeps only the selected year of revenue/expense points', () => {
-    const result = dashboardSummaryForYear(summary, 2026)
-    expect(result.charts.revenueExpense).toEqual([
-      { month: '2026-01', revenue: 10, expense: 2 },
-      { month: '2026-02', revenue: 20, expense: 3 },
+  it('maps the selected period to a backend granularity', () => {
+    expect(granularityForPeriod('today')).toBe('day')
+    expect(granularityForPeriod('monthly')).toBe('month')
+    expect(granularityForPeriod('yearly')).toBe('year')
+  })
+
+  it('fills a stable monthly axis for the current year', () => {
+    const buckets = buildDashboardBuckets(
+      [{ period: '2026-01', revenue: 10, expense: 2 }],
+      'monthly',
+      today,
+    )
+    expect(buckets).toEqual([
+      { key: '2026-01', revenue: 10, expense: 2 },
+      { key: '2026-02', revenue: 0, expense: 0 },
+      { key: '2026-03', revenue: 0, expense: 0 },
     ])
   })
 
-  it('leaves the rest of the summary untouched', () => {
-    const result = dashboardSummaryForYear(summary, 2025)
-    expect(result.summary).toEqual(summary.summary)
-    expect(result.charts.ordersByStatus).toEqual(summary.charts.ordersByStatus)
-    expect(result.generatedAt).toBe(summary.generatedAt)
+  it('fills a daily axis for the current month', () => {
+    const buckets = buildDashboardBuckets(
+      [{ period: '2026-03-02', revenue: 5, expense: 1 }],
+      'today',
+      today,
+    )
+    expect(buckets).toHaveLength(15)
+    expect(buckets[0]).toEqual({ key: '2026-03-01', revenue: 0, expense: 0 })
+    expect(buckets[1]).toEqual({ key: '2026-03-02', revenue: 5, expense: 1 })
+  })
+
+  it('spans the years present in the data for the yearly axis', () => {
+    const buckets = buildDashboardBuckets(
+      [
+        { period: '2024', revenue: 1, expense: 0 },
+        { period: '2026', revenue: 3, expense: 0 },
+      ],
+      'yearly',
+      today,
+    )
+    expect(buckets.map(bucket => bucket.key)).toEqual(['2024', '2025', '2026'])
   })
 })

@@ -3,11 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.bootstrap import reset_all_data
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
 from app.core.exceptions import ValidationFailed
+from app.core.rate_limit import enforce_rate_limit
+from app.modules.audit.service import write_audit
 from app.modules.settings import service
 
 router = APIRouter()
@@ -105,6 +108,16 @@ async def reset_data(
     if str(payload.get("confirm") or "").strip().upper() != "RESET":
         raise ValidationFailed("Typed confirmation is required.", {"confirm": "Type RESET to confirm."})
     await reset_all_data(session)
+    await write_audit(
+        session,
+        context,
+        event_type="BUSINESS_DATA_RESET",
+        entity_type="settings",
+        entity_id=0,
+        action="reset_business_data",
+    )
+    await session.commit()
+    await cache.bump("master_data", "reports", "auth")
     return {"data": {"reset": True}}
 
 
@@ -116,6 +129,7 @@ async def global_search(
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    await enforce_rate_limit(f"search:user:{context.user_id}", limit=120, window_seconds=60)
     return {"data": await service.search(session, context, q, limit)}
 
 
@@ -125,4 +139,5 @@ async def search_ask(
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    await enforce_rate_limit(f"search-ask:user:{context.user_id}", limit=60, window_seconds=60)
     return {"data": await service.answer(session, context, str(payload.get("q") or ""), payload.get("hitIds") or [])}

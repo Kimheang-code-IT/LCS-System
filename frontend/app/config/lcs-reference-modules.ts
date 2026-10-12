@@ -3,10 +3,8 @@ import { DOCUMENT_SEQUENCE_STATUSES, DOCUMENT_SEQUENCE_TYPES } from '~/utils/doc
 import {
   ACCOUNT_TYPES,
   ACTIVE_STATUS,
-  COUNTRIES,
+  PARTY_ROLES,
   PERIOD_STATUS,
-  PLACE_CATEGORIES,
-  TRANSPORT_TYPES,
 } from './freight-options'
 
 const YES_NO = ['Yes', 'No'] as const
@@ -30,7 +28,7 @@ const module = (value: FreightModule): FreightModule => value
 export const lcsReferenceModules: FreightModule[] = [
   module({
     path: '/master-data/business-parties', title: 'Business Parties', titleKm: 'ដៃគូអាជីវកម្ម', singular: 'Business Party', singularKm: 'ដៃគូអាជីវកម្ម',
-    description: 'One shared record for customer, supplier, carrier, broker and transport-operator roles.', descriptionKm: 'កំណត់ត្រារួមសម្រាប់តួនាទីដៃគូអាជីវកម្ម។',
+    description: 'One shared record for customer, supplier and company roles.', descriptionKm: 'កំណត់ត្រារួមសម្រាប់តួនាទីដៃគូអាជីវកម្ម។',
     icon: 'i-lucide-handshake', group: 'master', permission: 'master.reference.view', collection: 'businessParties', titleField: 'legalName', kind: 'standard', canCreate: true,
     columns: [
       column('partyCode', 'Party Code', 'លេខកូដ'), column('legalName', 'Legal Name', 'ឈ្មោះផ្លូវការ'), column('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'),
@@ -42,21 +40,20 @@ export const lcsReferenceModules: FreightModule[] = [
       field('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'), field('taxIdentifier', 'VAT / TIN', 'អាករ / TIN'), field('contactPerson', 'Contact Person', 'អ្នកទំនាក់ទំនង', 'Contact', 'ទំនាក់ទំនង'),
       field('phone', 'Phone', 'ទូរស័ព្ទ', 'Contact', 'ទំនាក់ទំនង'), field('email', 'Email', 'អ៊ីមែល', 'Contact', 'ទំនាក់ទំនង'),
       field('address', 'Address', 'អាសយដ្ឋាន', 'Address', 'អាសយដ្ឋាន', 'textarea', undefined, false, { colSpan: 2 }),
-      field('roles', 'Party Roles', 'តួនាទីដៃគូ', 'Contact', 'ទំនាក់ទំនង', 'select', undefined, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
+      field('roles', 'Party Roles', 'តួនាទីដៃគូ', 'Contact', 'ទំនាក់ទំនង', 'select', PARTY_ROLES, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
     ],
-    filters: [field('roles', 'Role', 'តួនាទី', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    filters: [field('roles', 'Role', 'តួនាទី', '', '', 'select', PARTY_ROLES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/master-data/places', title: 'Places', titleKm: 'ទីកន្លែង', singular: 'Place', singularKm: 'ទីកន្លែង', description: 'Ports, checkpoints, SEZs, warehouses, factories and destinations.', descriptionKm: 'កំពង់ផែ ច្រកព្រំដែន តំបន់សេដ្ឋកិច្ច ឃ្លាំង និងគោលដៅ។',
     icon: 'i-lucide-map-pin', group: 'master', permission: 'master.reference.view', collection: 'places', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('category', 'Category', 'ប្រភេទ'), column('parentPlace', 'Parent Place', 'ទីកន្លែងមេ'), column('country', 'Country', 'ប្រទេស'), column('address', 'Address', 'អាសយដ្ឋាន'), column('status', 'Status', 'ស្ថានភាព')],
+    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('address', 'Address', 'អាសយដ្ឋាន'), column('status', 'Status', 'ស្ថានភាព')],
     fields: [
-      field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
-      field('category', 'Place Category', 'ប្រភេទទីកន្លែង', 'Classification', 'ចំណាត់ថ្នាក់', 'select', PLACE_CATEGORIES), field('parentPlace', 'Parent Place', 'ទីកន្លែងមេ', 'Classification', 'ចំណាត់ថ្នាក់'),
-      field('address', 'Address', 'អាសយដ្ឋាន', 'Location', 'ទីតាំង', 'textarea', undefined, false, { colSpan: 2 }), field('country', 'Country', 'ប្រទេស', 'Location', 'ទីតាំង', 'select', COUNTRIES),
-      field('latitude', 'Latitude', 'រយៈទទឹង', 'Coordinates', 'កូអរដោនេ', 'number'), field('longitude', 'Longitude', 'រយៈបណ្តោយ', 'Coordinates', 'កូអរដោនេ', 'number'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
+      field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true),
+      field('address', 'Address', 'អាសយដ្ឋាន', 'Location', 'ទីតាំង', 'textarea', undefined, false, { colSpan: 2 }), field('description', 'Description', 'បរិយាយ', 'Location', 'ទីតាំង', 'textarea', undefined, false, { colSpan: 2 }),
+      field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
     ],
-    filters: [field('category', 'Category', 'ប្រភេទ', '', '', 'select', PLACE_CATEGORIES), field('country', 'Country', 'ប្រទេស', '', '', 'select', COUNTRIES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/master-data/trade-directions', title: 'Trade Directions', titleKm: 'ទិសដៅពាណិជ្ជកម្ម', singular: 'Trade Direction', singularKm: 'ទិសដៅពាណិជ្ជកម្ម', description: 'Import, export, transit and re-export service directions.', descriptionKm: 'ទិសដៅនាំចូល នាំចេញ ឆ្លងកាត់ និងនាំចេញវិញ។',
@@ -80,15 +77,15 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/master-data/transport-types', title: 'Transport Types', titleKm: 'ប្រភេទដឹកជញ្ជូន', singular: 'Transport Type', singularKm: 'ប្រភេទដឹកជញ្ជូន', description: 'Road, sea, air, rail and multimodal transport types.', descriptionKm: 'ដឹកជញ្ជូនផ្លូវគោក សមុទ្រ អាកាស ផ្លូវដែក និងចម្រុះ។',
     icon: 'i-lucide-truck', group: 'master', permission: 'master.reference.view', collection: 'transportTypes', titleField: 'name', kind: 'standard', canCreate: true,
     columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('description', 'Description', 'បរិយាយ'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'select', TRANSPORT_TYPES, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
+    fields: [field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true), field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true), field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/master-data/transport-assets', title: 'Transport Assets', titleKm: 'ទ្រព្យដឹកជញ្ជូន', singular: 'Transport Asset', singularKm: 'ទ្រព្យដឹកជញ្ជូន', description: 'Vehicles, vessels and other transport identities.', descriptionKm: 'យានយន្ត នាវា និងអត្តសញ្ញាណដឹកជញ្ជូន។',
     icon: 'i-lucide-truck-front', group: 'master', permission: 'master.reference.view', collection: 'transportAssets', titleField: 'identity', kind: 'standard', canCreate: true,
-    columns: [column('assetCode', 'Asset Code', 'លេខកូដទ្រព្យ'), column('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន'), column('identity', 'Identity', 'អត្តសញ្ញាណ'), column('identityType', 'Identity Type', 'ប្រភេទអត្តសញ្ញាណ'), column('ownerParty', 'Owner', 'ម្ចាស់'), column('operatorParty', 'Operator', 'ប្រតិបត្តិករ'), column('registrationCountry', 'Registration Country', 'ប្រទេសចុះបញ្ជី'), column('status', 'Status', 'ស្ថានភាព')],
-    fields: [field('assetCode', 'Asset Code', 'លេខកូដទ្រព្យ', undefined, undefined, 'text', undefined, true), field('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន', undefined, undefined, 'select', TRANSPORT_TYPES), field('identity', 'Identity', 'អត្តសញ្ញាណ', undefined, undefined, 'text', undefined, true), field('identityType', 'Identity Type', 'ប្រភេទអត្តសញ្ញាណ'), field('registrationCountry', 'Registration Country', 'ប្រទេសចុះបញ្ជី', 'Registration', 'ការចុះបញ្ជី', 'select', COUNTRIES), field('ownerParty', 'Owner Party', 'ភាគីម្ចាស់', 'Ownership', 'កម្មសិទ្ធិ'), field('operatorParty', 'Operator Party', 'ភាគីប្រតិបត្តិករ', 'Ownership', 'កម្មសិទ្ធិ'), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
-    filters: [field('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន', '', '', 'select', TRANSPORT_TYPES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+    columns: [column('assetCode', 'Asset Code', 'លេខកូដទ្រព្យ'), column('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន'), column('identity', 'Identity', 'អត្តសញ្ញាណ'), column('identityType', 'Identity Type', 'ប្រភេទអត្តសញ្ញាណ'), column('ownerParty', 'Owner', 'ម្ចាស់'), column('operatorParty', 'Operator', 'ប្រតិបត្តិករ'), column('status', 'Status', 'ស្ថានភាព')],
+    fields: [field('assetCode', 'Asset Code', 'លេខកូដទ្រព្យ', undefined, undefined, 'text', undefined, true), field('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន', undefined, undefined, 'select'), field('identity', 'Identity', 'អត្តសញ្ញាណ', undefined, undefined, 'text', undefined, true), field('identityType', 'Identity Type', 'ប្រភេទអត្តសញ្ញាណ'), field('ownerParty', 'Owner Party', 'ភាគីម្ចាស់', 'Ownership', 'កម្មសិទ្ធិ'), field('operatorParty', 'Operator Party', 'ភាគីប្រតិបត្តិករ', 'Ownership', 'កម្មសិទ្ធិ'), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea', undefined, false, { colSpan: 2 }), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
+    filters: [field('transportType', 'Transport Type', 'ប្រភេទដឹកជញ្ជូន', '', '', 'select'), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
   module({
     path: '/master-data/fee-types', title: 'Fee Types', titleKm: 'ប្រភេទថ្លៃ', singular: 'Fee Type', singularKm: 'ប្រភេទថ្លៃ', description: 'Reusable operational and financial fee definitions.', descriptionKm: 'និយមន័យថ្លៃប្រតិបត្តិការ និងហិរញ្ញវត្ថុដែលប្រើឡើងវិញ។',
@@ -102,12 +99,12 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/master-data/currencies', title: 'Currencies', titleKm: 'រូបិយប័ណ្ណ', singular: 'Currency', singularKm: 'រូបិយប័ណ្ណ',
     description: 'ISO currencies used for pricing, invoices and accounting.', descriptionKm: 'រូបិយប័ណ្ណ ISO សម្រាប់តម្លៃ វិក្កយបត្រ និងគណនេយ្យ។',
     icon: 'i-lucide-coins', group: 'master', permission: 'master.reference.view', collection: 'currencies', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('symbol', 'Symbol', 'សញ្ញា'), column('exchangeRate', 'Exchange Rate', 'អត្រាប្តូរប្រាក់'), column('status', 'Status', 'ស្ថានភាព')],
+    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('symbol', 'Symbol', 'សញ្ញា'), column('status', 'Status', 'ស្ថានភាព')],
     fields: [
       field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true),
       field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true),
       field('symbol', 'Symbol', 'សញ្ញា'),
-      field('exchangeRate', 'Exchange Rate', 'អត្រាប្តូរប្រាក់', 'Rate', 'អត្រា', 'number'),
+      field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
       field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
     ],
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
@@ -127,7 +124,6 @@ export const lcsReferenceModules: FreightModule[] = [
       field('lastValue', 'Starting / Last Value', 'តម្លៃចាប់ផ្តើម / ចុងក្រោយ', undefined, undefined, 'number', undefined, true),
       field('paddingLength', 'Padding Length', 'ប្រវែងលេខ', undefined, undefined, 'number', undefined, true),
       field('nextNumberPreview', 'Next Number Preview', 'លេខបន្ទាប់', undefined, undefined, 'text', undefined, false, { computed: true }),
-      field('status', 'Status', 'ស្ថានភាព', undefined, undefined, 'select', DOCUMENT_SEQUENCE_STATUSES, true),
     ],
     filters: [
       field('documentType', 'Document Type', 'ប្រភេទឯកសារ', '', '', 'select', DOCUMENT_SEQUENCE_TYPES),

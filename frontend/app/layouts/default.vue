@@ -45,7 +45,7 @@ const {
               :color="mode === 'keyword' ? 'primary' : 'neutral'"
               :variant="mode === 'keyword' ? 'soft' : 'ghost'"
               icon="i-lucide-search"
-              :label="t('docetra.search.modeKeyword')"
+              :label="t('lcs.search.modeKeyword')"
               @click="setMode('keyword')"
             />
             <UButton
@@ -53,14 +53,14 @@ const {
               :color="mode === 'semantic' ? 'primary' : 'neutral'"
               :variant="mode === 'semantic' ? 'soft' : 'ghost'"
               icon="i-lucide-brain"
-              :label="t('docetra.search.modeSemantic')"
+              :label="t('lcs.search.modeSemantic')"
               @click="setMode('semantic')"
             />
           </div>
           <p class="text-xs text-muted">
             {{ mode === 'semantic'
-              ? t('docetra.search.hintSemantic')
-              : t('docetra.search.hintKeyword') }}
+              ? t('lcs.search.hintSemantic')
+              : t('lcs.search.hintKeyword') }}
           </p>
         </div>
       </template>

@@ -3,16 +3,15 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Body, Depends
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_permission
 from app.core.exceptions import AccessDenied, Conflict, ValidationFailed
-from app.core.pagination import PageParams, list_sort_orders, page_params, paged
+from app.core.pagination import PageParams, page_params, paged
 from app.modules.backup import service
-from app.modules.backup.models import BackupRun
+from app.modules.backup.repository import BackupRunRepository
 from app.modules.backup.sheets import BackupConfigurationError, SheetsApiError
 
 router = APIRouter()
@@ -24,9 +23,7 @@ async def backup_status(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     config = await service._load_backup_config(session)
-    last_run = (
-        await session.execute(select(BackupRun).order_by(BackupRun.id.desc()).limit(1))
-    ).scalars().first()
+    last_run = await BackupRunRepository(session).latest()
     return {
         "data": {
             "config": service.public_config(config),
@@ -43,15 +40,7 @@ async def list_runs(
     context: RequestContext = Depends(require_permission("backup.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    total = int(await session.scalar(select(func.count()).select_from(BackupRun)) or 0)
-    runs = (
-        await session.execute(
-            select(BackupRun)
-            .order_by(*list_sort_orders(BackupRun, page, BackupRun.id.desc()))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
+    runs, total = await BackupRunRepository(session).page(page)
     return {"data": paged([service.serialize_run(run) for run in runs], page, total)}
 
 

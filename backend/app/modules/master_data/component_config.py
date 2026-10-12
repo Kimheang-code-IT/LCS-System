@@ -23,7 +23,6 @@ from app.modules.master_data.models import (
     ComponentGroupAttribute,
     ComponentTab,
     ComponentTabGroup,
-    ComponentTabTradeDirection,
 )
 from app.modules.operations.models import ServiceOrderComponentRow
 
@@ -436,19 +435,31 @@ async def reorder_group_attributes(session: AsyncSession, context: RequestContex
 
 
 # --- Tabs --------------------------------------------------------------------
-def tab_payload(tab: ComponentTab, group_count: int = 0, direction_ids: list[int] | None = None) -> dict[str, Any]:
+def _direction_id(data: dict[str, Any]) -> int | None:
+    value = data.get("tradeDirectionId")
+    if value in (None, ""):
+        legacy = data.get("tradeDirectionIds")
+        if isinstance(legacy, list) and legacy:
+            value = legacy[0]
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def tab_payload(tab: ComponentTab, group_count: int = 0) -> dict[str, Any]:
     return {
         "id": str(tab.id),
         "code": tab.code,
         "name": tab.name,
-        "nameKm": tab.name_km,
         "description": tab.description,
-        "icon": tab.icon,
+        "tradeDirectionId": str(tab.trade_direction_id) if tab.trade_direction_id else None,
         "displayOrder": tab.display_order,
         "isActive": tab.is_active,
         "isArchived": tab.is_archived,
         "groupCount": group_count,
-        "tradeDirectionIds": [str(item) for item in (direction_ids or [])],
         "createdAt": tab.created_at.isoformat() if tab.created_at else None,
         "updatedAt": tab.updated_at.isoformat() if tab.updated_at else None,
     }
@@ -475,14 +486,7 @@ async def list_tabs(session: AsyncSession, context: RequestContext, page: PagePa
                 ComponentTabGroup.tab_id == row.id, ComponentTabGroup.status == "ACTIVE"
             )
         )
-        directions = (
-            await session.execute(
-                select(ComponentTabTradeDirection.trade_direction_id).where(
-                    ComponentTabTradeDirection.tab_id == row.id, ComponentTabTradeDirection.status == "ACTIVE"
-                )
-            )
-        ).scalars().all()
-        items.append(tab_payload(row, int(count or 0), list(directions)))
+        items.append(tab_payload(row, int(count or 0)))
     return paged(items, page, total)
 
 
@@ -506,36 +510,24 @@ async def create_tab(session: AsyncSession, context: RequestContext, data: dict[
     tab = ComponentTab(
         code=code,
         name=str(data.get("name") or code.replace("-", " ").title()),
-        name_km=data.get("nameKm"),
         description=data.get("description"),
-        icon=data.get("icon") or "i-lucide-table",
+        trade_direction_id=_direction_id(data),
         display_order=int(data.get("displayOrder") if data.get("displayOrder") is not None else (max_order or 0) + 10),
         is_active=_bool(data.get("isActive"), True),
     )
     session.add(tab)
-    await session.flush()
-    direction_ids = data.get("tradeDirectionIds")
-    if isinstance(direction_ids, list):
-        for index, direction_id in enumerate(direction_ids):
-            session.add(
-                ComponentTabTradeDirection(
-                    tab_id=tab.id, trade_direction_id=int(direction_id), display_order=(index + 1) * 10
-                )
-            )
     await session.commit()
-    return tab_payload(tab, 0, [int(item) for item in direction_ids] if isinstance(direction_ids, list) else [])
+    return tab_payload(tab, 0)
 
 
 async def update_tab(session: AsyncSession, context: RequestContext, tab_id: int, data: dict[str, Any]) -> dict:
     tab = await _get_tab(session, tab_id)
     if data.get("name") is not None:
         tab.name = str(data["name"])
-    if data.get("nameKm") is not None:
-        tab.name_km = data.get("nameKm")
     if data.get("description") is not None:
         tab.description = data.get("description")
-    if data.get("icon") is not None:
-        tab.icon = data.get("icon")
+    if "tradeDirectionId" in data or "tradeDirectionIds" in data:
+        tab.trade_direction_id = _direction_id(data)
     if data.get("displayOrder") is not None:
         tab.display_order = int(data["displayOrder"])
     if data.get("isActive") is not None:
@@ -544,18 +536,6 @@ async def update_tab(session: AsyncSession, context: RequestContext, tab_id: int
         tab.is_archived = _bool(data["isArchived"], tab.is_archived)
         if tab.is_archived:
             tab.is_active = False
-    if isinstance(data.get("tradeDirectionIds"), list):
-        from sqlalchemy import delete
-
-        await session.execute(
-            delete(ComponentTabTradeDirection).where(ComponentTabTradeDirection.tab_id == tab.id)
-        )
-        for index, direction_id in enumerate(data["tradeDirectionIds"]):
-            session.add(
-                ComponentTabTradeDirection(
-                    tab_id=tab.id, trade_direction_id=int(direction_id), display_order=(index + 1) * 10
-                )
-            )
     await session.commit()
     return await _tab_detail(session, context, tab.id)
 
@@ -570,12 +550,7 @@ async def delete_tab(session: AsyncSession, context: RequestContext, tab_id: int
 async def _tab_detail(session: AsyncSession, context: RequestContext, tab_id: int) -> dict:
     tab = await _get_tab(session, tab_id)
     groups = await list_tab_groups(session, context, tab_id)
-    directions = (
-        await session.execute(
-            select(ComponentTabTradeDirection.trade_direction_id).where(ComponentTabTradeDirection.tab_id == tab.id)
-        )
-    ).scalars().all()
-    payload = tab_payload(tab, len(groups), list(directions))
+    payload = tab_payload(tab, len(groups))
     payload["groups"] = groups
     return payload
 
@@ -640,16 +615,3 @@ async def reorder_tab_groups(session: AsyncSession, context: RequestContext, tab
             membership.display_order = (index + 1) * 10
     await session.commit()
     return await list_tab_groups(session, context, tab_id)
-
-
-async def set_tab_directions(session: AsyncSession, context: RequestContext, tab_id: int, direction_ids: list[int]) -> list[str]:
-    from sqlalchemy import delete
-
-    await _get_tab(session, tab_id)
-    await session.execute(delete(ComponentTabTradeDirection).where(ComponentTabTradeDirection.tab_id == tab_id))
-    for index, direction_id in enumerate(direction_ids):
-        session.add(
-            ComponentTabTradeDirection(tab_id=tab_id, trade_direction_id=int(direction_id), display_order=(index + 1) * 10)
-        )
-    await session.commit()
-    return [str(item) for item in direction_ids]

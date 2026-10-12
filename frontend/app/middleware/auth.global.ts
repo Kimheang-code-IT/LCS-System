@@ -12,7 +12,7 @@ const PERMITTED_LANDING_ROUTES = [
   ['/administration/system-settings', 'settings.app_config.view'],
 ] as const
 
-const SETUP_PATH = '/setup'
+const SETUP_PATH = '/auth/setup'
 
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()

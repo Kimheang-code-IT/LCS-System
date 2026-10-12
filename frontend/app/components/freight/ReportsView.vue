@@ -10,7 +10,7 @@ import type { FreightRecord } from '~/types/record'
 import { ACTIVE_STATUS, CONTAINER_STATUSES } from '~/config/freight-options'
 import { downloadCsv } from '~/utils/export/csv'
 import { buildStatementGroups, postedJournalLines, reportRowDate, statementDifference as statementDifferenceOf } from '~/utils/freight/report'
-import { buildReportRows } from '~/utils/freight/report-queries'
+import { buildReportRows, buildRevenueExpenseReportRows, buildTrialBalanceReportRows } from '~/utils/freight/report-queries'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { limitFilterSelects, matchesFilter } from '~/utils/filter/values'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
@@ -49,12 +49,14 @@ const dateTo = ref('')
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const sort = ref<ListSortSelection>(null)
 const rowSelection = ref<Record<string, boolean>>({})
-const postedLines = computed<FreightRecord[]>(() => postedJournalLines(store.list('journals'), store.list('chartOfAccounts')))
+const localPostedLines = computed<FreightRecord[]>(() => postedJournalLines(store.list('journals'), store.list('chartOfAccounts')))
 function jobByNo(value: unknown) { return store.list('jobs').find(row => String(row.jobNo) === String(value)) }
 
-const backendSlugs = ['accounts-receivable', 'accounts-payable', 'profitability']
+const ledgerSlugs = ['revenue-expense', 'general-ledger', 'trial-balance', 'profit-loss', 'balance-sheet', 'cash-flow']
+const backendSlugs = ['accounts-receivable', 'accounts-payable', 'profitability', ...ledgerSlugs]
 const useBackend = computed(() => backendSlugs.includes(slug.value))
 const backendRows = ref<FreightRecord[]>([])
+const backendLedgerLines = ref<FreightRecord[]>([])
 const backendPending = ref(false)
 
 async function loadBackendReport() {
@@ -65,9 +67,26 @@ async function loadBackendReport() {
   backendPending.value = true
   try {
     let data: FreightRecord[] = []
+    backendLedgerLines.value = []
     if (slug.value === 'accounts-receivable') data = await reports.receivables()
     else if (slug.value === 'accounts-payable') data = await reports.payables()
     else if (slug.value === 'profitability') data = await reports.profitability()
+    else {
+      const lines = await reports.ledgerLines()
+      backendLedgerLines.value = lines
+      if (slug.value === 'revenue-expense') data = buildRevenueExpenseReportRows(lines)
+      else if (slug.value === 'trial-balance') data = buildTrialBalanceReportRows(lines)
+      else if (slug.value === 'cash-flow') {
+        let balance = 0
+        data = lines.filter(row => Boolean(row.isCashAccount)).map((row) => {
+          const cashIn = Number(row.debit || 0)
+          const cashOut = Number(row.credit || 0)
+          balance += cashIn - cashOut
+          return { ...row, cashIn, cashOut, runningBalance: balance }
+        })
+      }
+      else data = lines
+    }
     backendRows.value = data
   }
   catch {
@@ -129,7 +148,8 @@ function setFilterValue(key: ReportFilterKey, value: string[] | string | undefin
 
 const statementTypes=computed(()=>report.value.statementTypes||(slug.value==='profit-loss'?['Revenue','Expense']:['Asset','Liability','Equity']))
 // Statement reports must respect the same toolbar filters as table reports.
-const filteredPostedLines=computed(()=>postedLines.value.filter((row)=>{
+const statementLines = computed(() => ledgerSlugs.includes(slug.value) ? backendLedgerLines.value : localPostedLines.value)
+const filteredPostedLines=computed(()=>statementLines.value.filter((row)=>{
   const day=reportRowDate(row)
   return matchesFilter(row.currency,currency.value)
     && (!dateFrom.value||day>=dateFrom.value)

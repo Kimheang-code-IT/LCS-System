@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.context import RequestContext
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
@@ -26,6 +27,7 @@ from app.modules.finance.models import (
     JournalEntryLine,
     PostingRule,
 )
+from app.modules.finance.repository import FinanceRepository
 from app.modules.operations.models import ServiceOrder, ServiceOrderCharge, ServiceOrderChargeLine
 from app.modules.settings.service import get_default_currency
 
@@ -77,20 +79,7 @@ def account_payload(account: ChartOfAccount, parent_code: str | None = None) -> 
 
 
 async def list_accounts(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(ChartOfAccount)
-    if page.q:
-        pattern = f"%{page.q}%"
-        stmt = stmt.where(ChartOfAccount.account_code.ilike(pattern) | ChartOfAccount.account_name.ilike(pattern))
-    if page.status:
-        stmt = stmt.where(ChartOfAccount.status == str(page.status).upper())
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(ChartOfAccount, page, ChartOfAccount.account_code))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
+    rows, total = await FinanceRepository(session).account_page(page)
     codes = {row.id: row.account_code for row in rows}
     items = [account_payload(row, codes.get(row.parent_account_id)) for row in rows]
     return paged(items, page, total)
@@ -152,16 +141,24 @@ async def financial_account_payload(session: AsyncSession, account: FinancialAcc
 
 
 async def list_financial_accounts(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
-    stmt = select(FinancialAccount)
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(FinancialAccount, page, FinancialAccount.id))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
-    items = [await financial_account_payload(session, row) for row in rows]
+    repository = FinanceRepository(session)
+    rows, total = await repository.financial_account_page(page)
+    ledgers, balances = await repository.financial_account_details(rows)
+    items = [
+        {
+            "id": str(row.id),
+            "accountName": row.account_name,
+            "ledgerCode": ledgers[row.account_id].account_code if row.account_id in ledgers else None,
+            "ledgerAccountId": row.account_id,
+            "accountType": row.account_type,
+            "currency": row.currency_code,
+            "bankName": row.bank_name,
+            "accountNumberMasked": row.account_number_masked,
+            "balance": float(balances.get(row.account_id, 0) or 0),
+            "status": row.status,
+        }
+        for row in rows
+    ]
     return paged(items, page, total)
 
 
@@ -378,15 +375,7 @@ def _line_payload(line: FinancialDocumentLine) -> dict[str, Any]:
 
 
 async def _document_lines(session: AsyncSession, document_id: int) -> list[FinancialDocumentLine]:
-    return list(
-        (
-            await session.execute(
-                select(FinancialDocumentLine)
-                .where(FinancialDocumentLine.financial_document_id == document_id)
-                .order_by(FinancialDocumentLine.line_no)
-            )
-        ).scalars().all()
-    )
+    return (await FinanceRepository(session).document_lines([document_id])).get(document_id, [])
 
 
 async def list_documents(
@@ -396,34 +385,30 @@ async def list_documents(
     document_type: str | None = None,
     party_id: int | None = None,
 ) -> dict:
-    stmt = select(FinancialDocument)
-    if document_type:
-        stmt = stmt.where(FinancialDocument.document_type == document_type)
-    if party_id is not None:
-        stmt = stmt.where(FinancialDocument.party_id == party_id)
-    if page.status:
-        stmt = stmt.where(FinancialDocument.status == str(page.status).upper())
-    if page.q:
-        pattern = f"%{page.q}%"
-        stmt = stmt.where(
-            FinancialDocument.document_no.ilike(pattern) | FinancialDocument.description.ilike(pattern)
-        )
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(FinancialDocument, page, FinancialDocument.id.desc()))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
-    return paged([document_payload(row, row.data or {}, await _document_lines(session, row.id)) for row in rows], page, total)
+    repository = FinanceRepository(session)
+    rows, total = await repository.document_page(page, document_type=document_type, party_id=party_id)
+    lines = await repository.document_lines([row.id for row in rows])
+    return paged(
+        [document_payload(row, row.data or {}, lines.get(row.id, [])) for row in rows],
+        page,
+        total,
+    )
 
 
 async def get_document(session: AsyncSession, context: RequestContext, document_id: int) -> dict:
-    document = await session.get(FinancialDocument, document_id)
+    document, lines = await FinanceRepository(session).document_with_lines(document_id)
     if document is None:
         raise NotFound("Financial document not found.")
-    return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+    return document_payload(document, document.data or {}, lines)
+
+
+async def delete_draft_documents(session: AsyncSession, ids: list[int]) -> int:
+    documents = await FinanceRepository(session).documents_by_ids(ids)
+    drafts = [document for document in documents if document.status == "DRAFT"]
+    for document in drafts:
+        await session.delete(document)
+    await session.commit()
+    return len(drafts)
 
 
 async def save_document(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
@@ -549,16 +534,40 @@ async def _resolve_account_ref(session: AsyncSession, value: Any) -> ChartOfAcco
     return account
 
 
-async def _resolve_rule(session: AsyncSession, document_type: str) -> tuple[ChartOfAccount | None, ChartOfAccount | None, ChartOfAccount | None]:
-    rule = (
-        await session.execute(
-            select(PostingRule).where(
-                PostingRule.document_type == document_type,
-                PostingRule.fee_type_id.is_(None),
-                PostingRule.status == "ACTIVE",
-            )
+async def _resolve_rule(
+    session: AsyncSession,
+    document_type: str,
+    fee_type_id: int | None = None,
+) -> tuple[ChartOfAccount | None, ChartOfAccount | None, ChartOfAccount | None]:
+    async def matching_rule(candidate_fee_type_id: int | None) -> PostingRule | None:
+        fee_filter = (
+            PostingRule.fee_type_id == candidate_fee_type_id
+            if candidate_fee_type_id is not None
+            else PostingRule.fee_type_id.is_(None)
         )
-    ).scalars().first()
+        matches = list(
+            (
+                await session.execute(
+                    select(PostingRule)
+                    .where(
+                        PostingRule.document_type == document_type,
+                        fee_filter,
+                        PostingRule.status == "ACTIVE",
+                    )
+                    .order_by(PostingRule.id)
+                    .limit(2)
+                )
+            ).scalars().all()
+        )
+        if len(matches) > 1:
+            raise Conflict(
+                "AMBIGUOUS_POSTING_RULE",
+                f"More than one active posting rule matches {document_type}.",
+            )
+        return matches[0] if matches else None
+
+    rule = await matching_rule(fee_type_id) if fee_type_id is not None else None
+    rule = rule or await matching_rule(None)
     debit = await session.get(ChartOfAccount, rule.debit_account_id) if rule else None
     credit = await session.get(ChartOfAccount, rule.credit_account_id) if rule else None
     tax = await session.get(ChartOfAccount, rule.tax_account_id) if rule and rule.tax_account_id else None
@@ -567,6 +576,14 @@ async def _resolve_rule(session: AsyncSession, document_type: str) -> tuple[Char
         debit = debit or await _account_by_code(session, codes[0])
         credit = credit or await _account_by_code(session, codes[1])
     return debit, credit, tax
+
+
+def _validate_posting_account(account: ChartOfAccount | None, label: str) -> ChartOfAccount:
+    if account is None:
+        raise ValidationFailed(f"No {label} posting account could be resolved.")
+    if not account.is_postable or account.status != "ACTIVE":
+        raise ValidationFailed(f"The {label} account {account.account_code} must be active and postable.")
+    return account
 
 
 async def post_document(session: AsyncSession, context: RequestContext, document_id: int) -> dict:
@@ -587,10 +604,10 @@ async def post_document(session: AsyncSession, context: RequestContext, document
         raise Conflict("PERIOD_CLOSED", "The accounting period is closed.")
 
     debit_account, credit_account, tax_account = await _resolve_rule(session, document.document_type)
-    if debit_account is None or credit_account is None:
-        raise ValidationFailed("No posting rule or default account could be resolved.")
-    if not debit_account.is_postable or not credit_account.is_postable:
-        raise ValidationFailed("Posting accounts must be postable.")
+    debit_account = _validate_posting_account(debit_account, "debit")
+    credit_account = _validate_posting_account(credit_account, "credit")
+    if tax_account is not None:
+        tax_account = _validate_posting_account(tax_account, "tax")
 
     total = document.total_amount or Decimal("0")
     if total <= 0:
@@ -614,49 +631,73 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     await session.flush()
 
     lines: list[JournalEntryLine] = []
-    tax_amount = document.tax_amount or Decimal("0")
-    net_amount = total - tax_amount
-    lines.append(
-        JournalEntryLine(
-            journal_entry_id=entry.id,
-            line_no=1,
-            account_id=debit_account.id,
-            party_id=document.party_id,
-            service_order_id=document.service_order_id,
-            financial_document_id=document.id,
-            description=document.description or document.document_no,
-            debit_amount=total,
-            credit_amount=Decimal("0"),
-            currency_code=document.currency_code,
-            exchange_rate=document.exchange_rate,
-            base_debit_amount=total * (document.exchange_rate or Decimal("1")),
-            base_credit_amount=Decimal("0"),
-        )
-    )
-    credit_lines = []
-    if tax_amount > 0 and tax_account is not None:
-        credit_lines.append((credit_account, net_amount))
-        credit_lines.append((tax_account, tax_amount))
-    else:
-        credit_lines.append((credit_account, total))
-    for index, (account, amount) in enumerate(credit_lines, start=2):
+    exchange_rate = document.exchange_rate or Decimal("1")
+
+    def append_line(account: ChartOfAccount, amount: Decimal, *, debit: bool, description: str) -> None:
+        if amount <= 0:
+            return
         lines.append(
             JournalEntryLine(
                 journal_entry_id=entry.id,
-                line_no=index,
+                line_no=len(lines) + 1,
                 account_id=account.id,
                 party_id=document.party_id,
                 service_order_id=document.service_order_id,
                 financial_document_id=document.id,
-                description=document.description or document.document_no,
-                debit_amount=Decimal("0"),
-                credit_amount=amount,
+                description=description,
+                debit_amount=amount if debit else Decimal("0"),
+                credit_amount=Decimal("0") if debit else amount,
                 currency_code=document.currency_code,
-                exchange_rate=document.exchange_rate,
-                base_debit_amount=Decimal("0"),
-                base_credit_amount=amount * (document.exchange_rate or Decimal("1")),
+                exchange_rate=exchange_rate,
+                base_debit_amount=amount * exchange_rate if debit else Decimal("0"),
+                base_credit_amount=Decimal("0") if debit else amount * exchange_rate,
             )
         )
+
+    document_lines = await _document_lines(session, document.id)
+    detailed_credit = document.document_type in {"CUSTOMER_INVOICE", "OTHER_INCOME"}
+    detailed_debit = document.document_type in {"SUPPLIER_BILL", "OTHER_EXPENSE"}
+    description = document.description or document.document_no
+
+    if document_lines and (detailed_credit or detailed_debit):
+        # Receivable/payable (or cash) is the control side. The opposite side is
+        # resolved per fee line, allowing freight, customs and other services to
+        # map to different revenue/expense accounts automatically.
+        append_line(
+            debit_account if detailed_credit else credit_account,
+            total,
+            debit=detailed_credit,
+            description=description,
+        )
+        for source_line in document_lines:
+            line_total = source_line.line_amount or Decimal("0")
+            line_tax = min(source_line.tax_amount or Decimal("0"), line_total)
+            rule_debit, rule_credit, rule_tax = await _resolve_rule(
+                session, document.document_type, source_line.fee_type_id
+            )
+            detail_account = rule_credit if detailed_credit else rule_debit
+            if source_line.account_id is not None:
+                detail_account = await session.get(ChartOfAccount, source_line.account_id)
+            detail_account = _validate_posting_account(detail_account, "line")
+            if rule_tax is not None:
+                rule_tax = _validate_posting_account(rule_tax, "tax")
+            net_amount = line_total - line_tax if rule_tax is not None else line_total
+            append_line(
+                detail_account,
+                net_amount,
+                debit=detailed_debit,
+                description=source_line.description or description,
+            )
+            if rule_tax is not None:
+                append_line(
+                    rule_tax,
+                    line_tax,
+                    debit=detailed_debit,
+                    description=f"Tax: {source_line.description or description}",
+                )
+    else:
+        append_line(debit_account, total, debit=True, description=description)
+        append_line(credit_account, total, debit=False, description=description)
     for line in lines:
         session.add(line)
     total_debit = sum((line.debit_amount for line in lines), Decimal("0"))
@@ -670,6 +711,7 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     document.posted_by_user_id = context.user_id
     document.posted_at = datetime.now(UTC)
     await session.commit()
+    await cache.bump("reports")
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
@@ -765,6 +807,7 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
     document.paid_amount = Decimal("0")
     document.status = "REVERSED"
     await session.commit()
+    await cache.bump("reports")
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
@@ -845,6 +888,7 @@ async def allocate_payment(
     payment.paid_amount = (payment.paid_amount or Decimal("0")) + amount
     target.paid_amount = (target.paid_amount or Decimal("0")) + amount
     await session.commit()
+    await cache.bump("reports")
     return {
         "paymentDocumentId": str(payment.id),
         "targetDocumentId": str(target.id),
@@ -854,7 +898,15 @@ async def allocate_payment(
     }
 
 
-async def create_invoice_from_charge(session: AsyncSession, context: RequestContext, charge: ServiceOrderCharge) -> dict:
+async def create_invoice_from_charge(
+    session: AsyncSession,
+    context: RequestContext,
+    charge: ServiceOrderCharge,
+    *,
+    commit: bool = True,
+) -> dict:
+    if charge.status != "ISSUED":
+        raise InvalidState("Only an issued service charge can create a finance invoice.")
     existing = (
         await session.execute(
             select(FinancialDocumentSource).where(
@@ -917,7 +969,11 @@ async def create_invoice_from_charge(session: AsyncSession, context: RequestCont
             source_id=charge.id,
         )
     )
-    await session.commit()
+    if commit:
+        await session.commit()
+        await cache.bump("reports")
+    else:
+        await session.flush()
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
@@ -1038,6 +1094,7 @@ async def create_invoice_from_service_order(session: AsyncSession, context: Requ
         )
     )
     await session.commit()
+    await cache.bump("reports")
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
@@ -1165,9 +1222,25 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
                 "Every journal line must reference a valid account.",
                 {"lines": f"Line {index + 1} has an unknown account."},
             )
+        _validate_posting_account(account, f"line {index + 1}")
         debit_amount = _decimal(line.get("debit_amount") or line.get("debitAmount"))
         credit_amount = _decimal(line.get("credit_amount") or line.get("creditAmount"))
         exchange_rate = _decimal(line.get("exchangeRate"), Decimal("1"))
+        if debit_amount < 0 or credit_amount < 0:
+            raise ValidationFailed(
+                "Journal amounts cannot be negative.",
+                {"lines": f"Line {index + 1} contains a negative amount."},
+            )
+        if (debit_amount > 0) == (credit_amount > 0):
+            raise ValidationFailed(
+                "Each journal line must contain either a debit or a credit.",
+                {"lines": f"Line {index + 1} must have exactly one positive side."},
+            )
+        if exchange_rate <= 0:
+            raise ValidationFailed(
+                "Journal exchange rate must be greater than zero.",
+                {"lines": f"Line {index + 1} has an invalid exchange rate."},
+            )
         debit_total += debit_amount
         credit_total += credit_amount
         session.add(
@@ -1204,6 +1277,14 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
     if entry.status != "DRAFT":
         raise InvalidState(f"Cannot post a journal in status {entry.status}.")
     lines = await _journal_lines(session, entry.id)
+    if len(lines) < 2:
+        raise ValidationFailed("A journal must have at least two lines before posting.")
+    for index, line in enumerate(lines, start=1):
+        if line.debit_amount < 0 or line.credit_amount < 0 or ((line.debit_amount > 0) == (line.credit_amount > 0)):
+            raise ValidationFailed(
+                "Every journal line must contain exactly one positive debit or credit.",
+                {"lines": f"Line {index} is invalid."},
+            )
     debit_total = sum((line.debit_amount or Decimal("0") for line in lines), Decimal("0"))
     credit_total = sum((line.credit_amount or Decimal("0") for line in lines), Decimal("0"))
     if debit_total != credit_total or debit_total == 0:
@@ -1217,6 +1298,7 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
     entry.debit_total = debit_total
     entry.credit_total = credit_total
     await session.commit()
+    await cache.bump("reports")
     return await journal_payload(session, entry)
 
 
@@ -1255,12 +1337,29 @@ async def create_posting_rule(session: AsyncSession, context: RequestContext, da
     if debit is None or credit is None:
         raise ValidationFailed("Debit and credit accounts must exist.")
     tax_account = await _resolve_account_ref(session, data.get("taxAccount"))
+    document_type = str(data.get("documentType") or "CUSTOMER_INVOICE").upper()
+    fee_type_id = _int_or_none(data.get("feeTypeId") or data.get("feeType"))
+    status = str(data.get("status") or "ACTIVE").upper()
+    if status == "ACTIVE":
+        fee_filter = PostingRule.fee_type_id == fee_type_id if fee_type_id is not None else PostingRule.fee_type_id.is_(None)
+        duplicate = (
+            await session.execute(
+                select(PostingRule).where(
+                    PostingRule.document_type == document_type,
+                    fee_filter,
+                    PostingRule.status == "ACTIVE",
+                )
+            )
+        ).scalars().first()
+        if duplicate is not None:
+            raise Conflict("DUPLICATE_POSTING_RULE", "An active posting rule already exists for this document and fee type.")
     rule = PostingRule(
-        document_type=str(data.get("documentType") or "CUSTOMER_INVOICE").upper(),
+        document_type=document_type,
+        fee_type_id=fee_type_id,
         debit_account_id=debit.id,
         credit_account_id=credit.id,
         tax_account_id=tax_account.id if tax_account else None,
-        status=str(data.get("status") or "ACTIVE").upper(),
+        status=status,
     )
     session.add(rule)
     await session.commit()
@@ -1369,6 +1468,8 @@ async def update_posting_rule(session: AsyncSession, context: RequestContext, ru
         rule.document_type = str(data["documentType"]).upper()
     if data.get("status") is not None:
         rule.status = str(data["status"]).upper()
+    if "feeType" in data or "feeTypeId" in data:
+        rule.fee_type_id = _int_or_none(data.get("feeTypeId") or data.get("feeType"))
     if data.get("debitAccount") is not None:
         debit = await _account_by_code(session, str(data["debitAccount"]))
         if debit is None:
@@ -1382,6 +1483,20 @@ async def update_posting_rule(session: AsyncSession, context: RequestContext, ru
     if "taxAccount" in data:
         tax_account = await _resolve_account_ref(session, data.get("taxAccount"))
         rule.tax_account_id = tax_account.id if tax_account else None
+    if rule.status == "ACTIVE":
+        fee_filter = PostingRule.fee_type_id == rule.fee_type_id if rule.fee_type_id is not None else PostingRule.fee_type_id.is_(None)
+        duplicate = (
+            await session.execute(
+                select(PostingRule).where(
+                    PostingRule.id != rule.id,
+                    PostingRule.document_type == rule.document_type,
+                    fee_filter,
+                    PostingRule.status == "ACTIVE",
+                )
+            )
+        ).scalars().first()
+        if duplicate is not None:
+            raise Conflict("DUPLICATE_POSTING_RULE", "An active posting rule already exists for this document and fee type.")
     await session.commit()
     return await posting_rule_payload(session, rule)
 

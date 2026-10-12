@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ACTIVE_STATUS, CONTAINER_STATUSES, DOCUMENT_TYPES } from '../app/config/freight-options'
 import { labeledStatusOptions, shortDay } from '../app/utils/freight/format'
-import { statusColor } from '../app/composables/freight/useFreight'
+import { defaultStatusForModule, emptyFreightRecord, statusColor } from '../app/composables/freight/useFreight'
+import { lcsReferenceModules } from '../app/config/lcs-reference-modules'
+import { freightModules } from '../app/config/freight-modules'
 
 vi.mock('#components', () => ({
   UBadge: { name: 'UBadge' },
@@ -33,6 +35,26 @@ describe('statusColor', () => {
     expect(statusColor('COMPLETED')).toBe('success')
     expect(statusColor('Draft')).toBe('warning')
     expect(statusColor('PENDING')).toBe('warning')
+  })
+})
+
+describe('new record status defaults', () => {
+  it('starts a master-data reference record as Active, never Draft', () => {
+    const businessParties = lcsReferenceModules.find(module => module.collection === 'businessParties')
+    expect(businessParties).toBeTruthy()
+    expect(emptyFreightRecord(businessParties!).status).toBe('Active')
+  })
+
+  it('starts a service order as Active', () => {
+    const jobs = freightModules.find(module => module.collection === 'jobs')
+    expect(jobs).toBeTruthy()
+    expect(emptyFreightRecord(jobs!).status).toBe('Active')
+  })
+
+  it('keeps the first declared workflow status for document modules', () => {
+    const quotations = freightModules.find(module => module.collection === 'quotations')
+    expect(quotations).toBeTruthy()
+    expect(defaultStatusForModule(quotations!)).toBe('Draft')
   })
 })
 

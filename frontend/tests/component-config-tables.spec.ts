@@ -8,12 +8,8 @@ import {
   componentConfigTable,
   componentGroupAttributeColumns,
   componentGroupAttributeRows,
-  componentNeedsOptions,
-  componentOptionsText,
-  componentReferenceTypeValue,
   componentTabGroupColumns,
   componentTabGroupRows,
-  parseComponentOptionsText,
 } from '../app/utils/freight/component-config-tables'
 
 describe('component config grid tables', () => {
@@ -36,11 +32,9 @@ describe('component config grid tables', () => {
   it('keeps the attribute grid columns in display order', () => {
     expect(componentAttributeColumns().map(column => column.key)).toEqual([
       'label',
-      'code',
       'dataType',
-      'referenceType',
       'isRequired',
-      'optionsText',
+      'helpText',
       '_delete',
     ])
     const column = (key: string) => componentAttributeColumns().find(item => item.key === key)
@@ -78,83 +72,43 @@ describe('component config grid tables', () => {
       dataType: 'select',
       referenceType: null,
       isRequired: true,
+      placeholder: 'Enter the seal number',
       options: ['Original', { label: 'Replaced', value: 'Replaced' }],
     } as never])).toEqual([{
       id: 'ca-1',
       label: 'Seal No.',
-      code: 'seal_no',
       dataType: 'select',
-      referenceType: undefined,
       isRequired: true,
-      optionsText: 'Original, Replaced',
+      helpText: 'Enter the seal number',
     }])
   })
 
-  it('round-trips the options string through the API payload', () => {
-    expect(componentOptionsText({ options: ['A', ' B '] } as never)).toBe('A, B')
-    expect(parseComponentOptionsText(' Pending , Paid ,, ')).toEqual(['Pending', 'Paid'])
+  it('maps the help text onto the API placeholder and derives the code from the label', () => {
     expect(componentAttributePayload({
       label: '  Status  ',
-      code: '',
       dataType: 'select',
       isRequired: false,
-      optionsText: 'Pending, Paid',
+      helpText: ' Shown to the user. ',
     }, 'status')).toEqual({
       label: 'Status',
       code: 'status',
       dataType: 'select',
-      referenceType: null,
       isRequired: false,
-      options: ['Pending', 'Paid'],
+      placeholder: 'Shown to the user.',
     })
-  })
-
-  it('drops options and reference when the data type cannot carry them', () => {
-    expect(componentNeedsOptions('select')).toBe(true)
-    expect(componentNeedsOptions('multi_select')).toBe(true)
-    expect(componentNeedsOptions('currency')).toBe(true)
-    expect(componentNeedsOptions('text')).toBe(false)
-
-    expect(componentAttributePayload({
-      label: 'Seal No.',
-      code: 'seal_no',
-      dataType: 'text',
-      referenceType: 'fee_type',
-      optionsText: 'ignored',
-    }, 'seal_no')).toMatchObject({ referenceType: null, options: [] })
   })
 
   it('rejects cell values outside the allowed enums', () => {
     expect(componentAttributeDataType('multi_select')).toBe('multi_select')
     expect(componentAttributeDataType('not_a_type')).toBe('text')
-    expect(componentReferenceTypeValue('fee_type')).toBe('fee_type')
-    expect(componentReferenceTypeValue('currencies')).toBeNull()
-    expect(componentReferenceTypeValue('nonsense')).toBeNull()
-  })
-
-  it('keeps the reference type only for reference attributes', () => {
-    expect(componentAttributePayload({
-      label: 'Currency',
-      code: 'currency',
-      dataType: 'reference',
-      referenceType: 'fee_type',
-    }, 'currency').referenceType).toBe('fee_type')
-    expect(componentAttributePayload({
-      label: 'Currency',
-      code: 'currency',
-      dataType: 'text',
-      referenceType: 'fee_type',
-    }, 'currency').referenceType).toBeNull()
   })
 
   it('starts a new attribute row blank with a text data type', () => {
     expect(blankComponentAttributeRow()).toEqual({
       label: '',
-      code: '',
       dataType: 'text',
-      referenceType: undefined,
       isRequired: false,
-      optionsText: '',
+      helpText: '',
     })
   })
 

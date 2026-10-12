@@ -1,27 +1,35 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
+from app.core import cache
+from app.core.bootstrap import provision_admin, requires_setup
 from app.core.config import settings
 from app.core.context import RequestContext
-from app.core.exceptions import AuthRequired, Conflict, NotFound, ValidationFailed
-from app.core.pagination import PageParams, list_sort_orders
-from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, SOURCE_PERMISSIONS
+from app.core.exceptions import AccessDenied, AuthRequired, Conflict, NotFound, ValidationFailed
+from app.core.locks import advisory_lock
+from app.core.pagination import PageParams
+from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, ROLE_DEFINITIONS, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
+    constant_time_compare,
     create_access_token,
     create_refresh_token,
     decode_token,
     generate_reset_code,
     hash_password,
     hash_token,
+    validate_password_strength,
     verify_password,
+    verify_password_or_dummy,
 )
 from app.modules.auth.models import (
+    PROTECTED_SYSTEM_ADMIN_IDENTITY,
     PasswordResetToken,
     Permission,
     Role,
@@ -31,6 +39,7 @@ from app.modules.auth.models import (
     UserRoleAssignment,
     UserSession,
 )
+from app.modules.auth.repository import AuthRepository
 
 # Map source permissions to frontend page keys (mirrors the Nuxt contract).
 # Page keys come from the Roles & Permissions matrix catalog; a few source codes
@@ -101,6 +110,56 @@ PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
 
 SOURCE_PERMISSION_CODES = {code for code, _, _ in SOURCE_PERMISSIONS}
 
+# Account lockout policy for privileged/credentialed access.
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+PLATFORM_ADMIN_ROLE = "PLATFORM_ADMIN"
+
+
+def _is_protected_system_admin(user: User) -> bool:
+    return user.system_identity == PROTECTED_SYSTEM_ADMIN_IDENTITY
+
+
+async def _active_role_code(session: AsyncSession, user_id: int) -> str | None:
+    return await AuthRepository(session).active_role_code(user_id)
+
+
+def _is_active_assignment(expires_at: datetime | None, now: datetime) -> bool:
+    """True when a role assignment is currently active (tz-safe for SQLite)."""
+    if expires_at is None:
+        return True
+    return _as_utc(expires_at) > now
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize SQLite's naive datetimes so expiry comparisons are safe."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _refresh_session_lifetime(remember_me: bool) -> timedelta:
+    if remember_me:
+        return timedelta(days=settings.refresh_token_expire_days)
+    return timedelta(hours=settings.session_refresh_token_expire_hours)
+
+
+def _assert_can_manage_platform_admin(context: RequestContext | None, role_code: str | None) -> None:
+    """Only a platform administrator may touch the super-admin role."""
+    if role_code == PLATFORM_ADMIN_ROLE and not (context and context.is_platform_admin):
+        raise AccessDenied("Only a platform administrator can modify the Platform Administrator role.")
+
+
+async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
+    """Invalidate every refresh session and bump the token version so existing
+    access tokens stop working immediately."""
+    now = datetime.now(UTC)
+    records = await AuthRepository(session).active_sessions(user.id)
+    for record in records:
+        record.revoked_at = now
+    user.token_version = int(user.token_version or 0) + 1
+    await safe_delete(f"revoked:{user.id}")
+
 
 def expand_source_permissions(permissions: set[str]) -> set[str]:
     """Expand stored page permissions into the source/API permissions they imply."""
@@ -111,21 +170,40 @@ def expand_source_permissions(permissions: set[str]) -> set[str]:
 
 
 async def get_user_by_login(session: AsyncSession, login: str) -> User | None:
-    stmt = select(User).where((User.username == login) | (User.email == login))
-    return (await session.execute(stmt)).scalars().first()
+    return await AuthRepository(session).user_by_login(login)
+
+
+async def get_user(session: AsyncSession, user_id: int) -> User:
+    user = await AuthRepository(session).user(user_id)
+    if user is None:
+        raise NotFound("User not found.")
+    return user
 
 
 async def authenticate(session: AsyncSession, login: str, password: str) -> User:
     user = await get_user_by_login(session, login)
     if user is None:
+        verify_password_or_dummy(password, None)
         raise AuthRequired("Invalid username or password.")
-    credential = (
-        await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))
-    ).scalars().first()
+    credential = await AuthRepository(session).credential_for_user(user.id)
+    now = datetime.now(UTC)
+    locked_until = credential.locked_until if credential is not None else None
+    if locked_until is not None and locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=UTC)
+    if locked_until is not None and locked_until > now:
+        raise AuthRequired("Account is temporarily locked. Try again later.")
     if credential is None or not verify_password(password, credential.password_hash):
+        if credential is not None:
+            credential.failed_attempt_count = (credential.failed_attempt_count or 0) + 1
+            if credential.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
+                credential.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+                credential.failed_attempt_count = 0
+            await session.commit()
         raise AuthRequired("Invalid username or password.")
     if str(user.status or "").upper() not in {"ACTIVE"}:
         raise AuthRequired("This account is not active.")
+    credential.failed_attempt_count = 0
+    credential.locked_until = None
     await session.commit()
     return user
 
@@ -135,24 +213,29 @@ async def resolve_permissions(session: AsyncSession, user_id: int) -> tuple[set[
     assignments = (
         await session.execute(select(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
     ).scalars().all()
-    role_ids = {a.role_id for a in assignments if a.expires_at is None or a.expires_at > now}
+    role_ids = {a.role_id for a in assignments if _is_active_assignment(a.expires_at, now)}
     role_codes: list[str] = []
     permissions: set[str] = set()
     if role_ids:
-        role_codes = list(
-            (await session.execute(select(Role.code).where(Role.id.in_(role_ids)))).scalars().all()
-        )
-        permissions = set(
-            (
-                await session.execute(
-                    select(Permission.code)
-                    .join(RolePermission, RolePermission.permission_id == Permission.id)
-                    .where(RolePermission.role_id.in_(role_ids))
-                )
+        active_roles = (
+            await session.execute(
+                select(Role.id, Role.code).where(Role.id.in_(role_ids), Role.status == "ACTIVE")
             )
-            .scalars()
-            .all()
-        )
+        ).all()
+        active_role_ids = [role_id for role_id, _ in active_roles]
+        role_codes = [code for _, code in active_roles]
+        if active_role_ids:
+            permissions = set(
+                (
+                    await session.execute(
+                        select(Permission.code)
+                        .join(RolePermission, RolePermission.permission_id == Permission.id)
+                        .where(RolePermission.role_id.in_(active_role_ids))
+                    )
+                )
+                .scalars()
+                .all()
+            )
     # A role may store matrix page permissions; expand them to the API-level
     # source permissions they imply so enforcement keeps working.
     return expand_source_permissions(permissions), role_codes
@@ -181,9 +264,8 @@ async def build_context(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> RequestContext:
-    permissions, role_codes = await resolve_permissions(session, user.id)
+    permissions, role_codes, avatar = await resolve_identity(session, user)
     is_platform_admin = "PLATFORM_ADMIN" in role_codes or "*" in permissions
-    avatar = await get_user_avatar(session, user.id)
 
     return RequestContext(
         user_id=user.id,
@@ -197,6 +279,32 @@ async def build_context(
         user_agent=user_agent,
         avatar=avatar,
     )
+
+
+async def resolve_identity(session: AsyncSession, user: User) -> tuple[set[str], list[str], str | None]:
+    """Effective permissions, role codes and avatar for one user.
+
+    Cached read-through with version-based invalidation. The cache key includes
+    the user's ``token_version`` so session revocation invalidates it, and role
+    or permission changes bump the ``auth`` namespace immediately (see the
+    mutations in this module). Backend authorization remains authoritative:
+    every request still verifies the user row and token version first.
+    """
+    parts = ("identity", user.id, int(user.token_version or 0))
+    cached = await cache.get_json("auth", *parts)
+    if isinstance(cached, dict) and "permissions" in cached:
+        try:
+            return set(cached["permissions"]), list(cached.get("roles") or []), cached.get("avatar")
+        except (TypeError, ValueError):
+            pass
+    permissions, role_codes = await resolve_permissions(session, user.id)
+    avatar = await get_user_avatar(session, user.id)
+    await cache.set_json(
+        "auth", *parts,
+        value={"permissions": sorted(permissions), "roles": role_codes, "avatar": avatar},
+        ttl_seconds=settings.cache_ttl_permissions_seconds,
+    )
+    return permissions, role_codes, avatar
 
 
 def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
@@ -213,24 +321,41 @@ def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
     }
 
 
-async def create_session(session: AsyncSession, user: User, *, ip: str | None, user_agent: str | None) -> tuple[str, str]:
-    refresh = create_refresh_token(user.id)
+async def create_session(
+    session: AsyncSession,
+    user: User,
+    *,
+    ip: str | None,
+    user_agent: str | None,
+    remember_me: bool = False,
+) -> tuple[str, str]:
+    now = datetime.now(UTC)
+    lifetime = _refresh_session_lifetime(remember_me)
+    refresh = create_refresh_token(user.id, expires_delta=lifetime)
     record = UserSession(
         user_id=user.id,
         refresh_token_hash=hash_token(refresh),
         ip_address=ip,
         user_agent=user_agent,
-        expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+        expires_at=now + lifetime,
+        remember_me=remember_me,
     )
     session.add(record)
     await session.flush()
-    access = create_access_token(user.id)
-    user.last_login_at = datetime.now(UTC)
+    access = create_access_token(user.id, int(user.token_version or 0))
+    user.last_login_at = now
     await session.commit()
     return access, refresh
 
 
-async def rotate_refresh_token(session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None) -> tuple[User, str, str]:
+async def rotate_refresh_token(
+    session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None
+) -> tuple[User, str, str, bool]:
+    """Rotate a refresh token and return ``(user, access, refresh, remember_me)``.
+
+    The replacement session inherits the original absolute ``expires_at`` so
+    rotation never extends the server-side session lifetime.
+    """
     try:
         payload = decode_token(refresh_token)
     except Exception as exc:  # noqa: BLE001
@@ -238,19 +363,20 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str, *, ip:
     if payload.get("type") != "refresh":
         raise AuthRequired("Invalid token type.")
     token_hash = hash_token(refresh_token)
-    record = (
-        await session.execute(select(UserSession).where(UserSession.refresh_token_hash == token_hash))
-    ).scalars().first()
+    record = await AuthRepository(session).session_by_refresh_hash(token_hash)
     if record is None or record.revoked_at is not None:
         raise AuthRequired("Session is no longer valid.")
-    if record.expires_at < datetime.now(UTC):
+    now = datetime.now(UTC)
+    expires_at = _as_utc(record.expires_at)
+    if expires_at <= now:
         raise AuthRequired("Session has expired.")
     user = await session.get(User, record.user_id)
     if user is None:
         raise AuthRequired("User not found.")
-    record.revoked_at = datetime.now(UTC)
-    record.last_used_at = datetime.now(UTC)
-    new_refresh = create_refresh_token(user.id)
+    record.revoked_at = now
+    record.last_used_at = now
+    remember_me = bool(record.remember_me)
+    new_refresh = create_refresh_token(user.id, expires_delta=expires_at - now)
     # Rotation issues a brand-new session row. Reusing the now-revoked row would
     # make the fresh token fail the revoked check on the very next refresh.
     session.add(
@@ -259,32 +385,41 @@ async def rotate_refresh_token(session: AsyncSession, refresh_token: str, *, ip:
             refresh_token_hash=hash_token(new_refresh),
             ip_address=ip,
             user_agent=user_agent,
-            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+            expires_at=expires_at,
+            remember_me=remember_me,
         )
     )
     await session.commit()
-    access = create_access_token(user.id)
-    return user, access, new_refresh
+    access = create_access_token(user.id, int(user.token_version or 0))
+    return user, access, new_refresh, remember_me
 
 
-async def revoke_session(session: AsyncSession, user_id: int, refresh_token: str | None) -> None:
+async def revoke_session(session: AsyncSession, user_id: int | None, refresh_token: str | None) -> int | None:
+    """Revoke the session identified by ``refresh_token`` (or every active
+    session of ``user_id``). Returns the owner id when one was resolved."""
+    now = datetime.now(UTC)
     if refresh_token:
         token_hash = hash_token(refresh_token)
-        record = (
-            await session.execute(select(UserSession).where(UserSession.refresh_token_hash == token_hash))
-        ).scalars().first()
+        record = await AuthRepository(session).session_by_refresh_hash(token_hash)
         if record is not None:
-            record.revoked_at = datetime.now(UTC)
-    else:
-        records = (await session.execute(select(UserSession).where(UserSession.user_id == user_id, UserSession.revoked_at.is_(None)))).scalars().all()
-        for record in records:
-            record.revoked_at = datetime.now(UTC)
+            record.revoked_at = now
+            user_id = record.user_id
+        await session.commit()
+        if user_id is not None:
+            await safe_delete(f"revoked:{user_id}")
+        return user_id
+    if user_id is None:
+        return None
+    records = await AuthRepository(session).active_sessions(user_id)
+    for record in records:
+        record.revoked_at = now
     await session.commit()
     await safe_delete(f"revoked:{user_id}")
+    return user_id
 
 
 async def request_password_reset(session: AsyncSession, email: str) -> None:
-    user = (await session.execute(select(User).where(User.email == email))).scalars().first()
+    user = await AuthRepository(session).user_by_email(email)
     if user is None:
         return
     code = generate_reset_code()
@@ -315,12 +450,15 @@ async def verify_reset_code(session: AsyncSession, email: str, code: str) -> boo
 
 
 async def reset_password(session: AsyncSession, email: str, code: str, password: str) -> None:
+    password_errors = validate_password_strength(password)
+    if password_errors:
+        raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
     if not await verify_reset_code(session, email, code):
         raise Conflict("INVALID_RESET_CODE", "The reset code is invalid or has expired.")
-    user = (await session.execute(select(User).where(User.email == email))).scalars().first()
+    user = await AuthRepository(session).user_by_email(email)
     if user is None:
         raise NotFound("User not found.")
-    credential = (await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))).scalars().first()
+    credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None:
         session.add(UserCredential(user_id=user.id, password_hash=hash_password(password), password_changed_at=datetime.now(UTC)))
     else:
@@ -331,31 +469,39 @@ async def reset_password(session: AsyncSession, email: str, code: str, password:
     ).scalars().all()
     for record in records:
         record.used_at = datetime.now(UTC)
+    # A password reset invalidates every existing session for the account.
+    await _revoke_all_sessions(session, user)
     await session.commit()
     await safe_delete(f"reset:{email}")
 
 
 async def change_password(session: AsyncSession, user: User, current_password: str, new_password: str) -> None:
-    credential = (await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))).scalars().first()
+    credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None or not verify_password(current_password, credential.password_hash):
         raise AuthRequired("Current password is incorrect.")
+    password_errors = validate_password_strength(new_password)
+    if password_errors:
+        raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
     credential.password_hash = hash_password(new_password)
     credential.password_changed_at = datetime.now(UTC)
+    # Changing the password signs out every device, including the current one.
+    await _revoke_all_sessions(session, user)
+    await session.commit()
+
+
+async def force_logout_user(session: AsyncSession, user_id: int) -> None:
+    """Administrative forced sign-out: revoke all sessions and bump the version."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFound("User not found.")
+    await _revoke_all_sessions(session, user)
     await session.commit()
 
 
 async def list_users(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
-    orders = list_sort_orders(User, page, User.id) if page else [User.id]
-    users = (await session.execute(select(User).order_by(*orders))).scalars().all()
+    rows = await AuthRepository(session).users_with_role_codes(page)
     output = []
-    for user in users:
-        assignments = (
-            await session.execute(
-                select(Role.code)
-                .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
-                .where(UserRoleAssignment.user_id == user.id)
-            )
-        ).scalars().all()
+    for user, assignments in rows:
         output.append(
             {
                 "id": user.id,
@@ -363,12 +509,117 @@ async def list_users(session: AsyncSession, page: PageParams | None = None) -> l
                 "username": user.username,
                 "email": user.email,
                 "displayName": user.display_name,
-                "phone": user.phone,
                 "status": user.status,
                 "roles": list(assignments),
+                "isProtectedSystemAccount": _is_protected_system_admin(user),
             }
         )
     return output
+
+
+def _requested_role_code(data: dict) -> str | None:
+    """Resolve the single role requested by a user create/update payload.
+
+    Single-Role RBAC: a user has exactly one role. Accepts the ``role`` /
+    ``role_code`` / ``roleCode`` aliases and the legacy ``roles`` list, but a
+    list with more than one entry is rejected.
+
+    Returns ``None`` when the payload does not mention any role (leave the
+    current assignment unchanged), ``""`` when the payload explicitly clears the
+    role, or the role code otherwise.
+    """
+    roles = data.get("roles")
+    if roles is not None:
+        codes = [roles] if isinstance(roles, str) else list(roles)
+        codes = [str(code).strip() for code in codes if str(code).strip()]
+        if len(codes) > 1:
+            raise ValidationFailed(
+                "A user can only have one role.", {"role": "Only one role is allowed"}
+            )
+        return codes[0] if codes else ""
+
+    legacy = data.get("role_code") or data.get("roleCode") or data.get("role")
+    if legacy:
+        return str(legacy).strip()
+
+    mentioned = any(
+        key in data and data.get(key) is not None
+        for key in ("role_code", "roleCode", "role")
+    )
+    return "" if mentioned else None
+
+
+async def _sync_user_role(
+    session: AsyncSession, user_id: int, role_code: str, context: RequestContext | None
+) -> None:
+    """Replace a user's active role with ``role_code``.
+
+    The previous active assignment is expired (never deleted) so history is
+    preserved and the partial unique index still allows exactly one active row.
+    ``role_code`` must reference an existing active role.
+    """
+    role = (
+        await session.execute(select(Role).where(Role.code == role_code))
+    ).scalars().first()
+    if role is None:
+        raise ValidationFailed(f"Unknown role: {role_code}.", {"role": "Unknown role"})
+    if str(role.status or "").upper() != "ACTIVE":
+        raise ValidationFailed("The selected role is not active.", {"role": "Role is inactive"})
+
+    now = datetime.now(UTC)
+    active = (
+        await session.execute(
+            select(UserRoleAssignment).where(
+                UserRoleAssignment.user_id == user_id,
+                UserRoleAssignment.expires_at.is_(None),
+            )
+        )
+    ).scalars().all()
+    for assignment in active:
+        assignment.expires_at = now
+    # Flush the expiry before inserting so the partial unique index is satisfied.
+    await session.flush()
+    session.add(
+        UserRoleAssignment(
+            user_id=user_id,
+            role_id=role.id,
+            assigned_by_user_id=context.user_id if context else None,
+        )
+    )
+    await session.flush()
+
+
+async def _assert_platform_admin_remains(session: AsyncSession, user_id: int, new_role_code: str | None) -> None:
+    """Block removing the last remaining Platform Administrator assignment."""
+    if new_role_code == PLATFORM_ADMIN_ROLE:
+        return
+    assignment = (
+        await session.execute(
+            select(UserRoleAssignment.id)
+            .join(Role, Role.id == UserRoleAssignment.role_id)
+            .where(
+                UserRoleAssignment.user_id == user_id,
+                UserRoleAssignment.expires_at.is_(None),
+                Role.code == PLATFORM_ADMIN_ROLE,
+            )
+        )
+    ).scalars().first()
+    if assignment is None:
+        return
+    others = await session.scalar(
+        select(func.count())
+        .select_from(UserRoleAssignment)
+        .join(Role, Role.id == UserRoleAssignment.role_id)
+        .where(
+            Role.code == PLATFORM_ADMIN_ROLE,
+            UserRoleAssignment.user_id != user_id,
+            UserRoleAssignment.expires_at.is_(None),
+        )
+    )
+    if not others:
+        raise ValidationFailed(
+            "At least one Platform Administrator must remain.", {"roles": "Required"}
+        )
 
 
 async def create_user(session: AsyncSession, data: dict, context: RequestContext) -> User:
@@ -376,12 +627,22 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
         raise Conflict("DUPLICATE_EMAIL", "A user with this email already exists.", {"email": "Already in use"})
     if (await session.execute(select(User).where(User.username == data["username"]))).scalars().first():
         raise Conflict("DUPLICATE_USERNAME", "A user with this username already exists.", {"username": "Already in use"})
+    user_code = str(data.get("user_code") or data["username"].upper()).strip()
+    if (await session.execute(select(User).where(User.user_code == user_code))).scalars().first():
+        raise Conflict("DUPLICATE_USER_CODE", "A user with this code already exists.", {"userCode": "Already in use"})
+    role_code = _requested_role_code(data)
+    if not role_code:
+        raise ValidationFailed("A role is required.", {"role": "Required"})
+    _assert_can_manage_platform_admin(context, role_code)
+    password = str(data.get("password") or "")
+    password_errors = validate_password_strength(password)
+    if password_errors:
+        raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
     user = User(
-        user_code=data.get("user_code") or data["username"].upper(),
+        user_code=user_code,
         username=data["username"],
         email=data["email"],
         display_name=data["display_name"],
-        phone=data.get("phone"),
         status=str(data.get("status") or "ACTIVE").upper(),
     )
     session.add(user)
@@ -389,50 +650,68 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
     session.add(
         UserCredential(
             user_id=user.id,
-            password_hash=hash_password(data.get("password") or "changeme123"),
+            password_hash=hash_password(password),
             password_changed_at=datetime.now(UTC),
         )
     )
-    role_code = data.get("role_code")
-    if role_code:
-        role = (await session.execute(select(Role).where(Role.code == role_code))).scalars().first()
-        if role is not None:
-            session.add(
-                UserRoleAssignment(
-                    user_id=user.id,
-                    role_id=role.id,
-                    assigned_by_user_id=context.user_id,
-                )
-            )
+    await _sync_user_role(session, user.id, role_code, context)
     await session.commit()
     return user
 
 
-async def update_user(session: AsyncSession, user_id: int, data: dict) -> User:
+async def update_user(session: AsyncSession, user_id: int, data: dict, context: RequestContext) -> User:
     user = await session.get(User, user_id)
     if user is None:
         raise NotFound("User not found.")
+    role_code = _requested_role_code(data)
+    if _is_protected_system_admin(user):
+        if role_code is not None and role_code != PLATFORM_ADMIN_ROLE:
+            raise AccessDenied("The built-in System Administrator role cannot be changed.")
+        if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
+            raise AccessDenied("The built-in System Administrator cannot be deactivated.")
     for key, column in (
         ("email", "email"),
         ("display_name", "display_name"),
         ("displayName", "display_name"),
-        ("phone", "phone"),
         ("locale", "locale"),
         ("timezone", "timezone"),
     ):
         if data.get(key) is not None:
             setattr(user, column, data[key])
+
+    new_code = data.get("user_code") or data.get("userCode")
+    if new_code is not None and str(new_code).strip():
+        new_code = str(new_code).strip()
+        duplicate = (
+            await session.execute(select(User).where(User.user_code == new_code, User.id != user_id))
+        ).scalars().first()
+        if duplicate:
+            raise Conflict("DUPLICATE_USER_CODE", "A user with this code already exists.", {"userCode": "Already in use"})
+        user.user_code = new_code
+
+    if role_code is not None:
+        if not role_code:
+            raise ValidationFailed("A user must have exactly one role.", {"role": "Required"})
+        if context.user_id == user_id and not context.is_platform_admin:
+            raise AccessDenied("You cannot change your own roles.")
+        current_role_code = await _active_role_code(session, user_id)
+        if role_code != current_role_code:
+            _assert_can_manage_platform_admin(context, role_code)
+            await _assert_platform_admin_remains(session, user_id, role_code)
+            await _sync_user_role(session, user_id, role_code, context)
+
     if data.get("status") is not None:
-        user.status = str(data["status"]).upper()
-    role_code = data.get("role_code") or data.get("roleCode") or data.get("role")
-    if role_code:
-        role = (await session.execute(select(Role).where(Role.code == role_code))).scalars().first()
-        if role is None:
-            raise ValidationFailed("Role not found.", {"role": "Unknown role"})
-        # The user form captures a single role, so replace the current assignment.
-        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
-        session.add(UserRoleAssignment(user_id=user_id, role_id=role.id))
+        new_status = str(data["status"]).upper()
+        if context.user_id == user_id and new_status != "ACTIVE":
+            raise AccessDenied("You cannot deactivate your own account.")
+        if new_status != "ACTIVE":
+            # The last active Platform Administrator cannot be deactivated.
+            await _assert_platform_admin_remains(session, user_id, None)
+        user.status = new_status
+        if new_status != "ACTIVE":
+            await _revoke_all_sessions(session, user)
     await session.commit()
+    await cache.bump("auth")
     return user
 
 
@@ -445,22 +724,22 @@ async def user_payload(session: AsyncSession, user: User) -> dict:
         "username": user.username,
         "email": user.email,
         "displayName": user.display_name,
-        "phone": user.phone,
         "status": str(user.status or "").upper(),
         "role": roles[0] if roles else None,
         "roles": roles,
         "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
+        "isProtectedSystemAccount": _is_protected_system_admin(user),
     }
 
 
 async def list_role_assignments(session: AsyncSession, user_id: int) -> list[dict]:
-    rows = (
-        await session.execute(
-            select(UserRoleAssignment, Role.code)
-            .join(Role, Role.id == UserRoleAssignment.role_id)
-            .where(UserRoleAssignment.user_id == user_id)
-        )
-    ).all()
+    """Return the user's *active* role assignment(s).
+
+    Single-Role RBAC means at most one row. Expired rows are kept for history
+    but excluded here so callers always see the current role.
+    """
+    now = datetime.now(UTC)
+    rows = await AuthRepository(session).assignment_rows(user_id)
     return [
         {
             "id": assignment.id,
@@ -470,10 +749,14 @@ async def list_role_assignments(session: AsyncSession, user_id: int) -> list[dic
             "expiresAt": assignment.expires_at.isoformat() if assignment.expires_at else None,
         }
         for assignment, code in rows
+        if _is_active_assignment(assignment.expires_at, now)
     ]
 
 
 async def assign_role(session: AsyncSession, user_id: int, data: dict, context: RequestContext) -> UserRoleAssignment:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFound("User not found.")
     role = None
     if data.get("role_id"):
         role = await session.get(Role, data["role_id"])
@@ -481,27 +764,35 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
         role = (await session.execute(select(Role).where(Role.code == data["role_code"]))).scalars().first()
     if role is None:
         raise NotFound("Role not found.")
-    assignment = UserRoleAssignment(
-        user_id=user_id,
-        role_id=role.id,
-        assigned_by_user_id=context.user_id,
-        expires_at=data.get("expires_at"),
-    )
-    session.add(assignment)
+    if _is_protected_system_admin(user) and role.code != PLATFORM_ADMIN_ROLE:
+        raise AccessDenied("The built-in System Administrator role cannot be changed.")
+    _assert_can_manage_platform_admin(context, role.code)
+    if context.user_id == user_id and not context.is_platform_admin:
+        raise AccessDenied("You cannot change your own roles.")
+    current_role_code = await _active_role_code(session, user_id)
+    if role.code != current_role_code:
+        await _assert_platform_admin_remains(session, user_id, role.code)
+        # Single-Role RBAC: assigning a role replaces the previous active role.
+        await _sync_user_role(session, user_id, role.code, context)
     await session.commit()
+    await cache.bump("auth")
+    assignment = (
+        await session.execute(
+            select(UserRoleAssignment).where(
+                UserRoleAssignment.user_id == user_id,
+                UserRoleAssignment.expires_at.is_(None),
+            )
+        )
+    ).scalars().first()
     return assignment
 
 
-async def list_roles(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
-    orders = list_sort_orders(Role, page, Role.id) if page else [Role.id]
-    roles = (await session.execute(select(Role).order_by(*orders))).scalars().all()
+async def list_roles(
+    session: AsyncSession, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
+) -> list[dict]:
+    roles = await AuthRepository(session).roles_with_permissions(page, q=q, status=status)
     output = []
-    for role in roles:
-        perms = (
-            await session.execute(
-                select(Permission.code).join(RolePermission, RolePermission.permission_id == Permission.id).where(RolePermission.role_id == role.id)
-            )
-        ).scalars().all()
+    for role, perms in roles:
         output.append(
             {
                 "id": role.id,
@@ -511,36 +802,90 @@ async def list_roles(session: AsyncSession, page: PageParams | None = None) -> l
                 "isSystemRole": role.is_system_role,
                 "status": role.status,
                 "permissions": list(perms),
+                "permissionCount": len(perms),
             }
         )
     return output
 
 
-async def create_role(session: AsyncSession, data: dict) -> Role:
-    if (await session.execute(select(Role).where(Role.code == data["code"]))).scalars().first():
-        raise Conflict("DUPLICATE_ROLE", "A role with this code already exists.")
-    role = Role(code=data["code"], name=data["name"], description=data.get("description"), status="ACTIVE")
+def _derive_role_code(name: str, existing: set[str]) -> str:
+    """Build a stable uppercase role code from the role name."""
+    base = re.sub(r"[^A-Za-z0-9]+", "_", str(name or "")).strip("_").upper()[:48] or "ROLE"
+    code = base
+    suffix = 2
+    while code in existing:
+        suffix_token = f"_{suffix}"
+        code = f"{base[: 64 - len(suffix_token)]}{suffix_token}"
+        suffix += 1
+    return code
+
+
+async def _validate_permission_codes(session: AsyncSession, codes: list[str]) -> None:
+    if not codes:
+        return
+    found = set(
+        (await session.execute(select(Permission.code).where(Permission.code.in_(codes)))).scalars().all()
+    )
+    unknown = sorted(set(codes) - found)
+    if unknown:
+        raise ValidationFailed(
+            f"Unknown permission(s): {', '.join(unknown)}.", {"permissions": "Unknown permission"}
+        )
+
+
+async def create_role(session: AsyncSession, data: dict, context: RequestContext) -> Role:
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValidationFailed("A role name is required.", {"name": "Required"})
+    code = str(data.get("code") or "").strip()
+    if not code:
+        existing = set(
+            (await session.execute(select(Role.code))).scalars().all()
+        )
+        code = _derive_role_code(name, existing)
+    _assert_can_manage_platform_admin(context, code)
+    if (await session.execute(select(Role).where(Role.code == code))).scalars().first():
+        raise Conflict("DUPLICATE_ROLE", "A role with this code already exists.", {"code": "Already in use"})
+    permissions = [str(value) for value in data.get("permissions") or []]
+    await _validate_permission_codes(session, permissions)
+    role = Role(code=code, name=name, description=data.get("description"), status="ACTIVE")
     session.add(role)
     await session.flush()
-    await sync_role_permissions(session, role.id, data.get("permissions") or [])
+    await sync_role_permissions(session, role.id, permissions)
     await session.commit()
     return role
 
 
-async def update_role(session: AsyncSession, role_id: int, data: dict) -> Role:
+async def update_role(session: AsyncSession, role_id: int, data: dict, context: RequestContext) -> Role:
     role = await session.get(Role, role_id)
     if role is None:
         raise NotFound("Role not found.")
+    _assert_can_manage_platform_admin(context, role.code)
+    if role.is_system_role and role.code == PLATFORM_ADMIN_ROLE:
+        if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
+            raise AccessDenied("The built-in Platform Administrator role cannot be deactivated.")
+        if data.get("permissions") is not None:
+            required = set(ROLE_DEFINITIONS[PLATFORM_ADMIN_ROLE]["permissions"])
+            requested = {str(value) for value in data["permissions"]}
+            if not required.issubset(requested):
+                raise AccessDenied("Critical permissions cannot be removed from the built-in administrator role.")
     for key in ("name", "description", "status"):
         if data.get(key) is not None:
             setattr(role, key, data[key])
     if data.get("permissions") is not None:
-        await sync_role_permissions(session, role.id, data["permissions"])
+        await sync_role_permissions(session, role.id, [str(value) for value in data["permissions"]])
     await session.commit()
+    await cache.bump("auth")
     return role
 
 
 async def sync_role_permissions(session: AsyncSession, role_id: int, codes: list[str]) -> None:
+    await _validate_permission_codes(session, codes)
+    role = await session.get(Role, role_id)
+    if role is not None and role.is_system_role and role.code == PLATFORM_ADMIN_ROLE:
+        required = set(ROLE_DEFINITIONS[PLATFORM_ADMIN_ROLE]["permissions"])
+        if not required.issubset(codes):
+            raise AccessDenied("Critical permissions cannot be removed from the built-in administrator role.")
     await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
     await session.flush()
     if not codes:
@@ -550,12 +895,6 @@ async def sync_role_permissions(session: AsyncSession, role_id: int, codes: list
     ).scalars().all()
     for pid in ids:
         session.add(RolePermission(role_id=role_id, permission_id=pid))
-
-
-async def user_with_credential(session: AsyncSession, user_id: int) -> User | None:
-    return (
-        await session.execute(select(User).options(selectinload(User.credential)).where(User.id == user_id))
-    ).scalars().first()
 
 
 def role_label(role_codes: list[str]) -> str:
@@ -582,6 +921,7 @@ async def role_payload(session: AsyncSession, role: Role) -> dict:
         "isSystemRole": role.is_system_role,
         "status": role.status,
         "permissions": list(perms),
+        "permissionCount": len(perms),
     }
 
 
@@ -593,24 +933,71 @@ async def get_role(session: AsyncSession, role_id: int) -> dict:
 
 
 async def delete_roles(session: AsyncSession, ids: list[int]) -> None:
+    roles = [await session.get(Role, role_id) for role_id in set(ids)]
+    if any(role is not None and role.is_system_role for role in roles):
+        raise AccessDenied("Built-in system roles cannot be deleted.")
+    assigned_role_ids = {
+        role.id
+        for role in roles
+        if role is not None
+        and await session.scalar(
+            select(func.count()).select_from(UserRoleAssignment).where(UserRoleAssignment.role_id == role.id)
+        )
+    }
+    if assigned_role_ids:
+        raise Conflict(
+            "ROLE_IN_USE",
+            "A role assigned to a user cannot be deleted. Reassign its users first.",
+        )
     for role_id in ids:
         role = await session.get(Role, role_id)
-        if role is None or role.is_system_role:
+        if role is None:
             continue
         await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
-        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.role_id == role_id))
         await session.delete(role)
     await session.commit()
+    await cache.bump("auth")
 
 
-async def delete_users(session: AsyncSession, ids: list[int]) -> None:
-    for user_id in ids:
-        user = await session.get(User, user_id)
-        if user is None:
-            continue
-        await session.execute(delete(UserCredential).where(UserCredential.user_id == user_id))
-        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
-        await session.execute(delete(UserSession).where(UserSession.user_id == user_id))
+async def delete_users(session: AsyncSession, ids: list[int], context: RequestContext | None = None) -> None:
+    users = [await session.get(User, user_id) for user_id in set(ids)]
+    users = [user for user in users if user is not None]
+    if any(_is_protected_system_admin(user) for user in users):
+        raise AccessDenied("The built-in System Administrator account cannot be deleted.")
+    if context is not None and context.user_id in ids:
+        raise AccessDenied("You cannot delete your own account.")
+
+    # Guard: the last Platform Administrator cannot be deleted.
+    admin_role_id = (
+        await session.execute(select(Role.id).where(Role.code == PLATFORM_ADMIN_ROLE))
+    ).scalars().first()
+    target_ids = [user.id for user in users]
+    if admin_role_id is not None and target_ids:
+        deleting_admins = await session.scalar(
+            select(func.count())
+            .select_from(UserRoleAssignment)
+            .where(
+                UserRoleAssignment.role_id == admin_role_id,
+                UserRoleAssignment.user_id.in_(target_ids),
+                UserRoleAssignment.expires_at.is_(None),
+            )
+        )
+        if deleting_admins:
+            total_admins = await session.scalar(
+                select(func.count())
+                .select_from(UserRoleAssignment)
+                .where(
+                    UserRoleAssignment.role_id == admin_role_id,
+                    UserRoleAssignment.expires_at.is_(None),
+                )
+            )
+            if (total_admins or 0) - deleting_admins < 1:
+                raise ValidationFailed("At least one Platform Administrator must remain.")
+
+    for user in users:
+        await session.execute(delete(UserCredential).where(UserCredential.user_id == user.id))
+        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user.id))
+        await session.execute(delete(UserSession).where(UserSession.user_id == user.id))
         await session.delete(user)
     # Deleting every account would make `requires_setup` true again and expose the
     # public first-run setup endpoint; refuse to remove the last user.
@@ -660,6 +1047,7 @@ async def set_user_avatar(session: AsyncSession, context: RequestContext, avatar
     else:
         record.data = {**(record.data or {}), "avatar": avatar}
     await session.commit()
+    await cache.bump("auth")
     return avatar
 
 
@@ -668,3 +1056,40 @@ async def clear_user_avatar(session: AsyncSession, context: RequestContext) -> N
     if record is not None:
         await session.delete(record)
         await session.commit()
+        await cache.bump("auth")
+
+
+async def setup_status(session: AsyncSession) -> dict[str, bool]:
+    """Public first-run probe: true while no user account exists."""
+    return {"requiresSetup": await requires_setup(session)}
+
+
+async def setup_initialize(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
+    supplied_setup_token = str(payload.get("setupToken") or payload.get("setup_token") or "")
+    if settings.setup_token and not constant_time_compare(supplied_setup_token, settings.setup_token):
+        raise AccessDenied("The setup security token is invalid.")
+
+    email = str(payload.get("email") or "").strip()
+    password = str(payload.get("password") or "")
+    errors: dict[str, str] = {}
+    if "@" not in email:
+        errors["email"] = "A valid email address is required."
+    password_errors = validate_password_strength(password)
+    if password_errors:
+        errors["password"] = password_errors[0]
+    if errors:
+        raise ValidationFailed("The submitted data is invalid.", errors)
+
+    async with advisory_lock(session, "auth:setup-initialize") as acquired:
+        if not acquired or not await requires_setup(session):
+            raise Conflict("SETUP_COMPLETED", "Setup has already been completed or is in progress.")
+        try:
+            return await provision_admin(
+                session,
+                email=email,
+                password=password,
+                username=str(payload.get("username") or "").strip() or None,
+                name=str(payload.get("name") or "").strip() or None,
+            )
+        except ValueError as error:
+            raise ValidationFailed(str(error), {"role": str(error)}) from error

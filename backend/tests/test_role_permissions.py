@@ -61,3 +61,48 @@ async def test_role_page_permissions_roundtrip(client):
     got = await client.get(f"/api/v1/roles/{role['id']}", headers=headers)
     assert got.status_code == 200
     assert set(got.json()["data"]["permissions"]) == {"finance.accounting.edit", "admin.users.view"}
+
+
+async def test_role_code_is_derived_when_omitted(client):
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/roles",
+        headers=headers,
+        json={"name": "Warehouse Supervisor", "permissions": ["admin.users.view"]},
+    )
+    assert created.status_code in (200, 201), created.text
+    role = created.json()["data"]
+    assert role["code"] == "WAREHOUSE_SUPERVISOR"
+    assert role["status"] == "ACTIVE"
+
+    # A second role with the same name gets a distinct code.
+    second = await client.post(
+        "/api/v1/roles", headers=headers, json={"name": "Warehouse Supervisor"}
+    )
+    assert second.status_code in (200, 201), second.text
+    assert second.json()["data"]["code"] != role["code"]
+
+
+async def test_unknown_permissions_are_rejected(client):
+    headers = await login(client)
+    response = await client.post(
+        "/api/v1/roles",
+        headers=headers,
+        json={"code": "BAD_PERMS", "name": "Bad Perms", "permissions": ["not.a.real.permission"]},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+async def test_role_search_and_status_filter(client):
+    headers = await login(client)
+    await client.post(
+        "/api/v1/roles", headers=headers, json={"code": "SEARCH_ME", "name": "Searchable Role"}
+    )
+    found = await client.get("/api/v1/roles", headers=headers, params={"q": "Searchable"})
+    assert found.status_code == 200
+    assert any(row["code"] == "SEARCH_ME" for row in found.json()["data"])
+
+    filtered = await client.get("/api/v1/roles", headers=headers, params={"status": "INACTIVE"})
+    assert filtered.status_code == 200
+    assert all(row["status"] == "INACTIVE" for row in filtered.json()["data"])

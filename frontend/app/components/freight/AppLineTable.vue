@@ -8,8 +8,6 @@ import { useFreightLabel } from '~/composables/freight/useFreight'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref, revokeFilePreview, useFileAttachments } from '~/utils/freight/attachments'
 import { fileTypeIcon } from '~/utils/file-icon'
-import TableLineTableColumnsCell from '~/components/table/LineTableColumnsCell.vue'
-import TableLineTableNoteCell from '~/components/table/LineTableNoteCell.vue'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
@@ -84,8 +82,6 @@ const TableIcon = UIcon as Component
 const TableInput = UInput as Component
 const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
-const TableColumnsCell = TableLineTableColumnsCell as Component
-const TableNoteCell = TableLineTableNoteCell as Component
 const TableReferenceSelect = CommonAppReferenceSelect as Component
 
 const isFileTable = computed(() => props.table.kind === 'files')
@@ -404,20 +400,6 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
           })
         }
-        if (column.type === 'note') {
-          return h(TableNoteCell, {
-            'modelValue': row.original[column.key],
-            'disabled': disabled || column.computed,
-            'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
-          })
-        }
-        if (column.type === 'table-columns') {
-          return h(TableColumnsCell, {
-            modelValue: row.original[column.key],
-            disabled,
-            'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
-          })
-        }
         if (column.type === 'select') {
           const referenceItems = referenceColumnItems.value[column.key]
           const items = column.optionItems?.length
@@ -556,7 +538,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
 <template>
   <section :class="compact ? 'space-y-2' : 'space-y-3'">
     <div class="flex flex-wrap items-start justify-between gap-2">
-      <h3 :class="compact ? 'text-xs font-semibold text-highlighted' : 'text-sm font-semibold text-highlighted'">
+      <h3 v-if="!table.hideTitle" :class="compact ? 'text-xs font-semibold text-highlighted' : 'text-sm font-semibold text-highlighted'">
         {{ tableTitle(table) }}
       </h3>
       <div class="flex flex-wrap items-center justify-end gap-1.5">
@@ -572,7 +554,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           @click="action.onClick"
         />
         <UButton
-v-if="!disabled"
+v-if="!disabled && !table.hideAddRow"
 :size="compact ? 'xs' : 'sm'"
 color="neutral"
 variant="soft"

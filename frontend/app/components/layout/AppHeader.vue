@@ -127,7 +127,7 @@ function onHeaderRefresh() {
             :class="refreshSpinning ? 'animate-spin' : ''"
             :disabled="refreshSpinning"
             class="rounded-md"
-            :aria-label="$t('docetra.actions.refresh')"
+            :aria-label="$t('lcs.actions.refresh')"
             @click="onHeaderRefresh"
           />
 
@@ -150,18 +150,6 @@ function onHeaderRefresh() {
         <div
           id="app-header-trailing"
           class="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2"
-        />
-
-        <UButton
-          v-if="actions?.metaRail"
-          :icon="actions.metaRail.open ? 'i-lucide-panel-right-close' : 'i-lucide-panel-right-open'"
-          color="neutral"
-          variant="soft"
-          square
-          class="rounded-md"
-          :aria-label="actions.metaRail.label"
-          :aria-expanded="actions.metaRail.open"
-          @click="actions.metaRail.onToggle()"
         />
 
         <UButton

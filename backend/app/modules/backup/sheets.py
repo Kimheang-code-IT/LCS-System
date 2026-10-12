@@ -72,10 +72,6 @@ class GoogleSheetsClient:
         self._worksheet_cache: set[str] = set()
 
     @property
-    def spreadsheet_id(self) -> str:
-        return self._spreadsheet_id
-
-    @property
     def service_account_email(self) -> str:
         return str(self._info.get("client_email") or "")
 

@@ -12,10 +12,8 @@ from app.modules.operations.router import router as operations_router
 from app.modules.quotations.router import router as quotations_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
-from app.modules.setup.router import router as setup_router
 
 api_router = APIRouter()
-api_router.include_router(setup_router, tags=["setup"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(quotations_router, tags=["quotations"])
 api_router.include_router(operations_router, tags=["operations"])

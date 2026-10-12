@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import * as z from 'zod'
 import type { FormSubmitEvent, AuthFormField } from '@nuxt/ui'
-import { readRememberMe } from '~/utils/auth/remember-me'
+import { readRememberMe, writeRememberMe } from '~/utils/auth/remember-me'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { safeInternalPath } from '~/utils/auth/session'
@@ -49,6 +49,12 @@ function buildFields(): AuthFormField[] {
       autocomplete: 'current-password',
       defaultValue: '',
     },
+    {
+      name: 'remember',
+      type: 'checkbox',
+      label: t('pages.auth.remember'),
+      defaultValue: remembered.enabled,
+    },
   ]
 }
 
@@ -61,11 +67,13 @@ watch(locale, () => {
 const schema = computed(() => z.object({
   email: z.email({ error: t('pages.auth.emailRequired') }),
   password: z.string().min(6, { error: t('pages.auth.passwordRequired') }),
+  remember: z.boolean().optional(),
 }))
 
 type Schema = {
   email: string
   password: string
+  remember?: boolean
 }
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
@@ -76,7 +84,8 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     const formState = loginForm.value?.state || {}
     const email = String(payload.data?.email ?? formState.email ?? '').trim()
     const password = String(payload.data?.password ?? formState.password ?? '')
-    const result = await loginWithCredentials(email, password)
+    const remember = Boolean(payload.data?.remember ?? formState.remember)
+    const result = await loginWithCredentials(email, password, remember)
     const user = result.data?.user
 
     if (!user) {
@@ -88,6 +97,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
       return
     }
 
+    writeRememberMe({ enabled: remember, email })
     auth.login(user)
     await router.replace(safeInternalPath(route.query.redirect) || '/')
   }

@@ -2,7 +2,7 @@ import type { Ref } from 'vue'
 import type { FreightRecord } from '~/types/record'
 import type { useLcs } from '~/composables/freight/useLcs'
 import type { useConfirm } from '~/composables/common/useConfirm'
-import { canConvertQuotation, quotationDomainStatus } from '~/utils/freight/states'
+import { quotationDomainStatus } from '~/utils/freight/states'
 
 type LcsApi = ReturnType<typeof useLcs>
 
@@ -23,39 +23,50 @@ export function useQuotationCommands(options: {
   // revision id is unavailable.
   const revisionId = () => String(model.value.revisionId || model.value.id || '')
 
+  function guardSaved(): boolean {
+    if (quotationDraftDirty.value) {
+      toast({ title: t('freight.ui.missingRequired'), description: t('freight.ui.quotationSaveBeforeSubmit'), color: 'warning' })
+      return false
+    }
+    return true
+  }
+
   async function send() {
+    if (quotationDomainStatus(model.value.status) !== 'DRAFT' || !guardSaved()) return
+    const ok = await confirm({
+      kind: 'submit',
+      title: t('freight.ui.quotationSendTitle'),
+      description: t('freight.ui.quotationSendDescription'),
+      confirmLabel: t('freight.ui.send'),
+    })
+    if (!ok) return
     const saved = await lcs.runCommand('quotation.send', revisionId(), keyValue =>
       lcs.quotations.send(revisionId(), keyValue),
     )
     model.value = saved
+    store.reload()
     toast({ title: t('freight.ui.quotationSent'), color: 'success' })
   }
 
   async function submit() {
-    if (quotationDraftDirty.value) {
-      toast({ title: t('freight.ui.missingRequired'), description: t('freight.ui.quotationSaveBeforeSubmit'), color: 'warning' })
-      return
-    }
-    const ok = await confirm({
-      kind: 'submit',
-      title: t('freight.ui.quotationSubmitTitle'),
-      description: t('freight.ui.quotationSubmitDescription'),
-      confirmLabel: t('freight.ui.quotationSubmit'),
-    })
-    if (!ok) return
-    const saved = await lcs.runCommand('quotation.submit', revisionId(), keyValue =>
-      lcs.quotations.submit(revisionId(), keyValue),
-    )
-    model.value = saved
-    store.reload()
-    toast({ title: t('freight.ui.quotationSubmitted'), color: 'success' })
+    return send()
   }
 
   async function accept() {
+    if (quotationDomainStatus(model.value.status) !== 'SENT') return
+    const ok = await confirm({
+      kind: 'submit',
+      title: t('freight.ui.quotationAcceptTitle'),
+      description: t('freight.ui.quotationAcceptDescription'),
+      confirmLabel: t('freight.ui.accept'),
+      confirmColor: 'primary',
+    })
+    if (!ok) return
     const saved = await lcs.runCommand('quotation.accept', revisionId(), keyValue =>
       lcs.quotations.accept(revisionId(), keyValue),
     )
     model.value = saved
+    store.reload()
     toast({ title: t('freight.ui.quotationAccepted'), color: 'success' })
   }
 
@@ -65,11 +76,20 @@ export function useQuotationCommands(options: {
     toast({ title: t(key === 'reject' ? 'freight.ui.quotationRejected' : 'freight.ui.quotationCancelled'), color: key === 'reject' ? 'error' : 'warning' })
   }
 
+  /** Re-quotation: clones the latest revision into a new editable draft. */
   async function createRevision() {
+    const ok = await confirm({
+      kind: 'submit',
+      title: t('freight.ui.quotationRequoteTitle'),
+      description: t('freight.ui.quotationRequoteDescription'),
+      confirmLabel: t('freight.ui.requote'),
+    })
+    if (!ok) return
     const created = await lcs.quotations.createRevision(String(model.value.id))
     store.reload()
     toast({ title: t('freight.ui.revisionCreated'), color: 'success' })
-    await navigateTo(`/quotations/${created.id}`)
+    await navigateTo(`/quotations/${String(created.id || model.value.id)}`)
+    model.value = created
   }
 
   async function convertJob() {
@@ -78,44 +98,23 @@ export function useQuotationCommands(options: {
       await navigateTo(`/service-orders/${String(existing.id)}`)
       return
     }
-    if (!canConvertQuotation(model.value.status)) {
+    if (!guardSaved()) return
+    if (quotationDomainStatus(model.value.status) !== 'ACCEPTED') {
       toast({ title: t('freight.ui.convertRequiresAccepted'), color: 'warning' })
-      return
-    }
-    const job = await lcs.runCommand('quotation.convert', revisionId(), keyValue =>
-      lcs.quotations.convert(revisionId(), keyValue),
-    )
-    toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
-    await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
-  }
-
-  /**
-   * Simplified flow: accepting a saved quotation sends the revision (when still
-   * a draft), accepts it, and immediately converts it to a service order.
-   */
-  async function acceptAndConvert() {
-    const existing = relatedServiceOrder()
-    if (existing?.id) {
-      await navigateTo(`/service-orders/${String(existing.id)}`)
-      return
-    }
-    if (quotationDraftDirty.value) {
-      toast({ title: t('freight.ui.missingRequired'), description: t('freight.ui.quotationSaveBeforeSubmit'), color: 'warning' })
       return
     }
     const ok = await confirm({
       kind: 'submit',
-      title: t('freight.ui.quotationSubmitTitle'),
-      description: t('freight.ui.quotationSubmitDescription'),
-      confirmLabel: t('freight.ui.accept'),
+      title: t('freight.ui.quotationConvertTitle'),
+      description: t('freight.ui.quotationConvertDescription'),
+      confirmLabel: t('freight.ui.convertServiceOrder'),
+      confirmColor: 'primary',
     })
     if (!ok) return
-    const id = revisionId()
-    if (quotationDomainStatus(model.value.status) === 'DRAFT') {
-      model.value = await lcs.runCommand('quotation.send', id, keyValue => lcs.quotations.send(id, keyValue))
-    }
-    model.value = await lcs.runCommand('quotation.accept', id, keyValue => lcs.quotations.accept(id, keyValue))
-    const job = await lcs.runCommand('quotation.convert', id, keyValue => lcs.quotations.convert(id, keyValue))
+    const job = await lcs.runCommand('quotation.convert', revisionId(), keyValue =>
+      lcs.quotations.convert(revisionId(), keyValue),
+    )
+    model.value = { ...model.value, ...job }
     store.reload()
     toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
     await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
@@ -125,7 +124,6 @@ export function useQuotationCommands(options: {
     send,
     submit,
     accept,
-    acceptAndConvert,
     rejectOrCancel,
     createRevision,
     convertJob,

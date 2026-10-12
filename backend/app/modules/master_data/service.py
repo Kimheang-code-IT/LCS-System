@@ -5,24 +5,27 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
+from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.crypto import encrypt_secret, is_sensitive_field
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
-from app.core.pagination import PageParams, count_query, list_sort_orders, paged
+from app.core.pagination import PageParams, paged
 from app.core.serialization import jsonable, to_camel
 from app.modules.master_data.models import (
     BusinessParty,
     ContainerType,
     FeeType,
     ModuleRecord,
-    PartyRole,
     Place,
     TradeDirection,
     TransportAsset,
     TransportType,
 )
+from app.modules.master_data.repository import MasterDataRepository
 
 
 @dataclass
@@ -40,6 +43,7 @@ class Spec:
     output_map: dict[str, str] = field(default_factory=dict)
     refs: dict[str, RefSpec] = field(default_factory=dict)
     computed: Callable[[Any, AsyncSession], dict[str, Any]] | None = None
+    transform_input: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     after_create: Callable[[Any, dict, AsyncSession], None] | None = None
     before_delete: Callable[[Any, AsyncSession], None] | None = None
     status_field: str = "status"
@@ -160,6 +164,7 @@ async def resolve_or_create_container_type(session: AsyncSession, value: Any) ->
     created = ContainerType(code=text[:50], name=text[:255], status="ACTIVE")
     session.add(created)
     await session.flush()
+    await cache.bump("master_data")
     return created.id
 
 
@@ -170,31 +175,13 @@ async def apply_input(spec: Spec, model: Any, data: dict[str, Any], session: Asy
             column = spec.model.__table__.columns.get(attr)
             if column is not None and str(column.type).startswith("BOOLEAN"):
                 value = _bool(value)
+            elif column is not None and str(column.type).startswith("JSON") and value is not None and not isinstance(value, list):
+                value = [value]
             setattr(model, attr, value)
     for camel, ref in spec.refs.items():
         if camel in data:
             resolved = await resolve_reference(session, ref.target, data[camel])
             setattr(model, ref.label, resolved)
-
-
-async def _party_roles(model: BusinessParty, session: AsyncSession) -> dict[str, Any]:
-    roles = (
-        await session.execute(select(PartyRole.role_type).where(PartyRole.party_id == model.id))
-    ).scalars().all()
-    return {"roles": list(roles), "country": model.country_code, "taxIdentifier": model.vat_tin}
-
-
-async def _sync_party_roles(model: Any, data: dict[str, Any], session: AsyncSession) -> None:
-    if "roles" not in data:
-        return
-    roles = data["roles"]
-    if isinstance(roles, str):
-        roles = [roles]
-    from sqlalchemy import delete
-
-    await session.execute(delete(PartyRole).where(PartyRole.party_id == model.id))
-    for role in roles:
-        session.add(PartyRole(party_id=model.id, role_type=str(role), is_primary=False))
 
 
 async def _asset_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
@@ -206,13 +193,23 @@ async def _asset_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
         "transportTypeId": model.transport_type_id,
         "ownerParty": owner.legal_name if owner else None,
         "operatorParty": operator.legal_name if operator else None,
-        "registrationCountry": model.registration_country_code,
     }
 
 
-async def _place_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
-    parent = await session.get(Place, model.parent_place_id) if model.parent_place_id else None
-    return {"parentPlace": parent.name if parent else None, "category": model.place_category, "country": model.country_code}
+def _container_transform(data: dict[str, Any]) -> dict[str, Any]:
+    """The form edits width/height in meters; the table stores millimeters."""
+    for meters_key, millimeter_key in (("widthMeters", "widthMillimeter"), ("heightMeters", "heightMillimeter")):
+        if meters_key not in data:
+            continue
+        value = data[meters_key]
+        if value in (None, ""):
+            data[millimeter_key] = None
+            continue
+        try:
+            data[millimeter_key] = round(float(value) * 1000, 2)
+        except (TypeError, ValueError):
+            continue
+    return data
 
 
 async def _container_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
@@ -240,13 +237,11 @@ SPECS: dict[str, Spec] = {
             "phone": "phone",
             "email": "email",
             "address": "address",
+            "roles": "roles",
             "status": "status",
             "taxIdentifier": "vat_tin",
-            "country": "country_code",
         },
         search=["party_code", "legal_name", "display_name", "phone", "email"],
-        computed=_party_roles,
-        after_create=_sync_party_roles,
     ),
     "places": Spec(
         model=Place,
@@ -255,16 +250,10 @@ SPECS: dict[str, Spec] = {
             "code": "code",
             "name": "name",
             "description": "description",
-            "category": "place_category",
             "address": "address",
-            "latitude": "latitude",
-            "longitude": "longitude",
             "status": "status",
-            "country": "country_code",
         },
-        refs={"parentPlace": RefSpec("place", "parent_place_id")},
         search=["code", "name"],
-        computed=_place_computed,
     ),
     "tradeDirections": Spec(
         model=TradeDirection,
@@ -282,12 +271,15 @@ SPECS: dict[str, Spec] = {
             "kind": "container_kind",
             "isoCode": "iso_code",
             "lengthFeet": "length_feet",
+            "widthMillimeter": "width_millimeter",
+            "heightMillimeter": "height_millimeter",
             "maxGrossWeightKg": "max_gross_weight_kg",
             "description": "description",
             "status": "status",
         },
         search=["code", "name"],
         computed=_container_computed,
+        transform_input=_container_transform,
     ),
     "transportTypes": Spec(
         model=TransportType,
@@ -304,7 +296,6 @@ SPECS: dict[str, Spec] = {
             "identityType": "identity_type",
             "description": "description",
             "status": "status",
-            "registrationCountry": "registration_country_code",
         },
         refs={
             "transportType": RefSpec("transport_type", "transport_type_id"),
@@ -335,6 +326,9 @@ GENERIC_COLLECTIONS = {
     "currencies",
 }
 
+# Generic collections safe to cache: small, non-sensitive option lists only.
+CACHEABLE_GENERIC_COLLECTIONS = {"currencies"}
+
 
 def get_spec(collection: str) -> Spec:
     spec = SPECS.get(collection)
@@ -343,55 +337,118 @@ def get_spec(collection: str) -> Spec:
     return spec
 
 
+def list_cache_parts(collection: str, page: PageParams, *, kind: str = "reference") -> tuple:
+    """Every query-affecting input forms the cache key, so a cached page can
+    never be served for a different search/filter/sort/pagination request."""
+    return (
+        kind,
+        collection,
+        page.page,
+        page.page_size,
+        (page.q or "").strip(),
+        (page.status or "").strip().upper(),
+        page.sort_by or "",
+        page.sort_order or "",
+        page.from_date or "",
+        page.to_date or "",
+    )
+
+
 async def list_reference(session: AsyncSession, context: RequestContext, collection: str, page: PageParams) -> dict:
     spec = get_spec(collection)
-    stmt = select(spec.model).where(spec.model.deleted_at.is_(None))
-    if page.q:
-        pattern = f"%{page.q}%"
-        conditions = [getattr(spec.model, column).ilike(pattern) for column in spec.search]
-        if conditions:
-            stmt = stmt.where(or_(*conditions))
-    if page.status:
-        stmt = stmt.where(getattr(spec.model, spec.status_field) == page.status)
-    total = await count_query(session, stmt)
-    stmt = stmt.order_by(*list_sort_orders(spec.model, page, spec.model.id.desc()))
-    rows = (await session.execute(stmt.limit(page.page_size).offset(page.offset))).scalars().all()
+    parts = list_cache_parts(collection, page)
+    # The router guard already verified the caller may read this collection, so
+    # every caller reaching this point sees the same rows (no per-row scoping).
+    cached = await cache.get_json("master_data", *parts)
+    if cached is not None:
+        return cached
+    rows, total = await MasterDataRepository(session).reference_page(
+        spec.model,
+        search_columns=spec.search,
+        status_field=spec.status_field,
+        page=page,
+    )
     items = [await serialize(spec, row, session) for row in rows]
-    return paged(items, page, total)
+    result = paged(items, page, total)
+    await cache.set_json(
+        "master_data", *parts, value=result, ttl_seconds=settings.cache_ttl_reference_seconds
+    )
+    return result
 
 
 async def get_reference(session: AsyncSession, collection: str, record_id: int) -> dict:
     spec = get_spec(collection)
-    model = await session.get(spec.model, record_id)
-    if model is None or model.deleted_at is not None:
+    cached = await cache.get_json("master_data", "detail", collection, record_id)
+    if cached is not None:
+        return cached
+    model = await MasterDataRepository(session).reference(spec.model, record_id)
+    if model is None:
         raise NotFound()
-    return await serialize(spec, model, session)
+    result = await serialize(spec, model, session)
+    await cache.set_json(
+        "master_data", "detail", collection, record_id, value=result,
+        ttl_seconds=settings.cache_ttl_reference_seconds,
+    )
+    return result
+
+
+# (API field, message, tokens in the DB error). Ordered most-specific first;
+# tokens match both Postgres constraint names and SQLite "table.column" text.
+_UNIQUE_FIELD_ERRORS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("partyCode", "This party code is already in use.", ("party_code",)),
+    ("taxIdentifier", "This tax identifier is already in use.", ("vat_tin",)),
+    ("assetCode", "This asset code is already in use.", ("asset_code",)),
+    ("identity", "This transport type and identity already exist.", ("transport_type_id",)),
+    ("code", "This code is already in use.", ("code",)),
+)
+
+
+def _unique_violation(exc: IntegrityError) -> ValidationFailed:
+    detail = str(getattr(exc, "orig", exc)).lower()
+    for field_key, message, tokens in _UNIQUE_FIELD_ERRORS:
+        if any(token in detail for token in tokens):
+            return ValidationFailed(message, {field_key: message})
+    return ValidationFailed("A record with the same unique value already exists.")
 
 
 async def create_reference(session: AsyncSession, collection: str, data: dict) -> dict:
     spec = get_spec(collection)
+    if spec.transform_input is not None:
+        data = spec.transform_input(dict(data))
     model = spec.model()
     await apply_input(spec, model, data, session)
     session.add(model)
-    await session.flush()
-    if spec.after_create is not None:
-        await spec.after_create(model, data, session)
+    try:
         await session.flush()
-    await session.commit()
+        if spec.after_create is not None:
+            await spec.after_create(model, data, session)
+            await session.flush()
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise _unique_violation(exc) from exc
     await session.refresh(model)
+    await cache.bump("master_data")
     return await serialize(spec, model, session)
 
 
 async def update_reference(session: AsyncSession, collection: str, record_id: int, data: dict) -> dict:
     spec = get_spec(collection)
-    model = await session.get(spec.model, record_id)
-    if model is None or model.deleted_at is not None:
+    model = await MasterDataRepository(session).reference(spec.model, record_id)
+    if model is None:
         raise NotFound()
+    if spec.transform_input is not None:
+        data = spec.transform_input(dict(data))
     await apply_input(spec, model, data, session)
     if spec.after_create is not None:
         await spec.after_create(model, data, session)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise _unique_violation(exc) from exc
     await session.refresh(model)
+    await cache.bump("master_data")
     return await serialize(spec, model, session)
 
 
@@ -405,11 +462,7 @@ async def delete_reference(
     removed. This mirrors the UI and guards direct API calls.
     """
     spec = get_spec(collection)
-    models: list[Any] = []
-    for record_id in ids:
-        model = await session.get(spec.model, record_id)
-        if model is not None:
-            models.append(model)
+    models = await MasterDataRepository(session).references(spec.model, ids)
     if any(str(getattr(model, spec.status_field, "") or "").strip().upper() == "ACTIVE" for model in models):
         raise Conflict(
             "REFERENCE_ACTIVE",
@@ -419,25 +472,24 @@ async def delete_reference(
 
     for model in models:
         await archive_record(session, context, collection, model.id)
+    await cache.bump("master_data")
 
 
 # --- Generic record store -----------------------------------------------------
 async def list_generic(session: AsyncSession, context: RequestContext, collection: str, page: PageParams) -> dict:
-    stmt = select(ModuleRecord).where(ModuleRecord.collection == collection, ModuleRecord.deleted_at.is_(None))
-    if page.q:
-        stmt = stmt.where(ModuleRecord.data["name"].as_string().ilike(f"%{page.q}%"))
-    if page.status:
-        stmt = stmt.where(ModuleRecord.status == page.status)
-    total = await count_query(session, stmt)
-    rows = (
-        await session.execute(
-            stmt.order_by(*list_sort_orders(ModuleRecord, page, ModuleRecord.id.desc()))
-            .limit(page.page_size)
-            .offset(page.offset)
-        )
-    ).scalars().all()
+    parts = list_cache_parts(collection, page, kind="generic")
+    if collection in CACHEABLE_GENERIC_COLLECTIONS:
+        cached = await cache.get_json("master_data", *parts)
+        if cached is not None:
+            return cached
+    rows, total = await MasterDataRepository(session).generic_page(collection, page)
     items = [_generic_payload(row) for row in rows]
-    return paged(items, page, total)
+    result = paged(items, page, total)
+    if collection in CACHEABLE_GENERIC_COLLECTIONS:
+        await cache.set_json(
+            "master_data", *parts, value=result, ttl_seconds=settings.cache_ttl_reference_seconds
+        )
+    return result
 
 
 MASKED_SECRET = "********"
@@ -466,10 +518,15 @@ def _generic_payload(row: ModuleRecord) -> dict[str, Any]:
 
 
 async def get_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int) -> dict:
-    row = await session.get(ModuleRecord, record_id)
-    if row is None or row.collection != collection or row.deleted_at is not None:
+    row = await MasterDataRepository(session).generic(collection, record_id)
+    if row is None:
         raise NotFound()
     return _generic_payload(row)
+
+
+async def get_ui_schema(session: AsyncSession, page: str) -> dict[str, Any] | None:
+    row = await MasterDataRepository(session).generic_by_record_no("__ui_schema__", page)
+    return dict(row.data or {}) if row is not None else None
 
 
 async def create_generic(session: AsyncSession, context: RequestContext, collection: str, data: dict) -> dict:
@@ -485,12 +542,14 @@ async def create_generic(session: AsyncSession, context: RequestContext, collect
     session.add(row)
     await session.commit()
     await session.refresh(row)
+    if collection in CACHEABLE_GENERIC_COLLECTIONS:
+        await cache.bump("master_data")
     return _generic_payload(row)
 
 
 async def update_generic(session: AsyncSession, context: RequestContext, collection: str, record_id: int, data: dict) -> dict:
-    row = await session.get(ModuleRecord, record_id)
-    if row is None or row.collection != collection or row.deleted_at is not None:
+    row = await MasterDataRepository(session).generic(collection, record_id)
+    if row is None:
         raise NotFound()
     payload = _encrypt_payload(
         {key: value for key, value in data.items() if key not in {"id"}}
@@ -502,6 +561,8 @@ async def update_generic(session: AsyncSession, context: RequestContext, collect
     row.record_no = str(merged.get("code") or merged.get("name") or merged.get("documentNo") or "") or None
     await session.commit()
     await session.refresh(row)
+    if collection in CACHEABLE_GENERIC_COLLECTIONS:
+        await cache.bump("master_data")
     return _generic_payload(row)
 
 
@@ -517,10 +578,5 @@ async def delete_generic(session: AsyncSession, context: RequestContext, collect
                 await session.delete(row)
     if collection not in ARCHIVABLE_GENERIC_COLLECTIONS:
         await session.commit()
-
-
-async def assert_reference_exists(session: AsyncSession, model: type, record_id: int | None, message: str) -> None:
-    if record_id is None:
-        return
-    if await session.get(model, record_id) is None:
-        raise ValidationFailed(message)
+    if collection in CACHEABLE_GENERIC_COLLECTIONS:
+        await cache.bump("master_data")

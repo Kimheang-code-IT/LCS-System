@@ -67,7 +67,7 @@ export function dynamicTableColumnsToFreightTable(
     key,
     title,
     columns: freightColumns,
-    addLabelKey: 'docetra.config.addTableRow',
+    addLabelKey: 'lcs.config.addTableRow',
   }
 }
 

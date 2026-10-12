@@ -33,7 +33,7 @@ const store = useFreightStore()
 const toast = useToast()
 const router = useRouter()
 const { t, te } = useI18n()
-const { moduleTitle, moduleSingular } = useFreightLabel()
+const { moduleTitle } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
 const { confirm } = useConfirm()
 const lcs = useLcs()
@@ -55,9 +55,6 @@ const {
   navigatePrevious,
   navigateNext,
   attachments,
-  tags,
-  metaOwner,
-  metaAssignee,
   setChromeField,
   commentBody,
   submittingComment,
@@ -247,7 +244,7 @@ async function save() {
 async function setJobStatus(next: 'ACTIVE' | 'INACTIVE') {
   if (!model.value.id) return
   model.value = store.save('jobs', { ...model.value, status: next === 'ACTIVE' ? 'Active' : 'Inactive' })
-  toast.add({ title: t(next === 'ACTIVE' ? 'docetra.common.activated' : 'docetra.common.deactivated'), color: 'success' })
+  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
 }
 
 async function deleteJob() {
@@ -255,14 +252,14 @@ async function deleteJob() {
   const ok = await confirm({ kind: 'delete', count: 1 })
   if (!ok) return
   store.remove('jobs', [String(model.value.id)])
-  toast.add({ title: t('docetra.actions.deletedItems', { n: 1 }), color: 'success' })
+  toast.add({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
   await navigateTo('/service-orders')
 }
 
 function openQuotation() {
   const quotation = store.list('quotations').find(row => String(row.quotationNo || '') === String(model.value.quotationNo || ''))
   if (!quotation) {
-    toast.add({ title: t('docetra.states.notFound'), color: 'warning' })
+    toast.add({ title: t('lcs.states.notFound'), color: 'warning' })
     return
   }
   void navigateTo(`/quotations/${quotation.id}`)
@@ -336,7 +333,6 @@ function onTabChange(value: string) {
     :confirm-save="false"
     :show-save="canEdit || isCreate"
     :show-cancel="false"
-    :show-meta-rail="!isCreate"
     show-list-nav
     content-wide
     :can-navigate-previous="canNavigatePrevious"
@@ -351,16 +347,6 @@ function onTabChange(value: string) {
     :comment-body="commentBody"
     :submitting-comment="submittingComment"
     :current-user="currentUser"
-    :meta-title="String(model.jobNo || moduleSingular(module))"
-    :meta-subtitle="headerSubtitle || String(model.customer || moduleSingular(module))"
-    :meta-icon="module.icon"
-    :meta-status="String(model.status || '')"
-    :meta-stage="String(model.direction || '')"
-    :meta-owner="metaOwner"
-    :meta-assignee="metaAssignee"
-    :meta-tags="tags"
-    :meta-created-at="String(model.createdAt || '')"
-    :meta-updated-at="String(model.updatedAt || '')"
     :more-items="moreItems"
     :can-export="false"
     @update:active-tab="onTabChange"
@@ -412,7 +398,7 @@ function onTabChange(value: string) {
             :editable-payments="canEditPayments"
             @update:job="patchJob"
           />
-          <FreightComponentTabs
+          <DocumentAppComponentTabs
             v-else-if="isComponentTab && activeComponentTab"
             :tab="activeComponentTab"
             :references="componentTabsState.references.value"

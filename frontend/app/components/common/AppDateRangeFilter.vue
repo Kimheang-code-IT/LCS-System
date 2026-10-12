@@ -54,7 +54,7 @@ const hasActiveFilter = computed(() =>
   isFilterValueActive(start.value) || isFilterValueActive(end.value),
 )
 
-const pickerTitle = computed(() => props.label || t('docetra.fields.meetingDate'))
+const pickerTitle = computed(() => props.label || t('lcs.fields.meetingDate'))
 
 const dateUi = computed(() => getFilterDateUi(hasActiveFilter.value, {
   isDateTime: isDateTime.value,
@@ -179,8 +179,8 @@ function openPickerDialog() {
       size="xs"
       square
       class="shrink-0"
-      :aria-label="t('docetra.common.clear')"
-      :title="t('docetra.common.clear')"
+      :aria-label="t('lcs.common.clear')"
+      :title="t('lcs.common.clear')"
       :disabled="disabled"
       @click="clearFilter"
     />
@@ -193,8 +193,8 @@ function openPickerDialog() {
       size="xs"
       square
       class="shrink-0"
-      :aria-label="t('docetra.common.clear')"
-      :title="t('docetra.common.clear')"
+      :aria-label="t('lcs.common.clear')"
+      :title="t('lcs.common.clear')"
       @click="clearFilter"
     />
 

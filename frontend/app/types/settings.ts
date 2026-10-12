@@ -5,13 +5,6 @@ export type ConnectionStatus =
   | 'failed'
   | 'disabled'
 
-export type StorageProviderType =
-  | 'local'
-  | 'cloudflare_r2'
-  | 'amazon_s3'
-  | 'minio'
-  | 'google_drive'
-
 export type EncryptionType = 'none' | 'ssl' | 'tls' | 'starttls'
 
 export type TelegramConnectionMode = 'bot_api' | 'webhook'
@@ -240,54 +233,6 @@ export interface AppConfig {
   updatedAt: string
 }
 
-export interface StorageProvider {
-  id: string
-  name: string
-  type: StorageProviderType
-  active: boolean
-  isDefault: boolean
-  maxFileSizeMb: number
-  allowedFileTypes: string[]
-  accessMode: 'public' | 'private'
-  uploadPathPattern: string
-  connectionStatus: ConnectionStatus
-  lastTestedAt?: string
-  lastTestMessage?: string
-  /** S3-compatible */
-  endpoint?: string
-  region?: string
-  bucket?: string
-  accessKey?: string
-  secretKey?: string
-  publicUrl?: string
-  pathStyle?: boolean
-  /** Google Drive */
-  folderId?: string
-  clientId?: string
-  clientSecret?: string
-  credentialStatus?: ConnectionStatus
-  syncStatus?: ConnectionStatus
-  syncSchedule?: string
-  updatedAt: string
-}
-
-export type CreateStorageProviderInput = Omit<
-  StorageProvider,
-  'id' | 'updatedAt' | 'connectionStatus' | 'isDefault'
-> & { isDefault?: boolean }
-
-export type UpdateStorageProviderInput = Partial<CreateStorageProviderInput>
-
-export const NOTIFICATION_EVENTS: NotificationEvent[] = [
-  'record_created',
-  'record_assigned',
-  'stage_changed',
-  'deadline_approaching',
-  'record_overdue',
-  'meeting_created',
-  'file_uploaded',
-]
-
 export const TELEGRAM_TEMPLATE_VARIABLES = [
   '{{record_number}}',
   '{{record_title}}',
@@ -299,11 +244,3 @@ export const TELEGRAM_TEMPLATE_VARIABLES = [
   '{{created_by}}',
   '{{record_url}}',
 ] as const
-
-export const DEFAULT_TELEGRAM_TEMPLATE = [
-  '[{{record_type}}] {{record_number}}',
-  '{{record_title}}',
-  'Status: {{status}} · Stage: {{stage}}',
-  'Assignee: {{assigned_officer}}',
-  '{{record_url}}',
-].join('\n')

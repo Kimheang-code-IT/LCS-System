@@ -5,7 +5,6 @@ import type {
   AttachmentMeta,
   DocumentTabSchema,
   EntityComment,
-  PersonSummary,
 } from '~/types/common'
 import { useConfirm } from '~/composables/common/useConfirm'
 import type { ExportRequest } from '~/types/export'
@@ -22,9 +21,9 @@ const props = withDefaults(defineProps<{
   readOnly?: boolean
   canSave?: boolean
   saveLabel?: string
+  fieldErrors?: Record<string, string>
   showSave?: boolean
   showComments?: boolean
-  showMetaRail?: boolean
   showTabs?: boolean
   showListNav?: boolean
   canNavigatePrevious?: boolean
@@ -46,17 +45,6 @@ const props = withDefaults(defineProps<{
   hasMoreFeed?: boolean
   loadingMoreFeed?: boolean
   currentUser?: { id: string, name: string, email?: string }
-  metaTitle?: string
-  metaSubtitle?: string
-  /** Module icon rendered in the meta rail record tile. */
-  metaIcon?: string
-  metaStatus?: string
-  metaStage?: string
-  metaOwner?: PersonSummary | null
-  metaAssignee?: PersonSummary | null
-  metaTags?: string[]
-  metaCreatedAt?: string
-  metaUpdatedAt?: string
   moreItems?: DropdownMenuItem[][]
   exporting?: boolean
   canExport?: boolean
@@ -64,6 +52,7 @@ const props = withDefaults(defineProps<{
   showCancel?: boolean
 }>(), {
   saveLabel: '',
+  fieldErrors: () => ({}),
   listTo: '',
   currentUser: undefined,
   metaTitle: '',
@@ -84,7 +73,6 @@ const props = withDefaults(defineProps<{
   canSave: true,
   showSave: true,
   showComments: false,
-  showMetaRail: false,
   showTabs: true,
   showListNav: false,
   canNavigatePrevious: false,
@@ -103,7 +91,6 @@ const props = withDefaults(defineProps<{
   deletingCommentId: null,
   hasMoreFeed: false,
   loadingMoreFeed: false,
-  metaTags: () => [],
   exporting: false,
   canExport: true,
   confirmSave: true,
@@ -156,12 +143,6 @@ const { confirm } = useConfirm()
 
 const scrollEl = ref<HTMLElement | null>(null)
 const showScrollTop = ref(false)
-/** Rail starts collapsed — the header panel icon opens/closes it on every breakpoint. */
-const metaRailOpen = ref(false)
-
-function toggleMetaRail() {
-  metaRailOpen.value = !metaRailOpen.value
-}
 
 function onFormScroll() {
   showScrollTop.value = (scrollEl.value?.scrollTop ?? 0) > 240
@@ -208,14 +189,11 @@ async function onSaveClick() {
 :saving="saving"
       :show-cancel="showCancel && Boolean(listTo)"
 :cancel-to="listTo"
-      :show-meta-rail-toggle="showMetaRail && !notFound && !error && showForm"
-:meta-rail-open="metaRailOpen"
       @refresh="emit('refresh')"
 @export="emit('export', $event)"
 @navigate-previous="emit('navigatePrevious')"
       @navigate-next="emit('navigateNext')"
-@save="onSaveClick"
-@toggle-meta-rail="toggleMetaRail">
+@save="onSaveClick">
       <template v-if="$slots.leading" #leading>
         <slot name="leading" />
       </template>
@@ -230,13 +208,6 @@ v-if="pending"
       </div>
 
       <div class="relative flex min-h-0 w-full min-w-0 flex-1 overflow-hidden bg-default">
-        <button
-v-if="metaRailOpen"
-type="button"
-class="absolute inset-0 z-20 bg-black/25 lg:hidden"
-          :aria-label="t('actions.close')"
-@click="metaRailOpen = false" />
-
         <div class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <DocumentAppDocumentTabBar
 v-if="showTabs && showForm && !notFound && !error"
@@ -252,7 +223,7 @@ class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
               ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
               : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
 color="error"
-:title="t('docetra.states.notFound')" />
+:title="t('lcs.states.notFound')" />
             <UAlert
 v-else-if="error"
 class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
@@ -267,7 +238,7 @@ color="error"
 
               <div
 class="flex min-h-0 w-full"
-                :class="$slots.aside && !showMetaRail ? 'flex-col xl:flex-row' : 'flex-col'">
+                :class="$slots.aside ? 'flex-col xl:flex-row' : 'flex-col'">
                 <div class="min-w-0 flex-1">
                   <slot name="form">
                     <DocumentAppDocumentForm
@@ -276,6 +247,7 @@ class="flex min-h-0 w-full"
 :field-value="fieldValue"
                       :set-field-value="setFieldValue"
 :read-only="readOnly"
+:field-errors="fieldErrors"
 :wide="contentWide" />
                   </slot>
 
@@ -307,7 +279,7 @@ v-if="$slots['after-form']"
                 </div>
 
                 <aside
-v-if="$slots.aside && !showMetaRail"
+v-if="$slots.aside"
                   class="w-full shrink-0 border-t border-default px-4 py-6 sm:px-6 xl:w-80 xl:border-t-0 xl:border-l xl:overflow-y-auto">
                   <slot name="aside" />
                 </aside>
@@ -323,35 +295,9 @@ variant="soft"
             size="sm"
 square
 class="absolute bottom-4 right-4 z-20 border border-default shadow-sm"
-            :aria-label="t('docetra.document.scrollToTop')"
+            :aria-label="t('lcs.document.scrollToTop')"
 @click="scrollToTop" />
         </div>
-
-        <aside
-v-if="showMetaRail && !notFound && !error && showForm"
-          class="absolute inset-y-0 end-0 z-30 w-[min(22rem,calc(100%-3rem))] bg-default shadow-xl transition-transform duration-200 lg:static lg:z-auto lg:w-64 lg:shadow-none xl:w-72"
-          :class="metaRailOpen
-            ? 'translate-x-0'
-            : 'translate-x-full rtl:-translate-x-full lg:hidden'">
-          <UButton
-icon="i-lucide-x"
-color="neutral"
-variant="ghost"
-size="sm"
-square
-            class="absolute end-2 top-2 z-10 lg:hidden"
-:aria-label="t('actions.close')"
-            @click="metaRailOpen = false" />
-          <DocumentAppDocumentMetaRail
-class="h-full min-h-0 overflow-y-auto"
-:title="metaTitle"
-            :subtitle="metaSubtitle"
-:icon="metaIcon"
-:owner="metaOwner || undefined"
-:activity="activity"
-            :created-at="metaCreatedAt"
-:updated-at="metaUpdatedAt" />
-        </aside>
       </div>
     </div>
   </div>

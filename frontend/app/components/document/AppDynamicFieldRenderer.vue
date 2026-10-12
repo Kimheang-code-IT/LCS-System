@@ -5,15 +5,9 @@ import type {
   FieldOption,
 } from '~/types/common'
 import type {
-  AttributeDataType,
-  AttributeOption,
   ConfigWorkflowStage,
   RecordAttribute,
   RecordTypeAttribute,
-  RecordTypeNumbering,
-  ValidationRule,
-  VisibilityRule,
-  WorkflowTransition,
 } from '~/types/configuration'
 import type { AppRolePermissionRow } from '~/types/entities'
 import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/types/settings'
@@ -39,6 +33,7 @@ const props = defineProps<{
   field: DocumentFieldSchema
   modelValue: unknown
   disabled?: boolean
+  fieldErrors?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +42,8 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 const { loadReferenceOptions } = useReferenceOptions()
+
+const fieldError = computed(() => props.fieldErrors?.[props.field.key])
 
 const hintOpen = ref(false)
 
@@ -235,17 +232,11 @@ const isPermissionMatrix = computed(() => fieldKind.value === 'permissionMatrix'
 const isSecret = computed(() => props.field.type === 'secret')
 const isColor = computed(() => props.field.type === 'color')
 const isImage = computed(() => props.field.type === 'image')
-const isIcon = computed(() => props.field.type === 'icon')
 const isTelegramDestinations = computed(() => props.field.type === 'telegram-destinations')
 const isNotificationRules = computed(() => props.field.type === 'notification-rules')
 const isConnectionStatus = computed(() => props.field.type === 'connection-status')
 const isAlert = computed(() => props.field.type === 'alert')
 const isAssignedAttributes = computed(() => props.field.type === 'assigned-attributes')
-const isWorkflowBuilder = computed(() => props.field.type === 'workflow-builder')
-const isNumberingPreview = computed(() => props.field.type === 'numbering-preview')
-const isValidationBuilder = computed(() => props.field.type === 'validation-builder')
-const isOptionsBuilder = computed(() => props.field.type === 'options-builder')
-const isVisibilityBuilder = computed(() => props.field.type === 'visibility-builder')
 const isLineTable = computed(() => props.field.type === 'line-table')
 const isRelatedRecords = computed(() => props.field.type === 'related-records')
 const isDynamicTable = computed(() => props.field.type === 'dynamic-table')
@@ -301,11 +292,6 @@ function onFileChange(event: Event) {
   emit('update:modelValue', file?.name || props.modelValue)
 }
 
-const iconValue = computed({
-  get: () => String(props.modelValue ?? ''),
-  set: (v: string) => emit('update:modelValue', v),
-})
-
 const assignedAttributes = computed({
   get: () => (Array.isArray(props.modelValue) ? props.modelValue as RecordTypeAttribute[] : []),
   set: (v: RecordTypeAttribute[]) => emit('update:modelValue', v),
@@ -320,7 +306,7 @@ const assignmentStageItems = computed(() => {
     ? props.field.meta.stages as ConfigWorkflowStage[]
     : []
   return [
-    { label: t('docetra.config.allStages'), value: '__all_stages__' },
+    { label: t('lcs.config.allStages'), value: '__all_stages__' },
     ...[...configured]
       .sort((a, b) => a.order - b.order)
       .map(stage => ({ label: stage.name, value: stage.code })),
@@ -332,62 +318,9 @@ const searchAttributes = computed(() =>
   props.field.meta?.searchAttributes as ((query: string) => void) | undefined,
 )
 
-const workflowValue = computed({
-  get: () => {
-    const raw = props.modelValue as { stages?: ConfigWorkflowStage[], transitions?: WorkflowTransition[] } | null
-    return {
-      stages: raw?.stages || [],
-      transitions: raw?.transitions || [],
-    }
-  },
-  set: (v: { stages: ConfigWorkflowStage[], transitions: WorkflowTransition[] }) => emit('update:modelValue', v),
-})
+function goCreateAttribute() {}
 
-const workflowStages = computed({
-  get: () => workflowValue.value.stages,
-  set: (stages: ConfigWorkflowStage[]) => {
-    workflowValue.value = { ...workflowValue.value, stages }
-  },
-})
-
-const workflowTransitions = computed({
-  get: () => workflowValue.value.transitions,
-  set: (transitions: WorkflowTransition[]) => {
-    workflowValue.value = { ...workflowValue.value, transitions }
-  },
-})
-
-const numberingPreview = computed(() =>
-  (props.modelValue && typeof props.modelValue === 'object'
-    ? props.modelValue as RecordTypeNumbering
-    : { prefix: 'DOC', sequenceLength: 4, includeYear: true, resetYearly: true }),
-)
-
-const validationValue = computed({
-  get: () => (props.modelValue && typeof props.modelValue === 'object' ? props.modelValue as ValidationRule : {}),
-  set: (v: ValidationRule) => emit('update:modelValue', v),
-})
-
-const validationDataType = computed(() =>
-  (props.field.meta?.dataType as AttributeDataType) || 'short_text',
-)
-
-const optionsBuilderValue = computed({
-  get: () => (Array.isArray(props.modelValue) ? props.modelValue as AttributeOption[] : []),
-  set: (v: AttributeOption[]) => emit('update:modelValue', v),
-})
-
-const visibilityValue = computed({
-  get: () => (props.modelValue == null ? null : props.modelValue as VisibilityRule),
-  set: (v: VisibilityRule | null) => emit('update:modelValue', v),
-})
-
-const visibilityFieldOptions = computed(() =>
-  (props.field.options || []).map(o => ({
-    label: o.labelKey ? t(o.labelKey) : o.label,
-    value: o.value,
-  })),
-)
+function goOpenAttribute(_attributeId: string) {}
 
 function addAssignedAttribute() {
   const id = selectedAttributeId.value
@@ -588,53 +521,12 @@ function removeDestination(id: string) {
     :disabled="disabled || field.readOnly"
   />
 
-  <CommonAppIconPicker
-    v-else-if="isIcon"
-    v-model="iconValue"
-    :label="labelText"
-    :help="helpText"
-    :disabled="disabled || field.readOnly"
-  />
-
-  <ConfigurationAppNumberingPreview
-    v-else-if="isNumberingPreview"
-    class="md:col-span-2"
-    :numbering="numberingPreview"
-  />
-
-  <ConfigurationAppValidationRuleBuilder
-    v-else-if="isValidationBuilder"
-    v-model="validationValue"
-    class="md:col-span-2"
-    :data-type="validationDataType"
-  />
-
-  <ConfigurationAppAttributeOptionsBuilder
-    v-else-if="isOptionsBuilder"
-    v-model="optionsBuilderValue"
-    class="md:col-span-2"
-  />
-
-  <ConfigurationAppVisibilityRuleBuilder
-    v-else-if="isVisibilityBuilder"
-    v-model="visibilityValue"
-    class="md:col-span-2"
-    :field-options="visibilityFieldOptions"
-  />
-
-  <div v-else-if="isWorkflowBuilder" class="md:col-span-2">
-    <ConfigurationAppWorkflowStageBuilder
-      v-model:stages="workflowStages"
-      v-model:transitions="workflowTransitions"
-    />
-  </div>
-
   <div
     v-else-if="isAssignedAttributes"
     class="space-y-4 md:col-span-2"
   >
     <div class="flex flex-wrap items-end gap-2">
-      <UFormField :label="t('docetra.config.assignAttribute')" class="min-w-64 flex-1" :help="t('docetra.fieldHelp.assignAttribute')">
+      <UFormField :label="t('lcs.config.assignAttribute')" class="min-w-64 flex-1" :help="t('lcs.fieldHelp.assignAttribute')">
         <UInputMenu
           v-model="selectedAttributeId"
           :items="selectItems"
@@ -650,7 +542,16 @@ function removeDestination(id: string) {
         :disabled="!selectedAttributeId || disabled || field.readOnly"
         @click="addAssignedAttribute"
       >
-        {{ t('docetra.config.addAttribute') }}
+        {{ t('lcs.config.addAttribute') }}
+      </UButton>
+      <UButton
+        icon="i-lucide-list-plus"
+        color="neutral"
+        variant="outline"
+        :disabled="disabled || field.readOnly"
+        @click="goCreateAttribute"
+      >
+        {{ t('lcs.config.createAttribute') }}
       </UButton>
     </div>
 
@@ -671,6 +572,14 @@ function removeDestination(id: string) {
             </div>
             <div class="flex items-center gap-1">
               <UButton
+                icon="i-lucide-external-link"
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                :aria-label="t('lcs.config.openAttribute')"
+                @click="goOpenAttribute(item.attributeId)"
+              />
+              <UButton
                 icon="i-lucide-trash-2"
                 color="error"
                 variant="ghost"
@@ -683,37 +592,37 @@ function removeDestination(id: string) {
           <div class="grid gap-2 sm:grid-cols-3">
             <UCheckbox
               :model-value="item.required"
-              :label="t('docetra.fields.required')"
+              :label="t('lcs.fields.required')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { required: Boolean($event) })"
             />
             <UCheckbox
               :model-value="item.readOnly"
-              :label="t('docetra.config.readOnly')"
+              :label="t('lcs.config.readOnly')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { readOnly: Boolean($event) })"
             />
             <UCheckbox
               :model-value="item.visible"
-              :label="t('docetra.config.visible')"
+              :label="t('lcs.config.visible')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { visible: Boolean($event) })"
             />
             <UCheckbox
               :model-value="item.searchable"
-              :label="t('docetra.config.searchable')"
+              :label="t('lcs.config.searchable')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { searchable: Boolean($event) })"
             />
             <UCheckbox
               :model-value="item.filterable"
-              :label="t('docetra.config.filterable')"
+              :label="t('lcs.config.filterable')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { filterable: Boolean($event) })"
             />
             <UCheckbox
               :model-value="item.showInList"
-              :label="t('docetra.config.showInList')"
+              :label="t('lcs.config.showInList')"
               :disabled="disabled || field.readOnly"
               @update:model-value="updateAssigned(item.attributeId, { showInList: Boolean($event) })"
             />
@@ -721,11 +630,11 @@ function removeDestination(id: string) {
           <UInput
             :model-value="item.section || ''"
             size="sm"
-            :placeholder="t('docetra.config.section')"
+            :placeholder="t('lcs.config.section')"
             :disabled="disabled || field.readOnly"
             @update:model-value="updateAssigned(item.attributeId, { section: String($event) })"
           />
-          <UFormField :label="t('docetra.config.assignedStage')" :help="t('docetra.fieldHelp.assignedStage')">
+          <UFormField :label="t('lcs.config.assignedStage')" :help="t('lcs.fieldHelp.assignedStage')">
             <USelect
               :model-value="item.stageCode || '__all_stages__'"
               :items="assignmentStageItems"
@@ -740,7 +649,7 @@ function removeDestination(id: string) {
         </div>
       </template>
       <template #empty>
-        {{ t('docetra.config.noAssignedAttributes') }}
+        {{ t('lcs.config.noAssignedAttributes') }}
       </template>
     </CommonAppSortableList>
   </div>
@@ -751,7 +660,7 @@ function removeDestination(id: string) {
   >
     <div class="flex items-center justify-between">
       <h4 class="text-sm font-semibold">
-        {{ t('docetra.settings.destinations') }}
+        {{ t('lcs.settings.destinations') }}
       </h4>
       <UButton
         size="sm"
@@ -759,7 +668,7 @@ function removeDestination(id: string) {
         :disabled="disabled || field.readOnly"
         @click="addDestination"
       >
-        {{ t('docetra.settings.addDestination') }}
+        {{ t('lcs.settings.addDestination') }}
       </UButton>
     </div>
 
@@ -770,7 +679,7 @@ function removeDestination(id: string) {
     >
       <UInput
         v-model="dest.name"
-        :placeholder="t('docetra.fields.name')"
+        :placeholder="t('lcs.fields.name')"
         :disabled="disabled || field.readOnly"
       />
       <UInput
@@ -804,7 +713,7 @@ function removeDestination(id: string) {
     class="space-y-2 md:col-span-2"
   >
     <p class="text-sm font-medium">
-      {{ t('docetra.settings.eventRules') }}
+      {{ t('lcs.settings.eventRules') }}
     </p>
     <div
       v-for="rule in rulesValue"
@@ -830,6 +739,7 @@ function removeDestination(id: string) {
   <UFormField
     v-else-if="isBoolean"
     :help="helpText"
+    :error="fieldError"
   >
     <div class="flex min-h-11 flex-wrap items-center gap-2 pt-1">
       <UCheckbox
@@ -880,6 +790,7 @@ function removeDestination(id: string) {
     v-else
     :label="labelText"
     :required="field.required"
+    :error="fieldError"
     :help="field.type === 'textarea' && textareaHelp ? textareaHelp : helpText"
   >
     <div class="flex items-start gap-1.5">

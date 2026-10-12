@@ -18,35 +18,48 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "og:image": "node scripts/generate-og-image.mjs"
+    "audit:security": "pnpm audit --prod --audit-level high --ignore CVE-2026-85393 --ignore CVE-2026-93687"
   },
   "dependencies": {
-    "@iconify-json/lucide": "^1.2.96",
-    "@iconify-json/simple-icons": "^1.2.72",
-    "@internationalized/date": "^3.12.0",
-    "@nuxt/image": "^2.0.0",
-    "@nuxt/ui": "^4.5.1",
-    "@nuxtjs/i18n": "^10.2.3",
+    "@iconify-json/lucide": "^1.2.143",
+    "@iconify-json/simple-icons": "^1.2.100",
+    "@internationalized/date": "^3.12.4",
+    "@nuxt/ui": "^4.11.3",
+    "@nuxtjs/i18n": "^10.6.0",
     "@pinia/nuxt": "^0.11.3",
     "@tanstack/vue-table": "^8.21.3",
-    "@vueuse/core": "^14.2.1",
-    "@vueuse/nuxt": "^14.2.1",
-    "echarts": "^6.0.0",
-    "nuxt": "^4.3.1",
+    "@vueuse/core": "^14.4.0",
+    "@vueuse/nuxt": "^14.4.0",
+    "echarts": "^6.1.0",
+    "nuxt": "^4.6.1",
     "pinia": "^3.0.4",
-    "tailwindcss": "^4.2.1",
-    "vue": "^3.5.29",
-    "vue-echarts": "^8.0.1",
-    "zod": "^4.3.6"
+    "tailwindcss": "^4.3.3",
+    "vue": "^3.5.43",
+    "vue-echarts": "^8.3.2",
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.17.0",
     "@nuxt/fonts": "^0.14.0",
-    "eslint": "^10.9.0",
-    "sharp": "^0.35.4",
+    "eslint": "^10.12.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
-    "vue-tsc": "^3.2.5"
+    "vue-tsc": "^3.3.13"
+  },
+  "pnpm": {
+    "overrides": {
+      "@simple-git/argv-parser": "2.0.1",
+      "simple-git": "4.0.1"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-85393",
+        "CVE-2026-93687"
+      ]
+    },
+    "patchedDependencies": {
+      "@nuxt/devtools@3.4.2": "patches/@nuxt__devtools@3.4.2.patch"
+    }
   },
   "packageManager": "pnpm@10.30.3"
 }

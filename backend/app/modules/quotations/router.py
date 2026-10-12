@@ -76,6 +76,15 @@ async def create_revision(
     return {"data": record}
 
 
+@router.get("/quotations/{quotation_id}/revisions")
+async def list_revisions(
+    quotation_id: str,
+    context: RequestContext = Depends(require_permission("quotation.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.list_revisions(session, context, int(quotation_id))}
+
+
 @router.post("/quotation-revisions/{revision_id}/send")
 async def send_revision(
     revision_id: str,

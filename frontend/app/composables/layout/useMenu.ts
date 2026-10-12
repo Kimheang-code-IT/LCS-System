@@ -101,7 +101,6 @@ export function useMenu() {
     icon,
     type: 'trigger',
     value: id,
-    defaultOpen: true,
     class: 'mt-1 text-sm gap-2',
     children,
   })

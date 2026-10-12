@@ -18,6 +18,7 @@ export interface QuotationRepository {
   send: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   accept: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   createRevision: (quotationId: string) => Promise<FreightRecord>
+  listRevisions: (quotationId: string) => Promise<FreightRecord[]>
   submit: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   convert: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
 }
@@ -89,7 +90,7 @@ export type DashboardSummary = {
     expense: number
   }
   charts: {
-    revenueExpense: Array<{ month: string, revenue: number, expense: number }>
+    revenueExpense: Array<{ period: string, revenue: number, expense: number }>
     ordersByStatus: Array<{ status: string, count: number }>
     receivablesAging: Array<{ key: string, amount: number }>
     payablesAging: Array<{ key: string, amount: number }>
@@ -100,10 +101,11 @@ export type DashboardSummary = {
 }
 
 export interface ReportsRepository {
-  dashboard: () => Promise<DashboardSummary>
+  dashboard: (granularity?: 'day' | 'month' | 'year') => Promise<DashboardSummary>
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>
   profitability: () => Promise<FreightRecord[]>
+  ledgerLines: () => Promise<FreightRecord[]>
 }
 
 export type { CreateRecordInput as LcsCreateRecordInput }

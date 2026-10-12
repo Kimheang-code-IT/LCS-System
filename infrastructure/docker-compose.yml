@@ -11,7 +11,7 @@ services:
     ports:
       # BIND_HOST defaults to all interfaces for local dev; set BIND_HOST=127.0.0.1
       # in production so the datastores are not reachable from the internet.
-      - "${BIND_HOST:-0.0.0.0}:${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${BIND_HOST:-127.0.0.1}:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - freight_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,7 +25,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${REDIS_HOST_PORT:-6379}:6379"
+      - "${BIND_HOST:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - freight_redis_data:/data
     healthcheck:
@@ -45,8 +45,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${MINIO_HOST_PORT:-9000}:9000"
-      - "${BIND_HOST:-0.0.0.0}:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+      - "${BIND_HOST:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
+      - "${BIND_HOST:-127.0.0.1}:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
     volumes:
       - freight_minio_data:/data
     healthcheck:
@@ -67,8 +67,9 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-true}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-32-byte-minimum-secret}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      SESSION_REFRESH_TOKEN_EXPIRE_HOURS: ${SESSION_REFRESH_TOKEN_EXPIRE_HOURS:-12}
       # Comma-separated browser origins allowed to call the API over CORS.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:${FRONTEND_HOST_PORT:-80},http://127.0.0.1:${FRONTEND_HOST_PORT:-80}}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
@@ -83,7 +84,7 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_USE_SSL: ${S3_USE_SSL:-false}
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${BACKEND_HOST_PORT:-8000}:8000"
+      - "${BIND_HOST:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - freight_uploads:/app/storage
     depends_on:
@@ -94,7 +95,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4).read()"]
       interval: 15s
       timeout: 5s
       retries: 10

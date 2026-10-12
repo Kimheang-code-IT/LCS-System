@@ -9,6 +9,8 @@ export type ReferenceOptionSource = {
   labelField?: 'code' | 'name' | 'legalName' | 'displayName'
   /** Only include records whose `roles` include one of these (case-insensitive). */
   roles?: string[]
+  /** Only include records whose `status` matches one of these (case-insensitive). */
+  statuses?: string[]
 }
 
 /**
@@ -17,13 +19,13 @@ export type ReferenceOptionSource = {
  * line table picks these up automatically.
  */
 const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
+  customerPartyId: { collection: 'businessParties', valueField: 'id', labelField: 'legalName', roles: ['Customer'], statuses: ['ACTIVE'] },
   customer: { collection: 'businessParties', valueField: 'legalName', labelField: 'legalName', roles: ['Customer'] },
   containerType: { collection: 'containerTypes', valueField: 'code', labelField: 'name' },
+  transportType: { collection: 'transportTypes', valueField: 'name', labelField: 'name' },
   feeType: { collection: 'feeTypes', valueField: 'name', labelField: 'name' },
   direction: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
   tradeDirection: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
-  parentPlace: { collection: 'places', valueField: 'name', labelField: 'name' },
-  roles: { collection: 'roles', valueField: 'name', labelField: 'name' },
   currency: { collection: 'currencies', valueField: 'code', labelField: 'name' },
   currency20: { collection: 'currencies', valueField: 'code', labelField: 'name' },
   currency40: { collection: 'currencies', valueField: 'code', labelField: 'name' },
@@ -41,9 +43,14 @@ export function referenceSelectItems(
   const valueField = source.valueField || 'code'
   const labelField = source.labelField || 'name'
   const roleFilter = source.roles?.map(role => role.toLowerCase())
+  const statusFilter = source.statuses?.map(status => status.toLowerCase())
   const items: Array<{ label: string, value: string }> = []
   const seen = new Set<string>()
   for (const row of records || []) {
+    if (statusFilter?.length) {
+      const status = String(row.status || 'ACTIVE').toLowerCase()
+      if (!statusFilter.includes(status)) continue
+    }
     if (roleFilter?.length) {
       const roles = Array.isArray(row.roles) ? row.roles.map(role => String(role).toLowerCase()) : []
       if (!roles.some(role => roleFilter.includes(role))) continue

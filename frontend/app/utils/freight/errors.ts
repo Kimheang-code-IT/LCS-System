@@ -1,4 +1,4 @@
-import type { LcsApiErrorBody, LcsErrorCode } from '~/types/domain'
+import type { LcsApiErrorBody } from '~/types/domain'
 
 export class LcsDomainError extends Error {
   readonly code: string
@@ -23,23 +23,6 @@ export class LcsDomainError extends Error {
       field_errors: this.field_errors,
     }
   }
-}
-
-export function newRequestId() {
-  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
-export function domainError(
-  code: LcsErrorCode,
-  message: string,
-  options: { statusCode?: number, field_errors?: Record<string, string> } = {},
-) {
-  return new LcsDomainError({
-    code,
-    message,
-    request_id: newRequestId(),
-    field_errors: options.field_errors,
-  }, options.statusCode ?? (code === 'ACCESS_DENIED' ? 403 : 409))
 }
 
 export function isLcsDomainError(error: unknown): error is LcsDomainError {

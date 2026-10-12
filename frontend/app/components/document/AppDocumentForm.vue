@@ -8,10 +8,12 @@ const props = withDefaults(defineProps<{
   fieldValue: (key: string) => unknown
   setFieldValue: (key: string, value: unknown) => void
   readOnly?: boolean
+  fieldErrors?: Record<string, string>
   /** Force wider shell even without dense field types. */
   wide?: boolean
 }>(), {
   readOnly: false,
+  fieldErrors: () => ({}),
   wide: false,
 })
 
@@ -97,6 +99,7 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
                   :field="field"
                   :model-value="fieldValue(field.key)"
                   :disabled="readOnly || Boolean(field.readOnly)"
+                  :field-errors="fieldErrors"
                   @update:model-value="(v) => setFieldValue(field.key, v)"
                 />
               </div>

@@ -37,8 +37,8 @@ onMounted(() => {
 })
 
 const schema = computed(() => z.object({
-  password: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
-  passwordConfirmation: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
+  password: z.string().min(12, { error: t('pages.forgetPassword.passwordMin') }),
+  passwordConfirmation: z.string().min(12, { error: t('pages.forgetPassword.passwordMin') }),
 }).refine(data => data.password === data.passwordConfirmation, {
   message: t('pages.forgetPassword.passwordMismatch'),
   path: ['passwordConfirmation'],

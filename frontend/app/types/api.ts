@@ -11,14 +11,6 @@ export interface TableQueryParams {
   endDate?: string
 }
 
-export interface PaginatedResponse<T, S = Record<string, unknown>> {
-  items: T[]
-  total: number
-  page: number
-  limit: number
-  summary?: S
-}
-
 export interface AuthUser {
   id?: number
   name: string

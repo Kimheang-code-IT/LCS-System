@@ -1,3 +1,5 @@
+FROM ghcr.io/astral-sh/uv:0.12.14@sha256:1946145b8706ad9e5c0e79a513f9e324b58d5e38126bb2c8b7dbfca61febeb45 AS uv
+
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -7,10 +9,10 @@ ENV PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/usr/local \
     PATH="/usr/local/bin:$PATH"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir uv
+COPY --from=uv /uv /uvx /bin/
+
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
 
 WORKDIR /app
 
@@ -25,9 +27,13 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 
+RUN mkdir -p /app/storage && chown -R app:app /app
+
+USER app
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=10 --start-period=20s \
-    CMD curl -fsS http://localhost:8000/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4).read()" || exit 1
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}"]

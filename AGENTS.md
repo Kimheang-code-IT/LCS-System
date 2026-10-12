@@ -45,8 +45,8 @@ docker compose -f infrastructure/docker-compose.yml up -d --build   # from repo 
 
 Host ports: frontend 80, backend 8000, Postgres 5432, Redis 6379, MinIO 9000/9001
 (all env-driven in `infrastructure/.env`). The backend container runs
-`alembic upgrade head` on start. The DB ships empty; first login is `/setup`
-(`POST /api/v1/setup/initialize`, gated on no users existing), which provisions
+`alembic upgrade head` on start. The DB ships empty; first login is `/auth/setup`
+(`POST /api/v1/auth/setup/initialize`, gated on no users existing), which provisions
 the admin plus default document sequences (current year) and the default app
 info/config — no finance or business data. Admin CLI:
 `uv run python -m app.create_admin --email ... --password ...` (same baseline).
@@ -84,6 +84,17 @@ info/config — no finance or business data. Admin CLI:
   every referenced `/api/v1/...` path and collection verb exists on the FastAPI app.
   Adding a frontend endpoint without the matching backend route (or vice versa)
   fails this test, not the browser.
+- **Docker-only fallback (when `uv` is not on PATH):** run the backend test suite
+  from the repo root against the built backend image, mounting the whole repo so
+  the contract test can read `frontend/app` (the image ships no tests/dev deps):
+
+  ```powershell
+  docker run --rm -v "<repo>:/repo" -w /repo/backend freight_forwarding-backend:latest `
+    sh -c "uv sync --frozen --extra dev && uv run pytest tests/test_frontend_api_contract.py -q"
+  ```
+
+  Drop the path argument to run the full suite. Verify the live API from the
+  running stack with `docker exec ff-api curl -fsS http://localhost:8000/health`.
 
 ## Frontend
 
@@ -103,6 +114,11 @@ info/config — no finance or business data. Admin CLI:
   `app/types` or `.json` won't be bundled — add the reference to a scanned file.
 - Frontend tests are plain Vitest (`environment: node`, `import.meta.client = false`,
   alias `~ -> app`); only `tests/**/*.spec.ts`. They do not mount the Nuxt runtime.
+- **No editor/Tiptap deps:** `frontend/.pnpmfile.cjs` strips `@tiptap/*` from
+  `@nuxt/ui` at install time (no `UEditor*` component is used anywhere). The
+  lockfile pins the hook via `pnpmfileChecksum`, and CI/Docker install with
+  `--frozen-lockfile` need the file present. If Nuxt UI's editor is ever adopted,
+  delete the hook and run `pnpm install --no-frozen-lockfile`.
 - `pnpm-workspace.yaml` only lists `ignoredBuiltDependencies` — this is **not** a
   monorepo.
 

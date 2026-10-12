@@ -66,8 +66,6 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
       unwrapApiData(await api.delete<ApiResponse<{ removed: boolean }>>(ApiV1Endpoints.COMPONENT_TAB_GROUP(tabGroupId))),
     reorderTabGroups: async (tabId, orderedIds) =>
       asArray(unwrapApiData(await api.post<ApiResponse<ComponentTabGroupLink[]>>(ApiV1Endpoints.COMPONENT_TAB_GROUPS_REORDER(tabId), { orderedIds }))),
-    setTabDirections: async (tabId, directionIds) =>
-      unwrapApiData(await api.post<ApiResponse<string[]>>(ApiV1Endpoints.COMPONENT_TAB_TRADE_DIRECTIONS(tabId), { tradeDirectionIds: directionIds })),
 
     bootstrap: async (serviceOrderId, directionId) =>
       unwrapApiData(await api.get<ApiResponse<ComponentTabsBootstrap>>(

@@ -1,16 +1,8 @@
-import {
-  JOB_CORE_WORKSPACE_SECTIONS,
-  JOB_DEFAULT_COMPONENT_SECTIONS,
-  jobWorkspaceSectionIcon,
-} from '~/utils/freight/job-component-tabs'
+import { JOB_CORE_WORKSPACE_SECTIONS } from '~/utils/freight/job-component-tabs'
 
 export const JOB_WORKSPACE_SECTIONS = JOB_CORE_WORKSPACE_SECTIONS
 
 export type JobWorkspaceSection = string
-
-export const JOB_WORKSPACE_SECTION_META: Record<string, { icon: string }> = Object.fromEntries(
-  [...JOB_WORKSPACE_SECTIONS, ...JOB_DEFAULT_COMPONENT_SECTIONS].map(id => [id, { icon: jobWorkspaceSectionIcon(id) }]),
-)
 
 /**
  * Leading overview group. Its heading is redundant — the tab is already titled

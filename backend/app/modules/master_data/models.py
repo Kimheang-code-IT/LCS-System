@@ -9,12 +9,14 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,25 +24,38 @@ from app.core.database import Base, PKMixin, SoftDeleteMixin, TimestampMixin
 from app.core.types import JSONType
 
 
+def active_unique_index(name: str, *columns: str) -> Index:
+    """Uniqueness enforced only for non-archived rows.
+
+    Archived (soft-deleted) records keep their codes, so a code must be
+    reusable once the record is deleted. The archive/restore logic already
+    treats uniqueness as active-only; this index makes the database agree.
+    """
+    return Index(
+        name,
+        *columns,
+        unique=True,
+        postgresql_where=text("deleted_at IS NULL"),
+        sqlite_where=text("deleted_at IS NULL"),
+    )
+
+
 class Place(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "places"
+    __table_args__ = (active_unique_index("uq_places_code_active", "code"),)
 
-    code: Mapped[str | None] = mapped_column(String(50), unique=True)
+    code: Mapped[str | None] = mapped_column(String(50))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    place_category: Mapped[str] = mapped_column(String(64), nullable=False, default="City")
-    parent_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     address: Mapped[str | None] = mapped_column(Text)
-    country_code: Mapped[str | None] = mapped_column(String(2))
-    latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
-    longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
 class TradeDirection(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "trade_directions"
+    __table_args__ = (active_unique_index("uq_trade_directions_code_active", "code"),)
 
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
@@ -48,8 +63,9 @@ class TradeDirection(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 class ContainerType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "container_types"
+    __table_args__ = (active_unique_index("uq_container_types_code_active", "code"),)
 
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     container_size: Mapped[str | None] = mapped_column(String(32))
     container_kind: Mapped[str | None] = mapped_column(String(32))
@@ -64,8 +80,9 @@ class ContainerType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 class TransportType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "transport_types"
+    __table_args__ = (active_unique_index("uq_transport_types_code_active", "code"),)
 
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
@@ -73,8 +90,9 @@ class TransportType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 class FeeType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "fee_types"
+    __table_args__ = (active_unique_index("uq_fee_types_code_active", "code"),)
 
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
@@ -82,45 +100,34 @@ class FeeType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 class BusinessParty(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "business_parties"
+    __table_args__ = (
+        active_unique_index("uq_business_parties_party_code_active", "party_code"),
+        active_unique_index("uq_business_parties_vat_tin_active", "vat_tin"),
+    )
 
-    party_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    party_code: Mapped[str] = mapped_column(String(50), nullable=False)
     legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255))
-    vat_tin: Mapped[str | None] = mapped_column(String(64), unique=True)
+    vat_tin: Mapped[str | None] = mapped_column(String(64))
     contact_person: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(64))
     email: Mapped[str | None] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(Text)
-    country_code: Mapped[str | None] = mapped_column(String(2))
+    roles: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
-
-
-class PartyRole(Base):
-    __tablename__ = "party_roles"
-
-    party_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("business_parties.id", ondelete="CASCADE"), primary_key=True)
-    role_type: Mapped[str] = mapped_column(String(50), primary_key=True)
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-
-class PartyPlace(Base):
-    __tablename__ = "party_places"
-
-    party_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("business_parties.id", ondelete="CASCADE"), primary_key=True)
-    place_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("places.id"), primary_key=True)
-    relationship_type: Mapped[str] = mapped_column(String(50), primary_key=True)
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "transport_assets"
-    __table_args__ = (UniqueConstraint("transport_type_id", "identity", name="uq_transport_assets_type_identity"),)
+    __table_args__ = (
+        active_unique_index("uq_transport_assets_asset_code_active", "asset_code"),
+        active_unique_index("uq_transport_assets_type_identity_active", "transport_type_id", "identity"),
+    )
 
-    asset_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    asset_code: Mapped[str] = mapped_column(String(50), nullable=False)
     transport_type_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("transport_types.id"), nullable=False)
     identity: Mapped[str] = mapped_column(String(128), nullable=False)
     identity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="PLATE")
-    registration_country_code: Mapped[str | None] = mapped_column(String(2))
     owner_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     operator_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     description: Mapped[str | None] = mapped_column(Text)
@@ -204,16 +211,17 @@ class ComponentGroupAttribute(PKMixin, TimestampMixin, Base):
 
 
 class ComponentTab(PKMixin, TimestampMixin, Base):
-    """A Service Order tab composed of component groups, shown for chosen trade directions."""
+    """A Service Order tab composed of component groups, shown for one trade direction."""
 
     __tablename__ = "component_tabs"
     __table_args__ = (UniqueConstraint("code", name="uq_component_tabs_code"),)
 
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    name_km: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
-    icon: Mapped[str | None] = mapped_column(String(64))
+    trade_direction_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("trade_directions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -230,22 +238,6 @@ class ComponentTabGroup(PKMixin, TimestampMixin, Base):
     )
     group_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("component_groups.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
-
-
-class ComponentTabTradeDirection(PKMixin, TimestampMixin, Base):
-    """Assignment of a component tab to a trade direction."""
-
-    __tablename__ = "component_tab_trade_directions"
-    __table_args__ = (UniqueConstraint("tab_id", "trade_direction_id", name="uq_component_tab_directions_tab_direction"),)
-
-    tab_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("component_tabs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    trade_direction_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("trade_directions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")

@@ -12,8 +12,7 @@ Nuxt 4 Static SPA (nuxt generate) ── served by nginx
           │  /api/ reverse proxy (same origin)
           ▼
 FastAPI application  (async SQLAlchemy 2.x)
- ├── setup        first-run provisioning (public)
- ├── auth         users, credentials, sessions, roles, permissions
+ ├── auth         users, credentials, sessions, roles, permissions, first-run setup
  ├── master_data  reference data + generic module records + SO tab config
  ├── quotations   quotations, revisions, children, conversion
  ├── operations   service orders, containers, components, charges, attachments
@@ -46,10 +45,11 @@ business records.
 ### Reference data — `master_data`
 
 Owns places, trade directions, container types, transport types, transport
-assets, fee types, business parties (+ party roles/places), customer customs
-accounts, component groups/templates/attributes, trade-direction components, and
-the generic `module_records` JSON store. It also owns service-order tab/column
-configuration (`service_order_tabs.py`).
+assets, fee types, business parties, customer customs accounts, the reusable
+component attribute/group catalogue, component tabs (each bound to one trade
+direction), and the generic `module_records` JSON store. Component
+configuration is served by `component_config.py`; service-order tab rendering by
+`component_tabs.py`.
 
 ### Quotations — `quotations`
 
@@ -60,9 +60,9 @@ and the quotation→service-order conversion ledger. Lifecycle:
 ### Operations — `operations`
 
 Owns service orders, their places, container requirements, actual containers,
-pricing snapshots, dynamic components and values, movements, milestones, service
-charges and charge lines, dynamic tab rows, and attachment metadata.
-(`service_order_tabs.py` validates/serves dynamic-table rows.)
+pricing snapshots, dynamic component rows, movements, milestones, service
+charges and charge lines, and attachment metadata. Configurable tab rendering
+and row persistence are served by `component_tabs.py`.
 
 ### Finance — `finance`
 
@@ -84,10 +84,11 @@ notifications/security/system/backup), stored as `module_records`. Also provides
 global search / Ask, email and Telegram test endpoints, and reset-data. It owns no
 tables.
 
-### First-run setup — `setup`
+### First-run setup (in `auth`)
 
-Owns the public `/setup/status` and `/setup/initialize` endpoints. Setup is
-accepted only while no user exists.
+Served by the `auth` module: the public `/api/v1/auth/setup/status` and
+`/api/v1/auth/setup/initialize` endpoints. Setup is accepted only while no user
+exists.
 
 ### Backup — `backup`
 
@@ -109,7 +110,9 @@ API layer (router.py)
    ↓
 Application services (service.py)
    ↓
-Models / transaction manager (async SQLAlchemy session)
+Module repository/query component (repository.py)
+   ↓
+Models / async SQLAlchemy session
    ↓
 PostgreSQL
 ```
@@ -117,7 +120,12 @@ PostgreSQL
 Rules:
 
 - Cross-module work goes through application services, not direct table access.
-- Finance consumes a service-charge snapshot through the conversion service.
+- Repositories own query construction, persistence lookups, filtering, sorting,
+  pagination, and aggregate loading. They never authorize requests or commit a
+  multi-step workflow.
+- Services own business rules and transaction boundaries. One service call may
+  compose multiple repositories over the same `AsyncSession`.
+- Finance consumes an issued service-charge snapshot automatically and creates one idempotent draft customer invoice. The explicit conversion endpoint retrieves or repairs that draft; ledger posting remains a separate authorized command.
 - Reporting reads read-only queries.
 - Authorization (`get_current_context`, `require_permission`) runs before
   repository access.
@@ -149,7 +157,7 @@ backend/
       types.py            JSONType (JSONB on PostgreSQL)
     modules/
       audit/ auth/ backup/ finance/ master_data/ operations/
-      quotations/ reports/ settings/ setup/
+      quotations/ reports/ settings/
   alembic/versions/       versioned migrations (schema source of truth)
   tests/                  pytest (in-memory SQLite)
 frontend/
@@ -186,11 +194,18 @@ Most modules follow this shape:
 ```text
 modules/<name>/
   router.py     FastAPI routes + permission dependencies
-  service.py    business logic / queries
+  service.py    business rules, workflow and transaction coordination
+  repository.py SQLAlchemy queries and aggregate persistence (DB-heavy modules)
   models.py     SQLAlchemy models (only modules that own tables)
   schemas.py    Pydantic bodies (currently only auth)
   <name>_tabs.py  dynamic tab/column helpers (master_data, operations)
 ```
+
+Repositories are implemented for `auth`, `master_data`, `quotations`,
+`operations`, and `finance`. Backup history has a dedicated read repository.
+Reports remain a dedicated read/query service because they are projections,
+not aggregate persistence; archive and audit keep their append/archive services
+until their query surface grows enough to justify another layer.
 
 ## 6. Request Flow
 
@@ -201,6 +216,7 @@ HTTP request
   → permission dependency (require_permission / guard)
   → request validation
   → application service
+  → module repository/query component
   → async SQLAlchemy transaction
   → audit event (high-risk actions only)
   → {"data": ...} envelope (or {code, message, request_id, field_errors})
@@ -217,13 +233,14 @@ HTTP request
 - 39 source permissions gate the endpoints (see `docs/11_permissions_matrix.md`).
 - Several finance paths register both kebab-case and camelCase aliases to the
   same handler.
-- Master-data and generic collections are registered dynamically from
-  `service.SPECS` / `service.GENERIC_COLLECTIONS`:
+- Master-data reference collections are registered dynamically from
+  `service.SPECS`; generic collections resolve to `module_records`
+  (`service.GENERIC_COLLECTIONS`). Component configuration (attributes, groups,
+  tabs) uses dedicated `/component-*` endpoints:
   - relational: businessParties, places, tradeDirections, containerTypes,
-    transportTypes, transportAssets, feeTypes, componentGroups,
-    componentTemplates, tradeDirectionComponents
-  - generic (`module_records`): companies, customs, customerPayments,
-    deliveries, documents, shipments, supplierCosts, supplierPayments
+    transportTypes, transportAssets, feeTypes
+  - generic (`module_records`): companies, shipments, customs, documents,
+    deliveries, customerPayments, supplierCosts, supplierPayments, currencies
 
 ## 8. Transaction Boundaries
 
@@ -238,6 +255,17 @@ One database transaction is used for:
 - reversal;
 - period closure;
 - document-number allocation.
+
+The request dependency creates one `AsyncSession`; repositories do not create
+sessions and do not commit. Services commit after all invariant checks and
+mutations succeed. `get_session` rolls back any uncaught exception. Redis cache
+generation bumps happen only after successful commits, and PostgreSQL remains
+authoritative.
+
+Bounded-query loaders replace list N+1 patterns for users/roles,
+roles/permissions, quotation/latest-revision, financial documents/lines, and
+financial accounts/balances. `tests/test_repository_queries.py` measures both
+the previous per-row query shape and the bounded repository query count.
 
 ## 9. Finance Posting Architecture
 
@@ -302,7 +330,7 @@ Upload flow:
 - Number allocation uses row locks (`with_for_update`) plus unique constraints.
 - Positive/negative invariants not expressible as constraints are enforced in
   services (e.g., journal balance before posting).
-- 63 tables; see `docs/06_database_design.sql` and
+- 59 tables; see `docs/06_database_design.sql` and
   `docs/07_entity_relationship_diagram.mmd`.
 
 ## 14. Reporting
@@ -333,7 +361,7 @@ with Tailwind; state is Pinia; i18n is `@nuxtjs/i18n` with `en` and `km`.
 
 ### Pages (routes)
 
-- Auth/setup (public): `/setup`, `/auth/login`, `/auth/forget-password`,
+- Auth/setup (public): `/auth/setup`, `/auth/login`, `/auth/forget-password`,
   `/auth/verify-code`, `/auth/reset-password`.
 - Dashboard: `/`.
 - Sales/operations/finance: `/quotations`, `/service-orders`,
@@ -342,8 +370,8 @@ with Tailwind; state is Pinia; i18n is `@nuxtjs/i18n` with `en` and `km`.
   `/finance/accounting-periods`.
 - Master data: `/master-data/{business-parties,places,trade-directions,
   container-types,transport-types,transport-assets,fee-types}`.
-- Configuration: `/configuration/{component-groups,component-templates,
-  trade-direction-components,service-order-tabs}`.
+- Configuration: `/configuration/{component-attributes,component-groups,
+  component-tabs}`.
 - Administration: `/administration/{users,roles,document-sequences,audit-logs,
   system-settings}`.
 - Reports: `/reports`, `/reports/:slug`, `/reports/:area/:slug`.
@@ -401,20 +429,20 @@ acceptable.
 
 Generated from the live FastAPI routers and SQLAlchemy models. Paths are relative to the `/api/v1` prefix. Dynamic reference/generic collections are registered from `master_data/service.py`; their guard accepts the codes shown.
 
-### A.1 First-run setup (`setup`)
+### A.1 First-run setup (served by `auth`)
 
-Service functions: `initialize`, `status`
+Service functions: `setup_initialize`, `setup_status`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
-| POST | `/setup/initialize` | `setup_initialize` | public |
-| GET | `/setup/status` | `setup_status` | public |
+| POST | `/auth/setup/initialize` | `setup_initialize` | public |
+| GET | `/auth/setup/status` | `setup_status` | public |
 
 ### A.2 Identity and authorization (`auth`)
 
 Tables: `users`, `user_credentials`, `user_sessions`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `password_reset_tokens`
 
-Service functions: `assign_role`, `authenticate`, `build_auth_user`, `build_context`, `change_password`, `clear_user_avatar`, `create_role`, `create_session`, `create_user`, `delete_roles`, `delete_users`, `expand_source_permissions`, `get_role`, `get_user_avatar`, `get_user_by_login`, `list_role_assignments`, `list_roles`, `list_users`, `request_password_reset`, `reset_password`, `resolve_page_keys`, `resolve_permissions`, `revoke_session`, `role_label`, `role_payload`, `rotate_refresh_token`, `set_user_avatar`, `sync_role_permissions`, `update_role`, `update_user`, `user_payload`, `user_with_credential`, `verify_reset_code`
+Service functions: `assign_role`, `authenticate`, `build_auth_user`, `build_context`, `change_password`, `clear_user_avatar`, `create_role`, `create_session`, `create_user`, `delete_roles`, `delete_users`, `expand_source_permissions`, `get_role`, `get_user_avatar`, `get_user_by_login`, `list_role_assignments`, `list_roles`, `list_users`, `request_password_reset`, `reset_password`, `resolve_page_keys`, `resolve_permissions`, `revoke_session`, `role_label`, `role_payload`, `rotate_refresh_token`, `set_user_avatar`, `setup_initialize`, `setup_status`, `sync_role_permissions`, `update_role`, `update_user`, `user_payload`, `user_with_credential`, `verify_reset_code`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
@@ -465,7 +493,7 @@ Service functions: `accept_revision`, `convert_revision`, `create_revision`, `de
 
 ### A.4 Operations (service orders, charges, attachments) (`operations`)
 
-Tables: `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_components`, `service_component_values`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `service_order_tab_rows`, `attachments`, `attachment_links`
+Tables: `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links`
 
 Service functions: `add_container`, `charge_record`, `charge_to_invoice`, `complete_component`, `create_service_order_from_quotation`, `ensure_component`, `get_charge`, `get_service_order`, `issue_charge`, `list_all_components`, `list_attachments`, `list_charges`, `list_components`, `list_containers`, `list_service_orders`, `normalize_order_status`, `order_record`, `presign`, `read_attachment`, `remove_component`, `replace_component_values`, `resolve_order`, `save_charge`, `save_service_order`, `store_upload`, `update_status`
 
@@ -580,7 +608,7 @@ Service functions: `account_payload`, `allocate_payment`, `close_period`, `creat
 
 ### A.6 Reporting (`reports`)
 
-Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `payables`, `profitability`, `quotation_performance`, `receivables`, `service_order_report`
+Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `ledger_lines`, `payables`, `profitability`, `quotation_performance`, `receivables`, `service_order_report`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
@@ -593,6 +621,7 @@ Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `paya
 | GET | `/reports/income` | `income` | `report.read` |
 | GET | `/reports/payables` | `payables` | `report.read` |
 | GET | `/reports/profitability` | `profitability` | `report.read` |
+| GET | `/reports/ledger-lines` | `ledger_lines` | `report.read` |
 | GET | `/reports/quotation-performance` | `quotation_performance` | `report.read` |
 | GET | `/reports/receivables` | `receivables` | `report.read` |
 | GET | `/reports/service-order-profitability` | `profitability` | `report.read` |
@@ -600,9 +629,9 @@ Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `paya
 
 ### A.7 Master data, configuration and generic collections (`master_data`)
 
-Tables: `places`, `trade_directions`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `party_roles`, `party_places`, `transport_assets`, `customer_customs_accounts`, `component_groups`, `component_templates`, `template_attributes`, `service_order_tab_configs`, `service_order_column_configs`, `module_records`, `trade_direction_components`
+Tables: `places`, `trade_directions`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `transport_assets`, `customer_customs_accounts`, `component_attributes`, `component_groups`, `component_group_attributes`, `component_tabs`, `component_tab_groups`, `module_records`
 
-Service functions: `apply_input`, `assert_reference_exists`, `create_generic`, `create_reference`, `delete_generic`, `delete_reference`, `get_generic`, `get_reference`, `get_spec`, `list_generic`, `list_reference`, `resolve_reference`, `serialize`, `update_generic`, `update_reference`
+Service functions: `apply_input`, `create_generic`, `create_reference`, `delete_generic`, `delete_reference`, `get_generic`, `get_reference`, `get_spec`, `list_generic`, `list_reference`, `resolve_reference`, `serialize`, `update_generic`, `update_reference`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
@@ -780,9 +809,9 @@ Column definitions for every table are in `docs/06_database_design.sql`; relatio
 |---|---|
 | auth | `users`, `user_credentials`, `user_sessions`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `password_reset_tokens` |
 | quotations | `quotations`, `quotation_revisions`, `quotation_revision_places`, `quotation_revision_containers`, `quotation_revision_lines`, `quotation_conversions` |
-| operations | `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_components`, `service_component_values`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `service_order_tab_rows`, `attachments`, `attachment_links` |
+| operations | `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links` |
 | finance | `chart_of_accounts`, `financial_accounts`, `accounting_periods`, `document_sequences`, `financial_documents`, `financial_document_lines`, `financial_document_sources`, `financial_document_allocations`, `posting_rules`, `journal_entries`, `journal_entry_lines`, `financial_document_postings` |
-| master_data | `places`, `trade_directions`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `party_roles`, `party_places`, `transport_assets`, `customer_customs_accounts`, `component_groups`, `component_templates`, `template_attributes`, `service_order_tab_configs`, `service_order_column_configs`, `module_records`, `trade_direction_components` |
+| master_data | `places`, `trade_directions`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `transport_assets`, `customer_customs_accounts`, `component_attributes`, `component_groups`, `component_group_attributes`, `component_tabs`, `component_tab_groups`, `module_records` |
 | backup | `backup_runs`, `backup_records`, `backup_states`, `backup_logs` |
 | audit | `audit_events` |
 
@@ -806,17 +835,11 @@ Nuxt file-based routes. `permission` is the `definePageMeta` page permission enf
 | `/auth/forget-password` | `app/pages/auth/forget-password.vue` | — | — |
 | `/auth/login` | `app/pages/auth/login.vue` | — | — |
 | `/auth/reset-password` | `app/pages/auth/reset-password.vue` | — | — |
+| `/auth/setup` | `app/pages/auth/setup.vue` | — | — |
 | `/auth/verify-code` | `app/pages/auth/verify-code.vue` | — | — |
-| `/configuration/component-groups/:id` | `app/pages/configuration/component-groups/[id].vue` | `freight.pages.componentGroups` | `configuration.manage` |
+| `/configuration/component-attributes` | `app/pages/configuration/component-attributes/index.vue` | `freight.pages.componentAttributes` | `configuration.manage` |
 | `/configuration/component-groups` | `app/pages/configuration/component-groups/index.vue` | `freight.pages.componentGroups` | `configuration.manage` |
-| `/configuration/component-groups/new` | `app/pages/configuration/component-groups/new.vue` | `freight.pages.componentGroups` | `configuration.manage` |
-| `/configuration/component-templates/:id` | `app/pages/configuration/component-templates/[id].vue` | `freight.pages.componentTemplates` | `configuration.manage` |
-| `/configuration/component-templates` | `app/pages/configuration/component-templates/index.vue` | `freight.pages.componentTemplates` | `configuration.manage` |
-| `/configuration/component-templates/new` | `app/pages/configuration/component-templates/new.vue` | `freight.pages.componentTemplates` | `configuration.manage` |
-| `/configuration/service-order-tabs` | `app/pages/configuration/service-order-tabs/index.vue` | `freight.pages.serviceOrderTabs` | `configuration.manage` |
-| `/configuration/trade-direction-components/:id` | `app/pages/configuration/trade-direction-components/[id].vue` | `freight.pages.tradeDirectionComponents` | `configuration.manage` |
-| `/configuration/trade-direction-components` | `app/pages/configuration/trade-direction-components/index.vue` | `freight.pages.tradeDirectionComponents` | `configuration.manage` |
-| `/configuration/trade-direction-components/new` | `app/pages/configuration/trade-direction-components/new.vue` | `freight.pages.tradeDirectionComponents` | `configuration.manage` |
+| `/configuration/component-tabs` | `app/pages/configuration/component-tabs/index.vue` | `freight.pages.componentTabs` | `configuration.manage` |
 | `/finance/accounting-periods/:id` | `app/pages/finance/accounting-periods/[id].vue` | `freight.pages.accountingPeriods` | `finance.accounting.view` |
 | `/finance/accounting-periods` | `app/pages/finance/accounting-periods/index.vue` | `freight.pages.accountingPeriods` | `finance.accounting.view` |
 | `/finance/chart-of-accounts/:id` | `app/pages/finance/chart-of-accounts/[id].vue` | `freight.pages.chartOfAccounts` | `finance.accounting.view` |
@@ -865,21 +888,18 @@ Nuxt file-based routes. `permission` is the `definePageMeta` page permission enf
 | `/service-orders/:id` | `app/pages/service-orders/[id].vue` | `freight.pages.serviceOrders` | `operations.service_orders.view` |
 | `/service-orders` | `app/pages/service-orders/index.vue` | `freight.pages.serviceOrders` | `operations.service_orders.view` |
 | `/service-orders/new` | `app/pages/service-orders/new.vue` | `freight.pages.serviceOrders` | `operations.service_orders.view` |
-| `/setup` | `app/pages/setup.vue` | — | — |
 
 ## Appendix D — Frontend components
 
 | Folder | Components |
 |---|---|
-| `components/common/` | `AppAuthLocaleSwitch.vue`, `AppColorPicker.vue`, `AppConfirmDialog.vue`, `AppConfirmHost.vue`, `AppConnectionStatusCard.vue`, `AppConnectionTestButton.vue`, `AppDatePickerPopover.vue`, `AppDateRangeFilter.vue`, `AppDocumentActionButton.vue`, `AppExportDialog.vue`, `AppFilterMenu.vue`, `AppFilterSelect.vue`, `AppIconPicker.vue`, `AppImageUploadField.vue`, `AppInputDate.vue`, `AppLiveSearch.vue`, `AppMentionMultiInput.vue`, `AppRolePermissionMatrix.vue`, `AppSecretInput.vue`, `AppSortableList.vue` |
-| `components/configuration/` | `AppAttributeOptionsBuilder.vue`, `AppNumberingPreview.vue`, `AppTableColumnsBuilder.vue`, `AppValidationRuleBuilder.vue`, `AppVisibilityRuleBuilder.vue`, `AppWorkflowStageBuilder.vue` |
-| `components/dashboard/` | `AppChartGrid.vue`, `AppChartPanel.vue`, `AppEChart.vue`, `AppKpiSection.vue`, `AppSummaryCard.vue` |
-| `components/document/` | `AppCommentsActivity.vue`, `AppDocumentContentShell.vue`, `AppDocumentForm.vue`, `AppDocumentMetaRail.vue`, `AppDocumentPage.vue`, `AppDocumentTabBar.vue`, `AppDynamicFieldRenderer.vue`, `AppDynamicTableField.vue` |
-| `components/freight/` | `DashboardView.vue`, `DocumentView.vue`, `DynamicDataTable.vue`, `DynamicServiceOrderTabs.vue`, `FieldGrid.vue`, `FieldInput.vue`, `JobContainers.vue`, `JobDefinitionList.vue`, `JobDetail.vue`, `JobEmptyState.vue`, `JobFiles.vue`, `JobFinance.vue`, `JobLineTable.vue`, `JobOverview.vue`, `JobRoute.vue`, `JobSectionHeader.vue`, `JobSummaryStrip.vue`, `JobTasks.vue`, `ModulePage.vue`, `ReportsView.vue`, `WorkspaceView.vue` |
+| `components/common/` | `AppAuthLocaleSwitch.vue`, `AppColorPicker.vue`, `AppConfirmDialog.vue`, `AppConfirmHost.vue`, `AppConnectionStatusCard.vue`, `AppDatePickerPopover.vue`, `AppDateRangeFilter.vue`, `AppDocumentActionButton.vue`, `AppEntityDialog.vue`, `AppExportDialog.vue`, `AppFilterMenu.vue`, `AppFilterSelect.vue`, `AppImageUploadField.vue`, `AppInputDate.vue`, `AppLiveSearch.vue`, `AppMentionMultiInput.vue`, `AppReferenceSelect.vue`, `AppRolePermissionMatrix.vue`, `AppSecretInput.vue`, `AppSortableList.vue` |
+| `components/dashboard/` | `AppChartGrid.vue`, `AppSummaryCard.vue` |
+| `components/document/` | `AppCommentsActivity.vue`, `AppComponentTabs.vue`, `AppDocumentContentShell.vue`, `AppDocumentForm.vue`, `AppDocumentPage.vue`, `AppDocumentTabBar.vue`, `AppDynamicFieldRenderer.vue`, `AppDynamicTableField.vue`, `AppFieldGrid.vue`, `SystemSettingsPage.vue` |
+| `components/freight/` | `AppLineTable.vue`, `DocumentView.vue`, `DynamicDataTable.vue`, `JobCharges.vue`, `JobContainers.vue`, `JobDetail.vue`, `JobEmptyState.vue`, `JobFiles.vue`, `JobFinance.vue`, `JobLineTable.vue`, `JobOverview.vue`, `JobRoute.vue`, `JobSectionHeader.vue`, `JobSummaryStrip.vue`, `ModulePage.vue`, `ReportsView.vue`, `WorkspaceView.vue` |
 | `components/layout/` | `AppAboutDialog.vue`, `AppHeader.vue`, `AppHeaderPageActions.vue`, `AppSlidebar.vue`, `AppUserProfileDialog.vue`, `UserMenu.vue` |
 | `components/print/` | `BankBlock.vue`, `DebitNoteLayout.vue`, `DocumentPreview.vue`, `FooterBar.vue`, `IssuerHeader.vue`, `LinesTable.vue`, `MetaGrid.vue`, `SignatureBlock.vue`, `TaxInvoiceLayout.vue`, `TemplateModal.vue`, `TotalsBlock.vue` |
-| `components/settings/` | `SystemSettingsPage.vue` |
-| `components/table/` | `AppLineTable.vue`, `AppListTable.vue`, `AppRelatedRecords.vue`, `AppTableRowMeta.vue`, `LineTableColumnsCell.vue` |
+| `components/table/` | `AppListTable.vue`, `AppRelatedRecords.vue`, `AppSaveGrid.vue`, `AppTableRowMeta.vue` |
 
 ## Appendix E — Stores, composables, repositories, config, utils
 
@@ -1098,5 +1118,5 @@ are intentionally excluded pending entity-specific lifecycle rules.
 
 | Locale | Top-level namespaces |
 |---|---|
-| `en.json` | `freight`, `lcs`, `docetra`, `actions`, `common`, `components`, `pages`, `settings`, `api`, `app` |
-| `km.json` | `freight`, `lcs`, `docetra`, `actions`, `common`, `api`, `app`, `components`, `pages`, `settings` |
+| `en.json` | `freight`, `lcs`, `actions`, `common`, `components`, `pages`, `settings`, `api`, `app` |
+| `km.json` | `freight`, `lcs`, `actions`, `common`, `api`, `app`, `components`, `pages`, `settings` |

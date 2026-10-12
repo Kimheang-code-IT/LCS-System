@@ -45,6 +45,29 @@ async def test_business_party_roles(client):
     assert listed.json()["data"]["meta"]["total"] >= 1
 
 
+async def test_container_type_dimensions_persist(client):
+    headers = await login(client)
+    response = await client.post(
+        "/api/v1/containerTypes",
+        headers=headers,
+        json={
+            "code": "45HC-TEST",
+            "name": "45 High Cube Test",
+            "size": "45HC",
+            "kind": "High Cube",
+            "widthMeters": 2.44,
+            "heightMeters": 2.9,
+            "maxGrossWeightKg": 30480,
+            "status": "Active",
+        },
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    assert data["widthMeters"] == 2.44
+    assert data["heightMeters"] == 2.9
+    assert float(data["maxGrossWeightKg"]) == 30480
+
+
 async def test_permissions_are_enforced(client):
     ops_headers = await login(client, "ops.pp")
     response = await client.get("/api/v1/financial-documents", headers=ops_headers)
@@ -114,7 +137,7 @@ async def test_service_order_components_and_containers(client):
     assert duplicate.status_code == 409
 
     # Component tabs are configured per trade direction; the seed assigns the
-    # Customs tab (a table-mode group) to both IMPORT and EXPORT.
+    # Customs tab (a table-mode group) to the IMPORT direction.
     tabs = await client.get(f"/api/v1/service-orders/{service_order_id}/component-tabs", headers=headers)
     assert tabs.status_code == 200, tabs.text
     tab_items = tabs.json()["data"]["tabs"]

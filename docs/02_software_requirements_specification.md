@@ -372,11 +372,15 @@ The organization and branch capability has been **removed** from the schema and 
 
 **FR-107** Issuing a service charge shall not create a journal entry.
 
-**FR-108** Users shall explicitly convert a service charge into a draft financial invoice when accounting is required.
+**FR-108** Issuing a service charge shall automatically create one idempotent draft customer invoice; the explicit conversion command remains available as an idempotent recovery action.
 
 **FR-109** Conversion shall copy source values and shall not create a live mutable link.
 
 **FR-110** Users shall be able to edit the generated financial draft before posting.
+
+**FR-110A** Automatic invoice generation shall never post accounting; posting remains a separately authorized finance action.
+
+**FR-110B** Service-order profitability shall be calculated automatically from the accepted quotation, issued service charges, draft invoices, posted customer invoices, and posted supplier bills.
 
 ## 13. Financial Document Requirements
 
@@ -545,7 +549,7 @@ The API is a modular monolith. The current endpoint groups are:
 | Group | Paths (under `/api/v1`) | Notes |
 |---|---|---|
 | Health | `/health` | Liveness probe returning the `{"data": ...}` envelope |
-| Setup | `/setup/status`, `/setup/initialize` | First-run provisioning; gated on no users existing |
+| Setup | `/auth/setup/status`, `/auth/setup/initialize` | First-run provisioning; gated on no users existing |
 | Auth, users, roles, permissions | `/auth/*`, `/users`, `/users/{id}`, `/users/{id}/role-assignments`, `/roles`, `/roles/{id}`, `/permissions` | Login/logout/refresh/me, password reset and change, profile/avatar, user and role administration |
 | Quotations | `/quotations`, `/quotations/{id}`, `/quotations/{id}/revisions`, `/quotation-revisions/{id}/send`, `/submit`, `/accept`, `/convert` | Quotation and immutable revision lifecycle |
 | Service orders | `/service-orders`, `/service-orders/{identifier}`, `/service-orders/{identifier}/dynamic-tabs`, `/containers`, `/components`, `/charges`, `/service-order-components`, `/attachments/*` | Dynamic tabs and rows, containers, components, charges, and attachments |
@@ -555,7 +559,7 @@ The API is a modular monolith. The current endpoint groups are:
 | Settings and search | `/settings/app-info`, `/settings/app-config`, `/settings/reset-data`, `/search`, `/search/ask` | App info/config, email and Telegram connection tests, data reset, and search |
 | Backup | `/backup/status`, `/backup/runs`, `/backup/run`, `/backup/restore`, `/backup/test-connection` | Optional Google Sheets mirror plus restore/test utilities |
 | Audit | `/audit-events` | Searchable audit trail |
-| Reports | `/reports/dashboard`, `/reports/service-orders`, `/reports/quotation-performance`, `/reports/receivables`, `/reports/payables`, `/reports/income`, `/reports/expenses`, `/reports/profitability`, `/reports/financial-summary`, plus `/receivables`, `/payables`, `/profitability` aliases | Backend-served reporting; frontend exposes a catalogue of 12 reports |
+| Reports | `/reports/dashboard`, `/reports/service-orders`, `/reports/quotation-performance`, `/reports/receivables`, `/reports/payables`, `/reports/income`, `/reports/expenses`, `/reports/profitability`, `/reports/ledger-lines`, `/reports/financial-summary`, plus `/receivables`, `/payables`, `/profitability` aliases | Backend-served reporting; finance reports consume the complete posted-ledger projection rather than browser-loaded pages |
 
 ## 20. Non-Functional Requirements
 

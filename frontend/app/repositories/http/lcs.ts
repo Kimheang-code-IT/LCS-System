@@ -36,6 +36,10 @@ export function createHttpQuotationRepository(): QuotationRepository {
     send: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_SEND(revisionId), {}, withIdempotency(key))),
     accept: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_ACCEPT(revisionId), {}, withIdempotency(key))),
     createRevision: async quotationId => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId), {})),
+    listRevisions: async (quotationId) => {
+      const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId)))
+      return Array.isArray(data) ? data : []
+    },
     submit: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_SUBMIT(revisionId), {}, withIdempotency(key))),
     convert: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_CONVERT(revisionId), {}, withIdempotency(key))),
   }
@@ -142,9 +146,10 @@ export function createHttpUiSchemaRepository(): UiSchemaRepository {
 export function createHttpReportsRepository(): import('~/repositories/contracts/lcs').ReportsRepository {
   const api = useApi()
   return {
-    dashboard: async () => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD)),
+    dashboard: async granularity => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD, { query: { granularity: granularity ?? 'month' } })),
     receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
     payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
     profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),
+    ledgerLines: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_LEDGER_LINES)),
   }
 }

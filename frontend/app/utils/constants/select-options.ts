@@ -38,12 +38,6 @@ export const TIME_FORMAT_OPTIONS: FieldOption[] = [
   { label: '12-hour with seconds (h:mm:ss A)', value: 'h:mm:ss A' },
 ]
 
-export const FIRST_DAY_OF_WEEK_OPTIONS: FieldOption[] = [
-  { label: 'Sunday', value: '0' },
-  { label: 'Monday', value: '1' },
-  { label: 'Saturday', value: '6' },
-]
-
 export const NUMBER_FORMAT_OPTIONS: FieldOption[] = [
   { label: '1,234.56', value: '#,##0.00' },
   { label: '1.234,56', value: '#.##0,00' },
@@ -60,17 +54,6 @@ export const CURRENCY_OPTIONS: FieldOption[] = [
   { label: 'GBP — British Pound', value: 'GBP' },
   { label: 'JPY — Japanese Yen', value: 'JPY' },
   { label: 'CNY — Chinese Yuan', value: 'CNY' },
-]
-
-export const LOCALE_OPTIONS: FieldOption[] = [
-  { label: 'English (United States)', value: 'en-US' },
-  { label: 'English (United Kingdom)', value: 'en-GB' },
-  { label: 'Khmer (Cambodia)', value: 'km-KH' },
-  { label: 'Thai (Thailand)', value: 'th-TH' },
-  { label: 'Vietnamese (Vietnam)', value: 'vi-VN' },
-  { label: 'French (France)', value: 'fr-FR' },
-  { label: 'Japanese (Japan)', value: 'ja-JP' },
-  { label: 'Chinese (Simplified)', value: 'zh-CN' },
 ]
 
 export const PAGE_SIZE_OPTIONS: FieldOption[] = [
@@ -90,19 +73,6 @@ export const LANDING_PAGE_OPTIONS: FieldOption[] = [
   { label: 'Reports', value: '/reports' },
 ]
 
-export const AWS_REGION_OPTIONS: FieldOption[] = [
-  { label: 'Asia Pacific (Singapore) ap-southeast-1', value: 'ap-southeast-1' },
-  { label: 'Asia Pacific (Jakarta) ap-southeast-3', value: 'ap-southeast-3' },
-  { label: 'Asia Pacific (Tokyo) ap-northeast-1', value: 'ap-northeast-1' },
-  { label: 'Asia Pacific (Seoul) ap-northeast-2', value: 'ap-northeast-2' },
-  { label: 'Asia Pacific (Hong Kong) ap-east-1', value: 'ap-east-1' },
-  { label: 'Asia Pacific (Mumbai) ap-south-1', value: 'ap-south-1' },
-  { label: 'US East (N. Virginia) us-east-1', value: 'us-east-1' },
-  { label: 'US West (Oregon) us-west-2', value: 'us-west-2' },
-  { label: 'Europe (Frankfurt) eu-central-1', value: 'eu-central-1' },
-  { label: 'Europe (Ireland) eu-west-1', value: 'eu-west-1' },
-]
-
 export const TELEGRAM_DESTINATION_TYPE_OPTIONS: FieldOption[] = [
   { label: 'Chat', value: 'chat' },
   { label: 'Channel', value: 'channel' },
@@ -115,14 +85,4 @@ export const BACKUP_INTERVAL_OPTIONS: FieldOption[] = [
   { label: 'Every 6 hours', value: '6' },
   { label: 'Every 12 hours', value: '12' },
   { label: 'Every 24 hours', value: '24' },
-]
-
-export const SYNC_SCHEDULE_OPTIONS: FieldOption[] = [
-  { label: 'Every hour', value: '0 * * * *' },
-  { label: 'Every 6 hours', value: '0 */6 * * *' },
-  { label: 'Every 12 hours', value: '0 */12 * * *' },
-  { label: 'Daily at midnight', value: '0 0 * * *' },
-  { label: 'Daily at 06:00', value: '0 6 * * *' },
-  { label: 'Weekly (Sunday midnight)', value: '0 0 * * 0' },
-  { label: 'Manual only', value: 'manual' },
 ]

@@ -57,13 +57,13 @@ const menuItems = computed(() => {
   const items: Array<{ label: string, icon?: string, to?: string, onSelect?: () => void }> = []
   if (props.to) {
     items.push({
-      label: t('docetra.actions.viewAll'),
+      label: t('lcs.actions.viewAll'),
       icon: 'i-lucide-arrow-up-right',
       to: props.to,
     })
   }
   items.push({
-    label: t('docetra.actions.refresh'),
+    label: t('lcs.actions.refresh'),
     icon: 'i-lucide-refresh-cw',
     onSelect: () => emit('refresh'),
   })
@@ -96,7 +96,7 @@ function onActivate() {
           variant="ghost"
           size="xs"
           class="shrink-0 -mr-1 -mt-1"
-          :aria-label="$t('docetra.actions.more')"
+          :aria-label="$t('lcs.actions.more')"
           @click.stop
         />
       </UDropdownMenu>
@@ -117,7 +117,6 @@ function onActivate() {
         {{ trend >= 0 ? '+' : '' }}{{ trend }}%
       </span>
     </div>
-
     <slot />
   </div>
 </template>

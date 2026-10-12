@@ -46,7 +46,6 @@ export interface ComponentConfigRepository {
   addTabGroup: (tabId: string, input: { groupId: string }) => Promise<ComponentTab>
   removeTabGroup: (tabGroupId: string) => Promise<{ removed: boolean }>
   reorderTabGroups: (tabId: string, orderedIds: string[]) => Promise<ComponentTabGroupLink[]>
-  setTabDirections: (tabId: string, directionIds: string[]) => Promise<string[]>
 
   bootstrap: (serviceOrderId: string, directionId?: string) => Promise<ComponentTabsBootstrap>
   saveGroupRows: (serviceOrderId: string, groupId: string, rows: Array<{ id?: string, values: Record<string, unknown> }>) => Promise<ComponentGroupRow[]>
