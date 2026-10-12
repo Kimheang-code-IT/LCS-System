@@ -1,7 +1,7 @@
 # Static frontend: build the Nuxt SPA, then serve it with nginx.
 # The nginx config is mounted from infrastructure/nginx/default.conf.
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 ENV NUXT_TELEMETRY_DISABLED=1 \
     PNPM_HOME=/pnpm \
