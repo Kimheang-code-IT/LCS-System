@@ -36,7 +36,7 @@ ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL \
 RUN pnpm exec nuxt prepare
 RUN pnpm generate
 
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.31-alpine AS runtime
 
 COPY --from=build /app/.output/public /usr/share/nginx/html
 
