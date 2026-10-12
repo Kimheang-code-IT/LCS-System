@@ -336,6 +336,18 @@ jobs:
               echo "PostgreSQL is not running yet (first deployment); skipping backup."
             fi
 
+            # Reclaim disk space BEFORE pulling. Every deploy leaves the
+            # previous immutable sha-* images behind; without pruning them the
+            # host disk eventually fills and image extraction fails with
+            # "no space left on device". Images used by running containers are
+            # never removed, and rollback re-pulls its tag from GHCR.
+            echo "Disk usage before cleanup:"; df -h / | tail -n 1
+            $DOCKER container prune -f || true
+            $DOCKER image prune -af || true
+            $DOCKER builder prune -af || true
+            $DOCKER system df || true
+            echo "Disk usage after cleanup:"; df -h / | tail -n 1
+
             # Pull the exact immutable (public) images and recreate changed
             # services. No `down -v`; named volumes persist.
             export IMAGE_TAG
