@@ -169,7 +169,10 @@ services:
       minio-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4).read()"]
+      # The API rejects unknown Host headers (ALLOWED_HOSTS hardening), and
+      # production deliberately forbids localhost there, so the in-container
+      # probe must send the public hostname.
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Host': 'lcslog.minidev.in'}); urllib.request.urlopen(r, timeout=4).read()"]
       interval: 15s
       timeout: 5s
       retries: 10
