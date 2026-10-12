@@ -349,9 +349,12 @@ jobs:
             echo "Disk usage after cleanup:"; df -h / | tail -n 1
 
             # Pull the exact immutable (public) images and start the stack.
+            # `up` may fail while a dependency becomes healthy; the readiness
+            # loop and rollback below own that outcome, so a failed `up` must
+            # not abort the script and leave the site stopped.
             export IMAGE_TAG
             $COMPOSE pull
-            $COMPOSE up -d --remove-orphans
+            $COMPOSE up -d --remove-orphans || true
             $DOCKER image prune -f
 
             # Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
