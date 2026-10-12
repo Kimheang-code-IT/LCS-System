@@ -336,20 +336,19 @@ jobs:
               echo "PostgreSQL is not running yet (first deployment); skipping backup."
             fi
 
-            # Reclaim disk space BEFORE pulling. Every deploy leaves the
-            # previous immutable sha-* images behind; without pruning them the
-            # host disk eventually fills and image extraction fails with
-            # "no space left on device". Images used by running containers are
-            # never removed, and rollback re-pulls its tag from GHCR.
+            # Reclaim disk space BEFORE pulling. This host's root disk is small,
+            # so the old (in-use) images must be released first: stop the stack
+            # (named volumes persist), then prune. Without this the pull fails
+            # with "no space left on device" while extracting layers.
             echo "Disk usage before cleanup:"; df -h / | tail -n 1
+            $COMPOSE down --remove-orphans || true
             $DOCKER container prune -f || true
             $DOCKER image prune -af || true
             $DOCKER builder prune -af || true
             $DOCKER system df || true
             echo "Disk usage after cleanup:"; df -h / | tail -n 1
 
-            # Pull the exact immutable (public) images and recreate changed
-            # services. No `down -v`; named volumes persist.
+            # Pull the exact immutable (public) images and start the stack.
             export IMAGE_TAG
             $COMPOSE pull
             $COMPOSE up -d --remove-orphans
@@ -367,6 +366,8 @@ jobs:
             echo "Application did not become healthy within the retry window." >&2
             if [ -n "$PREVIOUS_IMAGE_TAG" ] && printf '%s' "$PREVIOUS_IMAGE_TAG" | grep -Eq '^sha-[0-9a-f]{7,40}$'; then
               echo "Rolling back application images to $PREVIOUS_IMAGE_TAG"
+              $COMPOSE down --remove-orphans || true
+              $DOCKER image prune -af || true
               sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_IMAGE_TAG/" "$ENV_FILE"
               export IMAGE_TAG="$PREVIOUS_IMAGE_TAG"
               $COMPOSE pull
