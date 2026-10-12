@@ -1,14 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import Request
-
-
-def apply_scope(stmt: Any, model: Any, ctx: RequestContext) -> Any:  # noqa: ARG001
-    """Single-tenant install: every record is visible to the signed-in user."""
-    return stmt
-
 
 class RequestContext:
     """Resolved authorization context attached to every authenticated request."""
@@ -49,7 +40,3 @@ class RequestContext:
         if not self.has_permission(code):
             raise AccessDenied(f"Missing permission: {code}")
         return self
-
-    @staticmethod
-    def from_request(request: Request) -> RequestContext:
-        return request.state.context

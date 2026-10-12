@@ -15,7 +15,8 @@ import {
 import { useLcs } from '~/composables/freight/useLcs'
 import type { FreightRecord } from '~/types/record'
 import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
-import { chargeDomainStatus, financeDomainStatus, quotationDomainStatus } from '~/utils/freight/states'
+import { chargeDomainStatus, financeDomainStatus } from '~/utils/freight/states'
+import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
 import { enrichJobListRows } from '~/utils/freight/job-list'
 import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
@@ -27,8 +28,8 @@ import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/docum
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
 import { useModuleList } from '~/composables/freight/useModuleList'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
-import { supportsCommentActivity } from '~/utils/freight/document-tabs'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 
 const { module, route } = useFreightRouteModule()
 const store = useFreightStore()
@@ -156,6 +157,7 @@ const selectedRecords = computed(() => {
 const bulkAction = computed<{ kind: 'delete' | 'deactivate', label: string, icon: string, color: 'error' | 'warning' } | null>(() => {
   if (!selectedIds.value.length || !canMutate.value) return null
   const rows = selectedRecords.value
+  if (rows.some(row => isProtectedManagementRecord(current.value?.collection, row))) return null
   const statuses = rows.map(recordStatusValue)
   const statusBased = rows.length > 0 && statuses.every(status => status === 'ACTIVE' || status === 'INACTIVE')
   if (statusBased && statuses.some(status => status === 'ACTIVE')) {
@@ -276,16 +278,38 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     // Status toggle and conditional delete are appended by the shared block below.
   }
   if (collection === 'quotations') {
-    const status = quotationDomainStatus(row.status)
-    if (status === 'DRAFT' && lcs.can('quotation.update_draft')) {
+    const relatedJob = jobForQuotation(store.list('jobs'), row)
+    const availability = quotationActionAvailability(
+      row.status,
+      {
+        updateDraft: lcs.can('quotation.update_draft'),
+        send: lcs.can('quotation.send'),
+        accept: lcs.can('quotation.accept'),
+        convert: lcs.can('quotation.convert'),
+      },
+      { hasServiceOrder: Boolean(relatedJob) },
+    )
+    if (availability.edit) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     }
-    if ((status === 'DRAFT' || status === 'SENT') && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
-      items.push({ label: t('freight.ui.accept'), icon: 'i-lucide-check', onSelect: () => { void runRowAction('acceptJob', row) } })
+    if (availability.send) {
+      items.push({ label: t('freight.ui.send'), icon: 'i-lucide-send', onSelect: () => { void runRowAction('send', row) } })
     }
-    if (status === 'ACCEPTED' && lcs.can('quotation.convert')) items.push({ label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', onSelect: () => { void runRowAction('convert', row) } })
-    const relatedJob = jobForQuotation(store.list('jobs'), row)
-    if (relatedJob) items.push({ label: t('freight.ui.openServiceOrder'), icon: 'i-lucide-briefcase', onSelect: () => { void navigateTo(`/service-orders/${relatedJob.id}`) } })
+    if (availability.accept) {
+      items.push({ label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success', onSelect: () => { void runRowAction('accept', row) } })
+    }
+    if (availability.convert) {
+      items.push({ label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', onSelect: () => { void runRowAction('convert', row) } })
+    }
+    if (availability.revise) {
+      items.push({ label: t('freight.ui.requote'), icon: 'i-lucide-git-branch', onSelect: () => { void runRowAction('createRevision', row) } })
+    }
+    if (availability.delete) {
+      items.push({ label: t('freight.ui.delete'), icon: 'i-lucide-trash-2', color: 'error', onSelect: () => { void runRowAction('delete', row) } })
+    }
+    if (relatedJob) {
+      items.push({ label: t('freight.ui.openServiceOrder'), icon: 'i-lucide-briefcase', onSelect: () => { void navigateTo(`/service-orders/${relatedJob.id}`) } })
+    }
   }
   else if (collection === 'jobCharges') {
     const status = chargeDomainStatus(row.status)
@@ -305,7 +329,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (status === 'OPEN' || status === 'REOPENED') items.push({ label: t('freight.ui.closePeriod'), icon: 'i-lucide-lock', color: 'warning', onSelect: () => { void runRowAction('closePeriod', row) } })
     if (status === 'CLOSED') items.push({ label: t('freight.ui.reopenPeriod'), icon: 'i-lucide-lock-open', onSelect: () => { void runRowAction('reopenPeriod', row) } })
   }
-  if (canMutate.value) {
+  if (canMutate.value && collection !== 'quotations' && !isProtectedManagementRecord(collection, row)) {
     const status = recordStatusValue(row)
     if (status === 'ACTIVE' || status === 'INACTIVE') {
       const active = status === 'ACTIVE'
@@ -350,26 +374,36 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
     const id = String(row.id || '')
     // Quotation revision endpoints need the revision id; other actions use the quotation id.
     const revisionId = String(row.revisionId || row.id || '')
-    if (action === 'send') await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
-    else if (action === 'accept') await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
-    else if (action === 'acceptJob') {
-      if (quotationDomainStatus(row.status) === 'DRAFT') {
-        await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
-      }
+    if (action === 'send') {
+      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationSendTitle'), description: t('freight.ui.quotationSendDescription'), confirmLabel: t('freight.ui.send') })
+      if (!ok) return
+      await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
+    }
+    else if (action === 'accept') {
+      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationAcceptTitle'), description: t('freight.ui.quotationAcceptDescription'), confirmLabel: t('freight.ui.accept'), confirmColor: 'primary' })
+      if (!ok) return
       await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
-      const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
-      await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
-      return
     }
     else if (action === 'createRevision') {
+      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationRequoteTitle'), description: t('freight.ui.quotationRequoteDescription'), confirmLabel: t('freight.ui.requote') })
+      if (!ok) return
       const created = await lcs.quotations.createRevision(id)
       store.reload()
       await navigateTo(`/quotations/${created.id}`)
       return
     }
     else if (action === 'convert') {
+      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationConvertTitle'), description: t('freight.ui.quotationConvertDescription'), confirmLabel: t('freight.ui.convertServiceOrder'), confirmColor: 'primary' })
+      if (!ok) return
       const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
       await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
+      return
+    }
+    else if (action === 'delete') {
+      const ok = await confirm({ kind: 'delete', count: 1 })
+      if (!ok) return
+      await moduleRecord.remove([id])
+      toast.add({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
       return
     }
     else if (action === 'reject' || action === 'cancel') {
@@ -472,7 +506,6 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           summary: pageSummary.value,
           items: rowMenuItems,
           loadingId: busyId.value,
-          showComments: supportsCommentActivity(current.value.collection),
         })]
       : []),
   ]
@@ -499,7 +532,13 @@ async function deleteIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
   const ok = await confirm({ kind: 'delete', count: ids.length })
   if (!ok) return
-  await moduleRecord.remove(ids)
+  try {
+    await moduleRecord.remove(ids)
+  }
+  catch (error) {
+    lcs.reportError(error)
+    return
+  }
   rowSelection.value = {}
   toast.add({ title: t('lcs.actions.deletedItems', { n: ids.length }), color: 'success' })
   await refreshList()

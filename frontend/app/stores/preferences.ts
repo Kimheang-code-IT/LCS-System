@@ -49,10 +49,6 @@ export const usePreferencesStore = defineStore('preferences', () => {
     return configured.length ? configured : ['en', 'km']
   })
 
-  const uiColors = computed<UiColorConfig>(() =>
-    ((appConfig.ui as { colors?: UiColorConfig }).colors ?? {}),
-  )
-
   function setThemeColors(nextColors: UiColorConfig) {
     ;(appConfig.ui as { colors?: UiColorConfig }).colors = {
       ...(appConfig.ui as { colors?: UiColorConfig }).colors,
@@ -69,18 +65,6 @@ export const usePreferencesStore = defineStore('preferences', () => {
       ...(primary ? { primary } : {}),
       ...(neutral ? { neutral } : {}),
     })
-  }
-
-  function persistThemeToLocal(nextColors: UiColorConfig) {
-    if (typeof window === 'undefined') return
-    if (nextColors.primary) localStorage.setItem(THEME_PRIMARY_KEY, nextColors.primary)
-    if (nextColors.neutral) localStorage.setItem(THEME_NEUTRAL_KEY, nextColors.neutral)
-  }
-
-  function applyThemeColor(key: 'primary' | 'neutral', color: string) {
-    const next = { [key]: color } as UiColorConfig
-    setThemeColors(next)
-    persistThemeToLocal(next)
   }
 
   function applyFontSizeToDom(size: AppFontSize) {
@@ -159,12 +143,9 @@ export const usePreferencesStore = defineStore('preferences', () => {
   }
 
   return {
-    uiColors,
     fontSize,
     availableLocales,
-    fontSizePx: FONT_SIZE_PX,
     hydrate,
-    applyThemeColor,
     setLocale,
     syncLocaleWithConfig,
     setFontSize,

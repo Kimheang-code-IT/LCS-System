@@ -8,6 +8,7 @@ from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.context import RequestContext
 from app.core.database import Base, utcnow
 from app.core.exceptions import Conflict, NotFound
@@ -290,11 +291,19 @@ def _model_for_table(table_name: str) -> type | None:
 
 async def _restore_conflict(session: AsyncSession, row: Any) -> str | None:
     table = row.__table__
+    unique_column_sets: list[list[str]] = []
     for constraint in table.constraints:
         columns = list(getattr(constraint, "columns", []))
-        if constraint.__class__.__name__ != "UniqueConstraint" or not columns:
-            continue
-        predicates = [getattr(row.__class__, column.name) == getattr(row, column.name) for column in columns]
+        if constraint.__class__.__name__ == "UniqueConstraint" and columns:
+            unique_column_sets.append([column.name for column in columns])
+    # Soft-deleted models enforce uniqueness through partial indexes instead of
+    # table constraints, so include unique indexes as well.
+    for index in table.indexes:
+        columns = list(getattr(index, "columns", []))
+        if index.unique and columns:
+            unique_column_sets.append([column.name for column in columns])
+    for column_names in unique_column_sets:
+        predicates = [getattr(row.__class__, name) == getattr(row, name) for name in column_names]
         predicates.append(row.__class__.id != row.id)
         if hasattr(row.__class__, "deleted_at"):
             predicates.append(row.__class__.deleted_at.is_(None))
@@ -348,6 +357,8 @@ async def restore_record(
         action="RESTORE", before=before, after=_safe_snapshot(row), metadata={"reference": record.record_reference},
     )
     await session.commit()
+    # Restored rows become visible again: drop cached master-data/reference views.
+    await cache.bump("master_data")
     return {"entityType": entity_type, "entityId": str(entity_id), "status": "RESTORED"}
 
 
@@ -404,4 +415,5 @@ async def hard_delete_record(
         )
         await session.commit()
         raise Conflict("HARD_DELETE_BLOCKED", "A database relationship still references this record.") from exc
+    await cache.bump("master_data")
     return {"entityType": entity_type, "entityId": str(entity_id), "status": "HARD_DELETED"}

@@ -94,7 +94,6 @@ const sidebarUi = computed(() => ({
         :items="links[0]"
         orientation="vertical"
         type="multiple"
-        :default-value="['finance', 'master', 'configuration', 'administration']"
         :unmount-on-hide="false"
         tooltip
         popover

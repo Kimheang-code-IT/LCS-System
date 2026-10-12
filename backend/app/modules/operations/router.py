@@ -5,10 +5,10 @@ import os
 from fastapi import APIRouter, Body, Depends, File, Form, Header, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
-from app.core.exceptions import Conflict
 from app.core.pagination import PageParams, page_params
 from app.modules.operations import component_tabs as component_tabs_service
 from app.modules.operations import service
@@ -41,16 +41,8 @@ async def delete_service_orders(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
-    for order_id in ids:
-        order = await session.get(service.ServiceOrder, order_id)
-        if order is not None and str(order.status).upper() != "INACTIVE":
-            raise Conflict("ORDER_ACTIVE", "Active service orders cannot be deleted. Deactivate the order first.")
-    for order_id in ids:
-        order = await session.get(service.ServiceOrder, order_id)
-        if order is not None:
-            await session.delete(order)
-    await session.commit()
-    return {"data": {"removed": len(ids)}}
+    removed = await service.delete_service_orders(session, ids)
+    return {"data": {"removed": removed}}
 
 
 @router.get("/service-orders/{identifier}/containers")
@@ -230,15 +222,9 @@ async def delete_service_charges(
     context: RequestContext = Depends(require_permission("service_charge.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    from app.modules.operations.models import ServiceOrderCharge
-
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
-    for charge_id in ids:
-        charge = await session.get(ServiceOrderCharge, charge_id)
-        if charge is not None and charge.status == "DRAFT":
-            await session.delete(charge)
-    await session.commit()
-    return {"data": {"removed": len(ids)}}
+    removed = await service.delete_charges(session, ids)
+    return {"data": {"removed": removed}}
 
 
 @router.post("/service-charges/{charge_id}/issue")
@@ -311,7 +297,11 @@ async def download_attachment(
     return Response(
         content=content,
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{os.path.basename(storage_key)}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{os.path.basename(storage_key).replace(chr(34), "")}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
@@ -323,5 +313,5 @@ async def upload_attachment(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     context.require("attachment.upload")
-    content = await file.read()
+    content = await file.read(settings.upload_max_size_mb * 1024 * 1024 + 1)
     return {"data": await service.store_upload(session, context, file.filename or "file", file.content_type or "", content, storage_key)}

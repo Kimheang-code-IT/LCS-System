@@ -21,17 +21,6 @@ export const freightDocumentLineActionKey: InjectionKey<
   (action: 'view', row: Record<string, unknown>) => void
 > = Symbol('freightDocumentLineAction')
 
-export type FreightDocumentLineMenuItem = {
-  label: string
-  icon?: string
-  color?: 'primary' | 'neutral' | 'error'
-  onSelect: () => void
-}
-
-export const freightDocumentLineMenuKey: InjectionKey<
-  (tableKey: string, row: Record<string, unknown>) => FreightDocumentLineMenuItem[]
-> = Symbol('freightDocumentLineMenu')
-
 export type FreightDocumentLineTableHeaderAction = {
   label: string
   icon?: string
@@ -73,6 +62,7 @@ const TYPE_MAP: Record<FreightFieldType, FieldType> = {
 }
 
 const QUOTATION_OVERVIEW_KEYS = [
+  'customerPartyId',
   'customer',
   'direction',
   'date',

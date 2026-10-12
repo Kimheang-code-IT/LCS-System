@@ -114,30 +114,30 @@ async def test_restore_success_duplicate_and_audit(client, session_factory):
         assert {"DELETE", "RESTORE"} <= actions
 
 
-async def test_restore_conflict_when_parent_is_archived(client):
+async def test_restore_conflict_when_dependency_is_archived(client):
     headers = await login(client)
-    parent = await _create_reference(
+    party = await _create_reference(
         client,
         headers,
-        "places",
-        {"code": "ARCH-PARENT", "name": "Archived Parent", "category": "City", "status": "Inactive"},
+        "businessParties",
+        {"partyCode": "ARCH-PARTY", "legalName": "Archived Party", "roles": ["Supplier"], "status": "Inactive"},
     )
-    child = await _create_reference(
+    asset = await _create_reference(
         client,
         headers,
-        "places",
+        "transportAssets",
         {
-            "code": "ARCH-CHILD",
-            "name": "Archived Child",
-            "category": "Port",
-            "parentPlace": parent["id"],
+            "assetCode": "ARCH-ASSET",
+            "identity": "PLATE-ARCH",
+            "transportType": "Truck",
+            "ownerParty": "Archived Party",
             "status": "Inactive",
         },
     )
-    await _archive(client, headers, "places", child["id"])
-    await _archive(client, headers, "places", parent["id"])
+    await _archive(client, headers, "transportAssets", asset["id"])
+    await _archive(client, headers, "businessParties", party["id"])
 
-    response = await client.post(f"/api/v1/archive/places/{child['id']}/restore", headers=headers)
+    response = await client.post(f"/api/v1/archive/transportAssets/{asset['id']}/restore", headers=headers)
     assert response.status_code == 409
     assert response.json()["code"] == "RESTORE_CONFLICT"
     assert "still archived" in response.json()["message"]
@@ -196,27 +196,27 @@ async def test_archive_permissions_are_enforced(client):
 
 async def test_hard_delete_is_blocked_when_related_rows_exist(client):
     headers = await login(client)
-    parent = await _create_reference(
+    party = await _create_reference(
         client,
         headers,
-        "places",
-        {"code": "BLOCK-PARENT", "name": "Blocked Parent", "category": "City", "status": "Inactive"},
+        "businessParties",
+        {"partyCode": "BLOCK-PARTY", "legalName": "Blocked Party", "roles": ["Supplier"], "status": "Inactive"},
     )
     await _create_reference(
         client,
         headers,
-        "places",
+        "transportAssets",
         {
-            "code": "BLOCK-CHILD",
-            "name": "Blocking Child",
-            "category": "Port",
-            "parentPlace": parent["id"],
+            "assetCode": "BLOCK-ASSET",
+            "identity": "PLATE-BLOCK",
+            "transportType": "Truck",
+            "ownerParty": "Blocked Party",
             "status": "Inactive",
         },
     )
-    await _archive(client, headers, "places", parent["id"])
+    await _archive(client, headers, "businessParties", party["id"])
 
-    response = await client.delete(f"/api/v1/archive/places/{parent['id']}", headers=headers)
+    response = await client.delete(f"/api/v1/archive/businessParties/{party['id']}", headers=headers)
     assert response.status_code == 409
     assert response.json()["code"] == "HARD_DELETE_BLOCKED"
 
@@ -233,3 +233,32 @@ async def test_generic_archive_masks_sensitive_snapshot_data(client):
     details = await client.get(f"/api/v1/archive/companies/{company['id']}", headers=headers)
     assert details.status_code == 200
     assert details.json()["data"]["data"]["data"]["apiToken"] == "********"
+
+
+async def test_unique_code_is_reusable_after_archive(client):
+    headers = await login(client)
+    original = await _create_reference(
+        client,
+        headers,
+        "feeTypes",
+        {"code": "REUSE-001", "name": "Reuse One", "status": "Inactive"},
+    )
+    await _archive(client, headers, "feeTypes", original["id"])
+
+    # A deleted record must not block re-creating the same code.
+    reused = await client.post(
+        "/api/v1/feeTypes",
+        json={"code": "REUSE-001", "name": "Reuse Two", "status": "Active"},
+        headers=headers,
+    )
+    assert reused.status_code == 201, reused.text
+    assert reused.json()["data"]["code"] == "REUSE-001"
+
+    # Duplicating an active code is rejected with a field error, not a 500.
+    duplicate = await client.post(
+        "/api/v1/feeTypes",
+        json={"code": "REUSE-001", "name": "Reuse Three", "status": "Active"},
+        headers=headers,
+    )
+    assert duplicate.status_code == 422
+    assert duplicate.json()["field_errors"].get("code")

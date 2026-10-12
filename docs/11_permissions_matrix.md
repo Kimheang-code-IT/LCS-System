@@ -5,7 +5,8 @@
 A permission answers **what may the user do?** The platform is single-tenant:
 organizations and branches were removed, so there is no organization/branch scope.
 Access is granted through roles, each role is a set of permission codes, and a
-user may hold several roles (with optional start/expiry dates).
+every user has exactly one active role. Replaced assignments are retained as
+expired history but do not grant permissions.
 
 Every permission code is `module.action`, defined in code in
 `backend/app/core/permissions.py` and synced into the `permissions` table on
@@ -324,10 +325,44 @@ role design):
 
 - There is no organization/branch scope. A granted permission applies to all
   records of that module.
-- A user may hold multiple role assignments; assignments support `starts_at` and
-  `expires_at`, and expired/future assignments do not contribute permissions.
+- A user has exactly one active role assignment. Replaced assignments are
+  expired for history, and expired/future assignments do not contribute permissions.
 - The API is authoritative: the UI hides unavailable actions, but every
   protected endpoint re-checks the permission server-side.
 - The Platform Administrator role is built in (`is_system_role = true`) and
   always resolves to all permission codes; it cannot be reduced below the
   bootstrap administrator.
+
+## 7. Protected System Administrator
+
+The account created by first-run setup is permanently identified by
+`users.system_identity = 'DEFAULT_SYSTEM_ADMIN'`. This machine identifier is
+unique, is never accepted from an API request, and is independent of mutable
+username, email, display name, and user code.
+
+Backend rules return HTTP 403 and write a rejected audit event when an operation
+attempts to:
+
+- delete the protected account, including a mixed bulk deletion;
+- deactivate it;
+- replace or clear its Platform Administrator role;
+- deactivate or delete the built-in Platform Administrator role; or
+- remove any catalog permission from that role.
+
+The account's ordinary profile fields remain editable. The UI marks protected
+records from the backend-provided flags, hides destructive row/detail actions,
+disables bulk destructive actions containing a protected record, and makes the
+protected role and permission matrix read-only. These UI controls are only a
+convenience; service-layer checks are authoritative.
+
+Administrative business-data reset preserves users, credentials, roles,
+permissions, assignments, sessions, and audit history. It therefore cannot
+delete the protected account or reopen first-run setup.
+
+### Access recovery
+
+Recovery requires production-host/database administrator access; there is no
+HTTP bypass. Find the protected account by `system_identity`, then use the
+documented `app.create_admin` CLI with that account's email or username and a
+new strong password. Rotate exposed credentials, inspect rejected/successful
+administrative audit events, and revoke active sessions after recovery.

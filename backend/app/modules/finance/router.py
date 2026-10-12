@@ -287,15 +287,9 @@ async def delete_financial_documents(
     context: RequestContext = Depends(require_permission("financial_document.update_draft")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    from app.modules.finance.models import FinancialDocument
-
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
-    for document_id in ids:
-        document = await session.get(FinancialDocument, document_id)
-        if document is not None and document.status == "DRAFT":
-            await session.delete(document)
-    await session.commit()
-    return {"data": {"removed": len(ids)}}
+    removed = await service.delete_draft_documents(session, ids)
+    return {"data": {"removed": removed}}
 
 
 @router.get("/financial-documents/{document_id}")

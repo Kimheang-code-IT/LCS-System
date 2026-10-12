@@ -8,7 +8,6 @@ import { useSearch } from '~/composables/search/useSearch'
 
 export function useGlobalSearch() {
   const { t } = useI18n()
-  const router = useRouter()
   const { links, close: closeSidebar } = useMenu()
   const { askAi, searchKeyword, searchSemantic } = useSearch()
 
@@ -223,6 +222,5 @@ export function useGlobalSearch() {
     groups,
     placeholder,
     onAskAi,
-    router,
   }
 }

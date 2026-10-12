@@ -2,8 +2,9 @@
 
 Application login passwords use one-way Argon2 hashing (``app.core.security``).
 Secrets that an authorised user must be able to read back (for example a
-customer customs-portal password) are stored reversibly encrypted with a key
-derived from ``JWT_SECRET_KEY``.
+customer customs-portal password) are stored reversibly encrypted with a
+dedicated key. Development keeps a JWT-key fallback for backwards
+compatibility; production configuration requires ``FIELD_ENCRYPTION_KEY``.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 
 from app.core.config import settings
 
@@ -34,7 +35,8 @@ SENSITIVE_FIELD_NAMES = {
 
 
 def _fernet() -> Fernet:
-    digest = hashlib.sha256(settings.jwt_secret_key.encode("utf-8")).digest()
+    source_key = settings.field_encryption_key or settings.jwt_secret_key
+    digest = hashlib.sha256(source_key.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
 
@@ -46,12 +48,3 @@ def encrypt_secret(value: str) -> str:
     if value.startswith(_PREFIX):
         return value
     return _PREFIX + _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
-
-
-def decrypt_secret(value: str) -> str:
-    if not value.startswith(_PREFIX):
-        return value
-    try:
-        return _fernet().decrypt(value[len(_PREFIX):].encode("utf-8")).decode("utf-8")
-    except InvalidToken:
-        return ""

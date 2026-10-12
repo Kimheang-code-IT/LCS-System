@@ -18,8 +18,12 @@ export function useAuth() {
     return (response && typeof response === 'object' ? response : {}) as Record<string, unknown>
   }
 
-  async function loginWithCredentials(email: string, password: string): Promise<{ data: LoginResult }> {
-    const response = await api.post(ApiV1Endpoints.LOGIN, { username: email, password })
+  async function loginWithCredentials(
+    email: string,
+    password: string,
+    rememberMe = false,
+  ): Promise<{ data: LoginResult }> {
+    const response = await api.post(ApiV1Endpoints.LOGIN, { username: email, password, remember_me: rememberMe })
     const data = payloadOf(response)
     auth.setTokens(
       typeof data.access_token === 'string' ? data.access_token : null,

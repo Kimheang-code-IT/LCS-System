@@ -48,11 +48,6 @@ export const freightTableUiCompactReadonly = {
   td: 'border border-default bg-default px-2 py-1 align-middle text-sm leading-tight text-default transition-colors',
 } as const
 
-export const freightTableFillUiReadonly = {
-  ...freightTableUiReadonly,
-  root: 'relative h-full min-h-0 min-w-0 overflow-auto',
-} as const
-
 /** Centered checkbox column classes for list tables. */
 export const freightTableCheckboxMeta = {
   class: {

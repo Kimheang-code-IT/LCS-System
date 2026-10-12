@@ -264,13 +264,14 @@ The conversion response keeps the quotation `id` and adds `serviceOrderId` /
 2. Recalculate totals and validate customer/document fields.
 3. Set status `ISSUED`.
 4. Render the customer-facing document from a snapshot.
-5. Do not create a journal entry.
+5. Create or retrieve one idempotent draft `CUSTOMER_INVOICE` from the charge snapshot.
+6. Do not create a journal entry.
 
 ### 8.3 Convert charge to financial invoice
 
 1. Authorize `service_charge.convert_to_invoice`.
 2. Lock the service charge.
-3. Copy charge lines into a draft `CUSTOMER_INVOICE`.
+3. Copy charge lines into a draft `CUSTOMER_INVOICE` when the issue workflow has not already created it; otherwise return the existing draft.
 4. Create the `SERVICE_ORDER_CHARGE` source relationship.
 5. Preserve service-order and container references.
 6. Allow finance users to edit the draft; do not post automatically.

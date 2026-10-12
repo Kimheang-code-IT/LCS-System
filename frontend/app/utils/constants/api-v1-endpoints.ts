@@ -1,7 +1,7 @@
 /** Source OpenAPI `/api/v1` operations. Do not invent alternate verbs. */
 export const ApiV1Endpoints = {
-  SETUP_STATUS: '/api/v1/setup/status',
-  SETUP_INITIALIZE: '/api/v1/setup/initialize',
+  SETUP_STATUS: '/api/v1/auth/setup/status',
+  SETUP_INITIALIZE: '/api/v1/auth/setup/initialize',
   LOGIN: '/api/v1/auth/login',
   LOGOUT: '/api/v1/auth/logout',
   REFRESH: '/api/v1/auth/refresh',
@@ -40,7 +40,6 @@ export const ApiV1Endpoints = {
   COMPONENT_TAB: (id: number | string) => `/api/v1/component-tabs/${id}`,
   COMPONENT_TAB_GROUPS: (id: number | string) => `/api/v1/component-tabs/${id}/groups`,
   COMPONENT_TAB_GROUPS_REORDER: (id: number | string) => `/api/v1/component-tabs/${id}/groups/reorder`,
-  COMPONENT_TAB_TRADE_DIRECTIONS: (id: number | string) => `/api/v1/component-tabs/${id}/trade-directions`,
   COMPONENT_TAB_GROUP: (id: number | string) => `/api/v1/component-tab-groups/${id}`,
   COMPONENT_CONFIG_TYPES: '/api/v1/component-tabs/meta/types',
   SERVICE_ORDER_CHARGES: (id: number | string) => `/api/v1/service-orders/${id}/charges`,
@@ -69,4 +68,5 @@ export const ApiV1Endpoints = {
   REPORTS_RECEIVABLES: '/api/v1/reports/receivables',
   REPORTS_PAYABLES: '/api/v1/reports/payables',
   REPORTS_PROFITABILITY: '/api/v1/reports/profitability',
+  REPORTS_LEDGER_LINES: '/api/v1/reports/ledger-lines',
 } as const

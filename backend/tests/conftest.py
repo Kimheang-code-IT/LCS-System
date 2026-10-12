@@ -1,15 +1,30 @@
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import settings
 from app.core.database import Base, get_session
 from app.main import app
 from tests.seed import DEFAULT_PASSWORD, ensure_seed_data, seed_demo_data
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def disable_cache_by_default(monkeypatch):
+    """Read-through caching is disabled for every test.
+
+    The in-memory test database is recreated per test while Redis (when running
+    locally) is not, so caches keyed only by request parameters could leak data
+    across tests. Cache-specific tests re-enable it with an injected fake
+    Redis client via the ``fake_redis`` fixture.
+    """
+    monkeypatch.setattr(settings, "cache_enabled", False)
+    return None
 
 
 @pytest_asyncio.fixture

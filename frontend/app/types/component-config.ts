@@ -110,14 +110,12 @@ export interface ComponentTab {
   id: string
   code: string
   name: string
-  nameKm?: string | null
   description?: string | null
-  icon?: string | null
+  tradeDirectionId?: string | null
   displayOrder: number
   isActive: boolean
   isArchived: boolean
   groupCount?: number
-  tradeDirectionIds?: string[]
   createdAt?: string | null
   updatedAt?: string | null
 }
@@ -125,13 +123,11 @@ export interface ComponentTab {
 export interface ComponentTabInput {
   code?: string
   name?: string
-  nameKm?: string
   description?: string
-  icon?: string
+  tradeDirectionId?: string | null
   displayOrder?: number
   isActive?: boolean
   isArchived?: boolean
-  tradeDirectionIds?: string[]
 }
 
 export interface ComponentTabGroupLink extends ComponentGroup {
@@ -180,8 +176,6 @@ export interface ComponentTabRuntime {
   id: string
   code: string
   name: string
-  nameKm?: string | null
-  icon?: string | null
   displayOrder: number
   groups: ComponentTabGroup[]
 }
@@ -193,14 +187,6 @@ export interface ComponentTabsBootstrap {
   tabs: ComponentTabRuntime[]
   references: Record<string, Record<string, string>>
 }
-
-export interface ComponentConfigTypes {
-  dataTypes: ComponentDataType[]
-  referenceTypes: ComponentReferenceType[]
-  renderModes: ComponentRenderMode[]
-}
-
-
 
 export const COMPONENT_DATA_TYPES: ComponentDataType[] = [
   'text',
@@ -217,15 +203,3 @@ export const COMPONENT_DATA_TYPES: ComponentDataType[] = [
   'boolean',
   'reference',
 ]
-
-export const COMPONENT_REFERENCE_TYPES: ComponentReferenceType[] = [
-  'business_party',
-  'place',
-  'transport_asset',
-  'transport_type',
-  'container',
-  'fee_type',
-  'user',
-]
-
-export const COMPONENT_RENDER_MODES: ComponentRenderMode[] = ['table', 'form']

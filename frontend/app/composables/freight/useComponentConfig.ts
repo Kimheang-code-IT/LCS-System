@@ -191,14 +191,6 @@ export function useComponentConfig() {
     return withSaving(async () => { tabGroups.value = await componentConfig.reorderTabGroups(tabId, orderedIds) })
   }
 
-  async function setTabDirections(tabId: string, directionIds: string[]) {
-    return withSaving(async () => {
-      const ids = await componentConfig.setTabDirections(tabId, directionIds)
-      tabs.value = tabs.value.map(item => (item.id === tabId ? { ...item, tradeDirectionIds: ids } : item))
-      return ids
-    })
-  }
-
   return {
     attributes,
     groups,
@@ -229,6 +221,5 @@ export function useComponentConfig() {
     addTabGroup,
     removeTabGroup,
     reorderTabGroups,
-    setTabDirections,
   }
 }

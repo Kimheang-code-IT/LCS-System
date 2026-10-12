@@ -6,9 +6,10 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
-    username: str | None = None
-    email: str | None = None
-    password: str
+    username: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    password: str = Field(max_length=128)
+    remember_me: bool = False
 
 
 class RefreshRequest(BaseModel):
@@ -21,39 +22,20 @@ class ForgotPasswordRequest(BaseModel):
 
 class VerifyCodeRequest(BaseModel):
     email: EmailStr
-    code: str
+    code: str = Field(pattern=r"^\d{6}$")
 
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
-    code: str
-    password: str = Field(min_length=6)
-    password_confirmation: str | None = None
+    code: str = Field(pattern=r"^\d{6}$")
+    password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str | None = Field(default=None, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    password: str = Field(min_length=6)
-    password_confirmation: str | None = None
-
-
-class AuthUser(BaseModel):
-    id: int
-    name: str
-    email: str
-    role: str
-    avatar: str | None = None
-    permissions: list[str] = []
-    pageAccess: list[str] = []
-    sourcePermissions: list[str] = []
-
-
-class LoginResponse(BaseModel):
-    user: AuthUser
-    access_token: str | None = None
-    refresh_token: str | None = None
-    token_type: str = "Bearer"
-    expires_in: int = 3600
+    current_password: str = Field(max_length=128)
+    password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str | None = Field(default=None, max_length=128)
 
 
 class UserCreate(BaseModel):
@@ -64,8 +46,8 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     display_name: str = Field(validation_alias=AliasChoices("display_name", "displayName", "name"))
-    password: str | None = Field(default=None, min_length=6)
-    phone: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    roles: list[str] | None = None
     role_code: str | None = Field(default=None, validation_alias=AliasChoices("role_code", "roleCode", "role"))
     status: str = "ACTIVE"
 
@@ -73,12 +55,13 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    user_code: str | None = Field(default=None, validation_alias=AliasChoices("user_code", "userCode"))
     email: EmailStr | None = None
     display_name: str | None = Field(default=None, validation_alias=AliasChoices("display_name", "displayName"))
-    phone: str | None = None
     status: str | None = None
     locale: str | None = None
     timezone: str | None = None
+    roles: list[str] | None = None
     role_code: str | None = Field(default=None, validation_alias=AliasChoices("role_code", "roleCode", "role"))
 
 
@@ -90,7 +73,9 @@ class RoleAssignmentCreate(BaseModel):
 
 
 class RoleCreate(BaseModel):
-    code: str
+    # `code` is optional: when omitted the service derives a stable code from
+    # the role name, so the UI only needs to collect a name.
+    code: str | None = None
     name: str
     description: str | None = None
     permissions: list[str] = []

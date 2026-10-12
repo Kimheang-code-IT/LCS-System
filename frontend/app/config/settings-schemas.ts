@@ -1,44 +1,14 @@
 import type { DocumentTabSchema } from '~/types/common'
 import {
-  AWS_REGION_OPTIONS,
   BACKUP_INTERVAL_OPTIONS,
   CURRENCY_OPTIONS,
   DATE_FORMAT_OPTIONS,
   LANDING_PAGE_OPTIONS,
   NUMBER_FORMAT_OPTIONS,
   PAGE_SIZE_OPTIONS,
-  SYNC_SCHEDULE_OPTIONS,
   TIME_FORMAT_OPTIONS,
   TIMEZONE_OPTIONS,
 } from '~/utils/constants/select-options'
-
-/** App Info — flat form (no tabs UI when single tab). */
-export const appInfoTabs: DocumentTabSchema[] = [
-  {
-    id: 'info',
-    labelKey: 'lcs.pages.appInfo',
-    sections: [
-      {
-        id: 'info',
-        fields: [
-          { key: 'applicationName', labelKey: 'lcs.settings.applicationName', type: 'text', required: true, colSpan: 2 },
-          { key: 'description', labelKey: 'lcs.fields.description', type: 'textarea', colSpan: 2, rows: 3 },
-          { key: 'supportEmail', labelKey: 'lcs.settings.supportEmail', type: 'text' },
-          { key: 'supportPhone', labelKey: 'lcs.settings.supportPhone', type: 'text' },
-          { key: 'website', labelKey: 'lcs.settings.website', type: 'url' },
-          { key: 'address', labelKey: 'lcs.settings.address', type: 'text' },
-          { key: 'footer.copyrightText', labelKey: 'lcs.settings.copyright', type: 'text', colSpan: 2 },
-          {
-            key: 'branding.primaryColor',
-            labelKey: 'lcs.settings.primaryColor',
-            type: 'color',
-          },
-          { key: 'branding.mainLogoUrl', labelKey: 'lcs.settings.logo', type: 'image', colSpan: 2 },
-        ],
-      },
-    ],
-  },
-]
 
 /** App Config tabs. */
 export const appConfigTabs: DocumentTabSchema[] = [
@@ -330,95 +300,3 @@ export const systemSettingsTabs: DocumentTabSchema[] = appConfigTabs
     })),
   }))
 
-const storageCommonFields = [
-  { key: 'name', labelKey: 'lcs.fields.name', type: 'text' as const, required: true },
-  { key: 'active', labelKey: 'lcs.status.active', type: 'boolean' as const },
-  {
-    key: 'accessMode',
-    labelKey: 'lcs.settings.accessMode',
-    type: 'select' as const,
-    options: [
-      { label: 'Private', value: 'private' },
-      { label: 'Public', value: 'public' },
-    ],
-  },
-  { key: 'maxFileSizeMb', labelKey: 'lcs.config.maxFileSizeMb', type: 'number' as const },
-  { key: 'allowedFileTypes', labelKey: 'lcs.config.allowedExtensions', type: 'csv-list' as const, colSpan: 2 as const },
-  { key: 'uploadPathPattern', labelKey: 'lcs.settings.uploadPathPattern', type: 'text' as const, colSpan: 2 as const },
-]
-
-const storageConnectionField = {
-  key: '__storageConnection',
-  labelKey: 'lcs.connection.title',
-  type: 'connection-status' as const,
-  colSpan: 2 as const,
-}
-
-/** Storage settings — S3 and Google Drive only. */
-export const storageSettingsTabs: DocumentTabSchema[] = [
-  {
-    id: 'amazon_s3',
-    labelKey: 'lcs.settings.storageTabs.amazonS3',
-    sections: [
-      {
-        id: 's3-connection',
-        titleKey: 'lcs.settings.connectionSettings',
-        fields: [
-          {
-            key: 'region',
-            labelKey: 'lcs.settings.region',
-            type: 'select',
-            required: true,
-            options: AWS_REGION_OPTIONS,
-          },
-          { key: 'bucket', labelKey: 'lcs.settings.bucket', type: 'text', required: true },
-          { key: 'endpoint', labelKey: 'lcs.settings.endpoint', type: 'text', colSpan: 2 },
-          { key: 'publicUrl', labelKey: 'lcs.settings.publicUrl', type: 'url', colSpan: 2 },
-          { key: 'accessKey', labelKey: 'lcs.settings.accessKey', type: 'text', required: true },
-          { key: 'secretKey', labelKey: 'lcs.settings.secretKey', type: 'secret', required: true },
-        ],
-      },
-      {
-        id: 's3-options',
-        titleKey: 'lcs.settings.tabs.general',
-        fields: [...storageCommonFields],
-      },
-      {
-        id: 's3-status',
-        titleKey: 'lcs.connection.title',
-        fields: [storageConnectionField],
-      },
-    ],
-  },
-  {
-    id: 'google_drive',
-    labelKey: 'lcs.settings.storageTabs.googleDrive',
-    sections: [
-      {
-        id: 'drive-connection',
-        titleKey: 'lcs.settings.connectionSettings',
-        fields: [
-          { key: 'clientId', labelKey: 'lcs.settings.clientId', type: 'text', required: true, colSpan: 2 },
-          { key: 'clientSecret', labelKey: 'lcs.settings.clientSecret', type: 'secret', required: true, colSpan: 2 },
-          { key: 'folderId', labelKey: 'lcs.settings.folderId', type: 'text', required: true },
-          {
-            key: 'syncSchedule',
-            labelKey: 'lcs.settings.syncSchedule',
-            type: 'select',
-            options: SYNC_SCHEDULE_OPTIONS,
-          },
-        ],
-      },
-      {
-        id: 'drive-options',
-        titleKey: 'lcs.settings.tabs.general',
-        fields: [...storageCommonFields],
-      },
-      {
-        id: 'drive-status',
-        titleKey: 'lcs.connection.title',
-        fields: [storageConnectionField],
-      },
-    ],
-  },
-]

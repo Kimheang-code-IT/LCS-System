@@ -17,7 +17,3 @@ export function tableRowInitials(row: Record<string, unknown>) {
   const letters = parts.slice(0, 2).map(part => part[0]).join('')
   return (letters || 'S').toUpperCase()
 }
-
-export function tableRowActorName(row: Record<string, unknown>) {
-  return String(row.assignedStaff || row.updatedBy || row.createdBy || row.user || row.contact || '')
-}

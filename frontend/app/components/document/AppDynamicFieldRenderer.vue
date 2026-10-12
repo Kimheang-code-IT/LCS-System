@@ -33,6 +33,7 @@ const props = defineProps<{
   field: DocumentFieldSchema
   modelValue: unknown
   disabled?: boolean
+  fieldErrors?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -41,6 +42,8 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 const { loadReferenceOptions } = useReferenceOptions()
+
+const fieldError = computed(() => props.fieldErrors?.[props.field.key])
 
 const hintOpen = ref(false)
 
@@ -736,6 +739,7 @@ function removeDestination(id: string) {
   <UFormField
     v-else-if="isBoolean"
     :help="helpText"
+    :error="fieldError"
   >
     <div class="flex min-h-11 flex-wrap items-center gap-2 pt-1">
       <UCheckbox
@@ -786,6 +790,7 @@ function removeDestination(id: string) {
     v-else
     :label="labelText"
     :required="field.required"
+    :error="fieldError"
     :help="field.type === 'textarea' && textareaHelp ? textareaHelp : helpText"
   >
     <div class="flex items-start gap-1.5">

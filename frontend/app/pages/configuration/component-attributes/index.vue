@@ -1,23 +1,29 @@
 <script setup lang="ts">
-import type { ComponentAttribute } from '~/types/component-config'
+import type { ComponentAttribute, ComponentDataType } from '~/types/component-config'
 import type { SaveGridChange } from '~/types/save-grid'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
 import {
-  blankComponentAttributeRow,
   componentAttributeColumns,
   componentAttributePayload,
   componentAttributeRows,
   componentConfigTable,
   componentDataTypeItems,
-  componentReferenceTypeItems,
 } from '~/utils/freight/component-config-tables'
-import { createClientId } from '~/utils/client-id'
 
 definePageMeta({
   titleKey: 'freight.pages.componentAttributes',
   permission: 'configuration.manage',
 })
+
+type AttributeDataType = Exclude<ComponentDataType, 'reference'>
+
+type AttributeDraft = {
+  label: string
+  dataType: AttributeDataType
+  isRequired: boolean
+  helpText: string
+}
 
 const { t } = useI18n()
 const toast = useToast()
@@ -27,19 +33,20 @@ const config = useComponentConfig()
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
 
 /**
- * Rows the grid edits. Kept locally so "Add attribute" and a cell edit are the
- * same kind of change; `syncRows` reseeds it from the API after every save.
+ * Rows the grid edits. Kept locally so a cell edit is stored until Save;
+ * `syncRows` reseeds it from the API after every save. Creation happens in a
+ * dialog instead of a blank grid row.
  */
 const gridRows = ref<Array<Record<string, unknown>>>([])
 
 const table = computed(() => componentConfigTable({
   key: 'componentAttributes',
   title: t('freight.pages.componentAttributes'),
+  hideTitle: true,
+  hideAddRow: true,
   columns: componentAttributeColumns().map(column => (column.key === 'dataType'
     ? { ...column, optionItems: componentDataTypeItems() }
-    : column.key === 'referenceType'
-      ? { ...column, optionItems: componentReferenceTypeItems() }
-      : column)),
+    : column)),
 }))
 
 function syncRows() {
@@ -53,12 +60,40 @@ async function refresh() {
 
 onMounted(refresh)
 
+// --- Create dialog -----------------------------------------------------------
+const dialogOpen = ref(false)
+const draft = ref<AttributeDraft>({
+  label: '',
+  dataType: 'text',
+  isRequired: false,
+  helpText: '',
+})
+
 function startAdd() {
-  gridRows.value = [{ ...blankComponentAttributeRow(), id: createClientId('new') }, ...gridRows.value]
+  draft.value = { label: '', dataType: 'text', isRequired: false, helpText: '' }
+  dialogOpen.value = true
+}
+
+async function submitAdd() {
+  const payload = componentAttributePayload({ ...draft.value } as Record<string, unknown>, slugify(draft.value.label))
+  if (!payload.label) {
+    toast.add({ title: 'Label is required.', color: 'error' })
+    return
+  }
+  try {
+    await config.createAttribute(payload)
+    dialogOpen.value = false
+    toast.add({ title: t('freight.ui.save'), color: 'success' })
+    await config.loadAttributes(true)
+    syncRows()
+  }
+  catch {
+    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  }
 }
 
 async function remove(attribute: ComponentAttribute) {
-  const accepted = await confirm({ kind: 'delete', descriptionKey: 'freight.ui.delete', descriptionParams: { name: attribute.label } })
+  const accepted = await confirm({ kind: 'delete', descriptionKey: 'freight.ui.deleteComponentConfirm', descriptionParams: { name: attribute.label } })
   if (!accepted) return false
   const result = await config.deleteAttribute(attribute.id)
   toast.add({ title: result.archived ? t('freight.ui.archived') : t('actions.delete'), color: result.archived ? 'warning' : 'success' })
@@ -77,9 +112,8 @@ async function save(change: SaveGridChange) {
       const saved = savedById.get(id)
       const payload = componentAttributePayload(row, slugify(String(row.label ?? '')))
       if (!payload.label) continue
-      // `code` is immutable once created, so new rows send it and edits keep it.
+      // `code` is immutable once created, so edits keep it.
       if (saved) await config.updateAttribute(id, { ...payload, code: saved.code })
-      else await config.createAttribute(payload)
     }
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     await config.loadAttributes(true)
@@ -107,5 +141,38 @@ async function save(change: SaveGridChange) {
       :rows="gridRows"
       :saving="config.saving.value"
       @save="save" />
+
+    <CommonAppEntityDialog
+      v-model:open="dialogOpen"
+      title="Add attribute"
+      :saving="config.saving.value"
+      confirm-label="Create"
+      @confirm="submitAdd"
+    >
+      <div class="space-y-4">
+        <UFormField label="Label" required>
+          <UInput
+            v-model="draft.label"
+            placeholder="e.g. Container No."
+            class="w-full"
+          />
+        </UFormField>
+        <UFormField label="Type">
+          <USelect
+            v-model="draft.dataType"
+            :items="componentDataTypeItems()"
+            class="w-full"
+          />
+        </UFormField>
+        <UFormField label="Help text" help="Shown below the field to guide the user.">
+          <UInput
+            v-model="draft.helpText"
+            placeholder="e.g. Enter the shipping container number"
+            class="w-full"
+          />
+        </UFormField>
+        <UCheckbox v-model="draft.isRequired" label="Required" />
+      </div>
+    </CommonAppEntityDialog>
   </div>
 </template>

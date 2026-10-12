@@ -40,6 +40,8 @@ async def get_current_context(
         raise AuthRequired("User not found.")
     if str(user.status or "").upper() not in {"ACTIVE"}:
         raise AuthRequired("This account is not active.")
+    if int(payload.get("tv", 0)) != int(getattr(user, "token_version", 0) or 0):
+        raise AuthRequired("Session has been revoked. Please sign in again.")
     request_id = getattr(request.state, "request_id", None) or payload.get("jti", "")
     context = await auth_service.build_context(
         session,
@@ -58,8 +60,11 @@ async def get_optional_context(
     authorization: str | None = Header(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> RequestContext | None:
-    if not authorization:
-        return None
+    """Resolve the caller when possible, falling back to the access cookie.
+
+    Returns ``None`` when neither a bearer token nor a valid cookie session is
+    present (or the access token is expired/revoked).
+    """
     try:
         return await get_current_context(request, authorization, session)
     except HTTPException:
@@ -67,13 +72,27 @@ async def get_optional_context(
 
 
 def require_permission(code: str) -> Callable[..., RequestContext]:
-    async def dependency(context: RequestContext = Depends(get_current_context)) -> RequestContext:
+    async def dependency(
+        context: RequestContext = Depends(get_current_context),
+        session: AsyncSession = Depends(get_session),
+    ) -> RequestContext:
         if not context.has_permission(code):
+            # Permission denials happen before the route handler, so record them
+            # here; otherwise direct API bypass attempts would leave no trace.
+            from app.modules.audit.service import write_audit
+
+            await write_audit(
+                session,
+                context,
+                event_type="AUTHORIZATION_DENIED",
+                entity_type="permission",
+                entity_id=0,
+                action=code,
+                result="REJECTED",
+                reason=f"Missing permission: {code}",
+            )
+            await session.commit()
             raise AccessDenied(f"Missing permission: {code}")
         return context
 
     return dependency
-
-
-CurrentContext = Depends(get_current_context)
-SessionDep = Depends(get_session)

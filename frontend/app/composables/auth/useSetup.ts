@@ -5,6 +5,7 @@ export type SetupInput = {
   password: string
   name?: string
   username?: string
+  setupToken?: string
 }
 
 function payloadOf(response: unknown): Record<string, unknown> {
@@ -16,7 +17,7 @@ function payloadOf(response: unknown): Record<string, unknown> {
 }
 
 /**
- * First-run provisioning. `/api/v1/setup/status` is public; `initialize` is
+ * First-run provisioning. `/api/v1/auth/setup/status` is public; `initialize` is
  * accepted only while the database has no user account.
  *
  * Uses raw `$fetch` (not `useApi`) on purpose: the global route middleware calls

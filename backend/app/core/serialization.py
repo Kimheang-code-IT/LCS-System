@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
-
-_CAMEL_RE1 = re.compile(r"(.)([A-Z][a-z]+)")
-_CAMEL_RE2 = re.compile(r"([a-z0-9])([A-Z])")
 
 
 def to_camel(name: str) -> str:
@@ -14,11 +10,6 @@ def to_camel(name: str) -> str:
         return name
     first, *rest = name.split("_")
     return first + "".join(part.capitalize() for part in rest)
-
-
-def to_snake(name: str) -> str:
-    s1 = _CAMEL_RE1.sub(r"\1_\2", name)
-    return _CAMEL_RE2.sub(r"\1_\2", s1).lower()
 
 
 def jsonable(value: Any) -> Any:

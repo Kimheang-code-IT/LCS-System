@@ -1,5 +1,3 @@
-import { resolveComponentInstanceMode } from '~/utils/freight/component-instance-mode'
-
 /** Core service-order tabs are fixed Vue sections. Extra tabs come from Component Groups. */
 
 export const JOB_FIXED_WORKSPACE_SECTIONS = ['overview', 'route', 'containers'] as const
@@ -120,18 +118,6 @@ export function jobWorkspaceSectionList(
   ]
 }
 
-export function groupCodeForSection(section: string, groups: Array<Record<string, unknown>> = []) {
-  const matched = groups.find(group => componentGroupTabId(group) === section)
-  if (matched) return String(matched.code || '').trim().toUpperCase()
-  return section.trim().toUpperCase().replace(/-/g, '_')
-}
-
-export function groupForSection(section: string, groups: Array<Record<string, unknown>> = []) {
-  return groups.find(group => componentGroupTabId(group) === section)
-    || groups.find(group => String(group.code || '').trim().toUpperCase() === groupCodeForSection(section, groups))
-    || null
-}
-
 export function resolveGroupTemplate(params: {
   group: Record<string, unknown> | null
   templates: Array<Record<string, unknown>>
@@ -166,22 +152,6 @@ export function resolveGroupTemplate(params: {
     normalizeMatch(row.group) === normalizeMatch(group.code)
     || normalizeMatch(row.group) === normalizeMatch(group.name),
   ) || null
-}
-
-export function assignmentForGroup(params: {
-  group: Record<string, unknown> | null
-  assignments?: Array<Record<string, unknown>>
-  direction?: string
-}) {
-  if (!params.group) return null
-  return (params.assignments || [])
-    .filter(isActiveAssignment)
-    .filter(row => assignmentMatchesDirection(row, params.direction) && groupMatchesAssignment(params.group!, row))
-    .sort((a, b) => Number(a.displayOrder || 0) - Number(b.displayOrder || 0))[0] || null
-}
-
-export function isRepeatableComponent(assignment: Record<string, unknown> | null, template: Record<string, unknown> | null) {
-  return resolveComponentInstanceMode(assignment, template) === 'REPEATABLE'
 }
 
 export function jobWorkspaceSectionIcon(id: string) {

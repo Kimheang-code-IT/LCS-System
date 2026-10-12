@@ -38,19 +38,6 @@ export function serviceChargeAmounts(row: ServiceChargeRow) {
   return { quantity, unitPrice, discount, taxRate, taxAmount }
 }
 
-export function blankServiceChargeRow(): ServiceChargeRow {
-  return {
-    description: '',
-    documentDate: new Date().toISOString().slice(0, 10),
-    documentType: 'SERVICE_NOTE',
-    status: 'DRAFT',
-    quantity: 1,
-    unitPrice: 0,
-    taxRate: 0,
-    taxAmount: 0,
-  }
-}
-
 export function serviceChargeToRow(charge: FreightRecord): ServiceChargeRow {
   const line = firstFeeLine(charge as ServiceChargeRow)
   return {
@@ -91,19 +78,9 @@ export function serviceChargePayload(row: ServiceChargeRow, currency: string) {
   }
 }
 
-export type ServiceChargePayload = ReturnType<typeof serviceChargePayload>
-
 /** A charge with no description cannot be created — the backend requires one. */
 export function serviceChargeIsCreatable(row: ServiceChargeRow): boolean {
   return Boolean(String(row.description || '').trim())
-}
-
-/**
- * Only a DRAFT charge may change, and only its own line values plus the date —
- * the backend never rewrites an issued charge's totals.
- */
-export function serviceChargeIsMutable(row: ServiceChargeRow): boolean {
-  return isDeletableCharge(row)
 }
 
 export function serviceChargeColumns(): FreightLineColumn[] {

@@ -15,9 +15,3 @@ export function outstandingOf(row: FreightRecord) {
   const allocated = Number(row.allocatedAmount || 0)
   return Math.max(total - allocated, 0)
 }
-
-/** Amount already allocated/paid on one document (total − outstanding). */
-export function paidAmountOf(row: FreightRecord) {
-  if (row.outstanding != null) return Math.max(Number(row.total || row.amount || 0) - Number(row.outstanding || 0), 0)
-  return Number(row.allocatedAmount || 0)
-}

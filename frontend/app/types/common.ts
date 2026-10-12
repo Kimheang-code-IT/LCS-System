@@ -26,35 +26,6 @@ export interface ApiResponse<T> {
   errors?: ApiErrorItem[]
 }
 
-export interface GroupCountSummary {
-  total: number
-  unassigned: number
-  groups: Record<string, number>
-}
-
-export interface ListQuery {
-  q?: string
-  page?: number
-  limit?: number
-  sort?: string
-  view?: EntityView
-  stage?: string
-  status?: string
-  startDate?: string
-  endDate?: string
-  [key: string]: string | number | boolean | undefined
-}
-
-export interface WorkflowStage {
-  id: string
-  code: string
-  labelKey: string
-  /** Literal configured label; preferred over labelKey for user-defined stages. */
-  label?: string
-  order: number
-  color?: string
-}
-
 export interface EntityComment {
   id: string
   entityType: string
@@ -63,17 +34,6 @@ export interface EntityComment {
   author: PersonSummary
   createdAt: string
   editedAt?: string
-}
-
-export type EntityView = 'table' | 'kanban' | 'hierarchy' | 'timeline'
-
-export interface EntityRecordNeighbors {
-  previousId: string | null
-  nextId: string | null
-}
-
-export interface EntityFavoriteState {
-  isFavorite: boolean
 }
 
 export interface ActivityEvent {
@@ -194,27 +154,6 @@ export interface DocumentTabSchema {
   /** Literal tab label (used when text is not an i18n key). */
   label?: string
   sections: DocumentSectionSchema[]
-}
-
-export interface TableColumnDef {
-  key: string
-  labelKey: string
-  sortable?: boolean
-  width?: string
-  priority?: 'high' | 'medium' | 'low'
-  /** How the cell should render. Defaults are inferred from the key when omitted. */
-  cell?: 'text' | 'badge' | 'datetime' | 'person'
-}
-
-export interface FilterDef {
-  key: string
-  labelKey: string
-  type: 'select' | 'multiselect' | 'boolean' | 'date' | 'daterange'
-  options?: FieldOption[]
-  /** Custom start query key for daterange type (defaults to 'startDate'). */
-  startKey?: string
-  /** Custom end query key for daterange type (defaults to 'endDate'). */
-  endKey?: string
 }
 
 export type EntityStatus = 'draft' | 'active' | 'archived' | 'deleted' | 'disabled' | 'pending' | 'completed' | 'failed'

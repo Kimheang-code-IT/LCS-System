@@ -15,6 +15,7 @@ from datetime import datetime
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.locks import advisory_lock
 from app.modules.backup import service
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,16 @@ async def maybe_run_due() -> None:
         now = service.utcnow()
         if not _is_due(str(config.get("lastRunAt") or ""), interval, now):
             return
-        try:
-            await service.run_now(session, trigger="scheduled")
-        except Exception as exc:  # noqa: BLE001 - scheduler must keep running
-            logger.warning("Scheduled backup failed: %s", exc)
+        # PostgreSQL advisory lock: when several API replicas run the scheduler,
+        # only the replica that wins the lock performs the scheduled run.
+        async with advisory_lock(session, "backup:scheduled") as acquired:
+            if not acquired:
+                logger.debug("Scheduled backup skipped: another replica holds the lock.")
+                return
+            try:
+                await service.run_now(session, trigger="scheduled")
+            except Exception as exc:  # noqa: BLE001 - scheduler must keep running
+                logger.warning("Scheduled backup failed: %s", exc)
 
 
 async def _loop() -> None:

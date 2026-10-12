@@ -56,6 +56,7 @@ export function useApi() {
     const { $i18n } = useNuxtApp()
     const t = $i18n.t
     const config = useRuntimeConfig()
+    const bearerMode = String(config.public.authMode) === 'bearer'
     const authStore = useAuthStore()
     const activeRequests = ref(0)
     const pending = computed(() => activeRequests.value > 0)
@@ -96,9 +97,9 @@ export function useApi() {
                         },
                     },
                 )
-                const token = response?.data?.access_token
-                if (!token) return false
-                authStore.setTokens(token, response?.data?.refresh_token ?? null)
+                const token = response?.data?.access_token ?? null
+                if (bearerMode && !token) return false
+                if (bearerMode) authStore.setTokens(token, response?.data?.refresh_token ?? null)
                 return true
             }
             catch {
@@ -143,7 +144,7 @@ export function useApi() {
                 let requiresSetup = false
                 try {
                     const status = await $fetch<{ data?: { requiresSetup?: boolean } }>(
-                        '/api/v1/setup/status',
+                        '/api/v1/auth/setup/status',
                         { baseURL, timeout: 10000 },
                     )
                     requiresSetup = Boolean(status?.data?.requiresSetup)
@@ -185,7 +186,7 @@ export function useApi() {
                 credentials: 'include',
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
+                    ...(bearerMode && authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
                     ...csrfRequestHeaders(
                         method,
                         String(config.public.csrfCookieName),

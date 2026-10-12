@@ -51,19 +51,3 @@ async def allocate_number(
     number = f"{sequence.prefix}{period_year}-{str(sequence.last_value).zfill(sequence.padding_length)}"
     await session.flush()
     return number
-
-
-async def preview_number(session: AsyncSession, document_type: str, year: int | None = None) -> str:
-    period_year = year or datetime.now(UTC).year
-    sequence = (
-        await session.execute(
-            select(DocumentSequence).where(
-                DocumentSequence.document_type == document_type,
-                DocumentSequence.period_year == period_year,
-            )
-        )
-    ).scalars().first()
-    prefix = sequence.prefix if sequence else DEFAULT_PREFIXES.get(document_type, document_type[:2])
-    padding = sequence.padding_length if sequence else 6
-    last = sequence.last_value if sequence else 0
-    return f"{prefix}{period_year}-{str(last + 1).zfill(padding)}"

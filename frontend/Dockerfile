@@ -14,7 +14,11 @@ WORKDIR /app
 # Dependency layer (cached): only the manifests, so it survives source changes.
 # --ignore-scripts skips the root "nuxt prepare" postinstall, which needs the
 # application source that is copied afterwards.
-COPY package.json pnpm-lock.yaml ./
+# .pnpmfile.cjs, pnpm-workspace.yaml and patches/ must be present here: the
+# lockfile pins their checksums, and the frozen install applies the pnpm hook
+# (.pnpmfile.cjs strips Tiptap) and the @nuxt/devtools patch before resolving.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # Application source.
@@ -24,8 +28,10 @@ COPY . .
 # (e.g. NUXT_PUBLIC_SITE_URL=https://lcslog.minidev.in).
 ARG NUXT_PUBLIC_SITE_URL=""
 ARG NUXT_PUBLIC_AUTH_MODE="cookie"
+ARG NUXT_PUBLIC_CSRF_COOKIE_NAME="XSRF-TOKEN"
 ENV NUXT_PUBLIC_SITE_URL=$NUXT_PUBLIC_SITE_URL \
-    NUXT_PUBLIC_AUTH_MODE=$NUXT_PUBLIC_AUTH_MODE
+    NUXT_PUBLIC_AUTH_MODE=$NUXT_PUBLIC_AUTH_MODE \
+    NUXT_PUBLIC_CSRF_COOKIE_NAME=$NUXT_PUBLIC_CSRF_COOKIE_NAME
 
 RUN pnpm exec nuxt prepare
 RUN pnpm generate

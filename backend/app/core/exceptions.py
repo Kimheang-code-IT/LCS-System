@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import HTTPException, status
 
 
@@ -50,7 +48,3 @@ class InvalidState(DomainError):
 class ValidationFailed(DomainError):
     def __init__(self, message: str, field_errors: dict[str, str] | None = None) -> None:
         super().__init__("VALIDATION_ERROR", message, status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, field_errors=field_errors)
-
-
-def error_payload(code: str, message: str, request_id: str | None, field_errors: dict[str, Any] | None = None) -> dict[str, Any]:
-    return {"code": code, "message": message, "request_id": request_id or "", "field_errors": field_errors or {}}

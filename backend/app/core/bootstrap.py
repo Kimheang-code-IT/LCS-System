@@ -24,8 +24,9 @@ from app.core.permissions import (
     ROLE_DEFINITIONS,
     permission_name,
 )
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_password_strength
 from app.modules.auth.models import (
+    PROTECTED_SYSTEM_ADMIN_IDENTITY,
     Permission,
     Role,
     RolePermission,
@@ -71,6 +72,9 @@ async def ensure_permission_catalog(
             session.add(role)
             await session.flush()
             roles[code] = role
+        else:
+            role.is_system_role = True
+            role.status = "ACTIVE"
         current = set(
             (
                 await session.execute(
@@ -86,6 +90,29 @@ async def ensure_permission_catalog(
             pid = permission_ids.get(code_to_add)
             if pid is not None:
                 session.add(RolePermission(role_id=role.id, permission_id=pid))
+
+    protected_user = (
+        await session.execute(
+            select(User).where(User.system_identity == PROTECTED_SYSTEM_ADMIN_IDENTITY)
+        )
+    ).scalars().first()
+    platform_role = roles.get("PLATFORM_ADMIN")
+    if protected_user is not None and platform_role is not None:
+        protected_user.status = "ACTIVE"
+        active_assignments = (
+            await session.execute(
+                select(UserRoleAssignment).where(
+                    UserRoleAssignment.user_id == protected_user.id,
+                    UserRoleAssignment.expires_at.is_(None),
+                )
+            )
+        ).scalars().all()
+        if not any(assignment.role_id == platform_role.id for assignment in active_assignments):
+            now = datetime.now(UTC)
+            for assignment in active_assignments:
+                assignment.expires_at = now
+            await session.flush()
+            session.add(UserRoleAssignment(user_id=protected_user.id, role_id=platform_role.id))
     await session.commit()
 
 
@@ -166,7 +193,10 @@ async def provision_admin(
     user_code: str | None = None,
     role_code: str = "PLATFORM_ADMIN",
 ) -> dict[str, Any]:
-    """Create/refresh the baseline admin. Raises ``ValueError`` on unknown role."""
+    """Create/refresh the baseline admin. Raises ``ValueError`` on invalid input."""
+    password_errors = validate_password_strength(password)
+    if password_errors:
+        raise ValueError(password_errors[0])
     username = username or email.split("@")[0]
     user_code = user_code or username.upper().replace(".", "-")[:50]
     display_name = name or username.replace(".", " ").title()
@@ -180,13 +210,27 @@ async def provision_admin(
     user = (
         await session.execute(select(User).where((User.email == email) | (User.username == username)))
     ).scalars().first()
+    protected_exists = await session.scalar(
+        select(func.count()).select_from(User).where(
+            User.system_identity == PROTECTED_SYSTEM_ADMIN_IDENTITY,
+        )
+    )
     if user is None:
-        user = User(user_code=user_code, username=username, email=email, display_name=display_name, status="ACTIVE")
+        user = User(
+            user_code=user_code,
+            username=username,
+            email=email,
+            display_name=display_name,
+            status="ACTIVE",
+            system_identity=PROTECTED_SYSTEM_ADMIN_IDENTITY if not protected_exists else None,
+        )
         session.add(user)
         await session.flush()
         user_created = True
     else:
         user_created = False
+        if not protected_exists:
+            user.system_identity = PROTECTED_SYSTEM_ADMIN_IDENTITY
 
     credential = (await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))).scalars().first()
     if credential is None:
@@ -217,7 +261,12 @@ async def provision_admin(
 
 
 async def reset_all_data(session: AsyncSession) -> None:
-    """Delete every row (business data, users, config) — back to setup-required."""
+    """Reset business data while preserving identities and security history.
+
+    Authentication/RBAC tables are deliberately excluded: an administrative
+    reset must never delete the protected System Administrator or reopen the
+    unauthenticated first-run setup flow.
+    """
     # Importing the model modules guarantees Base.metadata sees every table.
     import app.modules.archive.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
@@ -225,6 +274,19 @@ async def reset_all_data(session: AsyncSession) -> None:
     import app.modules.operations.models  # noqa: F401
     import app.modules.quotations.models  # noqa: F401
 
+    preserved_tables = {
+        "users",
+        "user_credentials",
+        "user_sessions",
+        "roles",
+        "permissions",
+        "role_permissions",
+        "user_role_assignments",
+        "audit_events",
+    }
     for table in reversed(Base.metadata.sorted_tables):
+        if table.name in preserved_tables:
+            continue
         await session.execute(delete(table))
+    await provision_baseline(session)
     await session.commit()

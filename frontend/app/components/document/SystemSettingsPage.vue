@@ -5,7 +5,6 @@ import type { ConnectionStatusFieldValue } from '~/types/common'
 import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
-import { useSetup } from '~/composables/auth/useSetup'
 import { useAppPageTitle } from '~/composables/layout/useAppPageTitle'
 import { getByPath, setByPath } from '~/utils/object-path'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
@@ -15,7 +14,7 @@ const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
-const setup = useSetup()
+const freight = useFreightStore()
 const canEdit = computed(() => auth.canAccessPage('settings.app_config.edit'))
 const canConfigure = computed(() => auth.canAccessPage('settings.app_config.configure'))
 const canReset = computed(() => auth.canAccessPage('settings.manage'))
@@ -98,10 +97,9 @@ async function submitReset() {
     await appConfig.resetData('RESET')
     resetOpen.value = false
     resetPhrase.value = ''
-    auth.clearSession()
-    await setup.refresh(true)
+    freight.reload()
+    await load()
     toast.add({ title: t('lcs.settings.resetDataDone'), color: 'success' })
-    await navigateTo('/auth/setup', { replace: true })
   }
   catch (error) {
     const message = error instanceof Error ? error.message : ''

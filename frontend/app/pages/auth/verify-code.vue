@@ -113,7 +113,11 @@ async function onResendCode() {
           otp
           required
           :aria-label="t('pages.forgetPassword.enterCode')"
-          class="justify-center"
+          class="w-full"
+          :ui="{
+            root: 'flex w-full gap-2',
+            base: 'h-12 w-full flex-1 text-xl md:text-xl',
+          }"
         />
       </UFormField>
 

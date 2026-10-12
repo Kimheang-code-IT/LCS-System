@@ -150,6 +150,7 @@ jobs:
           build-args: |
             NUXT_PUBLIC_SITE_URL=${{ vars.NUXT_PUBLIC_SITE_URL || 'https://lcslog.minidev.in' }}
             NUXT_PUBLIC_AUTH_MODE=cookie
+            NUXT_PUBLIC_CSRF_COOKIE_NAME=__Host-XSRF-TOKEN
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
@@ -227,8 +228,13 @@ jobs:
           POSTGRES_USER: ${{ vars.POSTGRES_USER || 'freight' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
           MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minioadmin' }}
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
+          S3_ACCESS_KEY: ${{ vars.S3_ACCESS_KEY || 'lcs-app' }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
           S3_BUCKET: ${{ vars.S3_BUCKET || 'freight-attachments' }}
           S3_REGION: ${{ vars.S3_REGION || 'us-east-1' }}
           S3_PUBLIC_ENDPOINT_URL: ${{ vars.S3_PUBLIC_ENDPOINT_URL || 'https://lcslog.minidev.in' }}
@@ -240,7 +246,7 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,SETUP_TOKEN,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
           script: |
             set -euo pipefail
             cd "$DEPLOY_DIR"
@@ -251,7 +257,7 @@ jobs:
 
             # Fail fast if required production values are missing, before any
             # container or volume is touched.
-            for name in POSTGRES_PASSWORD JWT_SECRET_KEY MINIO_ROOT_PASSWORD S3_PUBLIC_ENDPOINT_URL; do
+            for name in POSTGRES_PASSWORD JWT_SECRET_KEY CSRF_SECRET_KEY FIELD_ENCRYPTION_KEY SETUP_TOKEN MINIO_ROOT_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY S3_PUBLIC_ENDPOINT_URL; do
               eval "value=\"\${$name:-}\""
               if [ -z "$value" ]; then
                 echo "Missing required production value: $name" >&2
@@ -265,6 +271,10 @@ jobs:
             # Write the runtime .env atomically (0600). Values are passed as
             # printf arguments so their contents are never shell-expanded.
             ENV_FILE="$DEPLOY_DIR/.env"
+            PREVIOUS_IMAGE_TAG=""
+            if [ -f "$ENV_FILE" ]; then
+              PREVIOUS_IMAGE_TAG="$(sed -n 's/^IMAGE_TAG=//p' "$ENV_FILE" | head -n 1)"
+            fi
             umask 077
             TMP="$(mktemp "$DEPLOY_DIR/.env.XXXXXX")"
             trap 'rm -f "$TMP"' EXIT
@@ -283,8 +293,13 @@ jobs:
               write_kv POSTGRES_USER "$POSTGRES_USER"
               write_kv POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
               write_kv JWT_SECRET_KEY "$JWT_SECRET_KEY"
+              write_kv CSRF_SECRET_KEY "$CSRF_SECRET_KEY"
+              write_kv FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
+              write_kv SETUP_TOKEN "$SETUP_TOKEN"
               write_kv MINIO_ROOT_USER "$MINIO_ROOT_USER"
               write_kv MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
+              write_kv S3_ACCESS_KEY "$S3_ACCESS_KEY"
+              write_kv S3_SECRET_KEY "$S3_SECRET_KEY"
               write_kv S3_BUCKET "$S3_BUCKET"
               write_kv S3_REGION "$S3_REGION"
               write_kv S3_PUBLIC_ENDPOINT_URL "$S3_PUBLIC_ENDPOINT_URL"
@@ -312,6 +327,10 @@ jobs:
                 echo "PostgreSQL backup is empty; aborting deployment." >&2
                 exit 1
               fi
+              sha256sum "$BACKUP_FILE" > "$BACKUP_FILE.sha256"
+              find "$BACKUP_DIR" -maxdepth 1 -type f \
+                \( -name 'freight-*.dump' -o -name 'freight-*.dump.sha256' \) \
+                -mtime +30 -delete
               echo "Backup complete: $BACKUP_FILE"
             else
               echo "PostgreSQL is not running yet (first deployment); skipping backup."
@@ -334,4 +353,13 @@ jobs:
               sleep 4
             done
             echo "Application did not become healthy within the retry window." >&2
+            if [ -n "$PREVIOUS_IMAGE_TAG" ] && printf '%s' "$PREVIOUS_IMAGE_TAG" | grep -Eq '^sha-[0-9a-f]{7,40}$'; then
+              echo "Rolling back application images to $PREVIOUS_IMAGE_TAG"
+              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_IMAGE_TAG/" "$ENV_FILE"
+              export IMAGE_TAG="$PREVIOUS_IMAGE_TAG"
+              $COMPOSE pull
+              $COMPOSE up -d --remove-orphans
+            else
+              echo "No valid previous immutable image tag is available for automatic rollback." >&2
+            fi
             exit 1

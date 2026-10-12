@@ -34,8 +34,8 @@ const hasCustomAvatar = computed(() => Boolean(auth.user?.avatar))
 
 const passwordSchema = computed(() => z.object({
   currentPassword: z.string().min(1, { error: t('lcs.userProfile.currentPasswordRequired') }),
-  password: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
-  passwordConfirmation: z.string().min(6, { error: t('pages.forgetPassword.passwordMin') }),
+  password: z.string().min(12, { error: t('pages.forgetPassword.passwordMin') }),
+  passwordConfirmation: z.string().min(12, { error: t('pages.forgetPassword.passwordMin') }),
 }).refine(data => data.password === data.passwordConfirmation, {
   message: t('pages.forgetPassword.passwordMismatch'),
   path: ['passwordConfirmation'],

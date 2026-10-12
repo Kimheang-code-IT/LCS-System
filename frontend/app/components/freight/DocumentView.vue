@@ -6,6 +6,7 @@ import { useConfirm } from '~/composables/common/useConfirm'
 import { usePageSeo } from '~/composables/usePageSeo'
 import {
   asNumber,
+  defaultStatusForModule,
   emptyFreightRecord,
   formatMoney,
   statusColor,
@@ -23,6 +24,7 @@ import type { AppRolePermissionRow } from '~/types/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { recalculateFreightRecord } from '~/utils/freight/document-calculations'
 import { jobForQuotation } from '~/utils/freight/job-workspace'
+import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
 import { referenceOptionSource } from '~/utils/freight/reference-options'
 import {
   freightDocumentLineActionKey,
@@ -49,6 +51,7 @@ import { splitDocumentHeaderActions } from '~/utils/layout/document-header-actio
 import type { FreightAction } from '~/config/freight-modules'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useDocumentActions } from '~/composables/freight/useDocumentActions'
+import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 
@@ -70,6 +73,24 @@ const printOpen = ref(false)
 const model = ref<FreightRecord>({ id: '' } as FreightRecord)
 const originalModel = ref<FreightRecord | null>(null)
 const notFound = ref(false)
+const fieldErrors = ref<Record<string, string>>({})
+const revisionHistory = ref<Array<Record<string, unknown>>>([])
+
+/** Backend field errors may be snake_case (Pydantic); field keys are camelCase. */
+function normalizeFieldErrors(errors: Record<string, string> | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {}
+  for (const [key, message] of Object.entries(errors || {})) {
+    normalized[key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())] = message
+  }
+  return normalized
+}
+
+function clearFieldError(key: string) {
+  if (!fieldErrors.value[key]) return
+  fieldErrors.value = Object.fromEntries(
+    Object.entries(fieldErrors.value).filter(([fieldKey]) => fieldKey !== key),
+  )
+}
 
 const {
   commentBody,
@@ -145,16 +166,16 @@ watch(
   { immediate: true },
 )
 
-// User Code is read-only and auto-generated from the username.
+// User Code is editable; seed it from the username only while it is still empty.
 watch(
   [() => module.value?.collection, () => model.value.username],
   ([collection]) => {
     if (collection !== 'users') return
     const username = String(model.value.username || '').trim()
     const existing = String(model.value.userCode || '').trim()
-    if (!username || (!isCreate.value && existing)) return
+    if (!username || existing) return
     const generated = username.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
-    if (generated && generated !== existing) {
+    if (generated) {
       model.value = { ...model.value, userCode: generated }
     }
   },
@@ -277,33 +298,42 @@ const quotationDraftDirty = computed(() => {
   return quotationDraftSnapshot(model.value) !== quotationDraftSnapshot(originalModel.value)
 })
 
-// Simplified quotation flow: Save (create/edit/delete the draft) -> Accept,
-// which sends (when needed), accepts and converts to a service order in one go.
-// A dirty draft shows only Save; once saved it shows Accept. Editing again
-// hides Accept until the changes are saved.
+// Quotation workflow: Draft -> Sent (send) -> Accepted (accept) -> Service
+// Order (convert). Re-quotation clones the latest revision into a new draft.
+// A dirty draft only offers Save so every transition runs on persisted data.
+const quotationAvailability = computed(() => quotationActionAvailability(
+  model.value.status,
+  {
+    updateDraft: lcs.can('quotation.update_draft'),
+    send: lcs.can('quotation.send'),
+    accept: lcs.can('quotation.accept'),
+    convert: lcs.can('quotation.convert'),
+  },
+  { hasServiceOrder: Boolean(relatedServiceOrder()) },
+))
+
 const quotationHeaderActions = computed<FreightAction[]>(() => {
   if (module.value?.collection !== 'quotations') return []
   if (isCreate.value) {
     if (!lcs.can('quotation.create')) return []
     return [{ key: 'submitQuotation', label: 'Save', labelKm: 'រក្សាទុក', icon: 'i-lucide-save', color: 'primary' }]
   }
-  const status = quotationDomainStatus(model.value.status)
+  const availability = quotationAvailability.value
   const actions: FreightAction[] = []
-  if (status === 'DRAFT') {
-    if (quotationDraftDirty.value) {
-      if (lcs.can('quotation.update_draft')) {
-        actions.push({ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' })
-      }
+  if (availability.status === 'DRAFT' && quotationDraftDirty.value) {
+    if (availability.edit) {
+      actions.push({ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' })
     }
-    else if (lcs.can('quotation.send') && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
-      actions.push({ key: 'acceptJob', label: 'Accept', labelKm: 'ទទួលយក', icon: 'i-lucide-check', color: 'success' })
-    }
+    return actions
   }
-  if (status === 'SENT' && lcs.can('quotation.accept') && lcs.can('quotation.convert')) {
-    actions.push({ key: 'acceptJob', label: 'Accept', labelKm: 'ទទួលយក', icon: 'i-lucide-check', color: 'success' })
+  if (availability.send) {
+    actions.push({ key: 'send', label: t('freight.ui.send'), icon: 'i-lucide-send' })
   }
-  if (status === 'ACCEPTED' && lcs.can('quotation.convert')) {
-    actions.push({ key: 'convertJob', label: 'Convert to Service Order', labelKm: 'បម្លែងទៅបញ្ជាសេវាកម្ម', icon: 'i-lucide-arrow-right', color: 'primary' })
+  if (availability.accept) {
+    actions.push({ key: 'accept', label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success' })
+  }
+  if (availability.convert) {
+    actions.push({ key: 'convertJob', label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', color: 'primary' })
   }
   return actions
 })
@@ -371,6 +401,10 @@ const roleFieldOptions = computed(() => store.list('roles')
     value: String(role.code || role.name || ''),
   })))
 
+const protectedSystemRecord = computed(() =>
+  isProtectedManagementRecord(module.value?.collection, model.value),
+)
+
 const tabs = computed(() => {
   if (!module.value) return []
   const compiled = moduleDocumentTabs(module.value, {
@@ -383,10 +417,23 @@ const tabs = computed(() => {
       && (isCreate.value || String(model.value.status || 'Draft') === 'Draft'),
     readOnlyKeys: module.value.collection === 'documentSequences' && !isCreate.value
       ? ['documentType', 'year']
-      : [],
+      : module.value.collection === 'users' && model.value.isProtectedSystemAccount === true
+        ? ['role']
+        : [],
   })
+  if (module.value.collection === 'roles' && model.value.isSystemRole === true) {
+    return compiled.map(tab => ({
+      ...tab,
+      sections: tab.sections.map(section => ({
+        ...section,
+        fields: section.fields.map(field =>
+          field.key === 'permissionRows' ? { ...field, readOnly: true } : field,
+        ),
+      })),
+    }))
+  }
   if (module.value.collection !== 'users') return compiled
-  // Source the role field from existing roles so users pick instead of typing.
+  // Source the role field from existing roles so users pick one instead of typing.
   return compiled.map(tab => ({
     ...tab,
     sections: tab.sections.map(section => ({
@@ -471,31 +518,43 @@ function labeledTraceRows() {
 
 function tableRows(tableKey: string) {
   if (tableKey === 'sourceRelationships' && documentTrace()) return labeledTraceRows()
-  if (module.value?.collection !== 'quotations' || tableKey !== 'revisionHistory') {
-    return Array.isArray(model.value[tableKey])
-      ? model.value[tableKey] as Array<Record<string, unknown>>
-      : []
+  if (module.value?.collection === 'quotations' && tableKey === 'revisionHistory') {
+    if (revisionHistory.value.length) return revisionHistory.value
+    return [{
+      id: model.value.id,
+      revisionNo: model.value.revisionNo,
+      status: model.value.status,
+      quotationDate: model.value.date,
+      validUntil: model.value.validUntil,
+      currency: model.value.currency,
+      total: model.value.total,
+      isCurrent: true,
+    }]
   }
-  const quotationId = String(model.value.quotationId || model.value.id || '')
-  const revisions = store.list('quotations')
-    .filter(row => String(row.quotationId || row.id) === quotationId)
-    .map(row => String(row.id) === String(model.value.id) ? { ...row, ...model.value } : row)
-    .sort((a, b) => Number(b.revisionNo || 0) - Number(a.revisionNo || 0))
-  if (!revisions.some(row => String(row.id) === String(model.value.id))) revisions.unshift(model.value)
-  return revisions.map(row => ({
-    id: row.id,
-    revisionNo: row.revisionNo,
-    status: row.status,
-    quotationDate: row.date,
-    validUntil: row.validUntil,
-    currency: row.currency,
-    total: row.total,
-    createdBy: row.createdBy,
-    createdAt: row.createdAt,
-    sentAt: row.sentAt,
-    acceptedAt: row.acceptedAt,
-  }))
+  return Array.isArray(model.value[tableKey])
+    ? model.value[tableKey] as Array<Record<string, unknown>>
+    : []
 }
+
+/** Revision history is authoritative from the backend (all revisions, not just the latest). */
+async function loadRevisionHistory() {
+  if (module.value?.collection !== 'quotations' || isCreate.value || !model.value.id) {
+    revisionHistory.value = []
+    return
+  }
+  try {
+    revisionHistory.value = await lcs.quotations.listRevisions(String(model.value.quotationId || model.value.id))
+  }
+  catch {
+    revisionHistory.value = []
+  }
+}
+
+watch(
+  [() => module.value?.collection, () => model.value.id, () => model.value.revisionId, isCreate],
+  () => { void loadRevisionHistory() },
+  { immediate: true },
+)
 
 async function onLineRowAction(action: 'view', row: Record<string, unknown>) {
   if (action !== 'view' || !row.id) return
@@ -508,7 +567,18 @@ async function onLineRowAction(action: 'view', row: Record<string, unknown>) {
 }
 
 function relatedServiceOrder() {
-  return jobForQuotation(store.list('jobs'), model.value)
+  const jobs = store.list('jobs')
+  const linkedId = String(model.value.serviceOrderId || '').trim()
+  if (linkedId) {
+    const byId = jobs.find(row => String(row.id) === linkedId)
+    if (byId) return byId
+  }
+  const linkedNo = String(model.value.serviceOrderNo || '').trim()
+  if (linkedNo) {
+    const byNo = jobs.find(row => String(row.jobNo || '') === linkedNo)
+    if (byNo) return byNo
+  }
+  return jobForQuotation(jobs, model.value)
 }
 
 async function openRelatedServiceOrder() {
@@ -518,6 +588,22 @@ async function openRelatedServiceOrder() {
     return
   }
   await navigateTo(`/service-orders/${String(job.id)}`)
+}
+
+/** Quotation delete: guarded by status/permission and the backend link rule. */
+async function deleteQuotation() {
+  if (!quotationAvailability.value.delete || !model.value.id) return
+  const ok = await confirm({ kind: 'delete', count: 1 })
+  if (!ok) return
+  try {
+    await moduleRecord.remove([String(model.value.id)])
+    toast.add({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
+    await navigateTo('/quotations')
+  }
+  catch (error) {
+    if (!isLcsDomainError(error)) throw error
+    toast.add({ title: error.message, color: 'error' })
+  }
 }
 
 const documentActions = useDocumentActions({
@@ -562,20 +648,41 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   // Service charge pages: no overflow (⋯) actions.
   if (module.value?.collection === 'jobCharges') return []
   const items: DropdownMenuItem[] = []
-  if (module.value?.collection === 'quotations' && !isCreate.value && model.value.id && relatedServiceOrder()) {
-    items.push({
-      label: t('freight.ui.openServiceOrder'),
-      icon: 'i-lucide-briefcase',
-      onSelect: () => { void openRelatedServiceOrder() },
-    })
+  const isQuotation = module.value?.collection === 'quotations'
+  if (isQuotation && !isCreate.value && model.value.id) {
+    if (quotationAvailability.value.openServiceOrder) {
+      const serviceOrderNo = String(model.value.serviceOrderNo || '').trim()
+      items.push({
+        label: serviceOrderNo
+          ? `${t('freight.ui.openServiceOrder')} · ${serviceOrderNo}`
+          : t('freight.ui.openServiceOrder'),
+        icon: 'i-lucide-briefcase',
+        onSelect: () => { void openRelatedServiceOrder() },
+      })
+    }
+    if (quotationAvailability.value.revise) {
+      items.push({
+        label: t('freight.ui.requote'),
+        icon: 'i-lucide-git-branch',
+        onSelect: () => { void quotationCommands.createRevision() },
+      })
+    }
+    if (quotationAvailability.value.delete) {
+      items.push({
+        label: t('freight.ui.delete'),
+        icon: 'i-lucide-trash-2',
+        color: 'error' as const,
+        onSelect: () => { void deleteQuotation() },
+      })
+    }
   }
 
   for (const action of overflowHeaderActions.value) {
     items.push(headerActionMenuItem(action))
   }
 
-  if (canMutateRecord.value || (module.value?.collection === 'quotations' && !isCreate.value && Boolean(model.value.id))) {
-    if (canMutateRecord.value) {
+  if (!isQuotation && canMutateRecord.value) {
+    if (!protectedSystemRecord.value) {
       const status = String(model.value.status || '').trim().toUpperCase()
       if (status === 'ACTIVE' || status === 'INACTIVE') {
         const active = status === 'ACTIVE'
@@ -620,6 +727,11 @@ function setRolePermissions(rows: AppRolePermissionRow[]) {
 
 function setField(key: string, value: unknown) {
   const next: Record<string, unknown> = { ...model.value, [key]: value }
+  if (module.value?.collection === 'quotations' && key === 'customerPartyId') {
+    // Keep the denormalised company name in step with the selected party id.
+    const party = store.list('businessParties').find(row => String(row.id) === String(value))
+    next.customer = party ? String(party.legalName || party.name || '') : ''
+  }
   if (module.value?.collection === 'jobCharges' && key === 'jobNo') {
     const jobNo = String(value || '').trim()
     const job = jobNo
@@ -649,6 +761,7 @@ function fieldValue(key: string) {
 
 function setFieldValue(key: string, value: unknown) {
   if (key === RELATED_FIELD_KEY) return
+  clearFieldError(key)
   if (key === 'permissionRows') {
     setRolePermissions(value as AppRolePermissionRow[])
     return
@@ -686,6 +799,7 @@ function recalculate() {
 async function save(status?: string) {
   if (!module.value || readOnly.value) return
   saving.value = true
+  fieldErrors.value = {}
   try {
     recalculate()
     const payload = { ...model.value }
@@ -784,7 +898,7 @@ async function save(status?: string) {
     if (isCreate.value || !payload.id) {
       payload.createdAt ||= new Date().toISOString()
       payload.createdBy ||= String(currentUser.value?.name || 'Current User')
-      payload.status ||= module.value.collection === 'journals' ? 'DRAFT' : 'Draft'
+      payload.status ||= defaultStatusForModule(module.value)
       payload.currency ||= localization.value.currency
     }
     const isNew = isCreate.value || !payload.id
@@ -812,8 +926,15 @@ async function save(status?: string) {
     await navigateTo(module.value.path)
   }
   catch (error) {
-    if (isLcsDomainError(error)) toast.add({ title: error.message, color: 'error' })
-    else throw error
+    if (!isLcsDomainError(error)) throw error
+    const errors = normalizeFieldErrors(error.field_errors)
+    if (Object.keys(errors).length) {
+      // Show validation issues on the offending fields instead of a toast.
+      fieldErrors.value = errors
+    }
+    else {
+      toast.add({ title: error.message, color: 'error' })
+    }
   }
   finally {
     saving.value = false
@@ -845,7 +966,6 @@ async function runAction(key: string) {
     if (key === 'send' && module.value.collection === 'quotations') return quotationCommands.send()
     if (key === 'submit' && module.value.collection === 'quotations') return quotationCommands.submit()
     if (key === 'accept' && module.value.collection === 'quotations') return quotationCommands.accept()
-    if (key === 'acceptJob' && module.value.collection === 'quotations') return quotationCommands.acceptAndConvert()
     if ((key === 'reject' || key === 'cancel') && module.value.collection === 'quotations') {
       return quotationCommands.rejectOrCancel(key)
     }
@@ -904,6 +1024,7 @@ async function confirmReverse() {
       :set-field-value="setFieldValue"
 :saving="saving"
 :read-only="readOnly"
+:field-errors="fieldErrors"
       :can-save="!readOnly && module.collection !== 'quotations'"
       :save-label="documentSaveLabel"
       :confirm-save="false"

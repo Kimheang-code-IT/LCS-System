@@ -1,6 +1,6 @@
 %% Entity Relationship Diagram (generated from the SQLAlchemy models)
 %% Source of truth: backend/app/modules/*/models.py
-%% 64 tables. Organizations and branches were removed; access is user/role/permission based.
+%% 59 tables. Organizations and branches were removed; access is user/role/permission based.
 erDiagram
   %% ---------------------------------------------------------------
   %% Identity and access
@@ -29,18 +29,15 @@ erDiagram
   %% Master data and configuration
   %% ---------------------------------------------------------------
   PLACES ||--o{ PLACES : parent_of
-  BUSINESS_PARTIES ||--o{ PARTY_ROLES : has
-  BUSINESS_PARTIES ||--o{ PARTY_PLACES : operates_at
-  PLACES ||--o{ PARTY_PLACES : linked_to
   BUSINESS_PARTIES ||--o{ CUSTOMER_CUSTOMS_ACCOUNTS : holds
   TRANSPORT_TYPES ||--o{ TRANSPORT_ASSETS : classifies
   BUSINESS_PARTIES ||--o{ TRANSPORT_ASSETS : owns
   BUSINESS_PARTIES ||--o{ TRANSPORT_ASSETS : operates
-  COMPONENT_TEMPLATES ||--o{ TEMPLATE_ATTRIBUTES : defines
-  TRADE_DIRECTIONS ||--o{ TRADE_DIRECTION_COMPONENTS : configures
-  COMPONENT_GROUPS ||--o{ TRADE_DIRECTION_COMPONENTS : groups
-  COMPONENT_TEMPLATES ||--o{ TRADE_DIRECTION_COMPONENTS : selected
-  SERVICE_ORDER_TAB_CONFIGS ||--o{ SERVICE_ORDER_COLUMN_CONFIGS : defines
+  COMPONENT_GROUPS ||--o{ COMPONENT_GROUP_ATTRIBUTES : contains
+  COMPONENT_ATTRIBUTES ||--o{ COMPONENT_GROUP_ATTRIBUTES : referenced_by
+  TRADE_DIRECTIONS ||--o{ COMPONENT_TABS : configures
+  COMPONENT_TABS ||--o{ COMPONENT_TAB_GROUPS : composes
+  COMPONENT_GROUPS ||--o{ COMPONENT_TAB_GROUPS : included_in
 
   %% ---------------------------------------------------------------
   %% Quotations
@@ -77,20 +74,14 @@ erDiagram
   SERVICE_ORDER_PRICING ||--o{ SERVICE_ORDER_PRICING_LINES : contains
   FEE_TYPES ||--o{ SERVICE_ORDER_PRICING_LINES : classifies
   QUOTATION_REVISION_LINES ||--o{ SERVICE_ORDER_PRICING_LINES : source
-  SERVICE_ORDERS ||--o{ SERVICE_ORDER_COMPONENTS : contains
-  TRADE_DIRECTION_COMPONENTS ||--o{ SERVICE_ORDER_COMPONENTS : instantiates
-  COMPONENT_GROUPS ||--o{ SERVICE_ORDER_COMPONENTS : groups
-  COMPONENT_TEMPLATES ||--o{ SERVICE_ORDER_COMPONENTS : templates
-  SERVICE_ORDER_COMPONENTS ||--o{ SERVICE_COMPONENT_VALUES : stores
-  TEMPLATE_ATTRIBUTES ||--o{ SERVICE_COMPONENT_VALUES : validates
+  SERVICE_ORDERS ||--o{ SERVICE_ORDER_COMPONENT_ROWS : contains
+  COMPONENT_GROUPS ||--o{ SERVICE_ORDER_COMPONENT_ROWS : groups
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_MOVEMENTS : moves
   PLACES ||--o{ SERVICE_ORDER_MOVEMENTS : origin
   PLACES ||--o{ SERVICE_ORDER_MOVEMENTS : destination
   TRANSPORT_TYPES ||--o{ SERVICE_ORDER_MOVEMENTS : classifies
   TRANSPORT_ASSETS ||--o{ SERVICE_ORDER_MOVEMENTS : performs
   SERVICE_ORDERS ||--o{ SERVICE_ORDER_MILESTONES : tracks
-  SERVICE_ORDERS ||--o{ SERVICE_ORDER_TAB_ROWS : has
-  SERVICE_ORDER_TAB_CONFIGS ||--o{ SERVICE_ORDER_TAB_ROWS : defines
 
   %% ---------------------------------------------------------------
   %% Service charges (commercial, no journal)

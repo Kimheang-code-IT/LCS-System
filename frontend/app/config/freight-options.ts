@@ -1,7 +1,4 @@
-export const DIRECTIONS = ['Import', 'Export', 'Transit', 'Re-export'] as const
 export const CURRENCIES = ['USD', 'KHR', 'VND'] as const
-export const TIMEZONES = ['Asia/Phnom_Penh', 'Asia/Ho_Chi_Minh', 'Asia/Bangkok', 'UTC'] as const
-export const CONTAINER_TYPES = ['20GP', '40GP', '40HC', '45GP', '45HC'] as const
 export const CONTAINER_STATUSES = ['Expected', 'Planned', 'Loaded', 'In Transit', 'Delivered', 'Returned'] as const
 export const TRUCK_TYPES = ['1.5T', '2T', '3.5T', '5T', '8T'] as const
 export const TRANSPORT_MODES = ['Road', 'Sea', 'Air', 'Rail'] as const
@@ -95,14 +92,7 @@ export const QUOTATION_CONDITIONS = [
   'Fuel Surcharge',
 ] as const
 
-export const LOCATION_TYPES = ['Port', 'Border', 'Factory', 'Yard', 'Warehouse', 'City'] as const
-export const EQUIPMENT_CATEGORIES = ['Container', 'Truck'] as const
-export const CHARGE_CATEGORIES = ['Customs', 'Trucking', 'Vietnam', 'Cambodia', 'Port', 'Other'] as const
-export const COUNTRIES = ['Cambodia', 'Vietnam'] as const
-
-export const PLACE_CATEGORIES = ['Administrative', 'Port', 'Border Checkpoint', 'SEZ', 'Factory', 'Yard', 'Warehouse', 'City'] as const
-export const TRANSPORT_TYPES = ['Truck', 'Vessel', 'Air', 'Rail', 'Multimodal'] as const
-export const PARTY_ROLES = ['Customer', 'Supplier', 'Carrier', 'Customs Broker', 'Transport Operator'] as const
+export const PARTY_ROLES = ['Customer', 'Supplier', 'Company'] as const
 export const ACCOUNT_TYPES = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'] as const
 export const PERIOD_STATUS = ['OPEN', 'CLOSED'] as const
 export const COMPONENT_INSTANCE_MODES = ['SINGLE', 'REPEATABLE'] as const

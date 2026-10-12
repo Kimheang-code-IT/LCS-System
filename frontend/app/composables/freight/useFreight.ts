@@ -1,7 +1,7 @@
 import { h } from 'vue'
 import { UBadge } from '#components'
 import type { AppHeaderBadge } from '~/composables/layout/useAppHeader'
-import type { FreightAction, FreightField, FreightModule, FreightRelated, FreightTable } from '~/config/freight-modules'
+import type { FreightAction, FreightField, FreightModule, FreightRelated, FreightSelectOption, FreightTable } from '~/config/freight-modules'
 import { getFreightModule } from '~/config/freight-modules'
 import { JOB_CHECKLIST_TYPES } from '~/config/freight-options'
 import { isMoneyKey } from '~/utils/freight/job-workspace'
@@ -97,16 +97,31 @@ export function useFreightRouteModule() {
   return { module, isCreate, recordId, route }
 }
 
+function firstOptionValue(option: FreightSelectOption | undefined): string | undefined {
+  if (option == null) return undefined
+  return typeof option === 'string' ? option : option.value
+}
+
+/**
+ * Status a newly created record starts in (and is saved as when the form does
+ * not send one). Reference/master and operations modules start `Active`;
+ * workflow documents keep their first declared status (e.g. `Draft`).
+ */
+export function defaultStatusForModule(module: FreightModule): string {
+  const statusField = module.fields.find(field => field.key === 'status')
+  return firstOptionValue(statusField?.options?.[0]) || module.statuses?.[0] || 'Active'
+}
+
 export function emptyFreightRecord(module: FreightModule) {
-  const record: Record<string, unknown> = { id: '', status: module.statuses?.[0] || 'Active' }
+  const record: Record<string, unknown> = { id: '', status: defaultStatusForModule(module) }
   for (const field of module.fields) {
+    // The status field is seeded by `defaultStatusForModule`; do not blank it.
+    if (field.key === 'status') continue
     if (field.type === 'number') record[field.key] = 0
     else if (field.type === 'multiselect') record[field.key] = []
     else if (field.type === 'date') record[field.key] = new Date().toISOString().slice(0, 10)
     else if (field.type === 'checkbox') {
-      record[field.key] = field.key === 'status'
-        ? (field.options?.[0] ?? 'Active')
-        : (field.options?.[1] ?? 'No')
+      record[field.key] = field.options?.[1] ?? 'No'
     }
     else record[field.key] = ''
   }

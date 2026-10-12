@@ -31,12 +31,11 @@ export function listTableSelectColumn<T extends Record<string, unknown>>(
   }
 }
 
-/** Trailing avatar / relative time / comments / ⋯ column. */
+/** Trailing row-actions column (no avatar / time / comment meta). */
 export function listTableRowMetaColumn<T extends Record<string, unknown>>(options: {
   summary: string
   items: (row: T) => DropdownMenuItem[][]
   loadingId?: string
-  showComments?: boolean
 }): TableColumn<T> {
   return {
     id: 'actions',
@@ -45,12 +44,10 @@ export function listTableRowMetaColumn<T extends Record<string, unknown>>(option
     ]),
     enableSorting: false,
     enableHiding: false,
-    meta: { class: { td: 'text-end whitespace-nowrap', th: 'w-52' } },
+    meta: { class: { td: 'text-end whitespace-nowrap', th: 'w-20' } },
     cell: ({ row }) => h(TableAppTableRowMeta, {
-      row: row.original,
       items: options.items(row.original),
       loading: options.loadingId === String(row.original.id || ''),
-      showComments: options.showComments !== false,
     }),
   }
 }

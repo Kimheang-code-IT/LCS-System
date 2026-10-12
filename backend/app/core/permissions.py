@@ -226,7 +226,6 @@ def permission_name(code: str) -> str:
     return code.replace(".", " ").replace("_", " ").title()
 
 
-ALL_SOURCE = tuple(code for code, _, _ in SOURCE_PERMISSIONS)
 ALL_PAGES = ("ALL_PAGES",)
 
 

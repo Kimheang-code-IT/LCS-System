@@ -47,11 +47,15 @@ Host ports are env-driven (see `infrastructure/.env` / `infrastructure/.env.exam
 `POSTGRES_HOST_PORT` (default `5432`), `REDIS_HOST_PORT` (default `6379`),
 `MINIO_HOST_PORT` (default `9000`), `MINIO_CONSOLE_HOST_PORT` (default `9001`).
 
-Authentication uses JWT: the access token lasts **a full day** by default
-(`ACCESS_TOKEN_EXPIRE_MINUTES=1440`) and is sent as `Authorization: Bearer`;
-refresh tokens rotate a persisted server-side session and last 30 days
-(`REFRESH_TOKEN_EXPIRE_DAYS`). HttpOnly cookies are also set as a same-origin
-fallback. Change the durations via the env vars without rebuilding.
+Authentication uses JWT: the access token is short-lived
+(`ACCESS_TOKEN_EXPIRE_MINUTES`, 15 in Docker and capped at 30 in production) and
+is delivered in a Secure HttpOnly cookie; refresh tokens rotate a persisted
+server-side session and are never readable from JavaScript. The login page's
+**Remember me** option controls persistence: when checked, the refresh session
+lasts `REFRESH_TOKEN_EXPIRE_DAYS` (30 days) with persistent cookies; when
+unchecked, cookies are browser-session cookies and the server enforces
+`SESSION_REFRESH_TOKEN_EXPIRE_HOURS` (12 hours). Change the durations via the env
+vars without rebuilding.
 
 The backend container waits for PostgreSQL, Redis and MinIO to become healthy,
 then runs `alembic upgrade head`. **No data is seeded** — the database starts
@@ -65,13 +69,13 @@ sized for small internal teams (well under ~15 concurrent users).
 ### Empty database / first login
 
 Because all seeding was removed, a freshly migrated database has no users. Open
-the app and it redirects to the **first-run setup page** (`/setup`), where you
+the app and it redirects to the **first-run setup page** (`/auth/setup`), where you
 create the first organization and administrator in the browser. The setup page
 provisions the permission catalog, roles, organization, head-office branch,
 admin user/credential and a minimal finance baseline (chart of accounts, posting
 rules, financial accounts, sequences, current periods) so the system is usable
 immediately. Setup is accepted only while no user exists (guarded by
-`GET /api/v1/setup/status` / `POST /api/v1/setup/initialize`).
+`GET /api/v1/auth/setup/status` / `POST /api/v1/auth/setup/initialize`).
 
 The same provisioning is available headlessly (idempotent — re-run to reset the
 password):
@@ -89,13 +93,15 @@ Options: `--username`, `--name`, `--org-code`, `--org-name`, `--branch-code`,
 `--role` (`PLATFORM_ADMIN` default, or `ORGANIZATION_ADMIN`, …), `--country`,
 `--currency`, `--timezone`.
 
-### Reset all data
+### Reset business data
 
-An administrator (permission `settings.manage`) can wipe every record and return
-the system to first-run setup from **System Settings → Reset all data** (type
-`RESET` to confirm). The API is `POST /api/v1/settings/reset-data` with body
-`{"confirm": "RESET"}`. After a reset you are signed out and returned to
-`/setup`.
+An administrator (permission `settings.manage`) can clear business and
+configuration records from **System Settings → Reset all data** (type `RESET`
+to confirm). The API is `POST /api/v1/settings/reset-data` with body
+`{"confirm": "RESET"}`. Security identities are deliberately preserved:
+users, credentials, roles, permissions, role assignments, sessions, and audit
+history are not deleted, so the protected System Administrator remains usable
+and first-run setup is not reopened.
 
 Attachments are stored in MinIO (`STORAGE_PROVIDER=s3`); the backend signs
 uploads/downloads with the public endpoint (`S3_PUBLIC_ENDPOINT_URL`) so the

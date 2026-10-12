@@ -538,7 +538,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
 <template>
   <section :class="compact ? 'space-y-2' : 'space-y-3'">
     <div class="flex flex-wrap items-start justify-between gap-2">
-      <h3 :class="compact ? 'text-xs font-semibold text-highlighted' : 'text-sm font-semibold text-highlighted'">
+      <h3 v-if="!table.hideTitle" :class="compact ? 'text-xs font-semibold text-highlighted' : 'text-sm font-semibold text-highlighted'">
         {{ tableTitle(table) }}
       </h3>
       <div class="flex flex-wrap items-center justify-end gap-1.5">
@@ -554,7 +554,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           @click="action.onClick"
         />
         <UButton
-v-if="!disabled"
+v-if="!disabled && !table.hideAddRow"
 :size="compact ? 'xs' : 'sm'"
 color="neutral"
 variant="soft"

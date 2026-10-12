@@ -11,7 +11,6 @@ import {
 
 export const useFreightStore = defineStore('freight', () => {
   const revision = ref(0)
-  const hydrated = ref(false)
   const api = useApi()
   const toast = useToast()
   const { t } = useI18n()
@@ -22,11 +21,6 @@ export const useFreightStore = defineStore('freight', () => {
 
   function bumpRevision() {
     revision.value += 1
-  }
-
-  function hydrate() {
-    if (hydrated.value) return
-    hydrated.value = true
   }
 
   function reload() {
@@ -157,11 +151,6 @@ export const useFreightStore = defineStore('freight', () => {
     }
   }
 
-  const collections = computed(() => {
-    void revision.value
-    return remoteCache.value
-  })
-
   function moduleByPath(path: string) {
     return freightModules.find(module => module.path === path)
   }
@@ -177,12 +166,6 @@ export const useFreightStore = defineStore('freight', () => {
 
   function get(collection: string, id: string) {
     return list(collection).find(row => String(row.id) === String(id)) || null
-  }
-
-  function getJobByNo(jobNo: string) {
-    const value = jobNo.trim()
-    if (!value) return null
-    return list('jobs').find(row => String(row.jobNo || '') === value) || null
   }
 
   function save(collection: string, record: FreightRecord): FreightRecord {
@@ -240,12 +223,9 @@ export const useFreightStore = defineStore('freight', () => {
   }
 
   return {
-    collections,
-    hydrate,
     reload,
     list,
     get,
-    getJobByNo,
     save,
     create,
     remove,

@@ -1,6 +1,6 @@
 """Provision the first administrator account (CLI).
 
-The in-browser setup page (`/setup` → `/api/v1/setup/initialize`) is the
+The in-browser setup page (`/auth/setup` → `/api/v1/auth/setup/initialize`) is the
 recommended path. This command remains for automation and Docker/CI.
 
 Usage::

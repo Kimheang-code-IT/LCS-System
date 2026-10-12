@@ -21,6 +21,7 @@ const props = withDefaults(defineProps<{
   readOnly?: boolean
   canSave?: boolean
   saveLabel?: string
+  fieldErrors?: Record<string, string>
   showSave?: boolean
   showComments?: boolean
   showTabs?: boolean
@@ -51,6 +52,7 @@ const props = withDefaults(defineProps<{
   showCancel?: boolean
 }>(), {
   saveLabel: '',
+  fieldErrors: () => ({}),
   listTo: '',
   currentUser: undefined,
   metaTitle: '',
@@ -245,6 +247,7 @@ class="flex min-h-0 w-full"
 :field-value="fieldValue"
                       :set-field-value="setFieldValue"
 :read-only="readOnly"
+:field-errors="fieldErrors"
 :wide="contentWide" />
                   </slot>
 

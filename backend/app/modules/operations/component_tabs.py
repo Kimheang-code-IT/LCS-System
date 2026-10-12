@@ -26,7 +26,6 @@ from app.modules.master_data.models import (
     ComponentGroupAttribute,
     ComponentTab,
     ComponentTabGroup,
-    ComponentTabTradeDirection,
 )
 from app.modules.operations.models import ServiceOrder, ServiceOrderComponentRow
 from app.modules.operations.reference_options import reference_options
@@ -239,25 +238,14 @@ async def bootstrap(
     order = await _get_order(session, service_order_id)
     selected_direction_id = direction_id or order.trade_direction_id
 
-    tab_ids = (
-        await session.execute(
-            select(ComponentTabTradeDirection.tab_id)
-            .where(
-                ComponentTabTradeDirection.trade_direction_id == selected_direction_id,
-                ComponentTabTradeDirection.status == "ACTIVE",
-            )
-            .order_by(ComponentTabTradeDirection.display_order, ComponentTabTradeDirection.id)
-        )
-    ).scalars().all()
-
     tabs: list[ComponentTab] = []
-    if tab_ids:
+    if selected_direction_id:
         tabs = list(
             (
                 await session.execute(
                     select(ComponentTab)
                     .where(
-                        ComponentTab.id.in_(list(tab_ids)),
+                        ComponentTab.trade_direction_id == selected_direction_id,
                         ComponentTab.is_active.is_(True),
                         ComponentTab.is_archived.is_(False),
                     )
@@ -310,8 +298,6 @@ async def bootstrap(
                 "id": str(tab.id),
                 "code": tab.code,
                 "name": tab.name,
-                "nameKm": tab.name_km,
-                "icon": tab.icon,
                 "displayOrder": tab.display_order,
                 "groups": groups,
             }

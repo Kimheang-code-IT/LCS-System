@@ -15,51 +15,27 @@ import type {
   ComponentAttributeInput,
   ComponentDataType,
   ComponentGroupAttribute,
-  ComponentReferenceType,
   ComponentTabGroupLink,
 } from '~/types/component-config'
-import { COMPONENT_DATA_TYPES, COMPONENT_REFERENCE_TYPES } from '~/types/component-config'
+import { COMPONENT_DATA_TYPES } from '~/types/component-config'
 
 export type ComponentConfigRow = Record<string, unknown>
 
-/** Data types that carry a fixed list of allowed values. */
-const OPTION_DATA_TYPES = new Set(['select', 'multi_select', 'currency'])
+/** Types not usable when creating an attribute (no options/reference editing). */
+const ATTRIBUTE_EXCLUDED_DATA_TYPES = new Set(['reference', 'select', 'multi_select', 'checkbox', 'boolean'])
+const ATTRIBUTE_DATA_TYPES = COMPONENT_DATA_TYPES.filter(value => !ATTRIBUTE_EXCLUDED_DATA_TYPES.has(value))
 
 export function componentDataTypeItems() {
-  return COMPONENT_DATA_TYPES.map(value => ({ label: value.replace(/_/g, ' '), value }))
-}
-
-export function componentReferenceTypeItems() {
-  return COMPONENT_REFERENCE_TYPES.map(value => ({ label: value.replace(/_/g, ' '), value }))
-}
-
-export function componentNeedsOptions(dataType: unknown): boolean {
-  return OPTION_DATA_TYPES.has(String(dataType ?? ''))
+  return ATTRIBUTE_DATA_TYPES.map(value => ({ label: value.replace(/_/g, ' '), value }))
 }
 
 function text(value: unknown) {
   return String(value ?? '').trim()
 }
 
-/** Options live as a JSON array on the entity but must be edited as one string. */
-export function componentOptionsText(attribute: Pick<ComponentAttribute, 'options'>): string {
-  return (attribute.options || [])
-    .map(option => (typeof option === 'string' ? option : option?.value))
-    .map(value => text(value))
-    .filter(Boolean)
-    .join(', ')
-}
-
-export function parseComponentOptionsText(value: unknown): string[] {
-  return String(value ?? '')
-    .split(',')
-    .map(part => part.trim())
-    .filter(Boolean)
-}
-
 /** A new attribute row starts blank; `code` is derived from `label` on save. */
 export function blankComponentAttributeRow(): ComponentConfigRow {
-  return { label: '', code: '', dataType: 'text', referenceType: undefined, isRequired: false, optionsText: '' }
+  return { label: '', dataType: 'text', isRequired: false, helpText: '' }
 }
 
 /** Project an attribute onto the flat row the grid edits. */
@@ -67,11 +43,9 @@ export function componentAttributeToRow(attribute: ComponentAttribute): Componen
   return {
     id: attribute.id,
     label: attribute.label,
-    code: attribute.code,
     dataType: attribute.dataType,
-    referenceType: attribute.referenceType || undefined,
     isRequired: Boolean(attribute.isRequired),
-    optionsText: componentOptionsText(attribute),
+    helpText: text(attribute.placeholder),
   }
 }
 
@@ -82,10 +56,6 @@ export function componentAttributeRows(attributes: ComponentAttribute[]): Compon
 /** Cell values are strings; the API only accepts a known enum value. */
 export function componentAttributeDataType(value: unknown): ComponentDataType {
   return componentEnumValue(value, COMPONENT_DATA_TYPES) || 'text'
-}
-
-export function componentReferenceTypeValue(value: unknown): ComponentReferenceType | null {
-  return componentEnumValue(value, COMPONENT_REFERENCE_TYPES)
 }
 
 function componentEnumValue<T extends string>(value: unknown, allowed: readonly T[]): T | null {
@@ -100,25 +70,17 @@ export function componentAttributePayload(row: ComponentConfigRow, fallbackCode:
     label: text(row.label),
     code: text(row.code) || fallbackCode,
     dataType,
-    referenceType: dataType === 'reference' ? componentReferenceTypeValue(row.referenceType) : null,
     isRequired: Boolean(row.isRequired),
-    options: componentNeedsOptions(dataType) ? parseComponentOptionsText(row.optionsText) : [],
+    placeholder: text(row.helpText),
   }
 }
 
-/**
- * Reference column is only meaningful for `reference` attributes, and the
- * options column only for the option-carrying data types, so both cells hide
- * rather than showing an irrelevant editor.
- */
 export function componentAttributeColumns(): FreightLineColumn[] {
   return [
     { key: 'label', label: 'Label', labelKm: 'ស្លាកសញ្ញា', type: 'text', required: true },
-    { key: 'code', label: 'Code', labelKm: 'លេខកូដ', type: 'text' },
-    { key: 'dataType', label: 'Type', labelKm: 'ប្រភេទ', type: 'select', options: COMPONENT_DATA_TYPES.map(value => value.replace(/_/g, ' ')) },
-    { key: 'referenceType', label: 'Reference', labelKm: 'យោង', type: 'select', options: COMPONENT_REFERENCE_TYPES.map(value => value.replace(/_/g, ' ')) },
+    { key: 'dataType', label: 'Type', labelKm: 'ប្រភេទ', type: 'select', options: ATTRIBUTE_DATA_TYPES.map(value => value.replace(/_/g, ' ')) },
     { key: 'isRequired', label: 'Required', labelKm: 'ត្រូវសម្រាប់', type: 'checkbox' },
-    { key: 'optionsText', label: 'Options', labelKm: 'ជម្រើស', type: 'text' },
+    { key: 'helpText', label: 'Help text', labelKm: 'អត្ថបទជំនួយ', type: 'text' },
     { key: '_delete', label: '', type: 'delete' },
   ]
 }
@@ -177,6 +139,15 @@ export function componentConfigTable(options: {
   title: string
   titleKm?: string
   columns: FreightLineColumn[]
+  hideTitle?: boolean
+  hideAddRow?: boolean
 }): FreightTable {
-  return { key: options.key, title: options.title, titleKm: options.titleKm, columns: options.columns }
+  return {
+    key: options.key,
+    title: options.title,
+    titleKm: options.titleKm,
+    columns: options.columns,
+    hideTitle: options.hideTitle,
+    hideAddRow: options.hideAddRow,
+  }
 }

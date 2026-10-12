@@ -16,6 +16,7 @@ from app.core.bootstrap import ensure_permission_catalog
 from app.core.permissions import ROLE_DEFINITIONS
 from app.core.security import hash_password
 from app.modules.auth.models import (
+    PROTECTED_SYSTEM_ADMIN_IDENTITY,
     Role,
     User,
     UserCredential,
@@ -35,10 +36,8 @@ from app.modules.master_data.models import (
     ComponentGroupAttribute,
     ComponentTab,
     ComponentTabGroup,
-    ComponentTabTradeDirection,
     ContainerType,
     FeeType,
-    PartyRole,
     Place,
     TradeDirection,
     TransportType,
@@ -171,16 +170,14 @@ async def _ensure_finance_baseline(session: AsyncSession) -> None:
 
 async def seed_demo_data(session: AsyncSession) -> None:
     place_defs = [
-        ("PP", "Phnom Penh", "City", "KH"),
-        ("BV", "Bavet", "Border Checkpoint", "KH"),
-        ("PP_PORT", "Phnom Penh Port", "Port", "KH"),
-        ("SEZ", "Special Economic Zone", "SEZ", "KH"),
+        ("PP", "Phnom Penh"),
+        ("BV", "Bavet"),
+        ("PP_PORT", "Phnom Penh Port"),
+        ("SEZ", "Special Economic Zone"),
     ]
     places: dict[str, Place] = {}
-    for code, name, category, country in place_defs:
-        places[code] = await _get_or_create(
-            session, Place, {"name": name, "place_category": category, "country_code": country}, code=code
-        )
+    for code, name in place_defs:
+        places[code] = await _get_or_create(session, Place, {"name": name}, code=code)
 
     for code, name, description in [
         ("IMPORT", "Import", "Goods enter the country"),
@@ -242,8 +239,16 @@ async def seed_demo_data(session: AsyncSession) -> None:
             )
         await session.flush()
 
+    import_direction = (await session.execute(select(TradeDirection).where(TradeDirection.code == "IMPORT"))).scalars().first()
     tab = await _get_or_create(
-        session, ComponentTab, {"name": "Customs", "icon": "i-lucide-landmark", "display_order": 10}, code="CUSTOMS"
+        session,
+        ComponentTab,
+        {
+            "name": "Customs",
+            "display_order": 10,
+            "trade_direction_id": import_direction.id if import_direction else None,
+        },
+        code="CUSTOMS",
     )
     tab_group = (
         await session.execute(
@@ -252,24 +257,6 @@ async def seed_demo_data(session: AsyncSession) -> None:
     ).scalars().first()
     if tab_group is None:
         session.add(ComponentTabGroup(tab_id=tab.id, group_id=group.id, display_order=10, status="ACTIVE"))
-
-    import_direction = (await session.execute(select(TradeDirection).where(TradeDirection.code == "IMPORT"))).scalars().first()
-    export_direction = (await session.execute(select(TradeDirection).where(TradeDirection.code == "EXPORT"))).scalars().first()
-    for direction in (import_direction, export_direction):
-        if direction is None:
-            continue
-        exists = (
-            await session.execute(
-                select(ComponentTabTradeDirection).where(
-                    ComponentTabTradeDirection.tab_id == tab.id,
-                    ComponentTabTradeDirection.trade_direction_id == direction.id,
-                )
-            )
-        ).scalars().first()
-        if exists is None:
-            session.add(
-                ComponentTabTradeDirection(tab_id=tab.id, trade_direction_id=direction.id, display_order=10)
-            )
     await session.flush()
 
     customers = [
@@ -277,23 +264,24 @@ async def seed_demo_data(session: AsyncSession) -> None:
         ("CUST-002", "Mekong Trading Co., Ltd.", "CUSTOMER"),
     ]
     for code, name, role in customers:
-        party = await _get_or_create(
+        await _get_or_create(
             session, BusinessParty,
-            {"legal_name": name, "display_name": name, "country_code": "KH", "status": "ACTIVE"},
+            {"legal_name": name, "display_name": name, "roles": [role.title()], "status": "ACTIVE"},
             party_code=code,
         )
-        role_exists = (
-            await session.execute(select(PartyRole).where(PartyRole.party_id == party.id, PartyRole.role_type == role))
-        ).scalars().first()
-        if role_exists is None:
-            session.add(PartyRole(party_id=party.id, role_type=role, is_primary=True))
     await session.flush()
 
     roles = {role.code: role for role in (await session.execute(select(Role))).scalars().all()}
     for user_code, username, email, display_name, role_code, _ in DEMO_USERS:
         user = await _get_or_create(
             session, User,
-            {"username": username, "email": email, "display_name": display_name, "status": "ACTIVE"},
+            {
+                "username": username,
+                "email": email,
+                "display_name": display_name,
+                "status": "ACTIVE",
+                "system_identity": PROTECTED_SYSTEM_ADMIN_IDENTITY if role_code == "PLATFORM_ADMIN" else None,
+            },
             user_code=user_code,
         )
         credential = (await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))).scalars().first()

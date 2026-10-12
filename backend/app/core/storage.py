@@ -8,7 +8,7 @@ object store such as MinIO. The backend talks to the internal endpoint
 
 from __future__ import annotations
 
-import os
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
@@ -18,6 +18,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Storage(Protocol):
@@ -131,8 +133,8 @@ class S3Storage:
         except (ClientError, EndpointConnectionError):
             try:
                 self._client.create_bucket(Bucket=self.bucket)
-            except Exception:  # noqa: BLE001 - storage may not be ready yet
-                pass
+            except Exception as exc:  # noqa: BLE001 - storage may not be ready yet
+                logger.warning("Object-storage bucket %s could not be created: %s", self.bucket, exc)
 
     def put(self, key: str, data: bytes, content_type: str) -> None:
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type or "application/octet-stream")
@@ -182,23 +184,3 @@ def get_storage() -> Storage:
     if settings.storage_provider.lower() in {"s3", "minio"}:
         return S3Storage()
     return LocalStorage(settings.storage_local_path)
-
-
-def guess_content_type(file_name: str, provided: str | None = None) -> str:
-    if provided:
-        return provided
-    extension = os.path.splitext(file_name)[1].lower().lstrip(".")
-    return {
-        "pdf": "application/pdf",
-        "png": "image/png",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "gif": "image/gif",
-        "webp": "image/webp",
-        "svg": "image/svg+xml",
-        "txt": "text/plain",
-        "csv": "text/csv",
-        "json": "application/json",
-        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }.get(extension, "application/octet-stream")

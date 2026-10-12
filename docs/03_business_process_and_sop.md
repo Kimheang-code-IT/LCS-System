@@ -49,7 +49,7 @@ template that an administrator creates from Roles & Permissions.
    default app info/config. No finance or business data is seeded, and no other
    roles are created.
 4. System signs the administrator in. Setup is accepted only while no user exists
-   (`GET /api/v1/setup/status` / `POST /api/v1/setup/initialize`).
+   (`GET /api/v1/auth/setup/status` / `POST /api/v1/auth/setup/initialize`).
 
 ### Headless provisioning
 
@@ -189,15 +189,25 @@ machine, which remains available through the API: `send` → `accept` → `conve
 6. System calculates totals.
 7. User issues the service charge.
 8. System generates the customer-facing note or service document.
-9. No journal is created.
+9. System creates one idempotent draft customer invoice from the issued charge.
+10. No journal is created until an authorized finance user posts the draft.
 
 ### Convert to finance invoice
 
-1. Authorized user selects `Create Finance Invoice`.
-2. System copies the charge into a draft financial document.
+1. The issue command normally creates the finance draft automatically; an authorized user may select `Create Finance Invoice` to recover or retrieve it.
+2. System copies the charge into a draft financial document only when one does not already exist.
 3. System records the source relationship.
 4. Finance user reviews and may edit the draft.
 5. Finance user posts it separately.
+
+### Automatic service-order finance reporting
+
+1. The accepted quotation provides the quoted commercial value.
+2. Issued service charges provide confirmed charge value; drafts are reported separately.
+3. Draft customer invoices provide pending revenue.
+4. Posted customer invoices provide recognized job revenue.
+5. Posted supplier bills provide recognized job cost.
+6. The system calculates gross profit, margin, and uninvoiced issued charges without browser-side aggregation.
 
 ## 10. Financial Document Procedure
 

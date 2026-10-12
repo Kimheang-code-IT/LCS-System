@@ -18,6 +18,7 @@ export interface QuotationRepository {
   send: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   accept: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   createRevision: (quotationId: string) => Promise<FreightRecord>
+  listRevisions: (quotationId: string) => Promise<FreightRecord[]>
   submit: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   convert: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
 }
@@ -104,6 +105,7 @@ export interface ReportsRepository {
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>
   profitability: () => Promise<FreightRecord[]>
+  ledgerLines: () => Promise<FreightRecord[]>
 }
 
 export type { CreateRecordInput as LcsCreateRecordInput }

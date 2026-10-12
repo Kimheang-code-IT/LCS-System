@@ -188,19 +188,8 @@ async def get_ui_schema(
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    from sqlalchemy import select
-
-    from app.modules.master_data.models import ModuleRecord
-
-    row = (
-        await session.execute(
-            select(ModuleRecord).where(
-                ModuleRecord.collection == "__ui_schema__",
-                ModuleRecord.record_no == page,
-            )
-        )
-    ).scalars().first()
-    return {"data": (row.data if row else None)}
+    _read_guard(context)
+    return {"data": await service.get_ui_schema(session, page)}
 
 
 @router.get("/component-tabs/meta/types")
@@ -451,18 +440,6 @@ async def remove_component_tab_group(
 ) -> dict:
     _config_manage_guard(context, "delete")
     return {"data": await component_config_service.remove_tab_group(session, context, tab_group_id)}
-
-
-@router.post("/component-tabs/{tab_id}/trade-directions")
-async def set_component_tab_directions(
-    tab_id: int,
-    payload: dict = Body(default={}),
-    context: RequestContext = Depends(get_current_context),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    _config_manage_guard(context, "update")
-    direction_ids = [int(value) for value in payload.get("tradeDirectionIds") or [] if str(value).isdigit()]
-    return {"data": await component_config_service.set_tab_directions(session, context, tab_id, direction_ids)}
 
 
 for _collection in service.SPECS:

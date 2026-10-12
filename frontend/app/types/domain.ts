@@ -14,19 +14,8 @@ export type ServiceChargeStatus = 'DRAFT' | 'ISSUED'
 
 export type FinancialDocumentStatus = 'DRAFT' | 'POSTED' | 'REVERSED' | 'CANCELLED'
 
-export type JournalStatus = 'DRAFT' | 'POSTED' | 'REVERSED' | 'VOIDED'
-
-export type ComponentStatus = 'PENDING' | 'COMPLETED'
 export type ComponentInstanceMode = 'SINGLE' | 'REPEATABLE'
 export type ComponentInstanceModeOverride = 'INHERIT' | ComponentInstanceMode
-
-export type FinancialDocumentType =
-  | 'CUSTOMER_INVOICE'
-  | 'SUPPLIER_BILL'
-  | 'CUSTOMER_RECEIPT'
-  | 'SUPPLIER_PAYMENT'
-  | 'OTHER_INCOME'
-  | 'OTHER_EXPENSE'
 
 export type LcsErrorCode =
   | 'AUTH_REQUIRED'
@@ -61,63 +50,6 @@ export interface LcsPageMeta {
 export interface LcsPaged<T> {
   items: T[]
   meta: LcsPageMeta
-}
-
-export interface LcsComponentValue {
-  template_attribute_id: number
-  code: string
-  label: string
-  data_type: 'text' | 'number' | 'date' | 'datetime' | 'boolean' | 'reference'
-  required: boolean
-  resolved_instance_mode: ComponentInstanceMode
-  value_text?: string
-  value_number?: number
-  value_date?: string
-  value_boolean?: boolean
-}
-
-export interface LcsServiceComponent {
-  id: number
-  service_order_id: number
-  template_code: string
-  template_version: string
-  group_code: string
-  status: ComponentStatus
-  sequence_no: number
-  required: boolean
-  values: LcsComponentValue[]
-}
-
-export interface LcsActualContainer {
-  id: number
-  service_order_id: number
-  container_requirement_id?: number
-  container_type: string
-  container_number: string
-  seal_serial?: string
-  net_weight_kg?: number
-  gross_weight_kg?: number
-  status: string
-}
-
-export interface LcsJournalLine {
-  account_code: string
-  account_name: string
-  debit_amount: number
-  credit_amount: number
-  description: string
-}
-
-export interface LcsJournalEntry {
-  id: number
-  entry_no: string
-  status: JournalStatus
-  source_document_id?: number
-  source_document_no?: string
-  period_id: number
-  debit_total: number
-  credit_total: number
-  lines: LcsJournalLine[]
 }
 
 export const SOURCE_PERMISSIONS = [

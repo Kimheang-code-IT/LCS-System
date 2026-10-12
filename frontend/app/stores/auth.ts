@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { AuthUser } from '~/types/api'
 import { AUTH_STORAGE_KEY, compactAuthUser } from '~/utils/auth/session'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
+import { csrfRequestHeaders } from '~/utils/security/csrf'
 
 function restoreSessionUser(candidate: AuthUser | null | undefined): AuthUser | null {
   if (!candidate?.email) return null
@@ -13,6 +14,8 @@ const ACCESS_TOKEN_KEY = 'lcs-access-token'
 const REFRESH_TOKEN_KEY = 'lcs-refresh-token'
 
 export const useAuthStore = defineStore('auth', () => {
+  const config = useRuntimeConfig()
+  const bearerMode = computed(() => String(config.public.authMode) === 'bearer')
   const cookieUser = useCookie<AuthUser | null>('auth_user', {
     default: () => null,
     path: '/',
@@ -23,7 +26,6 @@ export const useAuthStore = defineStore('auth', () => {
   const storedUser = ref<AuthUser | null>(null)
   const accessToken = ref<string | null>(null)
   const refreshToken = ref<string | null>(null)
-  const clientHydrated = ref(false)
   const user = computed(() => storedUser.value || cookieUser.value)
   const isLoggedIn = computed(() => Boolean(user.value?.email))
 
@@ -38,9 +40,17 @@ export const useAuthStore = defineStore('auth', () => {
   function hydrateClient() {
     if (!import.meta.client) return
 
-    if (!accessToken.value) {
+    if (bearerMode.value && !accessToken.value) {
       accessToken.value = localStorage.getItem(ACCESS_TOKEN_KEY)
       refreshToken.value = localStorage.getItem(REFRESH_TOKEN_KEY)
+    }
+    else if (!bearerMode.value) {
+      // Remove tokens left by older cookie-mode releases. Authentication
+      // secrets must remain exclusively in Secure, HttpOnly cookies.
+      localStorage.removeItem(ACCESS_TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
+      accessToken.value = null
+      refreshToken.value = null
     }
 
     let resolved: AuthUser | null = null
@@ -60,8 +70,6 @@ export const useAuthStore = defineStore('auth', () => {
     if (resolved?.email) {
       persist(resolved)
     }
-
-    clientHydrated.value = true
   }
 
   function login(userData: AuthUser) {
@@ -69,6 +77,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function setTokens(access: string | null, refresh: string | null) {
+    if (!bearerMode.value) {
+      accessToken.value = null
+      refreshToken.value = null
+      if (import.meta.client) {
+        localStorage.removeItem(ACCESS_TOKEN_KEY)
+        localStorage.removeItem(REFRESH_TOKEN_KEY)
+      }
+      return
+    }
     accessToken.value = access
     refreshToken.value = refresh
     if (!import.meta.client) return
@@ -81,14 +98,21 @@ export const useAuthStore = defineStore('auth', () => {
   function clearSession() {
     persist(null)
     setTokens(null, null)
-    clientHydrated.value = true
   }
 
   async function logout() {
     if (import.meta.client) {
       // Revoke the server-side refresh session and clear the HttpOnly cookies.
       try {
-        await $fetch(ApiV1Endpoints.LOGOUT, { method: 'POST', credentials: 'include' })
+        await $fetch(ApiV1Endpoints.LOGOUT, {
+          method: 'POST',
+          credentials: 'include',
+          headers: csrfRequestHeaders(
+            'POST',
+            String(config.public.csrfCookieName),
+            String(config.public.csrfHeaderName),
+          ),
+        })
       }
       catch {
         // Local sign-out must succeed even if the server call fails.
@@ -133,7 +157,6 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     user,
     isLoggedIn,
-    clientHydrated,
     accessToken,
     refreshToken,
     login,

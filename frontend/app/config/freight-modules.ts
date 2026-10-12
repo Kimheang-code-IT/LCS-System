@@ -98,6 +98,10 @@ export type FreightTable = {
   columns: FreightLineColumn[]
   addLabel?: string
   addLabelKey?: string
+  /** Config grids manage add via a dialog, so they hide the built-in add-row button. */
+  hideAddRow?: boolean
+  /** Suppresses the in-table title when the page header already shows it. */
+  hideTitle?: boolean
   presets?: Array<Record<string, unknown>>
   lockedPresets?: boolean
   /** Native file picker + File name / By / Created columns. */
@@ -1164,16 +1168,15 @@ export const freightModules: FreightModule[] = [
       col('username', 'Username', 'ឈ្មោះអ្នកប្រើ'),
       col('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ'),
       col('email', 'Email', 'អ៊ីមែល'),
-      col('phone', 'Phone', 'ទូរស័ព្ទ'),
       col('status', 'Status', 'ស្ថានភាព'),
     ],
     fields: [
-      // Auto-generated and read-only; status is changed from the row "..." menu.
-      f('userCode', 'User Code', 'លេខកូដអ្នកប្រើ', 'General', 'ទូទៅ', 'text', undefined, { computed: true }),
+      // Editable; seeds from the username while empty. Status is changed from the row "..." menu.
+      f('userCode', 'User Code', 'លេខកូដអ្នកប្រើ', 'General', 'ទូទៅ', 'text'),
       f('username', 'Username', 'ឈ្មោះអ្នកប្រើ', 'General', 'ទូទៅ'),
       f('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ', 'General', 'ទូទៅ'),
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ'),
-      f('role', 'Role Name', 'ឈ្មោះតួនាទី', 'General', 'ទូទៅ', 'select'),
+      f('role', 'Role Name', 'ឈ្មោះតួនាទី', 'General', 'ទូទៅ', 'select', undefined, { required: true }),
     ],
   }),
 
@@ -1308,7 +1311,8 @@ if (quotationModule) freightModules.push({
   ],
   fields: [
     f('quotationNo', 'Quotation No.', 'លេខសម្រង់', 'Header', 'ក្បាល', 'text', undefined, { required: true, computed: true }),
-    f('customer', 'Customer', 'អតិថិជន', 'Header', 'ក្បាល', 'select', undefined, { required: true }),
+    f('customerPartyId', 'Company', 'ក្រុមហ៊ុន', 'Header', 'ក្បាល', 'select', undefined, { required: true }),
+    f('customer', 'Customer', 'អតិថិជន', 'Header', 'ក្បាល', 'text', undefined, { computed: true }),
     f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Header', 'ក្បាល', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }), f('revisionNo', 'Revision No.', 'លេខកំណែ', 'Header', 'ក្បាល', 'number', undefined, { computed: true }),
     f('date', 'Quotation Date', 'កាលបរិច្ឆេទសម្រង់', 'Header', 'ក្បាល', 'date', undefined, { required: true }), f('validUntil', 'Valid Until', 'មានសុពលភាពដល់', 'Header', 'ក្បាល', 'date'),
     f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Header', 'ក្បាល', 'select', undefined, { required: true }), f('description', 'Description', 'បរិយាយ', 'Header', 'ក្បាល', 'textarea', undefined, { colSpan: 2 }),

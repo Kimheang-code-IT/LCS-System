@@ -2,7 +2,7 @@
   "info": {
     "name": "LCS Freight Forwarding API",
     "_postman_id": "b7f3c1a2-5d64-4e19-9c8b-2a1d0e6f4a31",
-    "description": "Auto-generated from the LCS FastAPI OpenAPI schema (`GET /openapi.json`).\n\n## How to use\n1. Set collection variable `base_url` (default `http://localhost:8000`; production is `https://lcslog.minidev.in`).\n2. Set `username` / `password` variables, then run **01 Authentication > POST /api/v1/auth/login**.\n   The test script stores `data.access_token` into the `access_token` variable automatically.\n3. Every other request sends `Authorization: Bearer {{access_token}}` via the collection-level auth.\n4. POST/GET list requests auto-capture the first row id into collection variables (`user_id`, `quotation_id`, ...), so `:id` routes are runnable after their list call.\n\n## Response envelope\n- Success: `{ \"data\": ... }`\n- Lists: `{ \"data\": { \"items\": [...], \"meta\": { page, page_size, total } } }`\n- Error: `{ \"code\", \"message\", \"request_id\", \"field_errors\" }`\n\n## Notes\n- Request bodies are schema-derived examples - adjust values before sending; some fields have domain constraints (currency, status enums, period locking).\n- Optional filter query parameters are present but **disabled** by default.\n- `DELETE` routes are real and destructive. Point `base_url` at a disposable database when exercising them.\n\n## Known contract deviation\n`GET /health`, `GET /health/ready` and `GET /` are unversioned infra probes that return a bare object, not the `{\"data\": ...}` envelope (`GET /api/v1/health` does use the envelope). Their tests assert the real probe shape; every `/api/v1/**` response is asserted against the documented envelope.",
+    "description": "Auto-generated from the LCS FastAPI OpenAPI schema (`GET /openapi.json`).\n\n## How to use\n1. Set collection variable `base_url` (default `http://localhost:8000`; production is `https://lcslog.minidev.in`).\n2. Set `username` / `password` variables, then run **01 Authentication > POST /api/v1/auth/login**.\n   The test script stores `data.access_token` into the `access_token` variable automatically.\n3. Every other request sends `Authorization: Bearer {{access_token}}` via the collection-level auth.\n4. POST/GET list requests auto-capture the first row id into collection variables (`user_id`, `quotation_id`, ...), so `:id` routes are runnable after their list call.\n\n## Response envelope\n- Success: `{ \"data\": ... }`\n- Lists: `{ \"data\": { \"items\": [...], \"meta\": { page, page_size, total } } }`\n- Error: `{ \"code\", \"message\", \"request_id\", \"field_errors\" }`\n\n## Notes\n- Request bodies are schema-derived examples - adjust values before sending; some fields have domain constraints (currency, status enums, period locking).\n- Optional filter query parameters are present but **disabled** by default.\n- List endpoints: most return the paginated `{\"data\": {\"items\": [...], \"meta\": {page, page_size, total}}}` shape,   but some (e.g. `GET /api/v1/users`) return a bare array `{\"data\": [...]}`. The auto-capture scripts handle both.\n- `DELETE` routes are real and destructive. Point `base_url` at a disposable database when exercising them.\n\n## Known contract deviation\n`GET /health`, `GET /health/ready` and `GET /` are unversioned infra probes that return a bare object, not the `{\"data\": ...}` envelope (`GET /api/v1/health` does use the envelope). Their tests assert the real probe shape; every `/api/v1/**` response is asserted against the documented envelope.\n\n`POST /api/v1/auth/setup/initialize` returns an undocumented `409` when users already exist; the schema only documents 201/422.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -292,7 +292,7 @@
           ]
         },
         {
-          "name": "GET /api/v1/setup/status",
+          "name": "GET /api/v1/auth/setup/status",
           "request": {
             "method": "GET",
             "header": [
@@ -302,13 +302,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/setup/status",
+              "raw": "{{base_url}}/api/v1/auth/setup/status",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "v1",
+                "auth",
                 "setup",
                 "status"
               ]
@@ -349,7 +350,7 @@
           ]
         },
         {
-          "name": "POST /api/v1/setup/initialize",
+          "name": "POST /api/v1/auth/setup/initialize",
           "request": {
             "method": "POST",
             "header": [
@@ -363,13 +364,14 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/setup/initialize",
+              "raw": "{{base_url}}/api/v1/auth/setup/initialize",
               "host": [
                 "{{base_url}}"
               ],
               "path": [
                 "api",
                 "v1",
+                "auth",
                 "setup",
                 "initialize"
               ]
@@ -496,7 +498,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\",\n  \"remember_me\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -3851,81 +3853,6 @@
             "description": "Remove Component Tab Group",
             "auth": {
               "type": "noauth"
-            }
-          },
-          "response": [],
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const __code = pm.response.code;",
-                  "const __body = (() => { try { return __code === 204 || !pm.response.text() ? null : pm.response.json(); } catch (e) { return null; } })();",
-                  "pm.test(\"no server error (status < 500)\", function () {",
-                  "  pm.expect(__code, \"status \" + __code + \" body=\" + pm.response.text().slice(0, 300)).to.be.below(500);",
-                  "});",
-                  "pm.test(\"uses the LCS API envelope\", function () {",
-                  "  if (__body === null) return;",
-                  "  if (__code >= 400) {",
-                  "    pm.expect(__body, \"error envelope for \" + __code).to.have.property(\"code\");",
-                  "    pm.expect(__body, \"error envelope for \" + __code).to.have.property(\"message\");",
-                  "    pm.expect(__body, \"error envelope for \" + __code).to.have.property(\"request_id\");",
-                  "  } else {",
-                  "    pm.expect(__body, \"success envelope for \" + __code).to.have.property(\"data\");",
-                  "  }",
-                  "});"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "POST /api/v1/component-tabs/{tab_id}/trade-directions",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Accept",
-                "value": "application/json"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/api/v1/component-tabs/{tab_id}/trade-directions",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "component-tabs",
-                "{tab_id}",
-                "trade-directions"
-              ],
-              "variable": [
-                {
-                  "key": "tab_id",
-                  "value": "1",
-                  "description": "Component tab id"
-                }
-              ]
-            },
-            "description": "Set Component Tab Directions",
-            "auth": {
-              "type": "noauth"
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
             }
           },
           "response": [],

@@ -1,0 +1,33 @@
+name: Renew production certificate
+
+on:
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-certificate
+  cancel-in-progress: false
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Renew Let's Encrypt certificate
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd /opt/lcs
+            if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
+            $DOCKER compose -f compose.yml --profile tools run --rm certbot \
+              renew --webroot -w /var/www/certbot --quiet
+            $DOCKER compose -f compose.yml exec -T frontend nginx -s reload

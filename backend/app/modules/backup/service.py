@@ -62,7 +62,6 @@ from app.modules.backup.sheets import (
     BackupConfigurationError,
     GoogleSheetsClient,
     SheetsApiError,
-    sanitize_worksheet_title,
 )
 from app.modules.settings import service as settings_service
 
@@ -839,7 +838,3 @@ def schedule_status(config: dict[str, Any]) -> dict[str, Any]:
         "lastRunMessage": config.get("lastRunMessage") or "",
         "running": _active_run_id is not None,
     }
-
-
-def sanitize_title(table_name: str, config: dict[str, Any]) -> str:
-    return sanitize_worksheet_title(table_name)
