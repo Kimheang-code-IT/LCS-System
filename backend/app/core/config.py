@@ -114,8 +114,10 @@ class Settings(BaseSettings):
             errors.append("AUTH_RETURN_TOKENS must be false for browser cookie authentication")
         if self.access_token_expire_minutes > 30:
             errors.append("ACCESS_TOKEN_EXPIRE_MINUTES must not exceed 30")
-        if self.password_min_length < 12:
-            errors.append("PASSWORD_MIN_LENGTH must be at least 12")
+        if self.password_min_length < 8:
+            errors.append("PASSWORD_MIN_LENGTH must be at least 8")
+        if self.password_max_length < self.password_min_length:
+            errors.append("PASSWORD_MAX_LENGTH must not be lower than PASSWORD_MIN_LENGTH")
         if not self.rate_limit_enabled:
             errors.append("RATE_LIMIT_ENABLED must be true")
         origins = self.cors_origin_list

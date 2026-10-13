@@ -25,8 +25,8 @@ usePageSeo({
 const schema = computed(() => z.object({
   name: z.string().min(1, { error: t('pages.setup.nameRequired') }),
   email: z.email({ error: t('pages.auth.emailRequired') }),
-  password: z.string().min(12, { error: t('pages.auth.passwordRequired') }),
-  passwordConfirmation: z.string().min(12, { error: t('pages.auth.passwordRequired') }),
+  password: z.string().min(8, { error: t('pages.setup.passwordMin') }).max(20, { error: t('pages.setup.passwordMax') }),
+  passwordConfirmation: z.string().min(8, { error: t('pages.setup.passwordMin') }).max(20, { error: t('pages.setup.passwordMax') }),
 }))
 
 const fields = computed<AuthFormField[]>(() => [
