@@ -25,7 +25,6 @@ usePageSeo({
 const schema = computed(() => z.object({
   name: z.string().min(1, { error: t('pages.setup.nameRequired') }),
   email: z.email({ error: t('pages.auth.emailRequired') }),
-  setupToken: z.string().optional(),
   password: z.string().min(12, { error: t('pages.auth.passwordRequired') }),
   passwordConfirmation: z.string().min(12, { error: t('pages.auth.passwordRequired') }),
 }))
@@ -50,15 +49,6 @@ const fields = computed<AuthFormField[]>(() => [
     autocomplete: 'username',
   },
   {
-    name: 'setupToken',
-    type: 'password',
-    size: 'lg',
-    label: t('pages.setup.setupToken'),
-    placeholder: t('pages.setup.setupTokenPlaceholder'),
-    required: true,
-    autocomplete: 'off',
-  },
-  {
     name: 'password',
     type: 'password',
     size: 'lg',
@@ -81,7 +71,6 @@ const fields = computed<AuthFormField[]>(() => [
 type Schema = {
   name: string
   email: string
-  setupToken?: string
   password: string
   passwordConfirmation: string
 }
@@ -100,7 +89,6 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
       email: data.email.trim(),
       password: data.password,
       name: data.name.trim(),
-      setupToken: data.setupToken || undefined,
     })
 
     try {

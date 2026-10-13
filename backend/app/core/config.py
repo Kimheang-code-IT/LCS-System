@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     auth_return_tokens: bool = Field(default=True, alias="AUTH_RETURN_TOKENS")
     csrf_secret_key: str | None = Field(default=None, alias="CSRF_SECRET_KEY")
     field_encryption_key: str | None = Field(default=None, alias="FIELD_ENCRYPTION_KEY")
-    setup_token: str | None = Field(default=None, alias="SETUP_TOKEN")
 
     cors_origins: str = Field(default="http://localhost:3000,http://localhost:3001", alias="CORS_ORIGINS")
     allowed_hosts: str = Field(default="localhost,127.0.0.1,testserver", alias="ALLOWED_HOSTS")
@@ -102,16 +101,13 @@ class Settings(BaseSettings):
             errors.append("CSRF_SECRET_KEY must be a unique secret of at least 32 characters")
         if not self.field_encryption_key or len(self.field_encryption_key) < 32:
             errors.append("FIELD_ENCRYPTION_KEY must be a unique secret of at least 32 characters")
-        if not self.setup_token or len(self.setup_token) < 32:
-            errors.append("SETUP_TOKEN must be a unique secret of at least 32 characters")
         configured_secrets = [
             self.jwt_secret_key,
             self.csrf_secret_key,
             self.field_encryption_key,
-            self.setup_token,
         ]
         if len(set(configured_secrets)) != len(configured_secrets):
-            errors.append("JWT, CSRF, field-encryption, and setup secrets must all be different")
+            errors.append("JWT, CSRF and field-encryption secrets must all be different")
         if not self.cookie_secure:
             errors.append("COOKIE_SECURE must be true")
         if self.auth_return_tokens:

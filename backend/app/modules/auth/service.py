@@ -17,7 +17,6 @@ from app.core.pagination import PageParams
 from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, ROLE_DEFINITIONS, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
-    constant_time_compare,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -1065,10 +1064,6 @@ async def setup_status(session: AsyncSession) -> dict[str, bool]:
 
 
 async def setup_initialize(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
-    supplied_setup_token = str(payload.get("setupToken") or payload.get("setup_token") or "")
-    if settings.setup_token and not constant_time_compare(supplied_setup_token, settings.setup_token):
-        raise AccessDenied("The setup security token is invalid.")
-
     email = str(payload.get("email") or "").strip()
     password = str(payload.get("password") or "")
     errors: dict[str, str] = {}

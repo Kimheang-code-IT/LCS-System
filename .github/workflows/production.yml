@@ -230,7 +230,6 @@ jobs:
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
           CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
-          SETUP_TOKEN: ${{ secrets.SETUP_TOKEN }}
           MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minioadmin' }}
           MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
           S3_ACCESS_KEY: ${{ vars.S3_ACCESS_KEY || 'lcs-app' }}
@@ -246,7 +245,7 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,SETUP_TOKEN,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
           script: |
             set -euo pipefail
             cd "$DEPLOY_DIR"
@@ -257,7 +256,7 @@ jobs:
 
             # Fail fast if required production values are missing, before any
             # container or volume is touched.
-            for name in POSTGRES_PASSWORD JWT_SECRET_KEY CSRF_SECRET_KEY FIELD_ENCRYPTION_KEY SETUP_TOKEN MINIO_ROOT_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY S3_PUBLIC_ENDPOINT_URL; do
+            for name in POSTGRES_PASSWORD JWT_SECRET_KEY CSRF_SECRET_KEY FIELD_ENCRYPTION_KEY MINIO_ROOT_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY S3_PUBLIC_ENDPOINT_URL; do
               eval "value=\"\${$name:-}\""
               if [ -z "$value" ]; then
                 echo "Missing required production value: $name" >&2
@@ -295,7 +294,6 @@ jobs:
               write_kv JWT_SECRET_KEY "$JWT_SECRET_KEY"
               write_kv CSRF_SECRET_KEY "$CSRF_SECRET_KEY"
               write_kv FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
-              write_kv SETUP_TOKEN "$SETUP_TOKEN"
               write_kv MINIO_ROOT_USER "$MINIO_ROOT_USER"
               write_kv MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
               write_kv S3_ACCESS_KEY "$S3_ACCESS_KEY"
