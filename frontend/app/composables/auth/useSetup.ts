@@ -5,7 +5,6 @@ export type SetupInput = {
   password: string
   name?: string
   username?: string
-  setupToken?: string
 }
 
 function payloadOf(response: unknown): Record<string, unknown> {

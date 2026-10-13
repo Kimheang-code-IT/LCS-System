@@ -56,7 +56,6 @@ def _production_settings(**overrides) -> Settings:
         "JWT_SECRET_KEY": "j" * 32,
         "CSRF_SECRET_KEY": "c" * 32,
         "FIELD_ENCRYPTION_KEY": "f" * 32,
-        "SETUP_TOKEN": "s" * 32,
         "COOKIE_SECURE": True,
         "AUTH_RETURN_TOKENS": False,
         "ACCESS_TOKEN_EXPIRE_MINUTES": 15,

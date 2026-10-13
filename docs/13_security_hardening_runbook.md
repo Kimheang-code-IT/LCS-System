@@ -13,7 +13,6 @@ GitHub `production` environment for:
 - `JWT_SECRET_KEY`
 - `CSRF_SECRET_KEY`
 - `FIELD_ENCRYPTION_KEY`
-- `SETUP_TOKEN`
 - `MINIO_ROOT_PASSWORD`
 - `S3_SECRET_KEY`
 - `AWS_SSH_KEY`
@@ -27,9 +26,12 @@ secret. Re-encrypt those records with a newly generated field-encryption key in
 a planned migration before rotating the JWT key. Losing the field-encryption
 key makes those values unrecoverable.
 
-The setup screen requires `SETUP_TOKEN` when no user exists. Store this token in
-the password manager used by the deployment administrators; do not send it in
-email or chat.
+The first-run setup page (`/auth/setup`) is accepted only while no user exists
+and closes as soon as the first administrator is created. On a fresh deployment,
+complete setup immediately — until then, whoever reaches the site first could
+claim the administrator account. When the host must not be exposed before
+provisioning, create the administrator headlessly with
+`python -m app.create_admin` (see the deployment runbook).
 
 ## 2. Protect delivery and the host
 
