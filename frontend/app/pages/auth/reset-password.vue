@@ -7,6 +7,7 @@ import {
   clearPasswordResetSession,
   getPasswordResetSession,
 } from '~/utils/auth/password-reset'
+import { apiErrorDetails } from '~/utils/freight/errors'
 
 definePageMeta({
   layout: 'auth',
@@ -17,7 +18,34 @@ const router = useRouter()
 const toast = useToast()
 const { resetPasswordWithCode } = useAuth()
 const submitting = ref(false)
+const formError = ref('')
 const session = ref(getPasswordResetSession())
+const resetForm = useTemplateRef<{
+  formRef?: {
+    setErrors: (errors: { name: string, message: string }[]) => void
+    clear: () => void
+  }
+}>('resetForm')
+
+/** Errors are placed on the field they belong to, or just above the submit button. */
+function clearErrors() {
+  formError.value = ''
+  resetForm.value?.formRef?.clear()
+}
+
+function showErrors(error: unknown, fallback: string) {
+  const { message, fieldErrors } = apiErrorDetails(error)
+  const known = ['password', 'passwordConfirmation']
+  const entries = Object.entries(fieldErrors || {})
+    .filter(([name, text]) => known.includes(name) && text)
+    .map(([name, text]) => ({ name, message: text }))
+  formError.value = ''
+  if (entries.length) {
+    resetForm.value?.formRef?.setErrors(entries)
+    return
+  }
+  formError.value = message || fallback
+}
 
 usePageSeo({
   title: () => t('pages.forgetPassword.resetTitle'),
@@ -72,6 +100,7 @@ type Schema = {
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value || !session.value?.email || !session.value.code) return
+  clearErrors()
   submitting.value = true
   try {
     await resetPasswordWithCode({
@@ -88,12 +117,8 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     })
     await router.push('/auth/login')
   }
-  catch {
-    toast.add({
-      title: t('pages.forgetPassword.resetFailed'),
-      description: t('pages.forgetPassword.resetFailedDesc'),
-      color: 'error',
-    })
+  catch (error) {
+    showErrors(error, t('pages.forgetPassword.resetFailedDesc'))
   }
   finally {
     submitting.value = false
@@ -104,6 +129,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 <template>
   <div class="flex flex-col items-center justify-center">
     <UAuthForm
+      ref="resetForm"
       :schema="schema"
       :title="t('pages.forgetPassword.resetTitle')"
       icon="i-lucide-lock-keyhole"
@@ -128,6 +154,10 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
       <template #footer>
         <div class="space-y-2 text-center">
+          <p v-if="formError" class="flex items-start gap-2 text-left text-sm text-error" role="alert">
+            <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" />
+            <span>{{ formError }}</span>
+          </p>
           <UButton
             variant="link"
             size="sm"

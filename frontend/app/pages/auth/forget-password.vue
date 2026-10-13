@@ -4,6 +4,7 @@ import type { FormSubmitEvent } from '@nuxt/ui'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { startPasswordReset } from '~/utils/auth/password-reset'
+import { apiErrorDetails } from '~/utils/freight/errors'
 
 definePageMeta({
   layout: 'auth',
@@ -14,6 +15,32 @@ const router = useRouter()
 const toast = useToast()
 const { requestPasswordReset } = useAuth()
 const submitting = ref(false)
+const formError = ref('')
+const forgetForm = useTemplateRef<{
+  formRef?: {
+    setErrors: (errors: { name: string, message: string }[]) => void
+    clear: () => void
+  }
+}>('forgetForm')
+
+/** Errors are placed on the field they belong to, or just above the submit button. */
+function clearErrors() {
+  formError.value = ''
+  forgetForm.value?.formRef?.clear()
+}
+
+function showErrors(error: unknown, fallback: string) {
+  const { message, fieldErrors } = apiErrorDetails(error)
+  const entries = Object.entries(fieldErrors || {})
+    .filter(([name, text]) => name === 'email' && text)
+    .map(([name, text]) => ({ name, message: text }))
+  formError.value = ''
+  if (entries.length) {
+    forgetForm.value?.formRef?.setErrors(entries)
+    return
+  }
+  formError.value = message || fallback
+}
 
 usePageSeo({
   title: () => t('pages.forgetPassword.title'),
@@ -41,6 +68,7 @@ type Schema = { email: string }
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value) return
+  clearErrors()
   submitting.value = true
   try {
     const email = payload.data.email.trim()
@@ -53,6 +81,9 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     })
     await router.push('/auth/verify-code')
   }
+  catch (error) {
+    showErrors(error, t('api.somethingWentWrong'))
+  }
   finally {
     submitting.value = false
   }
@@ -62,6 +93,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 <template>
   <div class="flex flex-col items-center justify-center">
     <UAuthForm
+      ref="forgetForm"
       :schema="schema"
       :title="t('pages.forgetPassword.title')"
       icon="i-lucide-key-round"
@@ -86,6 +118,10 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
       <template #footer>
         <div class="space-y-2 text-center">
+          <p v-if="formError" class="flex items-start gap-2 text-left text-sm text-error" role="alert">
+            <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" />
+            <span>{{ formError }}</span>
+          </p>
           <UButton
             variant="link"
             size="sm"

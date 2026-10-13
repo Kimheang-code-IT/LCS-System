@@ -17,6 +17,8 @@ const { resendPasswordResetCode, verifyPasswordResetCode } = useAuth()
 
 const verifying = ref(false)
 const resending = ref(false)
+const formError = ref('')
+const resendError = ref('')
 const code = ref<string[]>(['', '', '', '', '', ''])
 const session = ref(getPasswordResetSession())
 
@@ -41,6 +43,7 @@ const codeValue = computed(() => code.value.join(''))
 
 async function onVerifyCode() {
   if (!codeComplete.value || verifying.value || !session.value?.email) return
+  formError.value = ''
   verifying.value = true
   try {
     await verifyPasswordResetCode(session.value.email, codeValue.value)
@@ -53,11 +56,7 @@ async function onVerifyCode() {
     await router.push('/auth/reset-password')
   }
   catch {
-    toast.add({
-      title: t('pages.forgetPassword.codeInvalid'),
-      description: t('pages.forgetPassword.codeInvalidDesc'),
-      color: 'error',
-    })
+    formError.value = t('pages.forgetPassword.codeInvalidDesc')
   }
   finally {
     verifying.value = false
@@ -66,6 +65,7 @@ async function onVerifyCode() {
 
 async function onResendCode() {
   if (resending.value || !session.value?.email) return
+  resendError.value = ''
   resending.value = true
   try {
     await resendPasswordResetCode(session.value.email)
@@ -76,10 +76,7 @@ async function onResendCode() {
     })
   }
   catch {
-    toast.add({
-      title: t('pages.forgetPassword.codeResendFailed'),
-      color: 'error',
-    })
+    resendError.value = t('pages.forgetPassword.codeResendFailed')
   }
   finally {
     resending.value = false
@@ -102,6 +99,7 @@ async function onResendCode() {
     <form class="flex w-full flex-col items-center gap-5" @submit.prevent="onVerifyCode">
       <UFormField
         :label="t('pages.forgetPassword.enterCode')"
+        :error="formError"
         class="w-full"
       >
         <UPinInput
@@ -134,6 +132,8 @@ async function onResendCode() {
           {{ t('pages.forgetPassword.resendCode') }}
         </UButton>
       </div>
+
+      <p v-if="resendError" class="text-sm text-error" role="alert">{{ resendError }}</p>
 
       <UButton
         type="submit"

@@ -4,17 +4,44 @@ import type { FormSubmitEvent, AuthFormField } from '@nuxt/ui'
 import { useSetup } from '~/composables/auth/useSetup'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
+import { apiErrorDetails } from '~/utils/freight/errors'
 
 definePageMeta({
   layout: 'auth',
 })
 
 const { t } = useI18n()
-const toast = useToast()
 const auth = useAuthStore()
 const setup = useSetup()
 const { loginWithCredentials } = useAuth()
 const submitting = ref(false)
+const formError = ref('')
+const setupForm = useTemplateRef<{
+  formRef?: {
+    setErrors: (errors: { name: string, message: string }[]) => void
+    clear: () => void
+  }
+}>('setupForm')
+
+/** Errors are placed on the field they belong to, or just above the submit button. */
+function clearErrors() {
+  formError.value = ''
+  setupForm.value?.formRef?.clear()
+}
+
+function showErrors(error: unknown, fallback: string) {
+  const { message, fieldErrors } = apiErrorDetails(error)
+  const known = ['name', 'email', 'password', 'passwordConfirmation']
+  const entries = Object.entries(fieldErrors || {})
+    .filter(([name, text]) => known.includes(name) && text)
+    .map(([name, text]) => ({ name, message: text }))
+  formError.value = ''
+  if (entries.length) {
+    setupForm.value?.formRef?.setErrors(entries)
+    return
+  }
+  formError.value = message || fallback
+}
 
 usePageSeo({
   title: () => t('pages.setup.title'),
@@ -78,8 +105,12 @@ type Schema = {
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value) return
   const data = payload.data
+
+  clearErrors()
   if (data.password !== data.passwordConfirmation) {
-    toast.add({ title: t('pages.setup.passwordMismatch'), color: 'error' })
+    setupForm.value?.formRef?.setErrors([
+      { name: 'passwordConfirmation', message: t('pages.setup.passwordMismatch') },
+    ])
     return
   }
 
@@ -106,8 +137,8 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
     await navigateTo('/auth/login', { replace: true })
   }
-  catch {
-    toast.add({ title: t('pages.setup.failed'), color: 'error' })
+  catch (error) {
+    showErrors(error, t('pages.setup.failed'))
   }
   finally {
     submitting.value = false
@@ -118,6 +149,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 <template>
   <div class="flex flex-col items-center justify-center">
     <UAuthForm
+      ref="setupForm"
       :schema="schema"
       :title="t('pages.setup.title')"
       icon="i-lucide-shield-check"
@@ -132,6 +164,13 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     >
       <template #leading>
         <img src="/logo.png" alt="Logo" class="mx-auto h-16 w-auto">
+      </template>
+
+      <template #footer>
+        <p v-if="formError" class="flex items-start gap-2 text-sm text-error" role="alert">
+          <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" />
+          <span>{{ formError }}</span>
+        </p>
       </template>
     </UAuthForm>
   </div>
