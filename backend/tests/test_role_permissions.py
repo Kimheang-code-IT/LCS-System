@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, PERMISSION_CATALOG
+from app.core.permissions import (
+    NAVIGATION_PAGE_ALIASES,
+    PAGE_PERMISSION_SOURCE_CODES,
+    PERMISSION_CATALOG,
+    SOURCE_PERMISSIONS,
+)
 from app.modules.auth import service as auth_service
 from tests.conftest import login
 
@@ -9,6 +14,70 @@ def test_permission_catalog_is_unique_and_covers_matrix():
     codes = [code for code, _, _ in PERMISSION_CATALOG]
     assert len(codes) == len(set(codes))
     assert set(PAGE_PERMISSION_SOURCE_CODES).issubset(set(codes))
+
+
+def test_every_source_permission_is_reachable_from_a_page_checkbox():
+    """No capability may be locked away from roles created in the Roles screen."""
+    implied = {code for codes in PAGE_PERMISSION_SOURCE_CODES.values() for code in codes}
+    unreachable = sorted(code for code, _, _ in SOURCE_PERMISSIONS if code not in implied)
+    assert unreachable == []
+
+
+def test_every_source_permission_has_a_page_key_for_legacy_roles():
+    missing = sorted(
+        code for code, _, _ in SOURCE_PERMISSIONS if code not in auth_service.PAGE_KEYS_BY_SOURCE
+    )
+    assert missing == []
+
+
+def test_operational_capabilities_come_from_the_page_checkboxes():
+    expanded = auth_service.expand_source_permissions(
+        {
+            "operations.service_orders.view",
+            "operations.service_orders.edit",
+            "sales.quotations.view",
+            "finance.financial_documents.edit",
+            "master.reference.edit",
+        }
+    )
+    assert {
+        "service_order_config.view",
+        "service_order_config.create",
+        "service_order_config.update",
+        "attachment.read",
+        "attachment.upload",
+        "attachment.delete",
+        "customs_credential.retrieve",
+    } <= expanded
+
+
+def test_service_charge_view_is_separate_from_create():
+    view_only = auth_service.expand_source_permissions({"finance.service_charges.view"})
+    assert "service_charge.read" in view_only
+    assert "service_charge.create" not in view_only
+    assert "service_charge.create" in auth_service.expand_source_permissions(
+        {"finance.service_charges.create"}
+    )
+
+
+def test_navigation_pages_are_granted_by_their_row():
+    """Generic-record and report pages must appear for the rows that serve them."""
+    permissions = auth_service.expand_source_permissions({"master.reference.view", "report.read"})
+    _, pages = auth_service.resolve_page_keys(permissions, False)
+    assert "operations.jobs.view" in pages
+    assert "operations.customs.view" in pages
+    assert "finance.debit_notes.view" in pages
+    assert "reports.view" in pages
+    assert "finance.accounts_receivable.view" in pages
+
+
+def test_every_navigation_page_code_expands_to_something():
+    """A page code that grants no API permission would render a page that 403s."""
+    catalog = {code for code, _, _ in PERMISSION_CATALOG}
+    for code, implied in NAVIGATION_PAGE_ALIASES.items():
+        assert code in catalog, f"{code} is missing from the catalog"
+        assert PAGE_PERMISSION_SOURCE_CODES[code] == implied
+        assert set(implied) <= catalog, f"{code} implies an unknown API permission"
 
 
 def test_page_permissions_expand_to_source_permissions():

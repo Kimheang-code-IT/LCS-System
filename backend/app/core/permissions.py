@@ -27,6 +27,7 @@ SOURCE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("service_order_config.create", "service_order_config", "create"),
     ("service_order_config.update", "service_order_config", "update"),
     ("service_order_config.delete", "service_order_config", "delete"),
+    ("service_charge.read", "service_charge", "read"),
     ("service_charge.create", "service_charge", "create"),
     ("service_charge.issue", "service_charge", "issue"),
     ("service_charge.convert_to_invoice", "service_charge", "convert_to_invoice"),
@@ -66,6 +67,25 @@ PAGE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("backup.manage", "backup", "manage"),
     ("finance.view", "finance", "view"),
     ("report.export", "report", "export"),
+    # Navigation codes for pages served by the generic record API (master data)
+    # or the report API. They are granted together with the matching matrix row
+    # (see PAGE_PERMISSION_SOURCE_CODES and PAGE_KEYS_BY_SOURCE), so the Roles
+    # screen needs no separate checkbox for them.
+    ("sales.companies.view", "sales.companies", "view"),
+    ("operations.jobs.view", "operations.jobs", "view"),
+    ("operations.shipments.view", "operations.shipments", "view"),
+    ("operations.customs.view", "operations.customs", "view"),
+    ("operations.documents.view", "operations.documents", "view"),
+    ("operations.deliveries.view", "operations.deliveries", "view"),
+    ("finance.debit_notes.view", "finance.debit_notes", "view"),
+    ("finance.customer_payments.view", "finance.customer_payments", "view"),
+    ("finance.job_charges.view", "finance.job_charges", "view"),
+    ("finance.supplier_costs.view", "finance.supplier_costs", "view"),
+    ("finance.supplier_payments.view", "finance.supplier_payments", "view"),
+    ("reports.view", "reports", "view"),
+    ("finance.accounts_receivable.view", "finance.accounts_receivable", "view"),
+    ("finance.accounts_payable.view", "finance.accounts_payable", "view"),
+    ("finance.job_profitability.view", "finance.job_profitability", "view"),
 )
 
 # --- Matrix page permissions (Roles & Permissions screen) --------------------
@@ -134,31 +154,67 @@ MATRIX_PAGE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("settings.backup.edit", "settings.backup", "edit"),
 )
 
+# Navigation permission codes for pages served by another row: the generic record
+# API (master data) or the report API. Granting the matching matrix row also grants
+# these codes, so a role created in Roles & Permissions can actually open those
+# pages; without them the page stayed invisible to every non-administrator role.
+NAVIGATION_PAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "sales.companies.view": ("master.reference.view",),
+    "operations.jobs.view": ("master.reference.view",),
+    "operations.shipments.view": ("master.reference.view",),
+    "operations.customs.view": ("master.reference.view",),
+    "operations.documents.view": ("master.reference.view",),
+    "operations.deliveries.view": ("master.reference.view",),
+    "finance.debit_notes.view": ("master.reference.view",),
+    "finance.customer_payments.view": ("master.reference.view",),
+    "finance.job_charges.view": ("master.reference.view",),
+    "finance.supplier_costs.view": ("master.reference.view",),
+    "finance.supplier_payments.view": ("master.reference.view",),
+    "reports.view": ("report.read",),
+    "finance.accounts_receivable.view": ("report.read",),
+    "finance.accounts_payable.view": ("report.read",),
+    "finance.job_profitability.view": ("report.read",),
+}
+
 # (page permission) -> source/API permission codes granted together with it.
 PAGE_PERMISSION_SOURCE_CODES: dict[str, tuple[str, ...]] = {
     "dashboard.view": (),
-    "sales.quotations.view": ("quotation.read",),
+    "sales.quotations.view": ("quotation.read", "attachment.read"),
     "sales.quotations.create": ("quotation.create",),
-    "sales.quotations.edit": ("quotation.update_draft", "quotation.send", "quotation.accept", "quotation.convert"),
+    "sales.quotations.edit": (
+        "quotation.update_draft",
+        "quotation.send",
+        "quotation.accept",
+        "quotation.convert",
+        "attachment.upload",
+    ),
     "sales.quotations.delete": ("quotation.update_draft",),
     "sales.quotations.export": ("report.export",),
-    "operations.service_orders.view": ("service_order.read",),
-    "operations.service_orders.create": ("service_order.create",),
-    "operations.service_orders.edit": ("service_order.update", "service_order.complete"),
-    "operations.service_orders.delete": ("service_order.update",),
+    "operations.service_orders.view": ("service_order.read", "service_order_config.view", "attachment.read"),
+    "operations.service_orders.create": ("service_order.create", "service_order_config.create"),
+    "operations.service_orders.edit": (
+        "service_order.update",
+        "service_order.complete",
+        "service_order_config.create",
+        "service_order_config.update",
+        "attachment.upload",
+    ),
+    "operations.service_orders.delete": ("service_order.update", "service_order_config.delete"),
     "operations.service_orders.export": ("report.export",),
-    "finance.service_charges.view": ("service_charge.create",),
+    "finance.service_charges.view": ("service_charge.read",),
     "finance.service_charges.create": ("service_charge.create",),
     "finance.service_charges.edit": ("service_charge.issue", "service_charge.convert_to_invoice"),
     "finance.service_charges.delete": ("service_charge.create",),
     "finance.service_charges.export": ("report.export",),
-    "finance.financial_documents.view": ("financial_document.read",),
+    "finance.financial_documents.view": ("financial_document.read", "attachment.read"),
     "finance.financial_documents.create": ("financial_document.create",),
     "finance.financial_documents.edit": (
         "financial_document.update_draft",
         "financial_document.post",
         "financial_document.reverse",
         "financial_document.allocate",
+        "attachment.upload",
+        "attachment.delete",
     ),
     "finance.financial_documents.delete": ("financial_document.update_draft",),
     "finance.financial_documents.export": ("report.export",),
@@ -173,7 +229,7 @@ PAGE_PERMISSION_SOURCE_CODES: dict[str, tuple[str, ...]] = {
     "finance.reports.export": ("report.export",),
     "master.reference.view": ("master.reference.view",),
     "master.reference.create": ("master.reference.manage",),
-    "master.reference.edit": ("master.reference.manage",),
+    "master.reference.edit": ("master.reference.manage", "customs_credential.retrieve"),
     "master.reference.delete": ("master.reference.manage",),
     "master.reference.export": ("report.export",),
     "configuration.view": ("configuration.manage",),
@@ -201,6 +257,7 @@ PAGE_PERMISSION_SOURCE_CODES: dict[str, tuple[str, ...]] = {
     "settings.app_config.edit": ("configuration.manage",),
     "settings.backup.view": ("backup.read",),
     "settings.backup.edit": ("backup.manage",),
+    **NAVIGATION_PAGE_ALIASES,
 }
 
 
@@ -257,6 +314,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "service_order_config.create",
             "service_order_config.update",
             "service_order_config.delete",
+            "service_charge.read",
             "service_charge.create",
             "service_charge.issue",
             "service_charge.convert_to_invoice",
@@ -308,6 +366,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "service_order.complete",
             "service_order_config.view",
             "service_order_config.update",
+            "service_charge.read",
             "service_charge.create",
             "service_charge.issue",
             "financial_document.read",
@@ -330,6 +389,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "quotation.accept",
             "quotation.convert",
             "service_order.read",
+            "service_charge.read",
             "service_charge.create",
             "service_charge.issue",
             "attachment.read",
@@ -348,6 +408,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "service_order.create",
             "service_order.update",
             "service_order.complete",
+            "service_charge.read",
             "service_charge.create",
             "service_charge.issue",
             "attachment.read",
@@ -361,6 +422,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "description": "Financial drafts, payments, and allocations",
         "permissions": (
             "service_order.read",
+            "service_charge.read",
             "service_charge.create",
             "service_charge.issue",
             "service_charge.convert_to_invoice",
@@ -384,6 +446,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
         "name": "Finance Manager",
         "description": "Posting, periods, journals, and reversals",
         "permissions": (
+            "service_charge.read",
             "financial_document.read",
             "financial_document.create",
             "financial_document.update_draft",
@@ -412,6 +475,7 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
             "role.read",
             "quotation.read",
             "service_order.read",
+            "service_charge.read",
             "financial_document.read",
             "journal_entry.read",
             "accounting_period.read",

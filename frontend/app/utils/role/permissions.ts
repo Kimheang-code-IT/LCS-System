@@ -45,11 +45,45 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
 ] as const
 
 /**
+ * Navigation permission codes that are served by another matrix row: pages on
+ * the generic record API (master data) or the report API. Granting the row also
+ * grants these page codes, so no extra checkbox is needed to reveal the page,
+ * and a role that only holds an alias still shows the row as checked.
+ */
+export const PAGE_PERMISSION_ALIASES: Record<string, readonly string[]> = {
+  master_reference: [
+    'sales.companies.view',
+    'operations.jobs.view',
+    'operations.shipments.view',
+    'operations.customs.view',
+    'operations.documents.view',
+    'operations.deliveries.view',
+    'finance.debit_notes.view',
+    'finance.customer_payments.view',
+    'finance.job_charges.view',
+    'finance.supplier_costs.view',
+    'finance.supplier_payments.view',
+  ],
+  operations_reports: ['reports.view'],
+  finance_reports: [
+    'finance.accounts_receivable.view',
+    'finance.accounts_payable.view',
+    'finance.job_profitability.view',
+  ],
+}
+
+const ALIAS_ROWS: Map<string, string> = new Map(
+  ROLE_DOCUMENT_TYPES.flatMap(definition =>
+    (PAGE_PERMISSION_ALIASES[definition.value] || []).map(alias => [alias, definition.value] as const),
+  ),
+)
+
+/**
  * Legacy source/API permission codes mapped onto matrix pages. Used to hydrate
  * the matrix for roles that were granted permissions before the page catalog
  * existed. New roles store the page codes directly.
  */
-const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: string, action: RolePermissionAction }>> = {
+export const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: string, action: RolePermissionAction }>> = {
   'quotation.read': [{ value: 'sales_quotations', action: 'view' }],
   'quotation.create': [{ value: 'sales_quotations', action: 'create' }],
   'quotation.update_draft': [{ value: 'sales_quotations', action: 'edit' }],
@@ -60,7 +94,12 @@ const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: stri
   'service_order.create': [{ value: 'operations_service_orders', action: 'create' }],
   'service_order.update': [{ value: 'operations_service_orders', action: 'edit' }],
   'service_order.complete': [{ value: 'operations_service_orders', action: 'edit' }],
-  'service_charge.create': [{ value: 'finance_service_charges', action: 'view' }, { value: 'finance_service_charges', action: 'create' }],
+  'service_order_config.view': [{ value: 'operations_service_orders', action: 'view' }],
+  'service_order_config.create': [{ value: 'operations_service_orders', action: 'create' }, { value: 'operations_service_orders', action: 'edit' }],
+  'service_order_config.update': [{ value: 'operations_service_orders', action: 'edit' }],
+  'service_order_config.delete': [{ value: 'operations_service_orders', action: 'delete' }],
+  'service_charge.read': [{ value: 'finance_service_charges', action: 'view' }],
+  'service_charge.create': [{ value: 'finance_service_charges', action: 'create' }],
   'service_charge.issue': [{ value: 'finance_service_charges', action: 'edit' }],
   'service_charge.convert_to_invoice': [{ value: 'finance_service_charges', action: 'edit' }],
   'financial_document.read': [{ value: 'finance_financial_documents', action: 'view' }],
@@ -81,6 +120,18 @@ const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: stri
   'archive.hard_delete': [{ value: 'admin_archive', action: 'delete' }],
   'report.read': [{ value: 'operations_reports', action: 'view' }, { value: 'finance_reports', action: 'view' }],
   'report.export': [{ value: 'operations_reports', action: 'export' }, { value: 'finance_reports', action: 'export' }],
+  'attachment.read': [
+    { value: 'sales_quotations', action: 'view' },
+    { value: 'operations_service_orders', action: 'view' },
+    { value: 'finance_financial_documents', action: 'view' },
+  ],
+  'attachment.upload': [
+    { value: 'sales_quotations', action: 'edit' },
+    { value: 'operations_service_orders', action: 'edit' },
+    { value: 'finance_financial_documents', action: 'edit' },
+  ],
+  'attachment.delete': [{ value: 'finance_financial_documents', action: 'edit' }],
+  'customs_credential.retrieve': [{ value: 'master_reference', action: 'edit' }],
   'master.reference.view': [{ value: 'master_reference', action: 'view' }],
   'master.reference.manage': [
     { value: 'master_reference', action: 'create' },
@@ -197,6 +248,12 @@ export function permissionRowsFromFlatKeys(
         continue
       }
     }
+    const aliasValue = ALIAS_ROWS.get(code)
+    if (aliasValue) {
+      add(aliasValue, 'view')
+      continue
+    }
+
     for (const mapping of SOURCE_PERMISSION_PAGE_ACTIONS[code] || []) {
       add(mapping.value, mapping.action)
     }
@@ -248,6 +305,10 @@ export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[]
     const prefix = definitions.get(row.documentType)?.permissionPrefix
     if (!prefix) continue
     for (const action of row.actions) keys.add(`${prefix}.${action}`)
+    // Navigation aliases travel with the row so the page is visible in the menu.
+    if (row.actions.includes('view')) {
+      for (const alias of PAGE_PERMISSION_ALIASES[row.documentType] || []) keys.add(alias)
+    }
   }
   return [...keys].sort()
 }
