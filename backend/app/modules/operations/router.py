@@ -109,7 +109,7 @@ async def bulk_save_component_group_rows(
 @router.get("/service-orders/{identifier}/charges")
 async def list_order_charges(
     identifier: str,
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_order_charges(session, context, identifier)}
@@ -128,7 +128,7 @@ async def create_order_charge(
 @router.get("/service-orders/{identifier}/invoice")
 async def get_service_order_invoice(
     identifier: str,
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     from app.modules.finance import service as finance_service
@@ -182,7 +182,7 @@ async def finish_service_order(
 @router.get("/service-charges")
 async def list_service_charges(
     page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_charges(session, context, page)}
@@ -200,7 +200,7 @@ async def create_service_charge(
 @router.get("/service-charges/{charge_id}")
 async def get_service_charge(
     charge_id: str,
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.get_charge(session, context, int(charge_id))}

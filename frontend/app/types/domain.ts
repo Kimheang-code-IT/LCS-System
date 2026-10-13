@@ -71,6 +71,7 @@ export const SOURCE_PERMISSIONS = [
   'service_order_config.create',
   'service_order_config.update',
   'service_order_config.delete',
+  'service_charge.read',
   'service_charge.create',
   'service_charge.issue',
   'service_charge.convert_to_invoice',

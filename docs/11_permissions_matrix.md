@@ -49,6 +49,7 @@ These gate API endpoints. Every code below is enforced server-side.
 | service_order_config.create | service_order_config | create |
 | service_order_config.update | service_order_config | update |
 | service_order_config.delete | service_order_config | delete |
+| service_charge.read | service_charge | read |
 | service_charge.create | service_charge | create |
 | service_charge.issue | service_charge | issue |
 | service_charge.convert_to_invoice | service_charge | convert_to_invoice |
@@ -116,31 +117,44 @@ These are the action codes stored by the role matrix. The page-level
 | App config | `settings.app_config.view`, `settings.app_config.edit` |
 | Backup | `settings.backup.view`, `settings.backup.edit` |
 
-### 2.4 Page grant → API permission mapping
+### 2.4 Navigation page codes (aliases)
+
+Some pages are served by another matrix row and therefore have no checkbox of
+their own. Their navigation code travels with the row that serves them
+(`NAVIGATION_PAGE_ALIASES`), so a role created in Roles & Permissions can open
+them. Without this, the page stayed invisible to every non-administrator role.
+
+| Pages | Navigation code | Granted with | API permission |
+|---|---|---|---|
+| Companies, Jobs, Shipments, Customs, Operations documents, Deliveries, Debit notes, Customer payments, Job charges, Supplier costs, Supplier payments | `sales.companies.view`, `operations.jobs.view`, `operations.shipments.view`, `operations.customs.view`, `operations.documents.view`, `operations.deliveries.view`, `finance.debit_notes.view`, `finance.customer_payments.view`, `finance.job_charges.view`, `finance.supplier_costs.view`, `finance.supplier_payments.view` | Master data (`master.reference.*`) | `master.reference.view` |
+| Reports | `reports.view` | Operations reports | `report.read` |
+| Accounts receivable, Accounts payable, Job profitability | `finance.accounts_receivable.view`, `finance.accounts_payable.view`, `finance.job_profitability.view` | Finance reports | `report.read` |
+
+### 2.5 Page grant → API permission mapping
 
 Granting a page/action also enables the API permissions it implies.
 
 | Page permission | Implied API permissions |
 |---|---|
 | dashboard.view | (none) |
-| sales.quotations.view | quotation.read |
+| sales.quotations.view | quotation.read, attachment.read |
 | sales.quotations.create | quotation.create |
-| sales.quotations.edit | quotation.update_draft, quotation.send, quotation.accept, quotation.convert |
+| sales.quotations.edit | quotation.update_draft, quotation.send, quotation.accept, quotation.convert, attachment.upload |
 | sales.quotations.delete | quotation.update_draft |
 | sales.quotations.export | report.export |
-| operations.service_orders.view | service_order.read |
-| operations.service_orders.create | service_order.create |
-| operations.service_orders.edit | service_order.update, service_order.complete |
-| operations.service_orders.delete | service_order.update |
+| operations.service_orders.view | service_order.read, service_order_config.view, attachment.read |
+| operations.service_orders.create | service_order.create, service_order_config.create |
+| operations.service_orders.edit | service_order.update, service_order.complete, service_order_config.create, service_order_config.update, attachment.upload |
+| operations.service_orders.delete | service_order.update, service_order_config.delete |
 | operations.service_orders.export | report.export |
-| finance.service_charges.view | service_charge.create |
+| finance.service_charges.view | service_charge.read |
 | finance.service_charges.create | service_charge.create |
 | finance.service_charges.edit | service_charge.issue, service_charge.convert_to_invoice |
 | finance.service_charges.delete | service_charge.create |
 | finance.service_charges.export | report.export |
-| finance.financial_documents.view | financial_document.read |
+| finance.financial_documents.view | financial_document.read, attachment.read |
 | finance.financial_documents.create | financial_document.create |
-| finance.financial_documents.edit | financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate |
+| finance.financial_documents.edit | financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate, attachment.upload, attachment.delete |
 | finance.financial_documents.delete | financial_document.update_draft |
 | finance.financial_documents.export | report.export |
 | finance.accounting.view | journal_entry.read, accounting_period.read |
@@ -154,6 +168,7 @@ Granting a page/action also enables the API permissions it implies.
 | finance.reports.export | report.export |
 | master.reference.view | master.reference.view |
 | master.reference.create/edit/delete | master.reference.manage |
+| master.reference.edit | master.reference.manage, customs_credential.retrieve |
 | master.reference.export | report.export |
 | configuration.view/create/delete | configuration.manage |
 | configuration.edit | configuration.manage, configuration.configure |
@@ -204,7 +219,7 @@ user.read, user.manage, role.read, role.manage,
 quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
 service_order.read, service_order.create, service_order.update, service_order.complete,
 service_order_config.view, service_order_config.create, service_order_config.update, service_order_config.delete,
-service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
+service_charge.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
 financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate,
 journal_entry.read, journal_entry.create, journal_entry.post,
 accounting_period.read, accounting_period.close, chart_of_accounts.manage,
@@ -220,7 +235,7 @@ user.read, role.read,
 quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
 service_order.read, service_order.create, service_order.update, service_order.complete,
 service_order_config.view, service_order_config.update,
-service_charge.create, service_charge.issue,
+service_charge.read, service_charge.create, service_charge.issue,
 financial_document.read, attachment.read, attachment.upload, audit_log.read, report.read,
 master.reference.view, master.reference.manage
 ```
@@ -229,7 +244,7 @@ master.reference.view, master.reference.manage
 
 ```text
 quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
-service_order.read, service_charge.create, service_charge.issue,
+service_order.read, service_charge.read, service_charge.create, service_charge.issue,
 attachment.read, attachment.upload, report.read, master.reference.view
 ```
 
@@ -238,14 +253,14 @@ attachment.read, attachment.upload, report.read, master.reference.view
 ```text
 quotation.read, quotation.convert,
 service_order.read, service_order.create, service_order.update, service_order.complete,
-service_charge.create, service_charge.issue,
+service_charge.read, service_charge.create, service_charge.issue,
 attachment.read, attachment.upload, report.read, master.reference.view
 ```
 
 ### 3.6 Finance Officer
 
 ```text
-service_order.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
+service_order.read, service_charge.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
 financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.allocate,
 journal_entry.read, journal_entry.create, journal_entry.post,
 accounting_period.read, attachment.read, attachment.upload, report.read,
@@ -255,6 +270,7 @@ master.reference.view, finance.view
 ### 3.7 Finance Manager
 
 ```text
+service_charge.read,
 financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate,
 journal_entry.read, journal_entry.create, journal_entry.post,
 accounting_period.read, accounting_period.close, chart_of_accounts.manage,
@@ -265,7 +281,7 @@ audit_log.read, attachment.read, report.read, master.reference.view, finance.vie
 
 ```text
 user.read, role.read,
-quotation.read, service_order.read,
+quotation.read, service_order.read, service_charge.read,
 financial_document.read, journal_entry.read, accounting_period.read,
 attachment.read, audit_log.read, report.read, master.reference.view, finance.view
 ```
