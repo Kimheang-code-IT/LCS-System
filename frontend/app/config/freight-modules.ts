@@ -42,6 +42,8 @@ export type FreightField = {
   type?: FreightFieldType
   options?: readonly FreightSelectOption[] | FreightSelectOption[]
   required?: boolean
+  /** Rendered only while creating a record (e.g. the initial user password); hidden when editing. */
+  createOnly?: boolean
   colSpan?: 1 | 2
   computed?: boolean
   helpKey?: string
@@ -1174,6 +1176,7 @@ export const freightModules: FreightModule[] = [
       f('username', 'Username', 'ឈ្មោះអ្នកប្រើ', 'General', 'ទូទៅ'),
       f('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ', 'General', 'ទូទៅ'),
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ'),
+      f('password', 'Password', 'ពាក្យសម្ងាត់', 'General', 'ទូទៅ', 'password', undefined, { required: true, createOnly: true }),
       f('role', 'Role Name', 'ឈ្មោះតួនាទី', 'General', 'ទូទៅ', 'select', undefined, { required: true }),
     ],
   }),

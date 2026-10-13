@@ -885,7 +885,10 @@ async function save(status?: string) {
         if (!ok) return
       }
     }
+    const isNew = isCreate.value || !payload.id
     const missing = module.value.fields.filter((field) => {
+      // A create-only field (the initial password) is not submitted on update.
+      if (field.createOnly && !isNew) return false
       if (module.value?.collection === 'jobCharges' && field.key === 'chargeNo' && !String(payload.jobNo || '').trim()) {
         return !String(payload.chargeNo ?? '').trim()
       }
@@ -895,13 +898,12 @@ async function save(status?: string) {
       toast.add({ title: t('freight.ui.missingRequired'), description: missing.map(fieldLabel).join(', '), color: 'error' })
       return
     }
-    if (isCreate.value || !payload.id) {
+    if (isNew) {
       payload.createdAt ||= new Date().toISOString()
       payload.createdBy ||= String(currentUser.value?.name || 'Current User')
       payload.status ||= defaultStatusForModule(module.value)
       payload.currency ||= localization.value.currency
     }
-    const isNew = isCreate.value || !payload.id
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
     toast.add({ title: t('freight.ui.save'), color: 'success' })

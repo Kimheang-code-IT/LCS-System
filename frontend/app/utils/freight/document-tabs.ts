@@ -448,11 +448,16 @@ function recipeTabs(module: FreightModule, options: ModuleDocumentTabsOptions): 
 }
 
 function defaultTabs(module: FreightModule, options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
+  // Create-only fields (e.g. the initial user password) are not part of an
+  // update, so they are hidden while editing an existing record.
+  const editableFields = options.isCreate === false
+    ? module.fields.filter(field => !field.createOnly)
+    : module.fields
   // Reference (Master Data / Configuration) status is changed from each row's
   // "..." menu, not from the document form, so keep it off the form here.
   const fields = (module.group === 'master' || module.group === 'configuration')
-    ? module.fields.filter(field => field.key !== 'status')
-    : module.fields
+    ? editableFields.filter(field => field.key !== 'status')
+    : editableFields
   const tabs: DocumentTabSchema[] = [{
     id: 'details',
     labelKey: 'freight.sections.details',
