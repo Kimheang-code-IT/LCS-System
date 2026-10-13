@@ -357,13 +357,12 @@ async def test_user_create_exposes_role_and_normalizes_status(client):
     created = await client.post(
         "/api/v1/users",
         headers=headers,
-        # The UI posts camelCase keys, an explicit auto-generated user code and a
-        # display-case status.
+        # The UI posts camelCase keys without a user code (the backend derives it
+        # from the username) and a display-case status.
         json={
             "username": "new.user",
             "displayName": "New User",
             "email": "new.user@example.com",
-            "userCode": "NEW-USER",
             "role": "AUDITOR",
             "status": "Active",
             "password": "Passw0rd!",
@@ -371,7 +370,7 @@ async def test_user_create_exposes_role_and_normalizes_status(client):
     )
     assert created.status_code == 201, created.text
     data = created.json()["data"]
-    assert data["userCode"] == "NEW-USER"
+    assert data["userCode"] == "NEW.USER"
     assert data["role"] == "AUDITOR"
     assert data["status"] == "ACTIVE"
 

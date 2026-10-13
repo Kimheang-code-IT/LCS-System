@@ -1171,8 +1171,6 @@ export const freightModules: FreightModule[] = [
       col('status', 'Status', 'ស្ថានភាព'),
     ],
     fields: [
-      // Editable; seeds from the username while empty. Status is changed from the row "..." menu.
-      f('userCode', 'User Code', 'លេខកូដអ្នកប្រើ', 'General', 'ទូទៅ', 'text'),
       f('username', 'Username', 'ឈ្មោះអ្នកប្រើ', 'General', 'ទូទៅ'),
       f('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ', 'General', 'ទូទៅ'),
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ'),

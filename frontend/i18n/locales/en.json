@@ -2135,7 +2135,7 @@
       "photoRemoveFailed": "Could not remove photo",
       "photoRemoveFailedDesc": "Try again in a moment.",
       "currentPasswordHelp": "Enter your current password to confirm you own this account.",
-      "newPasswordHelp": "Choose a new password of at least 12 characters.",
+      "newPasswordHelp": "Choose a new password of at least 8 characters.",
       "confirmPasswordHelp": "Re-type the new password to confirm it matches."
     },
     "common": {
@@ -3146,7 +3146,8 @@
       "newPasswordPlaceholder": "Enter a new password",
       "confirmPassword": "Confirm password",
       "confirmPasswordPlaceholder": "Re-enter your new password",
-      "passwordMin": "Password must be at least 12 characters",
+      "passwordMin": "Password must be at least 8 characters",
+      "passwordMax": "Password must not exceed 20 characters",
       "passwordMismatch": "Passwords do not match",
       "resetSubmit": "Update password",
       "resetSuccess": "Password updated",
@@ -3154,7 +3155,7 @@
       "resetFailed": "Could not update password",
       "resetFailedDesc": "Please try again or request a new code.",
       "emailHelp": "We send a 6-digit reset code to this email.",
-      "newPasswordHelp": "Choose a new password of at least 12 characters.",
+      "newPasswordHelp": "Choose a new password of at least 8 characters.",
       "confirmPasswordHelp": "Re-type the new password to confirm it matches.",
       "codeHelp": "Enter the 6-digit code from your email."
     },
@@ -3177,6 +3178,8 @@
       "email": "Email",
       "password": "Password",
       "confirmPassword": "Confirm password",
+      "passwordMin": "Password must be at least 8 characters",
+      "passwordMax": "Password must not exceed 20 characters",
       "passwordMismatch": "Passwords do not match",
       "submit": "Create administrator",
       "failed": "Setup failed. Please try again."
