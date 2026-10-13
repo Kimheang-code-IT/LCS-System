@@ -1559,6 +1559,7 @@
       "audit": "Recent audit events"
     },
     "fieldHelp": {
+      "password": "Initial password for the new account. Use 8 to 20 characters.",
       "quotationNo": "Official quotation number. Preview only — the backend allocates the legal number.",
       "jobNo": "Service order / job number used to track this shipment.",
       "instanceMode": "Choose SINGLE for one record per service order or REPEATABLE for multiple records or cards.",
