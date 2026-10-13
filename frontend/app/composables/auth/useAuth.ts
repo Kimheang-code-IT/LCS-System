@@ -18,12 +18,16 @@ export function useAuth() {
     return (response && typeof response === 'object' ? response : {}) as Record<string, unknown>
   }
 
+  // The auth pages render failures inline (field/form errors), so the global API
+  // toast is suppressed for these endpoints to avoid duplicate notifications.
+  const inlineErrors = { suppressErrorToast: true } as const
+
   async function loginWithCredentials(
     email: string,
     password: string,
     rememberMe = false,
   ): Promise<{ data: LoginResult }> {
-    const response = await api.post(ApiV1Endpoints.LOGIN, { username: email, password, remember_me: rememberMe })
+    const response = await api.post(ApiV1Endpoints.LOGIN, { username: email, password, remember_me: rememberMe }, inlineErrors)
     const data = payloadOf(response)
     auth.setTokens(
       typeof data.access_token === 'string' ? data.access_token : null,
@@ -33,17 +37,17 @@ export function useAuth() {
   }
 
   async function requestPasswordReset(email: string) {
-    await api.post(ApiV1Endpoints.AUTH_FORGOT_PASSWORD, { email })
+    await api.post(ApiV1Endpoints.AUTH_FORGOT_PASSWORD, { email }, inlineErrors)
     return { data: { sent: true } }
   }
 
   async function verifyPasswordResetCode(email: string, code: string) {
-    await api.post(ApiV1Endpoints.AUTH_RESET_VERIFY, { email, code })
+    await api.post(ApiV1Endpoints.AUTH_RESET_VERIFY, { email, code }, inlineErrors)
     return { data: { verified: true } }
   }
 
   async function resendPasswordResetCode(email: string) {
-    await api.post(ApiV1Endpoints.AUTH_RESET_RESEND, { email })
+    await api.post(ApiV1Endpoints.AUTH_RESET_RESEND, { email }, inlineErrors)
     return { data: { sent: true } }
   }
 
@@ -58,7 +62,7 @@ export function useAuth() {
       code: input.code,
       password: input.password,
       password_confirmation: input.passwordConfirmation,
-    })
+    }, inlineErrors)
     return { data: { reset: true } }
   }
 

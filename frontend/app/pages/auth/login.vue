@@ -5,6 +5,7 @@ import { readRememberMe, writeRememberMe } from '~/utils/auth/remember-me'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { safeInternalPath } from '~/utils/auth/session'
+import { apiErrorDetails } from '~/utils/freight/errors'
 
 definePageMeta({
   layout: 'auth',
@@ -13,11 +14,36 @@ definePageMeta({
 const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const toast = useToast()
 const auth = useAuthStore()
 const { loginWithCredentials } = useAuth()
 const submitting = ref(false)
-const loginForm = useTemplateRef<{ state?: Record<string, unknown> }>('loginForm')
+const formError = ref('')
+const loginForm = useTemplateRef<{
+  state?: Record<string, unknown>
+  formRef?: {
+    setErrors: (errors: { name: string, message: string }[]) => void
+    clear: () => void
+  }
+}>('loginForm')
+
+/** Errors are placed on the field they belong to, or just above the submit button. */
+function clearErrors() {
+  formError.value = ''
+  loginForm.value?.formRef?.clear()
+}
+
+function showErrors(error: unknown, fallback: string) {
+  const { message, fieldErrors } = apiErrorDetails(error)
+  const entries = Object.entries(fieldErrors || {})
+    .filter(([name, text]) => ['email', 'password'].includes(name) && text)
+    .map(([name, text]) => ({ name, message: text }))
+  formError.value = ''
+  if (entries.length) {
+    loginForm.value?.formRef?.setErrors(entries)
+    return
+  }
+  formError.value = message || fallback
+}
 
 usePageSeo({
   title: () => t('pages.auth.loginTitle'),
@@ -79,6 +105,7 @@ type Schema = {
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
   if (submitting.value) return
 
+  clearErrors()
   submitting.value = true
   try {
     const formState = loginForm.value?.state || {}
@@ -89,11 +116,7 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     const user = result.data?.user
 
     if (!user) {
-      toast.add({
-        title: t('pages.auth.loginFailed'),
-        description: t('pages.auth.loginFailedDesc'),
-        color: 'error',
-      })
+      showErrors(null, t('pages.auth.loginFailedDesc'))
       return
     }
 
@@ -101,12 +124,8 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     auth.login(user)
     await router.replace(safeInternalPath(route.query.redirect) || '/')
   }
-  catch {
-    toast.add({
-      title: t('pages.auth.loginFailed'),
-      description: t('pages.auth.loginFailedDesc'),
-      color: 'error',
-    })
+  catch (error) {
+    showErrors(error, t('pages.auth.loginFailedDesc'))
   }
   finally {
     submitting.value = false
@@ -136,6 +155,10 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
       <template #footer>
         <div class="space-y-3">
+          <p v-if="formError" class="flex items-start gap-2 text-sm text-error" role="alert">
+            <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" />
+            <span>{{ formError }}</span>
+          </p>
           <div class="text-center">
             <UButton
               variant="link"
