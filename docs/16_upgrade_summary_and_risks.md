@@ -112,6 +112,7 @@ what came back — is maintained once in `docs/15_migration_and_rollback_guide.m
 | `docs/06_database_design.sql` had no generator, so it could silently drift from the models | `test_schema_docs.py` would fail with no stated remedy | Added `backend/scripts/generate_schema_dump.py` |
 | `rejected_at` on quotations was never written | Rejections were indistinguishable from abandoned drafts | Wired up via the new reject endpoint |
 | Revision numbers were allocated with `MAX()+1` and no lock | Concurrent re-quotes could collide | Row lock added |
+| Auto-created customer codes used the second-precision stamp `P-YYMMDDHHMMSS` | Two quotations for two new customers saved in the same second failed with a unique violation on the active `party_code` index | `new_party_code` adds a random suffix, and `resolve_party_by_name` re-checks before insert (`test_quotations.py::test_two_new_customers_saved_in_the_same_second_do_not_collide`) |
 
 ---
 

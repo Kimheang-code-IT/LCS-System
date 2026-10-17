@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +64,18 @@ async def resolve_party_by_id(session: AsyncSession, party_id: Any) -> BusinessP
     return party
 
 
+def new_party_code(now: datetime | None = None) -> str:
+    """Return a party code that is unique among sibling placeholders.
+
+    The former second-precision code (``P-YYMMDDHHMMSS``) was not unique: two
+    customers created in the same second — two quotations saved back to back —
+    violated the active ``party_code`` index and the request failed. The timestamp
+    is kept for readability and a random suffix removes the collision.
+    """
+    stamp = (now or datetime.now(UTC)).strftime("%y%m%d%H%M%S")
+    return f"P-{stamp}-{uuid4().hex[:4].upper()}"
+
+
 async def resolve_party_by_name(session: AsyncSession, name: str | None, context: RequestContext, role: str = "CUSTOMER") -> BusinessParty:
     if name:
         party = (
@@ -77,8 +90,25 @@ async def resolve_party_by_name(session: AsyncSession, name: str | None, context
         ).scalars().first()
         if party is not None:
             return party
+    # The unique index is partial (active rows only), so only an active code blocks.
+    for _ in range(5):
+        party_code = new_party_code()
+        clash = (
+            await session.execute(
+                select(BusinessParty.id).where(
+                    BusinessParty.party_code == party_code, BusinessParty.deleted_at.is_(None)
+                )
+            )
+        ).first()
+        if clash is None:
+            break
+    else:
+        raise Conflict(
+            "PARTY_CODE_UNAVAILABLE",
+            "Could not allocate a unique party code; please try again.",
+        )
     created = BusinessParty(
-        party_code=f"P-{datetime.now(UTC).strftime('%y%m%d%H%M%S')}",
+        party_code=party_code,
         legal_name=name or "Unnamed Party",
         display_name=name or "Unnamed Party",
         roles=[role.strip().title() or "Customer"],
