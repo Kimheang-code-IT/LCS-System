@@ -52,7 +52,7 @@ watch(
 </script>
 
 <template>
-  <FreightJobLineTable
+  <FreightAppLineTable
     :table="table"
     :model-value="rows"
     :disabled="!canEdit"

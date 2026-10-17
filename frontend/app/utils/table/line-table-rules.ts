@@ -21,11 +21,20 @@ function money(value: number) {
   return Number(value.toFixed(2))
 }
 
-/** Quotation `pricingLines`: qty × unit price − discount, plus tax, 2dp. */
+/**
+ * Quotation `pricingLines`: qty × unit price − discount, plus tax, 2dp.
+ *
+ * The keys accept both spellings because the canonical quotation table writes
+ * `discountAmount`/`taxAmount` while the legacy sales table's inline fields write
+ * `discount`/`tax`. Reading only one of them meant the other table's inputs were
+ * silently ignored and the line total never moved.
+ */
 export function computePricingLine({ row }: { row: Row }) {
   const subtotal = num(row.quantity) * num(row.unitPrice)
-  const taxable = Math.max(0, subtotal - num(row.discountAmount))
-  return { lineTotal: money(taxable + num(row.taxAmount)) }
+  const discount = row.discountAmount ?? row.discount
+  const tax = row.taxAmount ?? row.tax
+  const taxable = Math.max(0, subtotal - num(discount))
+  return { lineTotal: money(taxable + num(tax)) }
 }
 
 /**

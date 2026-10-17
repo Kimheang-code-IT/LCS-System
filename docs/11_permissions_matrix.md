@@ -49,6 +49,7 @@ These gate API endpoints. Every code below is enforced server-side.
 | service_order_config.create | service_order_config | create |
 | service_order_config.update | service_order_config | update |
 | service_order_config.delete | service_order_config | delete |
+| service_order_config.publish | service_order_config | publish |
 | service_charge.read | service_charge | read |
 | service_charge.create | service_charge | create |
 | service_charge.issue | service_charge | issue |
@@ -65,6 +66,8 @@ These gate API endpoints. Every code below is enforced server-side.
 | accounting_period.read | accounting_period | read |
 | accounting_period.close | accounting_period | close |
 | chart_of_accounts.manage | chart_of_accounts | manage |
+| posting_rule.read | posting_rule | read |
+| posting_rule.manage | posting_rule | manage |
 | customs_credential.retrieve | customs_credential | retrieve |
 | attachment.read | attachment | read |
 | attachment.upload | attachment | upload |
@@ -74,6 +77,15 @@ These gate API endpoints. Every code below is enforced server-side.
 | archive.restore | archive | restore |
 | archive.hard_delete | archive | hard_delete |
 | report.read | report | read |
+
+The shared record-status endpoint (`POST /api/v1/{collection}/{item_id}/status`)
+introduces **no new codes**: each transition in
+`backend/app/modules/status/policy.py` requires the permission that already owns
+that area — `master.reference.manage` for reference data, `chart_of_accounts.manage`
+for the ledger accounts, `posting_rule.manage`, `configuration.manage` for the
+sequences, `accounting_period.close` for closing/reopening, `service_order.update`
+for the order lifecycle, `user.manage` / `role.manage` — and the policy endpoint
+returns only the transitions the caller may perform.
 
 ### 2.2 Page and configuration permissions
 
@@ -105,6 +117,7 @@ These are the action codes stored by the role matrix. The page-level
 | Service charges | `finance.service_charges.view`, `finance.service_charges.create`, `finance.service_charges.edit`, `finance.service_charges.delete`, `finance.service_charges.export` |
 | Financial documents | `finance.financial_documents.view`, `finance.financial_documents.create`, `finance.financial_documents.edit`, `finance.financial_documents.delete`, `finance.financial_documents.export` |
 | Accounting | `finance.accounting.view`, `finance.accounting.create`, `finance.accounting.edit`, `finance.accounting.delete`, `finance.accounting.export` |
+| Posting Rules | `finance.posting_rules.view`, `finance.posting_rules.create`, `finance.posting_rules.edit`, `finance.posting_rules.delete` |
 | Operations reports | `operations.reports.view`, `operations.reports.export` |
 | Finance reports | `finance.reports.view`, `finance.reports.export` |
 | Master data | `master.reference.create`, `master.reference.edit`, `master.reference.delete`, `master.reference.export` |
@@ -162,6 +175,31 @@ Granting a page/action also enables the API permissions it implies.
 | finance.accounting.edit | journal_entry.post, accounting_period.close, chart_of_accounts.manage |
 | finance.accounting.delete | journal_entry.create |
 | finance.accounting.export | report.export |
+| finance.posting_rules.view | posting_rule.read |
+| finance.posting_rules.create | posting_rule.manage |
+| finance.posting_rules.edit | posting_rule.manage |
+| finance.posting_rules.delete | posting_rule.manage |
+
+Posting rules are their own page rather than part of Accounting: which accounts a
+document posts through is a distinct decision from the accounts themselves, and an
+auditor should be able to read the rules without being able to rewrite them.
+`posting_rule.manage` is deliberately **not** implied by `finance.accounting.edit`,
+so granting "edit accounting" does not silently grant the ability to redirect
+where a document posts.
+
+Setting another account's password (`POST /users/{id}/password`) is gated on the
+existing `user.manage`, not a permission of its own. Creating a user already means
+choosing that user's password, so a reset is a recovery path rather than a wider
+capability; a separate code would have implied a restriction that does not exist.
+The one guard it does carry is that only a platform administrator may reset the
+built-in administrator, which `_assert_can_manage_platform_admin` enforces.
+
+**Posting Rule History** (the change history of every rule, and the change history
+and posting usage on a single rule) is gated on `posting_rule.read`, not on
+`audit_log.read`. The events it returns are exclusively about an entity the caller
+can already read and leak no other entity's data, so requiring the generic audit
+permission would mean the person who manages the rules could not see why a rule
+changed. The generic Audit Logs screen keeps its own `audit_log.read` gate.
 | operations.reports.view | report.read |
 | operations.reports.export | report.export |
 | finance.reports.view | report.read |
@@ -222,7 +260,7 @@ service_order_config.view, service_order_config.create, service_order_config.upd
 service_charge.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
 financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate,
 journal_entry.read, journal_entry.create, journal_entry.post,
-accounting_period.read, accounting_period.close, chart_of_accounts.manage,
+accounting_period.read, accounting_period.close, chart_of_accounts.manage, posting_rule.read, posting_rule.manage,
 attachment.read, attachment.upload, attachment.delete, audit_log.read, report.read,
 master.reference.view, master.reference.manage, configuration.manage,
 admin.user_manage, admin.role_manage, settings.manage, backup.read, backup.manage
@@ -282,7 +320,7 @@ audit_log.read, attachment.read, report.read, master.reference.view, finance.vie
 ```text
 user.read, role.read,
 quotation.read, service_order.read, service_charge.read,
-financial_document.read, journal_entry.read, accounting_period.read,
+financial_document.read, journal_entry.read, accounting_period.read, posting_rule.read,
 attachment.read, audit_log.read, report.read, master.reference.view, finance.view
 ```
 
@@ -312,6 +350,8 @@ Legend: `Y` = granted, `-` = not granted. `ALL` = every permission code.
 | Journal create/post | ALL | Y | - | - | - | Y | Y | - |
 | Accounting-period close | ALL | Y | - | - | - | - | Y | - |
 | Chart of accounts manage | ALL | Y | - | - | - | - | Y | - |
+| Posting-rule read | ALL | Y | - | - | - | - | Y | Y |
+| Posting-rule manage | ALL | Y | - | - | - | - | Y | - |
 | Master data view | ALL | Y | Y | Y | Y | Y | Y | Y |
 | Master data manage | ALL | Y | Y | - | - | - | - | - |
 | Configuration | ALL | Y | - | - | - | - | - | - |
@@ -382,3 +422,32 @@ HTTP bypass. Find the protected account by `system_identity`, then use the
 documented `app.create_admin` CLI with that account's email or username and a
 new strong password. Rotate exposed credentials, inspect rejected/successful
 administrative audit events, and revoke active sessions after recovery.
+
+## 8. Role Administration and Delegation Safety
+
+- `GET /api/v1/roles` supports search, status filtering, stable sorting and the
+  standard paginated `{items, meta}` envelope. Each row includes the number of
+  currently assigned users; role detail also includes their identifiers and
+  display names.
+- `POST /api/v1/roles/{role_id}/duplicate` creates an active custom copy with a
+  distinct code and an audit event. The Roles & Permissions page exposes this
+  operation from the record action menu.
+- A delegated role manager may grant or assign only capabilities already held
+  by that manager. Page-level matrix permissions are evaluated through their
+  implied API permissions, preventing a custom role from being used as a
+  privilege-escalation bridge.
+- No user, including a Platform Administrator, may replace their own role.
+- A role assigned to an active user cannot be deactivated. Reassign those users
+  first. The built-in Platform Administrator role remains non-deletable and
+  cannot lose catalog permissions.
+- Role replacement locks the user row, permission updates lock the role row,
+  and last-Platform-Administrator checks lock the built-in role. PostgreSQL's
+  partial unique index remains the final concurrency backstop.
+- The permission matrix supports module/action filtering, search, applicable
+  Select All/Clear All operations, and an unsaved-change indicator.
+
+Migration `a2b3c4d5e6f7` normalizes every current assignment into the
+non-expiring form covered by the unique index. Any legacy active user without a
+role is mapped to the active, zero-permission `MIGRATED_NO_ACCESS` role. This is
+an explicit least-privilege mapping; administrators must review and reassign
+those users after deployment.

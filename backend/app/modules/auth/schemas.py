@@ -38,6 +38,23 @@ class ChangePasswordRequest(BaseModel):
     password_confirmation: str | None = Field(default=None, max_length=128)
 
 
+class SetPasswordRequest(BaseModel):
+    """An administrator setting another account's password.
+
+    ``must_change_password`` defaults to true: the account owner did not choose
+    this password, so a temporary one should not be able to stay in use indefinitely.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str | None = Field(default=None, max_length=128)
+    must_change_password: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("must_change_password", "mustChangePassword"),
+    )
+
+
 class UserCreate(BaseModel):
     # Accept both the API snake_case form and the frontend camelCase form.
     model_config = ConfigDict(populate_by_name=True)
@@ -86,3 +103,8 @@ class RoleUpdate(BaseModel):
     description: str | None = None
     status: str | None = None
     permissions: list[str] | None = None
+
+
+class RoleDuplicate(BaseModel):
+    name: str | None = None
+    code: str | None = None

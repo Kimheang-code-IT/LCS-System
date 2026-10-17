@@ -124,7 +124,7 @@ async def test_users_sort_by_display_name(client):
 
 async def test_roles_sort_by_code(client):
     headers = await login(client)
-    ascending = await _bare_list(client, "/api/v1/roles", {"sortKey": "code", "sortDir": "asc"}, headers)
+    ascending = await _items(client, "/api/v1/roles", {"sortKey": "code", "sortDir": "asc"}, headers)
     codes = [row["code"] for row in ascending]
     assert len(codes) >= 2
     assert codes == sorted(codes)

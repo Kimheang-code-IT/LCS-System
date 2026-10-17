@@ -4,7 +4,6 @@ import type { FreightRecord } from '~/types/record'
 import { JOB_FINANCE_LINES_TABLE } from '~/config/job-workspace-forms'
 import { formatMoney } from '~/composables/freight/useFreight'
 import { createClientId } from '~/utils/client-id'
-import { postedDocumentTotal } from '~/utils/freight/finance'
 import {
   JOB_FINANCE_LINE_LABEL_KEYS,
   isJobFinanceRowEditable,
@@ -120,29 +119,6 @@ const jobCurrency = computed(() =>
   String(props.documents[0]?.currency || props.receivables[0]?.currency || props.supplierCosts[0]?.currency || '').trim() || undefined,
 )
 
-const expenseTotal = computed(() => Math.round(expenseRows.value.reduce((sum, row) => sum + Number(row.amount || 0), 0) * 100) / 100)
-
-const summary = computed(() => {
-  const revenue = Math.round(postedDocumentTotal(props.documents) * 100) / 100
-  // Supplier bills are posted costs; the expense grid is the job's manual cost.
-  const supplierBills = props.supplierCosts.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-  const cost = Math.round((supplierBills + expenseTotal.value) * 100) / 100
-  const outstanding = Math.round(props.receivables.reduce((sum, row) => sum + Number(row.outstanding || 0), 0) * 100) / 100
-  return {
-    revenue,
-    cost,
-    profit: Math.round((revenue - cost) * 100) / 100,
-    outstanding,
-  }
-})
-
-const summaryItems = computed(() => [
-  { label: t('freight.ui.revenue'), value: formatMoney(summary.value.revenue, jobCurrency.value) },
-  { label: t('freight.ui.costLabel'), value: formatMoney(summary.value.cost, jobCurrency.value) },
-  { label: t('freight.ui.grossProfit'), value: formatMoney(summary.value.profit, jobCurrency.value) },
-  { label: t('freight.ui.outstandingAmount'), value: formatMoney(summary.value.outstanding, jobCurrency.value) },
-])
-
 const kindTotals = computed(() => {
   const totals = jobFinanceLineTotals(lines.value)
   return (Object.keys(JOB_FINANCE_LINE_LABEL_KEYS) as JobFinanceLineKind[])
@@ -172,10 +148,11 @@ const kindTotals = computed(() => {
       </template>
     </FreightJobSectionHeader>
 
-    <FreightJobSummaryStrip :items="summaryItems" />
-
+    <!-- Deliberately no summary strip: this tab shows the finance table and its
+         per-kind totals only. Job revenue, cost and profit are reported in the
+         Finance module, not repeated here. -->
     <div class="space-y-2">
-      <FreightJobLineTable
+      <FreightAppLineTable
         :table="JOB_FINANCE_LINES_TABLE"
         :model-value="lines"
         :row-disabled="rowLocked"

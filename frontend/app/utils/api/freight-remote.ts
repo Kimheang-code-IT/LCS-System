@@ -69,6 +69,8 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   transportAssets: reference('transportAssets'),
   feeTypes: reference('feeTypes'),
   currencies: reference('currencies'),
+  // The approved rate store a document resolves its exchange rate from.
+  currencyRates: reference('currencyRates'),
   // Legacy collection aliases still referenced by print/container components.
   chargeTypes: reference('feeTypes'),
   suppliers: reference('businessParties'),

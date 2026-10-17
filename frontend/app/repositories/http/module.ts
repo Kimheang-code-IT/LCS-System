@@ -1,6 +1,7 @@
 import type { FreightModule } from '~/config/freight-modules'
 import type { FreightRecord } from '~/types/record'
 import type { ModuleRepository } from '~/repositories/contracts/module'
+import type { RecordStatusPolicy } from '~/types/status'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
 import type { ApiResponse } from '~/types/common'
@@ -46,5 +47,14 @@ export function createHttpModuleRepository(module: FreightModule): ModuleReposit
     remove: async (ids) => {
       await api.delete<ApiResponse<void>>(base, { body: { ids } })
     },
+    statusPolicy: async () =>
+      unwrapApiData(await api.get<ApiResponse<RecordStatusPolicy>>(
+        ApiV1Endpoints.RECORD_STATUS_POLICY(module.collection),
+      )),
+    changeStatus: async (id, status, reason) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(
+        ApiV1Endpoints.RECORD_STATUS(module.collection, id),
+        { status, ...(reason ? { reason } : {}) },
+      )),
   }
 }

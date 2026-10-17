@@ -26,6 +26,8 @@ export const useAuthStore = defineStore('auth', () => {
   const storedUser = ref<AuthUser | null>(null)
   const accessToken = ref<string | null>(null)
   const refreshToken = ref<string | null>(null)
+  let lastPermissionRefreshAt = 0
+  let permissionRefresh: Promise<void> | null = null
   const user = computed(() => storedUser.value || cookieUser.value)
   const isLoggedIn = computed(() => Boolean(user.value?.email))
 
@@ -100,6 +102,40 @@ export const useAuthStore = defineStore('auth', () => {
     setTokens(null, null)
   }
 
+  async function refreshSession(force = false) {
+    if (!import.meta.client || !isLoggedIn.value) return
+    if (!force && Date.now() - lastPermissionRefreshAt < 15_000) return
+    if (permissionRefresh) return permissionRefresh
+    permissionRefresh = (async () => {
+      try {
+        const response = await $fetch<{ data: AuthUser }>(ApiV1Endpoints.AUTH_ME, {
+          credentials: 'include',
+          headers: bearerMode.value && accessToken.value
+            ? { Authorization: `Bearer ${accessToken.value}` }
+            : undefined,
+        })
+        const current = user.value
+        if (current && response.data) {
+          persist({
+            ...current,
+            ...response.data,
+            pageAccess: response.data.permissions || response.data.pageAccess,
+          })
+        }
+        lastPermissionRefreshAt = Date.now()
+      }
+      catch (error: unknown) {
+        const status = (error as { response?: { status?: number }, statusCode?: number })?.response?.status
+          || (error as { statusCode?: number })?.statusCode
+        if (status === 401) clearSession()
+      }
+      finally {
+        permissionRefresh = null
+      }
+    })()
+    return permissionRefresh
+  }
+
   async function logout() {
     if (import.meta.client) {
       // Revoke the server-side refresh session and clear the HttpOnly cookies.
@@ -163,6 +199,7 @@ export const useAuthStore = defineStore('auth', () => {
     setTokens,
     hydrateClient,
     clearSession,
+    refreshSession,
     logout,
     updateUser,
     canAccessPage,

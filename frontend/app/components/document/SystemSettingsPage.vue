@@ -6,6 +6,8 @@ import { systemSettingsTabs } from '~/config/settings-schemas'
 import { useSettingsRepositories } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { useAppPageTitle } from '~/composables/layout/useAppPageTitle'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import { getByPath, setByPath } from '~/utils/object-path'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
@@ -26,18 +28,39 @@ const testingBackup = ref(false)
 const restoringBackup = ref(false)
 const restoreOpen = ref(false)
 const restorePhrase = ref('')
+/** Page-level refusals (bad credentials, network) — rendered, never toasted. */
+const pageErrors = ref<string[]>([])
+
+/**
+ * Shared validation for the settings form. Keys are dotted config paths
+ * (`email.smtp.host`), so a backend error maps straight onto its input.
+ */
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  order: () => systemSettingsTabs
+    .flatMap(tab => tab.sections)
+    .flatMap(section => section.fields.map(field => field.key)),
+  reveal: (key) => {
+    const tab = systemSettingsTabs.find(item =>
+      item.sections.some(section => section.fields.some(field => field.key === key)),
+    )
+    if (!tab || activeTab.value === tab.id) return Boolean(tab)
+    activeTab.value = tab.id
+    return true
+  },
+})
 
 async function runBackup() {
   if (runningBackup.value) return
   runningBackup.value = true
+  pageErrors.value = []
   try {
     if (model.value) await appConfig.update(model.value)
     const run = await backup.run()
     toast.add({ title: t('lcs.settings.backup.runStarted', { id: run.id }), color: 'success' })
   }
   catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('lcs.settings.backup.runFailed'), color: 'error' })
+    pageErrors.value = [apiErrorMessage(error, t('lcs.settings.backup.runFailed'))]
   }
   finally {
     runningBackup.value = false
@@ -47,17 +70,19 @@ async function runBackup() {
 async function testBackupConnection() {
   if (testingBackup.value) return
   testingBackup.value = true
+  pageErrors.value = []
   try {
     if (model.value) await appConfig.update(model.value)
     const result = await backup.testConnection()
-    toast.add({
-      title: result.message,
-      color: result.status === 'connected' ? 'success' : 'error',
-    })
+    if (result.status === 'connected') {
+      toast.add({ title: result.message, color: 'success' })
+    }
+    else {
+      pageErrors.value = [result.message || t('lcs.settings.backup.testFailed')]
+    }
   }
   catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('lcs.settings.backup.testFailed'), color: 'error' })
+    pageErrors.value = [apiErrorMessage(error, t('lcs.settings.backup.testFailed'))]
   }
   finally {
     testingBackup.value = false
@@ -67,6 +92,7 @@ async function testBackupConnection() {
 async function submitRestore() {
   if (restorePhrase.value.trim().toUpperCase() !== 'RESTORE' || restoringBackup.value) return
   restoringBackup.value = true
+  pageErrors.value = []
   try {
     const result = await backup.restore('RESTORE')
     restoreOpen.value = false
@@ -78,8 +104,7 @@ async function submitRestore() {
     await load()
   }
   catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('lcs.settings.backup.restoreFailed'), color: 'error' })
+    pageErrors.value = [apiErrorMessage(error, t('lcs.settings.backup.restoreFailed'))]
   }
   finally {
     restoringBackup.value = false
@@ -93,6 +118,7 @@ const resetting = ref(false)
 async function submitReset() {
   if (resetPhrase.value.trim().toUpperCase() !== 'RESET' || resetting.value) return
   resetting.value = true
+  pageErrors.value = []
   try {
     await appConfig.resetData('RESET')
     resetOpen.value = false
@@ -102,8 +128,7 @@ async function submitReset() {
     toast.add({ title: t('lcs.settings.resetDataDone'), color: 'success' })
   }
   catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    toast.add({ title: message || t('lcs.settings.resetDataFailed'), color: 'error' })
+    pageErrors.value = [apiErrorMessage(error, t('lcs.settings.resetDataFailed'))]
   }
   finally {
     resetting.value = false
@@ -123,7 +148,7 @@ async function load() {
     model.value = await appConfig.get()
   }
   catch (e) {
-    toast.add({ title: e instanceof Error ? e.message : t('lcs.common.loadFailed'), color: 'error' })
+    pageErrors.value = [apiErrorMessage(e, t('lcs.common.loadFailed'))]
   }
   finally {
     pending.value = false
@@ -197,19 +222,25 @@ async function setFieldValue(key: string, value: unknown) {
 }
 
 async function save() {
-  if (!model.value) return
+  if (!model.value || saving.value) return
   saving.value = true
+  validation.submitting.value = true
+  validation.reset()
   try {
     model.value = await appConfig.update(model.value)
     appLocalization.apply(model.value.localization)
     usePreferencesStore().syncLocaleWithConfig()
     toast.add({ title: t('lcs.common.saved'), color: 'success' })
   }
-  catch (e) {
-    toast.add({ title: e instanceof Error ? e.message : t('lcs.common.saveFailed'), color: 'error' })
+  catch (error) {
+    // Field-addressable refusals land on their input; anything else becomes a
+    // page-level message and the form keeps the values the user entered.
+    validation.applyServerError(error)
+    await validation.focusFirstInvalid()
   }
   finally {
     saving.value = false
+    validation.submitting.value = false
   }
 }
 
@@ -315,9 +346,14 @@ useAppPageTitle(() => t('freight.pages.settings'))
     :show-comments="false"
     :show-list-nav="false"
     :more-items="moreItems"
+    :field-errors="validation.fieldErrors.value"
+    :summary-items="validation.summaryItems.value"
+    :form-errors="[...validation.formErrors.value, ...pageErrors]"
+    :on-field-edit="validation.clearFieldError"
     content-wide
     @save="save"
     @refresh="load"
+    @select-error="validation.focusFieldKey($event)"
   />
 
   <UModal

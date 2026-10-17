@@ -9,7 +9,9 @@ import type { FreightRecord } from '~/types/record'
 import type { SaveGridChange } from '~/types/save-grid'
 import { useLcs } from '~/composables/freight/useLcs'
 import { useConfirm } from '~/composables/common/useConfirm'
-import { SAVE_GRID_NEW_PREFIX } from '~/types/save-grid'
+import { apiErrorMessage } from '~/utils/validation/api-error'
+import { validateTableRows } from '~/utils/validation/record-validation'
+import { SAVE_GRID_NEW_PREFIX, rowsBeingSaved as selectRowsBeingSaved } from '~/types/save-grid'
 import {
   isDeletableCharge,
   serviceChargeIsCreatable,
@@ -34,6 +36,8 @@ const charges = ref<FreightRecord[]>([])
 const invoice = ref<FreightRecord | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+/** Page-level refusal (business rule, dependency, network) — never a toast. */
+const formErrors = ref<string[]>([])
 
 const orderId = computed(() => String(props.job.id || props.jobNo || ''))
 const currency = computed(() => String(props.job.currency || ''))
@@ -87,10 +91,44 @@ function rowAction(action: string, row: Record<string, unknown>) {
   }
 }
 
+/**
+ * The rows this save will actually write, with their position in the grid.
+ *
+ * A change set carries every row in display order, so validating it directly
+ * would block on pre-existing rows this user never touched. Keeping the grid
+ * position alongside each row means an error still addresses `feeLines.3.x`
+ * and not `feeLines.0.x`.
+ */
+function rowsBeingSaved(change: SaveGridChange, savedById: Map<string, FreightRecord>) {
+  const columns = table.value.columns
+  return selectRowsBeingSaved(change, savedById, columns).map(({ row, index }) => ({
+    row,
+    index,
+  }))
+}
+
 async function save(change: SaveGridChange) {
   if (!orderId.value) return
   const savedById = new Map(charges.value.map(charge => [String(charge.id ?? ''), charge]))
   saving.value = true
+  formErrors.value = []
+  const pending = rowsBeingSaved(change, savedById)
+  // Inline gate: an incomplete row is reported on its own cell and never sent.
+  const failures = validateTableRows({
+    table: table.value,
+    rows: pending.map(entry => entry.row),
+    rowIndices: pending.map(entry => entry.index),
+    label: key => key,
+    columnLabel: column => column.label || column.key,
+  })
+  if (failures.length) {
+    formErrors.value = failures.map(failure => `${failure.label}: ${t(`validation.${failure.code}`, {
+      field: failure.label,
+      ...(failure.params || {}),
+    })}`)
+    saving.value = false
+    return
+  }
   try {
     for (const id of change.removedIds) {
       const charge = savedById.get(id)
@@ -113,8 +151,8 @@ async function save(change: SaveGridChange) {
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     await load()
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    formErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
     await load()
   }
   finally {
@@ -142,8 +180,8 @@ async function createInvoice() {
     toast.add({ title: t('freight.ui.draftInvoiceCreated'), color: 'success' })
     await load()
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    formErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
   }
   finally {
     saving.value = false
@@ -176,6 +214,8 @@ function printInvoice() {
         :label="t('freight.ui.printInvoice')"
         @click="printInvoice" />
     </div>
+
+    <CommonAppFormErrorSummary class="pt-4" :form-errors="formErrors" />
 
     <TableAppSaveGrid
       v-if="rows.length || editable"

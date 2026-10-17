@@ -12,8 +12,12 @@ from app.modules.operations.router import router as operations_router
 from app.modules.quotations.router import router as quotations_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
+from app.modules.status.router import router as status_router
 
 api_router = APIRouter()
+# Registered first so `GET /{collection}/status-policy` is matched before the
+# generic `GET /{collection}/{item_id}` routes of the data modules.
+api_router.include_router(status_router, tags=["status"])
 api_router.include_router(auth_router, tags=["auth"])
 api_router.include_router(quotations_router, tags=["quotations"])
 api_router.include_router(operations_router, tags=["operations"])

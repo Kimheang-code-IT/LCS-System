@@ -1,12 +1,11 @@
 import { useLcsRepositories } from '~/repositories'
-import { isLcsDomainError } from '~/utils/freight/errors'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import { hasSourcePermission } from '~/utils/freight/permissions'
 import { rememberIdempotencyKey, clearIdempotencyKey } from '~/utils/freight/idempotency'
 import type { SourcePermission } from '~/types/domain'
 
 export function useLcs() {
   const repos = useLcsRepositories()
-  const toast = useToast()
   const { t } = useI18n()
   const store = useFreightStore()
   const auth = useAuthStore()
@@ -15,13 +14,20 @@ export function useLcs() {
     return hasSourcePermission(auth.user, code)
   }
 
+  /**
+   * Turn a rejected command into a single safe sentence.
+   *
+   * Callers render it next to the form or the page: command failures are
+   * business-rule or dependency refusals, which must never be reported as a
+   * toast. Returns the message so it can be rendered inline.
+   */
+  function errorMessage(error: unknown) {
+    return apiErrorMessage(error, t('api.somethingWentWrong'))
+  }
+
+  /** Kept for call sites that only need the failure handled, not shown. */
   function reportError(error: unknown) {
-    if (isLcsDomainError(error)) {
-      toast.add({ title: error.message, color: 'error' })
-      return error
-    }
-    toast.add({ title: t('api.somethingWentWrong'), color: 'error' })
-    return error
+    return errorMessage(error)
   }
 
   async function runCommand<T>(command: string, entityId: string, fn: (key: string) => Promise<T>) {
@@ -35,6 +41,7 @@ export function useLcs() {
   return {
     ...repos,
     can,
+    errorMessage,
     reportError,
     runCommand,
   }

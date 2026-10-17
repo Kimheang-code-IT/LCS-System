@@ -20,6 +20,7 @@ from app.core.context import RequestContext
 from app.core.exceptions import NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.serialization import jsonable
+from app.modules.master_data import config_versions
 from app.modules.master_data.models import (
     ComponentAttribute,
     ComponentGroup,
@@ -304,12 +305,17 @@ async def bootstrap(
         )
 
     references = await reference_options(session, context, order.id, sorted(reference_types))
+    configuration = await config_versions.version_for_order(session, order)
     return {
         "serviceOrderId": str(order.id),
         "jobNo": order.service_order_no,
         "tradeDirectionId": str(selected_direction_id) if selected_direction_id else None,
         "tabs": tab_items,
         "references": references,
+        # The configuration the order was captured under, so the client can keep
+        # rendering historical rows against the layout they were entered in.
+        "configVersionId": str(order.configuration_version_id) if order.configuration_version_id else None,
+        "configVersion": configuration,
     }
 
 
@@ -392,6 +398,7 @@ async def bulk_save(
                 group_id=group.id,
                 row_no=index,
                 values=jsonable(values),
+                config_version_id=order.configuration_version_id,
                 created_by_user_id=context.user_id,
                 updated_by_user_id=context.user_id,
             )

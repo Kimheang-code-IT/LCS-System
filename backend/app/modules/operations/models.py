@@ -36,6 +36,12 @@ class ServiceOrder(PKMixin, TimestampMixin, Base):
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     description: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    # Pins the Service Order to the published dynamic-configuration version it
+    # was created under, so a later configuration change cannot re-render or
+    # re-interpret its saved component rows.
+    configuration_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("configuration_versions.id", ondelete="SET NULL")
+    )
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
 
 
@@ -126,6 +132,12 @@ class ServiceOrderComponentRow(PKMixin, TimestampMixin, Base):
     row_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     values: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    # The configuration version in force when the row was written. A config
+    # change therefore never invalidates a saved row: it is still interpreted
+    # against the labels and rules it was captured under.
+    config_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("configuration_versions.id", ondelete="SET NULL")
+    )
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     updated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
 

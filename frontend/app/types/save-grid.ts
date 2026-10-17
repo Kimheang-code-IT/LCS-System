@@ -24,3 +24,38 @@ export function isSaveGridNewRow(row: Row) {
   const id = String(row.id ?? '')
   return !id || id.startsWith(SAVE_GRID_NEW_PREFIX)
 }
+
+/** Column keys a grid actually renders, i.e. the ones worth diffing. */
+export type SaveGridColumn = { key: string, type?: string }
+
+const UTILITY_COLUMN_TYPES = new Set(['delete', 'action', 'reorder', 'note'])
+
+/** A row together with the position it occupies in the grid. */
+export type SavedRow = { row: Row, index: number }
+
+/**
+ * Rows a save will actually write: the new ones plus the saved rows whose
+ * rendered values changed.
+ *
+ * A change set carries every row in display order, so validating it directly
+ * would block on pre-existing rows the user never touched. Each result keeps
+ * its grid position so a cell error still addresses the row the user sees.
+ */
+export function rowsBeingSaved(
+  change: SaveGridChange,
+  savedById: Map<string, Row>,
+  columns: readonly SaveGridColumn[],
+): SavedRow[] {
+  const keys = columns
+    .filter(column => !UTILITY_COLUMN_TYPES.has(String(column.type ?? '')))
+    .map(column => column.key)
+
+  return change.rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => {
+      if (isSaveGridNewRow(row)) return true
+      const original = savedById.get(String(row.id ?? ''))
+      if (!original) return true
+      return keys.some(key => String(row[key] ?? '') !== String(original[key] ?? ''))
+    })
+}

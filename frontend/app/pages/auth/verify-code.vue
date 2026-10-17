@@ -5,6 +5,7 @@ import {
   getPasswordResetSession,
   markPasswordResetVerified,
 } from '~/utils/auth/password-reset'
+import { fieldErrorMessage } from '~/utils/validation/form-field-error'
 
 definePageMeta({
   layout: 'auth',
@@ -99,7 +100,7 @@ async function onResendCode() {
     <form class="flex w-full flex-col items-center gap-5" @submit.prevent="onVerifyCode">
       <UFormField
         :label="t('pages.forgetPassword.enterCode')"
-        :error="formError"
+        :error="fieldErrorMessage(formError)"
         class="w-full"
       >
         <UPinInput

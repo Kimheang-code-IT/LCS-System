@@ -20,6 +20,12 @@ export interface AuthUser {
   permissions?: string[]
   pageAccess?: string[]
   sourcePermissions?: SourcePermission[]
+  /**
+   * True when the password was set by an administrator. The API refuses every
+   * route except changing it, and the middleware routes this session to the
+   * change-password screen.
+   */
+  mustChangePassword?: boolean
 }
 
 declare module '#app' {

@@ -1,27 +1,47 @@
 <script setup lang="ts">
 import type { ComponentTabAttribute, ComponentTabGroup, ComponentTabRuntime } from '~/types/component-config'
 import { componentGroupToFreightTable } from '~/utils/freight/component-tabs'
+import { formFieldError } from '~/utils/validation/form-field-error'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tab: ComponentTabRuntime
   references: Record<string, Record<string, string>>
   rowsByGroup: Record<string, Array<Record<string, unknown>>>
   editable?: boolean
   saving?: boolean
-}>()
+  /** Cell errors keyed `<groupId>.<rowIndex>.<attributeCode>`. */
+  fieldErrors?: Record<string, string>
+  /** Fired on any edit so the host can clear that cell's error. */
+  onFieldEdit?: (key: string) => void
+}>(), {
+  fieldErrors: () => ({}),
+  onFieldEdit: undefined,
+})
 
 const emit = defineEmits<{
   'update:rows': [groupId: string, rows: Array<Record<string, unknown>>]
   'save-group': [groupId: string]
 }>()
 
-const { t } = useI18n()
+const { t, te, locale } = useI18n()
 
 function rowOf(groupId: string): Record<string, unknown> {
   return (props.rowsByGroup[groupId] || [])[0] || {}
 }
 
+/** Labels for dynamic attributes come from the record, per active locale. */
+function attributeLabel(attribute: ComponentTabAttribute) {
+  if (te(`freight.fields.${attribute.code}`)) return t(`freight.fields.${attribute.code}`)
+  return String(locale.value === 'km' && attribute.labelKm ? attribute.labelKm : attribute.label)
+}
+
+function errorFor(groupId: string, code: string) {
+  // Never `''`: `UFormField.error` casts an empty string to `true`.
+  return formFieldError(props.fieldErrors, `${groupId}.0.${code}`)
+}
+
 function setValue(group: ComponentTabGroup, code: string, value: unknown) {
+  props.onFieldEdit?.(`${group.id}.0.${code}`)
   const rows = props.rowsByGroup[group.id] || []
   emit('update:rows', group.id, [{ ...(rows[0] || {}), [code]: value }])
 }
@@ -49,6 +69,9 @@ function optionItems(attribute: ComponentTabAttribute) {
         :model-value="rowsByGroup[group.id] || []"
         :disabled="!editable"
         :saving="saving"
+        :field-errors="fieldErrors"
+        :error-key="group.id"
+        :on-cell-edit="onFieldEdit"
         @update:model-value="emit('update:rows', group.id, $event)"
         @save="emit('save-group', group.id)"
       />
@@ -58,8 +81,10 @@ function optionItems(attribute: ComponentTabAttribute) {
           <UFormField
             v-for="attribute in group.attributes"
             :key="attribute.code"
-            :label="attribute.label"
+            :label="attributeLabel(attribute)"
             :required="attribute.isRequired"
+            :error="errorFor(group.id, attribute.code)"
+            :data-field-key="`${group.id}.0.${attribute.code}`"
           >
             <UCheckbox
               v-if="attribute.fieldType === 'checkbox' || attribute.fieldType === 'boolean'"

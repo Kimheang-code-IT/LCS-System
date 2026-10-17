@@ -6,10 +6,11 @@
 -- The Alembic migrations in backend/alembic/ remain the migration source of
 -- truth; this file mirrors the resulting schema for design/reference use.
 --
--- 59 tables. The database ships empty after migration. First-run
+-- 63 tables. The database ships empty after migration. First-run
 -- provisioning seeds only the permission catalog, the built-in Platform
--- Administrator role, the current-year document sequences and the default app
--- info/config records.
+-- Administrator role, the current-year document sequences, the default app
+-- info/config settings and the currency master seeded from the supported
+-- currency list.
 --
 -- NOTE: Organizations and branches are NOT part of this schema. Multi-tenancy
 -- was removed (migration b7f1c2a9d4e0_remove_organization_and_branch.py); access
@@ -79,21 +80,6 @@ CREATE TABLE component_groups (
 	CONSTRAINT pk_component_groups PRIMARY KEY (id), 
 	CONSTRAINT uq_component_groups_code UNIQUE (code)
 );
-CREATE TABLE component_tabs (
-	code VARCHAR(64) NOT NULL, 
-	name VARCHAR(255) NOT NULL, 
-	description TEXT, 
-	trade_direction_id BIGINT, 
-	display_order INTEGER NOT NULL, 
-	is_active BOOLEAN NOT NULL, 
-	is_archived BOOLEAN NOT NULL, 
-	id BIGSERIAL NOT NULL, 
-	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	CONSTRAINT pk_component_tabs PRIMARY KEY (id), 
-	CONSTRAINT uq_component_tabs_code UNIQUE (code)
-);
-CREATE INDEX ix_component_tabs_trade_direction_id ON component_tabs (trade_direction_id);
 CREATE TABLE document_sequences (
 	document_type VARCHAR(64) NOT NULL, 
 	period_year INTEGER NOT NULL, 
@@ -137,6 +123,7 @@ CREATE TABLE users (
 	status VARCHAR(20) NOT NULL, 
 	locale VARCHAR(10) NOT NULL, 
 	timezone VARCHAR(64) NOT NULL, 
+	system_identity VARCHAR(64), 
 	last_login_at TIMESTAMP WITH TIME ZONE, 
 	token_version INTEGER DEFAULT '0' NOT NULL, 
 	id BIGSERIAL NOT NULL, 
@@ -145,7 +132,8 @@ CREATE TABLE users (
 	CONSTRAINT pk_users PRIMARY KEY (id), 
 	CONSTRAINT uq_users_user_code UNIQUE (user_code), 
 	CONSTRAINT uq_users_username UNIQUE (username), 
-	CONSTRAINT uq_users_email UNIQUE (email)
+	CONSTRAINT uq_users_email UNIQUE (email), 
+	CONSTRAINT uq_users_system_identity UNIQUE (system_identity)
 );
 CREATE TABLE accounting_periods (
 	period_year INTEGER NOT NULL, 
@@ -163,6 +151,20 @@ CREATE TABLE accounting_periods (
 	CONSTRAINT fk_accounting_periods_closed_by_user_id_users FOREIGN KEY(closed_by_user_id) REFERENCES users (id)
 );
 CREATE INDEX ix_accounting_periods_status ON accounting_periods (status);
+CREATE TABLE app_settings (
+	setting_key VARCHAR(120) NOT NULL, 
+	setting_group VARCHAR(60) NOT NULL, 
+	setting_value JSONB NOT NULL, 
+	description TEXT, 
+	updated_by_user_id BIGINT, 
+	id BIGSERIAL NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_app_settings PRIMARY KEY (id), 
+	CONSTRAINT uq_app_settings_key UNIQUE (setting_key), 
+	CONSTRAINT fk_app_settings_updated_by_user_id_users FOREIGN KEY(updated_by_user_id) REFERENCES users (id)
+);
+CREATE INDEX ix_app_settings_group ON app_settings (setting_group);
 CREATE TABLE archive_records (
 	entity_type VARCHAR(64) NOT NULL, 
 	entity_id BIGINT NOT NULL, 
@@ -293,21 +295,22 @@ CREATE TABLE component_group_attributes (
 );
 CREATE INDEX ix_component_group_attributes_attribute_id ON component_group_attributes (attribute_id);
 CREATE INDEX ix_component_group_attributes_group_id ON component_group_attributes (group_id);
-CREATE TABLE component_tab_groups (
-	tab_id BIGINT NOT NULL, 
-	group_id BIGINT NOT NULL, 
-	display_order INTEGER NOT NULL, 
+CREATE TABLE configuration_versions (
+	version_no INTEGER NOT NULL, 
 	status VARCHAR(20) NOT NULL, 
+	change_note TEXT, 
+	config_snapshot JSONB NOT NULL, 
+	published_at TIMESTAMP WITH TIME ZONE, 
+	published_by_user_id BIGINT, 
 	id BIGSERIAL NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
-	CONSTRAINT pk_component_tab_groups PRIMARY KEY (id), 
-	CONSTRAINT uq_component_tab_groups_tab_group UNIQUE (tab_id, group_id), 
-	CONSTRAINT fk_component_tab_groups_tab_id_component_tabs FOREIGN KEY(tab_id) REFERENCES component_tabs (id) ON DELETE CASCADE, 
-	CONSTRAINT fk_component_tab_groups_group_id_component_groups FOREIGN KEY(group_id) REFERENCES component_groups (id) ON DELETE CASCADE
+	CONSTRAINT pk_configuration_versions PRIMARY KEY (id), 
+	CONSTRAINT uq_configuration_versions_no UNIQUE (version_no), 
+	CONSTRAINT fk_configuration_versions_published_by_user_id_users FOREIGN KEY(published_by_user_id) REFERENCES users (id)
 );
-CREATE INDEX ix_component_tab_groups_group_id ON component_tab_groups (group_id);
-CREATE INDEX ix_component_tab_groups_tab_id ON component_tab_groups (tab_id);
+CREATE INDEX ix_configuration_versions_status ON configuration_versions (status);
+CREATE UNIQUE INDEX uq_configuration_versions_published ON configuration_versions (status) WHERE status = 'PUBLISHED';
 CREATE TABLE container_types (
 	code VARCHAR(50) NOT NULL, 
 	name VARCHAR(255) NOT NULL, 
@@ -331,6 +334,45 @@ CREATE TABLE container_types (
 CREATE INDEX ix_container_types_deleted_at ON container_types (deleted_at);
 CREATE INDEX ix_container_types_deleted_by_user_id ON container_types (deleted_by_user_id);
 CREATE UNIQUE INDEX uq_container_types_code_active ON container_types (code) WHERE deleted_at IS NULL;
+CREATE TABLE currencies (
+	code VARCHAR(3) NOT NULL, 
+	name VARCHAR(100) NOT NULL, 
+	symbol VARCHAR(10), 
+	numeric_code VARCHAR(3), 
+	decimal_places INTEGER NOT NULL, 
+	description TEXT, 
+	status VARCHAR(20) NOT NULL, 
+	id BIGSERIAL NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	deleted_at TIMESTAMP WITH TIME ZONE, 
+	deleted_by_user_id BIGINT, 
+	CONSTRAINT pk_currencies PRIMARY KEY (id), 
+	CONSTRAINT fk_currencies_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_currencies_deleted_at ON currencies (deleted_at);
+CREATE INDEX ix_currencies_deleted_by_user_id ON currencies (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_currencies_code_active ON currencies (code) WHERE deleted_at IS NULL;
+CREATE TABLE currency_rates (
+	from_currency_code VARCHAR(3) NOT NULL, 
+	to_currency_code VARCHAR(3) NOT NULL, 
+	effective_date DATE NOT NULL, 
+	rate NUMERIC(19, 8) NOT NULL, 
+	status VARCHAR(20) NOT NULL, 
+	source VARCHAR(80), 
+	description TEXT, 
+	id BIGSERIAL NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	deleted_at TIMESTAMP WITH TIME ZONE, 
+	deleted_by_user_id BIGINT, 
+	CONSTRAINT pk_currency_rates PRIMARY KEY (id), 
+	CONSTRAINT fk_currency_rates_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_currency_rates_deleted_at ON currency_rates (deleted_at);
+CREATE INDEX ix_currency_rates_deleted_by_user_id ON currency_rates (deleted_by_user_id);
+CREATE INDEX ix_currency_rates_lookup ON currency_rates (from_currency_code, to_currency_code, effective_date, status);
+CREATE UNIQUE INDEX uq_currency_rates_pair_date ON currency_rates (from_currency_code, to_currency_code, effective_date) WHERE deleted_at IS NULL;
 CREATE TABLE fee_types (
 	code VARCHAR(50) NOT NULL, 
 	name VARCHAR(255) NOT NULL, 
@@ -430,7 +472,6 @@ CREATE TABLE trade_directions (
 CREATE INDEX ix_trade_directions_deleted_at ON trade_directions (deleted_at);
 CREATE INDEX ix_trade_directions_deleted_by_user_id ON trade_directions (deleted_by_user_id);
 CREATE UNIQUE INDEX uq_trade_directions_code_active ON trade_directions (code) WHERE deleted_at IS NULL;
-ALTER TABLE component_tabs ADD CONSTRAINT fk_component_tabs_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id) ON DELETE SET NULL;
 CREATE TABLE transport_types (
 	code VARCHAR(50) NOT NULL, 
 	name VARCHAR(255) NOT NULL, 
@@ -452,6 +493,7 @@ CREATE TABLE user_credentials (
 	password_hash TEXT NOT NULL, 
 	password_algorithm VARCHAR(32) NOT NULL, 
 	password_changed_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	must_change_password BOOLEAN DEFAULT false NOT NULL, 
 	failed_attempt_count INTEGER NOT NULL, 
 	locked_until TIMESTAMP WITH TIME ZONE, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -539,6 +581,24 @@ CREATE TABLE backup_records (
 CREATE INDEX ix_backup_records_synced ON backup_records (synced);
 CREATE INDEX ix_backup_records_table_name ON backup_records (table_name);
 CREATE INDEX ix_backup_records_table_record ON backup_records (table_name, record_id);
+CREATE TABLE component_tabs (
+	code VARCHAR(64) NOT NULL, 
+	name VARCHAR(255) NOT NULL, 
+	description TEXT, 
+	trade_direction_id BIGINT, 
+	display_order INTEGER NOT NULL, 
+	is_active BOOLEAN NOT NULL, 
+	is_archived BOOLEAN NOT NULL, 
+	config_version_id BIGINT, 
+	id BIGSERIAL NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_component_tabs PRIMARY KEY (id), 
+	CONSTRAINT uq_component_tabs_code UNIQUE (code), 
+	CONSTRAINT fk_component_tabs_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id) ON DELETE SET NULL, 
+	CONSTRAINT fk_component_tabs_config_version_id_configuration_versions FOREIGN KEY(config_version_id) REFERENCES configuration_versions (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_component_tabs_trade_direction_id ON component_tabs (trade_direction_id);
 CREATE TABLE customer_customs_accounts (
 	party_id BIGINT NOT NULL, 
 	system_name VARCHAR(128) NOT NULL, 
@@ -560,6 +620,8 @@ CREATE TABLE posting_rules (
 	credit_account_id BIGINT NOT NULL, 
 	tax_account_id BIGINT, 
 	status VARCHAR(20) NOT NULL, 
+	priority INTEGER NOT NULL, 
+	description TEXT, 
 	id BIGSERIAL NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
 	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -569,6 +631,8 @@ CREATE TABLE posting_rules (
 	CONSTRAINT fk_posting_rules_credit_account_id_chart_of_accounts FOREIGN KEY(credit_account_id) REFERENCES chart_of_accounts (id), 
 	CONSTRAINT fk_posting_rules_tax_account_id_chart_of_accounts FOREIGN KEY(tax_account_id) REFERENCES chart_of_accounts (id)
 );
+CREATE INDEX ix_posting_rules_resolution ON posting_rules (document_type, status, priority);
+CREATE UNIQUE INDEX uq_posting_rules_active_priority ON posting_rules (document_type, coalesce(fee_type_id, 0), priority) WHERE status = 'ACTIVE';
 CREATE TABLE quotations (
 	quotation_no VARCHAR(50) NOT NULL, 
 	customer_party_id BIGINT NOT NULL, 
@@ -609,6 +673,21 @@ CREATE INDEX ix_transport_assets_deleted_at ON transport_assets (deleted_at);
 CREATE INDEX ix_transport_assets_deleted_by_user_id ON transport_assets (deleted_by_user_id);
 CREATE UNIQUE INDEX uq_transport_assets_asset_code_active ON transport_assets (asset_code) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX uq_transport_assets_type_identity_active ON transport_assets (transport_type_id, identity) WHERE deleted_at IS NULL;
+CREATE TABLE component_tab_groups (
+	tab_id BIGINT NOT NULL, 
+	group_id BIGINT NOT NULL, 
+	display_order INTEGER NOT NULL, 
+	status VARCHAR(20) NOT NULL, 
+	id BIGSERIAL NOT NULL, 
+	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
+	CONSTRAINT pk_component_tab_groups PRIMARY KEY (id), 
+	CONSTRAINT uq_component_tab_groups_tab_group UNIQUE (tab_id, group_id), 
+	CONSTRAINT fk_component_tab_groups_tab_id_component_tabs FOREIGN KEY(tab_id) REFERENCES component_tabs (id) ON DELETE CASCADE, 
+	CONSTRAINT fk_component_tab_groups_group_id_component_groups FOREIGN KEY(group_id) REFERENCES component_groups (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_component_tab_groups_group_id ON component_tab_groups (group_id);
+CREATE INDEX ix_component_tab_groups_tab_id ON component_tab_groups (tab_id);
 CREATE TABLE quotation_revisions (
 	quotation_id BIGINT NOT NULL, 
 	revision_no INTEGER NOT NULL, 
@@ -687,6 +766,7 @@ CREATE TABLE service_orders (
 	currency_code VARCHAR(3) NOT NULL, 
 	description TEXT, 
 	created_by_user_id BIGINT, 
+	configuration_version_id BIGINT, 
 	data JSONB NOT NULL, 
 	id BIGSERIAL NOT NULL, 
 	created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, 
@@ -696,7 +776,8 @@ CREATE TABLE service_orders (
 	CONSTRAINT fk_service_orders_quotation_revision_id_quotation_revisions FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id), 
 	CONSTRAINT fk_service_orders_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id), 
 	CONSTRAINT fk_service_orders_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id), 
-	CONSTRAINT fk_service_orders_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+	CONSTRAINT fk_service_orders_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id), 
+	CONSTRAINT fk_service_orders_configuration_version_id_configuratio_6d1e FOREIGN KEY(configuration_version_id) REFERENCES configuration_versions (id) ON DELETE SET NULL
 );
 CREATE INDEX ix_service_orders_status ON service_orders (status);
 CREATE TABLE financial_documents (
@@ -709,6 +790,7 @@ CREATE TABLE financial_documents (
 	service_order_id BIGINT, 
 	currency_code VARCHAR(3) NOT NULL, 
 	exchange_rate NUMERIC(19, 8) NOT NULL, 
+	base_currency_code VARCHAR(3), 
 	description TEXT, 
 	reference_number VARCHAR(128), 
 	due_date DATE, 
@@ -719,6 +801,10 @@ CREATE TABLE financial_documents (
 	discount_amount NUMERIC(19, 4) NOT NULL, 
 	tax_amount NUMERIC(19, 4) NOT NULL, 
 	total_amount NUMERIC(19, 4) NOT NULL, 
+	base_subtotal_amount NUMERIC(19, 4) NOT NULL, 
+	base_discount_amount NUMERIC(19, 4) NOT NULL, 
+	base_tax_amount NUMERIC(19, 4) NOT NULL, 
+	base_total_amount NUMERIC(19, 4) NOT NULL, 
 	paid_amount NUMERIC(19, 4) NOT NULL, 
 	created_by_user_id BIGINT, 
 	posted_by_user_id BIGINT, 
@@ -792,6 +878,7 @@ CREATE TABLE service_order_component_rows (
 	row_no INTEGER NOT NULL, 
 	is_archived BOOLEAN NOT NULL, 
 	values JSONB NOT NULL, 
+	config_version_id BIGINT, 
 	created_by_user_id BIGINT, 
 	updated_by_user_id BIGINT, 
 	id BIGSERIAL NOT NULL, 
@@ -800,6 +887,7 @@ CREATE TABLE service_order_component_rows (
 	CONSTRAINT pk_service_order_component_rows PRIMARY KEY (id), 
 	CONSTRAINT fk_service_order_component_rows_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE, 
 	CONSTRAINT fk_service_order_component_rows_group_id_component_groups FOREIGN KEY(group_id) REFERENCES component_groups (id) ON DELETE CASCADE, 
+	CONSTRAINT fk_service_order_component_rows_config_version_id_confi_1420 FOREIGN KEY(config_version_id) REFERENCES configuration_versions (id) ON DELETE SET NULL, 
 	CONSTRAINT fk_service_order_component_rows_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id), 
 	CONSTRAINT fk_service_order_component_rows_updated_by_user_id_users FOREIGN KEY(updated_by_user_id) REFERENCES users (id)
 );
@@ -928,6 +1016,7 @@ CREATE TABLE journal_entries (
 	status VARCHAR(20) NOT NULL, 
 	description TEXT, 
 	source_document_id BIGINT, 
+	posting_rule_id BIGINT, 
 	reversal_of_journal_entry_id BIGINT, 
 	created_by_user_id BIGINT, 
 	posted_by_user_id BIGINT, 
@@ -942,10 +1031,12 @@ CREATE TABLE journal_entries (
 	CONSTRAINT uq_journal_entries_no UNIQUE (entry_no), 
 	CONSTRAINT fk_journal_entries_accounting_period_id_accounting_periods FOREIGN KEY(accounting_period_id) REFERENCES accounting_periods (id), 
 	CONSTRAINT fk_journal_entries_source_document_id_financial_documents FOREIGN KEY(source_document_id) REFERENCES financial_documents (id), 
+	CONSTRAINT fk_journal_entries_posting_rule_id_posting_rules FOREIGN KEY(posting_rule_id) REFERENCES posting_rules (id), 
 	CONSTRAINT fk_journal_entries_reversal_of_journal_entry_id_journal_entries FOREIGN KEY(reversal_of_journal_entry_id) REFERENCES journal_entries (id), 
 	CONSTRAINT fk_journal_entries_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id), 
 	CONSTRAINT fk_journal_entries_posted_by_user_id_users FOREIGN KEY(posted_by_user_id) REFERENCES users (id)
 );
+CREATE INDEX ix_journal_entries_posting_rule_id ON journal_entries (posting_rule_id);
 CREATE INDEX ix_journal_entries_status ON journal_entries (status);
 CREATE TABLE service_order_containers (
 	service_order_id BIGINT NOT NULL, 

@@ -169,11 +169,29 @@ describe('line table config is self describing', () => {
   it('marks pricing tables so tax fields and totals render', () => {
     const pricingMeta = (path: string, key: string) => moduleDocumentTabs(getFreightModule(path)!, {})
       .flatMap(tab => tab.sections.flatMap(section => section.fields))
-      .find(field => field.key === key)?.meta as { showPricingTotals?: boolean, includeTax?: boolean }
+      .find(field => field.key === key)?.meta as {
+        showPricingTotals?: boolean
+        showDiscountTotals?: boolean
+        includeTax?: boolean
+      }
 
-    expect(pricingMeta('/quotations', 'pricingLines')).toMatchObject({ showPricingTotals: true, includeTax: true })
-    expect(pricingMeta('/service-charges', 'feeLines')).toMatchObject({ showPricingTotals: true, includeTax: true })
-    expect(pricingMeta('/finance/documents', 'lines')).toMatchObject({ showPricingTotals: true, includeTax: true })
+    // A quotation has no discount or tax step: the quoted rate is what the
+    // customer pays, so only the subtotal and total lines render.
+    expect(pricingMeta('/quotations', 'pricingLines')).toMatchObject({
+      showPricingTotals: true,
+      showDiscountTotals: false,
+      includeTax: false,
+    })
+    expect(pricingMeta('/service-charges', 'feeLines')).toMatchObject({
+      showPricingTotals: true,
+      showDiscountTotals: true,
+      includeTax: true,
+    })
+    expect(pricingMeta('/finance/documents', 'lines')).toMatchObject({
+      showPricingTotals: true,
+      showDiscountTotals: true,
+      includeTax: true,
+    })
     // A non-pricing table must not pull in tax handling.
     expect(pricingMeta('/quotations', 'places')).toMatchObject({ includeTax: false })
   })
@@ -185,6 +203,21 @@ describe('line table config is self describing', () => {
     )
     expect(source).not.toMatch(/table\.key\s*===/)
     expect(source).not.toMatch(/table\.key\s*!==/)
+  })
+
+  it('sizes every column from the shared resolver so the field fits its column', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../app/components/freight/AppLineTable.vue', import.meta.url)),
+      'utf8',
+    )
+    // The field width is resolved once per column and put on the column itself,
+    // so the field inside cannot disagree with the column it belongs to.
+    expect(source).toContain('lineTableColumnMetrics(column)')
+    expect(source).toContain('meta: columnMeta(column)')
+    // Icon columns stay pinched; the table fills the form and scrolls when the
+    // columns genuinely need more room than it has.
+    expect(source).toContain('w-px')
+    expect(source).toContain('freight-table w-full min-w-max')
   })
 
   it('treats delete, action and reorder columns as utility cells with no row data', () => {

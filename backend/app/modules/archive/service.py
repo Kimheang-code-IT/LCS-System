@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import cache
 from app.core.context import RequestContext
 from app.core.database import Base, utcnow
+from app.core.deletion import dependent_references
 from app.core.exceptions import Conflict, NotFound
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged, parse_date
 from app.core.serialization import jsonable
@@ -34,6 +35,7 @@ def _registry() -> dict[str, ArchiveAdapter]:
     from app.modules.master_data.models import (
         BusinessParty,
         ContainerType,
+        Currency,
         FeeType,
         Place,
         TradeDirection,
@@ -49,11 +51,12 @@ def _registry() -> dict[str, ArchiveAdapter]:
         ArchiveAdapter("transportTypes", TransportType, "name", "Transport Type"),
         ArchiveAdapter("transportAssets", TransportAsset, "identity", "Transport Asset"),
         ArchiveAdapter("feeTypes", FeeType, "name", "Fee Type"),
+        ArchiveAdapter("currencies", Currency, "name", "Currency"),
     )
     return {adapter.entity_type: adapter for adapter in adapters}
 
 
-ARCHIVABLE_GENERIC_COLLECTIONS = frozenset({"companies", "shipments", "documents", "deliveries", "currencies"})
+ARCHIVABLE_GENERIC_COLLECTIONS = frozenset({"companies", "shipments", "documents", "deliveries"})
 
 
 def adapter_for(entity_type: str) -> ArchiveAdapter:
@@ -363,17 +366,12 @@ async def restore_record(
 
 
 async def _dependency_names(session: AsyncSession, row: Any) -> list[str]:
-    found: list[str] = []
-    for table in Base.metadata.sorted_tables:
-        if table.name in {"archive_records", "audit_events"}:
-            continue
-        for foreign_key in table.foreign_keys:
-            if foreign_key.column.table.name != row.__table__.name or foreign_key.column.name != "id":
-                continue
-            count = await session.scalar(select(func.count()).select_from(table).where(foreign_key.parent == row.id))
-            if count:
-                found.append(f"{table.name} ({count})")
-    return sorted(set(found))
+    """Tables and counts that still reference ``row``.
+
+    Delegates to the shared policy in ``app/core/deletion.py`` so the archive and
+    every other delete path agree on what counts as a dependency.
+    """
+    return await dependent_references(session, row)
 
 
 async def hard_delete_record(

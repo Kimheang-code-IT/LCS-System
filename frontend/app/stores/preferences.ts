@@ -2,14 +2,19 @@ import { defineStore } from 'pinia'
 import { computed } from 'vue'
 import type { AppFontSize } from '~/types/settings'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+import {
+  APP_LANGUAGE_CODES,
+  DEFAULT_APP_LANGUAGE,
+  isAppLanguage,
+  normalizeAppLanguage,
+  type AppLocale,
+} from '~/utils/constants/app-languages'
 
 const THEME_PRIMARY_KEY = 'ui:theme:primary'
 const THEME_NEUTRAL_KEY = 'ui:theme:neutral'
 const LOCALE_KEY = 'ui:locale'
 const LOCALE_EXPLICIT_KEY = 'ui:locale:explicit'
 const FONT_SIZE_KEY = 'ui:font-size'
-
-export type AppLocale = 'en' | 'km'
 
 type UiColorConfig = { primary?: string; neutral?: string }
 
@@ -45,8 +50,8 @@ export const usePreferencesStore = defineStore('preferences', () => {
   const fontSize = useState<AppFontSize>('ui-font-size', () => DEFAULT_FONT_SIZE)
   const availableLocales = computed<AppLocale[]>(() => {
     const configured = appLocalization.localization.value.availableLanguages
-      .filter((code): code is AppLocale => code === 'en' || code === 'km')
-    return configured.length ? configured : ['en', 'km']
+      .filter((code): code is AppLocale => isAppLanguage(code))
+    return configured.length ? configured : [...APP_LANGUAGE_CODES]
   })
 
   function setThemeColors(nextColors: UiColorConfig) {
@@ -94,20 +99,25 @@ export const usePreferencesStore = defineStore('preferences', () => {
     await appLocalization.load()
     const savedLocale = localStorage.getItem(LOCALE_KEY)
     const isExplicit = localStorage.getItem(LOCALE_EXPLICIT_KEY) === '1'
-    if (isExplicit && (savedLocale === 'en' || savedLocale === 'km') && availableLocales.value.includes(savedLocale)) {
+    if (isExplicit && isAppLanguage(savedLocale) && availableLocales.value.includes(savedLocale)) {
       void i18n.setLocale(savedLocale)
       return
     }
     const configured = appLocalization.localization.value.defaultLanguage
-    void i18n.setLocale(configured === 'km' ? 'km' : 'en')
+    void i18n.setLocale(
+      availableLocales.value.includes(configured)
+        ? configured
+        : (availableLocales.value[0] ?? DEFAULT_APP_LANGUAGE),
+    )
   }
 
   function setLocale(code: AppLocale) {
     const next = availableLocales.value.includes(code)
       ? code
-      : (availableLocales.value.includes(appLocalization.localization.value.defaultLanguage)
-          ? appLocalization.localization.value.defaultLanguage
-          : availableLocales.value[0]!)
+      : normalizeAppLanguage(
+          appLocalization.localization.value.defaultLanguage,
+          availableLocales.value[0] ?? DEFAULT_APP_LANGUAGE,
+        )
     if (import.meta.client) {
       localStorage.setItem(LOCALE_KEY, next)
       localStorage.setItem(LOCALE_EXPLICIT_KEY, '1')

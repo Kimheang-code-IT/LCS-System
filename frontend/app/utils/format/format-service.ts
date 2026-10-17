@@ -1,10 +1,17 @@
 import type { AppConfigLocalization } from '~/types/settings'
 import { shallowRef } from 'vue'
+import {
+  APP_LANGUAGE_CODES,
+  APP_LANGUAGE_LOCALES,
+  DEFAULT_APP_LANGUAGE,
+  normalizeAppLanguage,
+  normalizeAppLanguages,
+} from '~/utils/constants/app-languages'
 
 /** Defaults aligned with System Settings → Localization. */
 export const DEFAULT_FORMAT_CONFIG: AppConfigLocalization = {
-  defaultLanguage: 'en',
-  availableLanguages: ['en', 'km'],
+  defaultLanguage: DEFAULT_APP_LANGUAGE,
+  availableLanguages: [...APP_LANGUAGE_CODES],
   timezone: 'Asia/Phnom_Penh',
   dateFormat: 'DD/MM/YYYY',
   timeFormat: 'HH:mm',
@@ -26,9 +33,7 @@ const LEGACY_NUMBER_FORMATS: Record<string, string> = {
 }
 const DATE_FORMATS = new Set(['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'DD-MM-YYYY', 'D MMM YYYY'])
 const TIME_FORMATS = new Set(['HH:mm', 'HH:mm:ss', 'h:mm A', 'h:mm:ss A'])
-const LANGUAGES = new Set(['en', 'km'])
 const CURRENCIES = new Set(['USD', 'KHR', 'THB', 'VND', 'SGD', 'EUR', 'GBP', 'JPY', 'CNY'])
-const LANGUAGE_LOCALES: Record<string, string> = { en: 'en-US', km: 'km-KH' }
 
 let activeConfig: AppConfigLocalization = {
   ...DEFAULT_FORMAT_CONFIG,
@@ -48,17 +53,13 @@ function supportedTimezone(value: unknown): value is string {
 }
 
 export function normalizeFormatConfig(next: Partial<AppConfigLocalization> = {}): AppConfigLocalization {
-  const language = LANGUAGES.has(String(next.defaultLanguage))
-    ? next.defaultLanguage as AppConfigLocalization['defaultLanguage']
-    : DEFAULT_FORMAT_CONFIG.defaultLanguage
-  const languages = Array.isArray(next.availableLanguages)
-    ? next.availableLanguages.filter((item): item is 'en' | 'km' => LANGUAGES.has(item))
-    : []
+  const language = normalizeAppLanguage(next.defaultLanguage)
+  const languages = normalizeAppLanguages(next.availableLanguages)
   const legacyNumberFormat = LEGACY_NUMBER_FORMATS[String(next.numberFormat)] || next.numberFormat
-  const locale = LANGUAGE_LOCALES[language]!
+  const locale = APP_LANGUAGE_LOCALES[language]
   return {
     defaultLanguage: language,
-    availableLanguages: languages.length ? [...new Set(languages)] : [...DEFAULT_FORMAT_CONFIG.availableLanguages],
+    availableLanguages: languages.length ? languages : [...DEFAULT_FORMAT_CONFIG.availableLanguages],
     timezone: supportedTimezone(next.timezone) ? next.timezone : DEFAULT_FORMAT_CONFIG.timezone,
     dateFormat: DATE_FORMATS.has(String(next.dateFormat)) ? String(next.dateFormat) : DEFAULT_FORMAT_CONFIG.dateFormat,
     timeFormat: TIME_FORMATS.has(String(next.timeFormat)) ? String(next.timeFormat) : DEFAULT_FORMAT_CONFIG.timeFormat,

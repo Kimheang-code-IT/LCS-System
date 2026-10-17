@@ -45,7 +45,6 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
 const colorMode = useColorMode()
 
 const visiblePanels = computed(() => props.panels.filter(panel => panel.visible !== false))
@@ -107,12 +106,16 @@ function downloadFile(href: string, filename: string) {
   link.click()
 }
 
+/** Download failures are shown inside the panel, never as a toast. */
+const downloadError = ref('')
+
 function downloadPng(panel: DashboardChartPanel) {
   const url = toPng(panel)
   if (!url) {
-    toast.add({ title: t('freight.dashboard.chartDownloadFailed'), color: 'error' })
+    downloadError.value = panel.title
     return
   }
+  downloadError.value = ''
   downloadFile(url, `${fileSlug(panel)}.png`)
 }
 
@@ -171,6 +174,15 @@ function menuItems(panel: DashboardChartPanel): DropdownMenuItem[][] {
 
 <template>
   <div class="grid min-h-72 flex-1 grid-cols-1 grid-rows-2 gap-2 xl:min-h-0 xl:grid-cols-2 xl:grid-rows-1">
+    <UAlert
+      v-if="downloadError"
+      class="col-span-full"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-alert-circle"
+      :title="t('freight.dashboard.chartDownloadFailed')"
+      :description="downloadError"
+    />
     <section
       v-for="panel in visiblePanels"
       :key="panel.key"

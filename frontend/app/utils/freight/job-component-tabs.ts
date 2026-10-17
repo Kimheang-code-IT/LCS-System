@@ -8,15 +8,6 @@ export const JOB_CORE_WORKSPACE_SECTIONS = [
   ...JOB_TRAILING_WORKSPACE_SECTIONS,
 ] as const
 
-/** Known group slugs for icons and deep-link aliases only — not fallback tabs. */
-export const JOB_DEFAULT_COMPONENT_SECTIONS = [
-  'invoice',
-  'packing-list',
-  'shipment-registration',
-  'bill',
-  'customs',
-] as const
-
 const RESERVED_TAB_IDS = new Set<string>(JOB_CORE_WORKSPACE_SECTIONS)
 
 export type JobWorkspaceTabOptions = {
@@ -152,23 +143,6 @@ export function resolveGroupTemplate(params: {
     normalizeMatch(row.group) === normalizeMatch(group.code)
     || normalizeMatch(row.group) === normalizeMatch(group.name),
   ) || null
-}
-
-export function jobWorkspaceSectionIcon(id: string) {
-  const icons: Record<string, string> = {
-    overview: 'i-lucide-layout-dashboard',
-    route: 'i-lucide-map-pinned',
-    containers: 'i-lucide-container',
-    invoice: 'i-lucide-file-text',
-    'packing-list': 'i-lucide-list',
-    'shipment-registration': 'i-lucide-clipboard-list',
-    bill: 'i-lucide-receipt',
-    customs: 'i-lucide-landmark',
-    charges: 'i-lucide-receipt-text',
-    finance: 'i-lucide-banknote',
-    files: 'i-lucide-paperclip',
-  }
-  return icons[id] || 'i-lucide-file-text'
 }
 
 export function firstJobDocumentSection(

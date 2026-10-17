@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -15,9 +16,12 @@ from app.core.crypto import encrypt_secret, is_sensitive_field
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
 from app.core.pagination import PageParams, paged
 from app.core.serialization import jsonable, to_camel
+from app.modules.master_data.currency_rates import normalize_rate_input
 from app.modules.master_data.models import (
     BusinessParty,
     ContainerType,
+    Currency,
+    CurrencyRate,
     FeeType,
     ModuleRecord,
     Place,
@@ -61,6 +65,19 @@ def _bool(value: Any) -> bool:
     return bool(value)
 
 
+def _parse_date(value: Any, field_key: str) -> date:
+    """An ISO date from a JSON payload, refused as a field error when malformed."""
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except ValueError as exc:
+        raise ValidationFailed(
+            "A valid date is required.",
+            {field_key: "Use a date such as 2026-01-31."},
+        ) from exc
+
+
 async def serialize(spec: Spec, model: Any, session: AsyncSession) -> dict[str, Any]:
     output: dict[str, Any] = {"id": str(model.id)}
     for camel, attr in spec.fields.items():
@@ -93,6 +110,7 @@ async def resolve_reference(session: AsyncSession, target: str, value: Any) -> A
         "transport_type": (TransportType, "name"),
         "fee_type": (FeeType, "name"),
         "business_party": (BusinessParty, "legal_name"),
+        "currency": (Currency, "code"),
     }
     if target == "chart_of_account":
         from app.modules.finance.models import ChartOfAccount
@@ -175,12 +193,26 @@ async def apply_input(spec: Spec, model: Any, data: dict[str, Any], session: Asy
             column = spec.model.__table__.columns.get(attr)
             if column is not None and str(column.type).startswith("BOOLEAN"):
                 value = _bool(value)
+            elif column is not None and str(column.type) == "DATE" and value not in (None, ""):
+                # A date arrives as JSON text. Coercing it here, by column type,
+                # is the same rule the BOOLEAN and JSON branches apply, so a
+                # reference model with a date does not need its own parser.
+                value = _parse_date(value, camel)
             elif column is not None and str(column.type).startswith("JSON") and value is not None and not isinstance(value, list):
                 value = [value]
             setattr(model, attr, value)
     for camel, ref in spec.refs.items():
         if camel in data:
-            resolved = await resolve_reference(session, ref.target, data[camel])
+            supplied = data[camel]
+            resolved = await resolve_reference(session, ref.target, supplied)
+            if resolved is None and supplied not in (None, ""):
+                # Writing NULL here would silently discard the operator's input
+                # and leave a dangling-looking record, so reject it instead.
+                label = ref.target.replace("_", " ")
+                raise ValidationFailed(
+                    f"Unknown {label}: {supplied!r} was not found.",
+                    {camel: f"'{supplied}' does not match any {label}."},
+                )
             setattr(model, ref.label, resolved)
 
 
@@ -311,6 +343,39 @@ SPECS: dict[str, Spec] = {
         fields={"code": "code", "name": "name", "description": "description", "status": "status"},
         search=["code", "name"],
     ),
+    "currencies": Spec(
+        model=Currency,
+        title="name",
+        fields={
+            "code": "code",
+            "name": "name",
+            "symbol": "symbol",
+            "numericCode": "numeric_code",
+            "decimalPlaces": "decimal_places",
+            "description": "description",
+            "status": "status",
+        },
+        search=["code", "name", "symbol"],
+    ),
+    # The rate store the document form reads from. Rows are versioned by
+    # effective date and only an APPROVED row is ever applied to a document; see
+    # `master_data/currency_rates.py` for the resolution rules and
+    # `app/core/fx.py` for the arithmetic.
+    "currencyRates": Spec(
+        model=CurrencyRate,
+        title="fromCurrencyCode",
+        fields={
+            "fromCurrencyCode": "from_currency_code",
+            "toCurrencyCode": "to_currency_code",
+            "effectiveDate": "effective_date",
+            "rate": "rate",
+            "status": "status",
+            "source": "source",
+            "description": "description",
+        },
+        search=["from_currency_code", "to_currency_code", "source"],
+        transform_input=normalize_rate_input,
+    ),
 }
 
 # Collection slugs that resolve to the generic record store.
@@ -323,11 +388,10 @@ GENERIC_COLLECTIONS = {
     "customerPayments",
     "supplierCosts",
     "supplierPayments",
-    "currencies",
 }
 
 # Generic collections safe to cache: small, non-sensitive option lists only.
-CACHEABLE_GENERIC_COLLECTIONS = {"currencies"}
+CACHEABLE_GENERIC_COLLECTIONS: set[str] = set()
 
 
 def get_spec(collection: str) -> Spec:
@@ -399,6 +463,11 @@ _UNIQUE_FIELD_ERRORS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("taxIdentifier", "This tax identifier is already in use.", ("vat_tin",)),
     ("assetCode", "This asset code is already in use.", ("asset_code",)),
     ("identity", "This transport type and identity already exist.", ("transport_type_id",)),
+    (
+        "effectiveDate",
+        "A rate for this currency pair and effective date already exists.",
+        ("currency_rates.from_currency_code", "uq_currency_rates_pair_date"),
+    ),
     ("code", "This code is already in use.", ("code",)),
 )
 

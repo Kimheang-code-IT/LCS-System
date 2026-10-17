@@ -14,6 +14,7 @@ import type { ConnectionStatus, NotificationRule, TelegramDestination } from '~/
 import { TELEGRAM_TEMPLATE_VARIABLES } from '~/types/settings'
 import { createClientId } from '~/utils/client-id'
 import { TELEGRAM_DESTINATION_TYPE_OPTIONS } from '~/utils/constants/select-options'
+import { APP_LANGUAGES, APP_LANGUAGE_CODES } from '~/utils/constants/app-languages'
 import { resolveFieldHelp } from '~/utils/field-help'
 import { useReferenceOptions } from '~/composables/common/useReferenceOptions'
 import type { FreightRelated, FreightTable } from '~/config/freight-modules'
@@ -28,12 +29,15 @@ import {
 } from '~/utils/freight/document-tabs'
 import { resolveDynamicFieldKind } from '~/composables/freight/useDynamicFieldRegistry'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { formFieldError } from '~/utils/validation/form-field-error'
 
 const props = defineProps<{
   field: DocumentFieldSchema
   modelValue: unknown
   disabled?: boolean
   fieldErrors?: Record<string, string>
+  /** Forwarded to nested tables so an edited cell can drop its own error. */
+  onFieldEdit?: (key: string) => void
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +47,7 @@ const emit = defineEmits<{
 const { t, te } = useI18n()
 const { loadReferenceOptions } = useReferenceOptions()
 
-const fieldError = computed(() => props.fieldErrors?.[props.field.key])
+const fieldError = computed(() => formFieldError(props.fieldErrors, props.field.key))
 
 const hintOpen = ref(false)
 
@@ -143,6 +147,25 @@ const rulesValue = computed({
   get: () => (Array.isArray(props.modelValue) ? props.modelValue as NotificationRule[] : []),
   set: (v: NotificationRule[]) => emit('update:modelValue', v),
 })
+
+/** `localization.availableLanguages` — one toggle per shipped language. */
+const languagesValue = computed({
+  get: () => (Array.isArray(props.modelValue) ? props.modelValue.map(String) : []),
+  set: (v: string[]) => emit('update:modelValue', v),
+})
+
+function isLanguageEnabled(code: string) {
+  return languagesValue.value.includes(code)
+}
+
+function toggleLanguage(code: string, enabled: boolean) {
+  const next = enabled
+    ? [...new Set([...languagesValue.value, code])]
+    : languagesValue.value.filter(item => item !== code)
+  // The API rejects an empty list, so keep the last enabled language in place.
+  if (!next.length) return
+  languagesValue.value = APP_LANGUAGE_CODES.filter(item => next.includes(item))
+}
 
 const connectionValue = computed(() => {
   const raw = props.modelValue as ConnectionStatusFieldValue | null | undefined
@@ -264,6 +287,7 @@ const relatedGroups = computed(() =>
     : [],
 )
 const showPricingTotals = computed(() => Boolean(props.field.meta?.showPricingTotals))
+const showDiscountTotals = computed(() => Boolean(props.field.meta?.showDiscountTotals))
 const includeTaxTotal = computed(() => Boolean(props.field.meta?.includeTax))
 const lineCompact = computed(() => Boolean(props.field.meta?.compact))
 const lineViewOnly = computed(() => Boolean(props.field.meta?.viewOnly || props.field.readOnly))
@@ -439,6 +463,9 @@ function removeDestination(id: string) {
       :compact="lineCompact"
       :view-only-actions="lineViewOnly"
       :header-actions="lineHeaderActions"
+      :field-errors="fieldErrors"
+      :error-key="field.key"
+      :on-cell-edit="onFieldEdit"
       @update:model-value="lineRows = $event"
       @row-action="(action, row) => lineAction?.(action, row)"
     />
@@ -450,7 +477,7 @@ function removeDestination(id: string) {
         <span class="text-muted">{{ $t('freight.fields.subtotal') }}</span>
         <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('subtotal')) }}</span>
       </div>
-      <div class="flex items-center justify-between gap-4">
+      <div v-if="showDiscountTotals" class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ $t('freight.fields.discount') }}</span>
         <span class="font-medium text-highlighted">− {{ moneyLabel(moneyAmount('discount')) }}</span>
       </div>
@@ -478,6 +505,7 @@ function removeDestination(id: string) {
     v-else-if="isDynamicTable && dynamicTable"
     :label="labelText"
     :help="helpText"
+    :error="fieldError"
     :required="field.required"
     class="md:col-span-2"
   >
@@ -485,6 +513,9 @@ function removeDestination(id: string) {
       v-model="dynamicTableRows"
       :table="dynamicTable"
       :disabled="disabled || field.readOnly"
+      :field-errors="fieldErrors"
+      :error-key="field.key"
+      :on-cell-edit="onFieldEdit"
     />
   </UFormField>
 
@@ -723,6 +754,30 @@ function removeDestination(id: string) {
       <span class="text-sm">{{ rule.event }}</span>
       <USwitch v-model="rule.enabled" :disabled="disabled || field.readOnly" />
     </div>
+  </div>
+
+  <div
+    v-else-if="field.type === 'language-toggles'"
+    class="space-y-2 md:col-span-2"
+  >
+    <p class="text-sm font-medium">
+      {{ t('lcs.settings.availableLanguages') }}
+    </p>
+    <div
+      v-for="language in APP_LANGUAGES"
+      :key="language.code"
+      class="flex items-center justify-between rounded-md border border-default px-3 py-2"
+    >
+      <span class="text-sm">{{ language.name }}</span>
+      <USwitch
+        :model-value="isLanguageEnabled(language.code)"
+        :disabled="disabled || field.readOnly"
+        @update:model-value="toggleLanguage(language.code, $event)"
+      />
+    </div>
+    <p class="text-xs text-muted">
+      {{ t('lcs.settings.availableLanguagesHint') }}
+    </p>
   </div>
 
   <CommonAppConnectionStatusCard

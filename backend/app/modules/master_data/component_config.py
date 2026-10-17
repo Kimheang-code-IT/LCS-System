@@ -152,8 +152,51 @@ async def create_attribute(session: AsyncSession, context: RequestContext, data:
     return attribute_payload(attribute)
 
 
+async def _attribute_row_references(session: AsyncSession, attribute_id: int) -> int:
+    """How many saved Service Order component rows hold values for this attribute.
+
+    Component values are stored as JSON keyed by the attribute ``code``, so a
+    rename would orphan every stored value. Group membership is what links a row
+    to an attribute, which keeps this check dialect-independent.
+    """
+    from app.modules.operations.models import ServiceOrderComponentRow
+
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ServiceOrderComponentRow)
+            .join(ComponentGroupAttribute, ComponentGroupAttribute.group_id == ServiceOrderComponentRow.group_id)
+            .where(ComponentGroupAttribute.attribute_id == attribute_id)
+        )
+        or 0
+    )
+
+
+async def _rename_attribute(session: AsyncSession, attribute: ComponentAttribute, raw_code: Any) -> None:
+    code = _normalize_code(raw_code)
+    if not code or code == attribute.code:
+        return
+    duplicate = (
+        await session.execute(
+            select(ComponentAttribute).where(ComponentAttribute.code == code, ComponentAttribute.id != attribute.id)
+        )
+    ).scalars().first()
+    if duplicate is not None:
+        raise Conflict("DUPLICATE_ATTRIBUTE_CODE", "An attribute with this code already exists.", {"code": "Already in use"})
+    if await _attribute_row_references(session, attribute.id):
+        raise Conflict(
+            "ATTRIBUTE_CODE_IN_USE",
+            "This field already has values saved against its code, so the code cannot change. "
+            "Deactivate it and create a replacement field instead.",
+            {"code": "In use by saved Service Orders"},
+        )
+    attribute.code = code
+
+
 async def update_attribute(session: AsyncSession, context: RequestContext, attribute_id: int, data: dict[str, Any]) -> dict:
     attribute = await _get_attribute(session, attribute_id)
+    if data.get("code") is not None:
+        await _rename_attribute(session, attribute, data["code"])
     if data.get("label") is not None:
         attribute.label = str(data["label"])
     if data.get("labelKm") is not None:

@@ -1,6 +1,6 @@
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { usePreferencesStore } from '~/stores/preferences'
-import type { AppLocale } from '~/stores/preferences'
+import { isAppLanguage, type AppLocale } from '~/utils/constants/app-languages'
 import type { AppFontSize } from '~/types/settings'
 import { resolveUserAvatar } from '~/utils/auth/user-avatar'
 
@@ -57,8 +57,8 @@ export function useUserMenu() {
           checked: i18n.locale.value === loc.code,
           onSelect: (e: Event) => {
             e.preventDefault()
-            if (loc.code === 'en' || loc.code === 'km') {
-              preferences.setLocale(loc.code as AppLocale)
+            if (isAppLanguage(loc.code)) {
+              preferences.setLocale(loc.code)
             }
           },
         })),

@@ -131,6 +131,13 @@ export function useFileAttachments() {
   const toast = useToast()
   const { t } = useI18n()
   const maxMb = useState('max-upload-size-mb', () => 50)
+  /**
+   * Rejected files are reported next to the file grid, not in a toast. The
+   * accepted files are still added, so one oversized file does not discard the
+   * rest of the selection.
+   */
+  const rejected = ref<string[]>([])
+  const maxSizeMb = computed(() => maxMb.value)
 
   onMounted(async () => {
     try {
@@ -154,16 +161,18 @@ export function useFileAttachments() {
     const uploadedBy = String(auth.user?.name || t('freight.ui.currentUser'))
     const uploadedAt = new Date().toISOString()
     const accepted: Array<Record<string, unknown>> = []
+    const tooLarge: string[] = []
     for (const file of files) {
       if (file.size > maxMb.value * 1024 * 1024) {
-        toast.add({ title: t('freight.ui.fileTooLarge', { size: maxMb.value }), description: file.name, color: 'error' })
+        tooLarge.push(`${file.name} — ${t('freight.ui.fileTooLarge', { size: maxMb.value })}`)
         continue
       }
       accepted.push(attachmentRowFromFile(file, uploadedBy, uploadedAt))
     }
+    rejected.value = tooLarge
     if (accepted.length) toast.add({ title: t('freight.ui.fileUploaded'), color: 'success' })
     return accepted
   }
 
-  return { inputRef, openPicker, rowsFromInput }
+  return { inputRef, openPicker, rowsFromInput, rejected, maxSizeMb }
 }

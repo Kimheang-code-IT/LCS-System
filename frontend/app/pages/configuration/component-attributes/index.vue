@@ -3,6 +3,9 @@ import type { ComponentAttribute, ComponentDataType } from '~/types/component-co
 import type { SaveGridChange } from '~/types/save-grid'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateDraftFields } from '~/utils/validation/record-validation'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import {
   componentAttributeColumns,
   componentAttributePayload,
@@ -25,10 +28,24 @@ type AttributeDraft = {
   helpText: string
 }
 
+/** Required inputs of the create dialog, shared with the validator. */
+const ATTRIBUTE_DRAFT_FIELDS = [
+  { key: 'label', label: 'Label', required: true },
+] as const
+
 const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const config = useComponentConfig()
+
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  label: key => ATTRIBUTE_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  order: () => ATTRIBUTE_DRAFT_FIELDS.map(field => field.key),
+})
+
+/** Grid saves are not a form: report the refusal above the grid instead. */
+const gridErrors = ref<string[]>([])
 
 const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
 
@@ -71,15 +88,23 @@ const draft = ref<AttributeDraft>({
 
 function startAdd() {
   draft.value = { label: '', dataType: 'text', isRequired: false, helpText: '' }
+  validation.reset()
   dialogOpen.value = true
 }
 
 async function submitAdd() {
-  const payload = componentAttributePayload({ ...draft.value } as Record<string, unknown>, slugify(draft.value.label))
-  if (!payload.label) {
-    toast.add({ title: 'Label is required.', color: 'error' })
+  const failures = validateDraftFields(
+    draft.value as unknown as Record<string, unknown>,
+    ATTRIBUTE_DRAFT_FIELDS.map(field => ({ key: field.key, required: field.required })),
+    key => ATTRIBUTE_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  )
+  if (failures.length) {
+    validation.applyFailures(failures)
+    void validation.focusFirstInvalid()
     return
   }
+  validation.reset()
+  const payload = componentAttributePayload({ ...draft.value } as Record<string, unknown>, slugify(draft.value.label))
   try {
     await config.createAttribute(payload)
     dialogOpen.value = false
@@ -87,8 +112,9 @@ async function submitAdd() {
     await config.loadAttributes(true)
     syncRows()
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    validation.applyServerError(error)
+    void validation.focusFirstInvalid()
   }
 }
 
@@ -102,6 +128,7 @@ async function remove(attribute: ComponentAttribute) {
 
 async function save(change: SaveGridChange) {
   const savedById = new Map(config.attributes.value.map(attribute => [attribute.id, attribute]))
+  gridErrors.value = []
   try {
     for (const id of change.removedIds) {
       const attribute = savedById.get(id)
@@ -119,8 +146,10 @@ async function save(change: SaveGridChange) {
     await config.loadAttributes(true)
     syncRows()
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    // Not a form submit: the offending row is not rendered as an input, so the
+    // refusal is reported above the grid rather than as a toast.
+    gridErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
     await config.loadAttributes(true)
     syncRows()
   }
@@ -136,6 +165,8 @@ async function save(change: SaveGridChange) {
       @refresh="refresh"
     />
 
+    <CommonAppFormErrorSummary class="mb-2" :form-errors="gridErrors" />
+
     <TableAppSaveGrid
       :table="table"
       :rows="gridRows"
@@ -147,14 +178,21 @@ async function save(change: SaveGridChange) {
       title="Add attribute"
       :saving="config.saving.value"
       confirm-label="Create"
+      :form-errors="validation.formErrors.value"
       @confirm="submitAdd"
     >
       <div class="space-y-4">
-        <UFormField label="Label" required>
+        <UFormField
+          label="Label"
+          required
+          :error="validation.fieldErrors.value.label"
+          data-field-key="label"
+        >
           <UInput
             v-model="draft.label"
             placeholder="e.g. Container No."
             class="w-full"
+            @update:model-value="validation.clearFieldError('label')"
           />
         </UFormField>
         <UFormField label="Type">

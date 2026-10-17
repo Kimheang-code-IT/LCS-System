@@ -8,6 +8,7 @@ import type {
 } from '~/types/common'
 import { useConfirm } from '~/composables/common/useConfirm'
 import type { ExportRequest } from '~/types/export'
+import type { ValidationSummaryItem } from '~/composables/common/useFormValidation'
 
 const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
@@ -22,6 +23,12 @@ const props = withDefaults(defineProps<{
   canSave?: boolean
   saveLabel?: string
   fieldErrors?: Record<string, string>
+  /** Host hook so an edit can drop that field's (or cell's) error at once. */
+  onFieldEdit?: (key: string) => void
+  /** Rows rendered by the error summary above the form. */
+  summaryItems?: ValidationSummaryItem[]
+  /** Messages that belong to no single field (business rule, network). */
+  formErrors?: string[]
   showSave?: boolean
   showComments?: boolean
   showTabs?: boolean
@@ -53,6 +60,9 @@ const props = withDefaults(defineProps<{
 }>(), {
   saveLabel: '',
   fieldErrors: () => ({}),
+  onFieldEdit: undefined,
+  summaryItems: () => [],
+  formErrors: () => [],
   listTo: '',
   currentUser: undefined,
   metaTitle: '',
@@ -110,6 +120,8 @@ const emit = defineEmits<{
   navigatePrevious: []
   navigateNext: []
   export: [request: ExportRequest]
+  /** An error-summary row was activated: reveal + focus that field. */
+  selectError: [key: string]
 }>()
 
 const { t } = useI18n()
@@ -234,6 +246,17 @@ color="error"
 :title="error" />
 
             <template v-else-if="showForm">
+              <CommonAppFormErrorSummary
+                v-if="summaryItems.length || formErrors.length"
+                class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
+                :class="contentWide
+                  ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
+                  : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
+                :items="summaryItems"
+                :form-errors="formErrors"
+                @select="emit('selectError', $event)"
+              />
+
               <slot name="before-form" />
 
               <div
@@ -248,8 +271,13 @@ class="flex min-h-0 w-full"
                       :set-field-value="setFieldValue"
 :read-only="readOnly"
 :field-errors="fieldErrors"
+:on-field-edit="onFieldEdit"
 :wide="contentWide" />
                   </slot>
+
+                  <!-- A tab whose content is not a field grid renders here: the
+                       owning view decides what to show for the active tab. -->
+                  <slot name="tab-extra" :tab-id="activeTab" />
 
                   <DocumentAppDocumentContentShell v-if="showComments && !isCreate" :wide="contentWide">
                     <DocumentAppCommentsActivity

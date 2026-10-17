@@ -230,7 +230,8 @@ HTTP request
 - Errors return `{code, message, request_id, field_errors}`.
 - Auth tokens are sent as `Authorization: Bearer` or HttpOnly cookies; a CSRF
   cookie/header pair is used for cookie-authenticated mutations.
-- 39 source permissions gate the endpoints (see `docs/11_permissions_matrix.md`).
+- The endpoint permission catalog (`app/core/permissions.py`) is documented in
+  `docs/11_permissions_matrix.md`; the counts live there.
 - Several finance paths register both kebab-case and camelCase aliases to the
   same handler.
 - Master-data reference collections are registered dynamically from
@@ -273,17 +274,158 @@ the previous per-row query shape and the bounded repository query count.
 Financial document
         │
         ▼
-Posting service
+post_document  (transaction owner)
         ├── validate document state
-        ├── resolve period
-        ├── resolve account/posting rules
-        ├── build journal lines
-        ├── validate debit = credit
-        └── persist document + journal atomically
+        ├── reject an existing posting link      → DUPLICATE_POSTING
+        ├── resolve period; refuse if CLOSED     → PERIOD_CLOSED
+        │
+        ├─ PostingRuleResolver ─────── "which accounts?"
+        │      ├── most specific tier: document type + fee type
+        │      ├── document default:   document type, fee type IS NULL
+        │      └── within a tier: highest priority wins
+        │
+        ├─ AccountingPostingService ── "what journal?"
+        │      ├── per document type, a named strategy in STRATEGIES
+        │      └── returns a balanced JournalDraft or raises
+        │
+        ├── persist journal + lines + posting link + status atomically
+        └── history is immutable from here: reverse_document, never edit
 ```
 
 The journal is the source of truth for posted accounting balances. Financial
 documents are source/business records.
+
+### 9.1 The two units, and why they are separate
+
+`PostingRuleResolver` (`app/modules/finance/posting_rules.py`) answers *which
+accounts* and nothing else. `AccountingPostingService`
+(`app/modules/finance/posting.py`) answers *what journal* and delegates every
+account question back to the resolver. Keeping them apart is what lets a new
+document type reuse account resolution without inheriting the customer-invoice
+line logic, and what makes rule selection testable without a posting flow around
+it.
+
+No account id appears in either file. Every account comes from a `posting_rules`
+row, so changing where a document posts is a data change an administrator makes.
+
+### 9.2 Rule selection
+
+Resolution walks two tiers, most specific first, and takes the highest `priority`
+within the tier:
+
+1. `document_type` **and** `fee_type_id` — a rule narrowed to one fee type;
+2. `document_type` with `fee_type_id IS NULL` — the document default.
+
+A partial unique index over
+`(document_type, COALESCE(fee_type_id, 0), priority)` for `status = 'ACTIVE'`
+makes "one active rule per scope *and* priority" a database guarantee, so a
+concurrent pair of writes leaves one winner rather than two. Two active rules
+sharing a priority are an `AMBIGUOUS_POSTING_RULE` conflict in the resolver —
+never an arbitrary winner — which covers a database restored without its indexes.
+
+With no rule at all, `DEFAULT_ACCOUNTS` in `finance/service.py` is a last-resort
+fallback for an install that has not configured rules yet. The resolved
+`PostingRuleAccounts.source` (`EXACT`, `DOCUMENT_DEFAULT`, `LEGACY_DEFAULT`)
+records which path was taken, and a document type with neither a rule nor a
+fallback is refused with a field-level error rather than guessed.
+
+### 9.3 Journal shapes per document type
+
+The accounting meaning of each type is one table, `STRATEGIES` in `posting.py`:
+
+| Document type | Control side | Detail side |
+|---|---|---|
+| `CUSTOMER_INVOICE` | Dr receivable | Cr revenue per fee line, tax to the rule's tax account |
+| `CREDIT_NOTE` | Cr receivable | Dr revenue per fee line — mirrors its invoice |
+| `SUPPLIER_BILL` | Cr payable | Dr expense per fee line, tax to the rule's tax account |
+| `SUPPLIER_CREDIT_NOTE` | Dr payable | Cr expense per fee line — mirrors its bill |
+| `CUSTOMER_RECEIPT` / `SUPPLIER_PAYMENT` | Dr cash / Dr payable | Cr receivable / Cr cash, two lines |
+| `OTHER_INCOME`, `OTHER_EXPENSE`, `TRANSFER`, `ADJUSTMENT` | the rule's debit and credit account | two lines |
+
+A line may override the rule with an account chosen on the document itself, which
+is how a one-off revenue or expense is booked without a dedicated rule.
+
+### 9.4 What the ledger guarantees
+
+A `JournalDraft` is only produced when debits equal credits, so the caller never
+receives a half-built entry to commit; `post_document` re-checks before persisting.
+The database enforces the rest independently of the service: posted journals and
+their lines are immutable (`fn_guard_journal_entry`, `fn_guard_journal_line`),
+entries must fall inside an `OPEN` period (`fn_validate_journal_post`), and one
+document may have only one posting link. A rule change never rewrites posted
+history — the journal carries its own account ids, amounts **and the rule that
+resolved them** (`journal_entries.posting_rule_id`), so a correction is a
+reversal.
+
+One ordering detail is load-bearing: the lines are flushed while the journal
+header is still `DRAFT`, and only then is the header promoted to `POSTED`.
+`fn_guard_journal_line` is an immediate trigger, and SQLAlchemy emits a mapper's
+pending UPDATE before another mapper's pending INSERT when both are queued
+together — so promoting the status in the same flush as the line inserts makes
+the trigger observe `POSTED` and reject every posting on PostgreSQL. The SQLite
+test database has no triggers and would not catch it;
+`tests/test_posting_rules.py::test_lines_are_written_before_the_journal_is_marked_posted`
+pins the ordering, and `integrity_guards.sql` remains the manual check.
+
+### 9.5 Audit attribution
+
+A journal entry keeps the `posting_rule_id` it was posted under, and a reversal
+carries its originating entry's rule, so the rule a posting came from is always
+recoverable from `journal_entries`; `audit_events` is excluded from the deletion
+reference scan, so the history of a rule outlives the rule.
+
+Deleting a rule that posted something is refused, because the foreign key from
+`journal_entries` would otherwise lose the attribution. The rule is deactivated
+instead, which is what superseding a rule means everywhere else in the system.
+
+The rule History tab, the standalone Posting Rule History screen and their
+endpoints (`/posting-rules/history`, `/posting-rules/{id}/history`,
+`/posting-rules/{id}/usage`) were removed by owner request —
+`docs/18_implementation_checklist.md` §6 records that and says not to re-add the
+screens.
+
+### 9.6 Multi-currency
+
+One base currency per installation (System Settings → Localization → Currency),
+one stored rate per document, and one implementation of the conversion:
+
+- **The base currency is the company currency.** Organizations and branches were
+  removed from the product, so the installation *is* the company: the localization
+  `currency` setting, read through `get_default_currency()`, is seeded onto every
+  new document as `baseCurrency`.
+- **The rate store** is `currency_rates`: a row reads "1 FROM = rate TO", is
+  versioned by `effective_date`, and only an APPROVED row is ever applied. It is
+  maintained through the `currencyRates` master-data API (`/api/v1/currencyRates`)
+  and deliberately has no sidebar page.
+  `master_data/currency_rates.py` resolves the newest approved row for the pair —
+  in either direction, inverting it when only the inverse exists — and reports
+  `None` rather than 1 when nothing covers the pair.
+- **A document snapshots its own rate.** `financial_documents.exchange_rate` means
+  "base units per one document unit", so `base = amount * exchange_rate`, which is
+  the arithmetic every posting already used. A document already in the base
+  currency always stores 1, whatever a client sends; another currency must resolve
+  a rate from the store or take the operator's, and a missing, zero, negative,
+  non-finite or absurd rate is refused at the API boundary (`app/core/fx.py`).
+- **The converted amounts are stored** (`base_subtotal_amount`,
+  `base_discount_amount`, `base_tax_amount`, `base_total_amount`), rounded with the
+  document currency's own precision (`currencies.decimal_places`, so KHR and JPY
+  are not given cents), and re-derived when the document posts — the document and
+  the journal it writes cannot disagree. `journal_entry_lines` keeps its own
+  `exchange_rate` and `base_debit_amount`/`base_credit_amount`, which is what makes
+  a posted amount explainable after the rate store changes. Posted documents cannot
+  be edited at all, so a later rate never reaches one.
+- **Journals balance twice.** `fn_validate_journal_post` compares the own-currency
+  sums, so a journal's lines must agree in their own amounts; the service
+  additionally requires the base amounts to balance, which the trigger cannot see.
+  A journal is therefore effectively single-currency by design, and a document in
+  another currency posts one journal through its own rate.
+- **An allocation values each side at its own rate.** `allocate_payment` reports
+  `paymentBaseAmount`, `targetBaseAmount` and the `exchangeDifference` between
+  them — the exchange gain or loss a settlement realises — and the same figures are
+  visible from either document. Posting that difference through a configured
+  account pair is not wired yet; the checklist carries it.
+- **An invoice generated from a charge** keeps the charge's currency, resolves its
+  own approved rate at its own date, and never rewrites the source charge.
 
 ## 10. Events and Background Jobs
 
@@ -322,6 +464,19 @@ Upload flow:
   columns are excluded from the backup mirror.
 - RBAC enforced at API boundaries; the UI never substitutes for API checks.
 - No secrets in logs, responses, seed data, or audit payloads.
+- **Passwords are one-way hashed and can never be read back.** `user_credentials`
+  stores an Argon2id digest; there is no plaintext and no reversible encryption,
+  so no screen can offer a "show password". An administrator who sets a password
+  on another account (`POST /users/{id}/password`, gated on `user.manage`) gets no
+  access to it either — the request is hashed on arrival and the response carries
+  only the account.
+- **A password an administrator set must be replaced before anything else.**
+  Setting one flags `user_credentials.must_change_password`, revokes every session
+  and puts a `pwd` claim on the next access token. `get_current_context` then
+  answers `403 ACCESS_DENIED` for every route except
+  `auth/change-password`, `auth/logout`, `auth/refresh` and `auth/me` — so
+  refreshing is not an escape. `change_password` clears the flag, and the SPA
+  routes the session to `/auth/change-password` meanwhile.
 
 ## 13. Database and Consistency
 
@@ -330,8 +485,14 @@ Upload flow:
 - Number allocation uses row locks (`with_for_update`) plus unique constraints.
 - Positive/negative invariants not expressible as constraints are enforced in
   services (e.g., journal balance before posting).
-- 59 tables; see `docs/06_database_design.sql` and
-  `docs/07_entity_relationship_diagram.mmd`.
+- 63 tables; see `docs/06_database_design.sql` for the raw DDL, the annotated
+  companion `docs/06b_database_design_annotated.sql`, and
+  `docs/07_entity_relationship_diagram.mmd` for the relationships.
+  `docs/14_47_table_migration_analysis.md` records how the schema maps to the
+  47-table reference proposal and which of its tables were deliberately not
+  adopted. PostgreSQL integrity triggers and reporting views are installed by
+  `alembic/versions/e6f7a8b9c0d1_reporting_views_and_integrity.py`; they are not
+  part of the SQLAlchemy models, so they do not appear in the files above.
 
 ## 14. Reporting
 
@@ -399,8 +560,74 @@ Most list/detail routes reuse two generic views: `FreightWorkspaceView`
 - `app/utils/freight/document-tabs.ts` compiles module metadata into the
   `AppDocumentForm` tab/section/field schema rendered by
   `AppDynamicFieldRenderer.vue`.
+- A field or a tab may declare what it applies to: `FreightField.documentTypes`
+  and `documentTypes`/`statuses` on the compiled tab.
+  `moduleDocumentTabs(module, { documentType, status })` drops everything else, so
+  the financial-document form shows payment method, financial account and value
+  date only on a receipt or payment, a due date only on an invoice or bill, and the
+  journal tab only once the document is posted. The constraint is metadata; no
+  screen hides a field by hand, and an unknown type or status leaves the form
+  untouched rather than empty.
+- The same fields are enforced on write: the finance service reads a settlement
+  field only for the document types that carry one, so a stale client value cannot
+  land on a document it does not belong to.
 - Service-order dynamic tabs are configured in the database and surfaced through
-  `useDynamicServiceOrderTabs` / `DynamicServiceOrderTabs.vue`.
+  `useComponentTabs` / `AppComponentTabs.vue`, filtered by the order's trade
+  direction and pinned to the published configuration version the order was
+  captured under.
+
+### Record status
+
+- Status is never an editable form field: `moduleDocumentTabs` strips it from every
+  compiled form, and a create still seeds the module default
+  (`defaultStatusForModule` / `emptyFreightRecord`) so a new record always starts
+  with a valid status.
+- The list keeps the Status column with its colour-coded badge, and every change
+  is offered from the row's (or record's) "..." menu under **Change Status**:
+  `useRecordStatus()` fetches the backend policy, renders only the transitions
+  that are legal from the record's current status *and* permitted for this
+  caller, asks for confirmation (and a reason for a reversal), runs the change
+  and reports the outcome.
+- Plain transitions (activate / deactivate / mark / reopen) go through
+  `POST /{collection}/{id}/status`; workflow transitions run the endpoint that
+  owns them (`utils/freight/status-commands.ts`), so posting, reversal, issuing a
+  charge, closing a period and the quotation workflow stay inside their engines.
+  A policy `command` transition without a runner is hidden rather than run — the
+  pair is pinned by `backend/tests/test_record_status.py`.
+- A refusal (closed period, invalid state, missing permission) lands on the page
+  or form-level message, never a toast; only a confirmed change toasts.
+
+### Form validation and error presentation
+
+One shared pipeline covers every form; no page implements its own.
+
+- `app/utils/validation/` holds the leaf, framework-free core:
+  `field-rules.ts` (rules → `{ code, params }` issues), `record-validation.ts`
+  (document fields, repeatable rows and flat drafts), `component-rules.ts`
+  (database-driven Service Order attributes, including the admin-managed
+  `validationRules` blob), `error-paths.ts` (canonical camelCase model paths
+  and `table.<row>.<column>` cell keys), `api-error.ts` (one normaliser for the
+  FastAPI envelope, a raw Pydantic `detail` array and an `LcsDomainError`),
+  `messages.ts` (`validation.*` copy) and `focus.ts` (first-invalid-field
+  navigation).
+- `useFormValidation()` (`app/composables/common/`) owns the three error buckets
+  — field, row cell and form level — plus submission state, error clearing and
+  the reveal/focus contract. A form supplies only its field order, its label
+  resolver and a way to open the section that owns a key.
+- Every addressable input carries `data-field-key` with its canonical model
+  path. That attribute is what `focus.ts` scrolls to and focuses after asking
+  the host to reveal the owning tab, section, accordion or dynamic group.
+- `UFormField :error` supplies `aria-invalid` / `aria-describedby` and renders
+  the message under the control; `AppFormErrorSummary` lists everything that
+  failed, including fields inside hidden tabs. Pass the message or `undefined`
+  for a clean field — **never `''`**: the prop is `[Boolean, String]`, and Vue
+  casts an empty string to `true`, which reds out and marks invalid a field that
+  has no error. Use the normalisers in
+  `app/utils/validation/form-field-error.ts` (`formFieldError` for an error map,
+  `fieldErrorMessage` for a lone message).
+- Policy: **validation errors and business-rule refusals are never toasts.**
+  Success is announced only after the backend confirms. Business-rule refusals
+  with no input to own them become a persistent page- or form-level message.
 
 ### Layout and navigation
 
@@ -476,12 +703,14 @@ Service functions: `assign_role`, `authenticate`, `build_auth_user`, `build_cont
 
 Tables: `quotations`, `quotation_revisions`, `quotation_revision_places`, `quotation_revision_containers`, `quotation_revision_lines`, `quotation_conversions`
 
-Service functions: `accept_revision`, `convert_revision`, `create_revision`, `delete_quotations`, `get_latest_revision`, `get_quotation`, `list_quotations`, `normalize_status`, `quotation_record`, `resolve_direction`, `resolve_party_by_name`, `save_quotation`, `send_revision`, `submit_revision`
+Service functions: `accept_revision`, `cancel_revision`, `convert_revision`, `create_revision`, `delete_quotations`, `get_latest_revision`, `get_quotation`, `list_quotations`, `normalize_status`, `quotation_record`, `reject_revision`, `resolve_direction`, `resolve_party_by_name`, `revision_status`, `save_quotation`, `send_revision`, `submit_revision`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
 | POST | `/quotation-revisions/{revision_id}/accept` | `accept_revision` | `quotation.accept` |
+| POST | `/quotation-revisions/{revision_id}/cancel` | `cancel_revision` | `quotation.update_draft` |
 | POST | `/quotation-revisions/{revision_id}/convert` | `convert_revision` | `quotation.convert` |
+| POST | `/quotation-revisions/{revision_id}/reject` | `reject_revision` | `quotation.accept` |
 | POST | `/quotation-revisions/{revision_id}/send` | `send_revision` | `quotation.send` |
 | POST | `/quotation-revisions/{revision_id}/submit` | `submit_revision` | `quotation.send` |
 | DELETE | `/quotations` | `delete_quotations` | `quotation.update_draft` |
@@ -495,7 +724,7 @@ Service functions: `accept_revision`, `convert_revision`, `create_revision`, `de
 
 Tables: `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links`
 
-Service functions: `add_container`, `charge_record`, `charge_to_invoice`, `complete_component`, `create_service_order_from_quotation`, `ensure_component`, `get_charge`, `get_service_order`, `issue_charge`, `list_all_components`, `list_attachments`, `list_charges`, `list_components`, `list_containers`, `list_service_orders`, `normalize_order_status`, `order_record`, `presign`, `read_attachment`, `remove_component`, `replace_component_values`, `resolve_order`, `save_charge`, `save_service_order`, `store_upload`, `update_status`
+Service functions: `add_container`, `charge_record`, `charge_status`, `charge_to_invoice`, `complete_component`, `create_service_order_from_quotation`, `ensure_component`, `finish_service_order`, `get_charge`, `get_service_order`, `issue_charge`, `list_all_components`, `list_attachments`, `list_charges`, `list_components`, `list_containers`, `list_service_orders`, `normalize_order_status`, `order_record`, `order_status`, `presign`, `read_attachment`, `record_charge_status_change`, `record_order_status_change`, `remove_component`, `replace_component_values`, `resolve_order`, `save_charge`, `save_service_order`, `set_service_order_status`, `store_upload`, `update_status`
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
@@ -540,7 +769,13 @@ Service functions: `add_container`, `charge_record`, `charge_to_invoice`, `compl
 
 Tables: `chart_of_accounts`, `financial_accounts`, `accounting_periods`, `document_sequences`, `financial_documents`, `financial_document_lines`, `financial_document_sources`, `financial_document_allocations`, `posting_rules`, `journal_entries`, `journal_entry_lines`, `financial_document_postings`
 
-Service functions: `account_payload`, `allocate_payment`, `close_period`, `create_account`, `create_financial_account`, `create_invoice_from_charge`, `create_posting_rule`, `delete_accounts`, `delete_financial_accounts`, `delete_posting_rules`, `document_payload`, `financial_account_payload`, `get_account`, `get_document`, `get_financial_account`, `get_journal`, `get_period`, `get_posting_rule`, `get_sequence`, `journal_payload`, `list_accounts`, `list_documents`, `list_financial_accounts`, `list_journals`, `list_periods`, `list_posting_rules`, `list_sequences`, `period_payload`, `post_document`, `post_journal`, `posting_rule_payload`, `resolve_period`, `reverse_document`, `save_document`, `save_journal`, `sequence_payload`, `update_account`, `update_financial_account`, `update_period`, `update_posting_rule`, `upsert_sequence`
+Service functions: `account_payload`, `allocate_payment`, `close_period`, `create_account`, `create_financial_account`, `create_invoice_from_charge`, `create_posting_rule`, `delete_accounts`, `delete_financial_accounts`, `delete_posting_rules`, `document_payload`, `financial_account_payload`, `get_account`, `get_document`, `get_financial_account`, `get_journal`, `get_period`, `get_posting_rule`, `get_sequence`, `journal_payload`, `list_accounts`, `list_documents`, `list_financial_accounts`, `list_journals`, `list_periods`, `list_posting_rules`, `list_sequences`, `period_payload`, `post_document`, `post_journal`, `posting_rule_payload`, `reopen_period`, `resolve_period`, `reverse_document`, `save_document`, `save_journal`, `sequence_payload`, `update_account`, `update_financial_account`, `update_period`, `update_posting_rule`, `upsert_sequence`
+
+Supporting modules: `posting_rules.py` (`PostingRuleResolver`, `PostingRuleAccounts`, `RuleSource`, `validate_postable`) and `posting.py` (`AccountingPostingService`, `JournalDraft`, `PostingStrategy`, `STRATEGIES`, `ALLOCATABLE_TYPES`). §9 explains how the two compose, and §9.5 how a rule's history is derived rather than stored twice.
+
+Document types (`DOCUMENT_TYPE_LABELS`) and their posting meanings (`STRATEGIES`) are declared together, so a type cannot be configurable without a posting meaning. `backend/tests/test_posting_rules.py` asserts the frontend registry (`FINANCIAL_DOCUMENT_TYPES`) has not drifted from `DOCUMENT_TYPE_LABELS`.
+
+Service functions added for history: `posting_rule_history`, `list_posting_rule_history`, `posting_rule_usage`.
 
 | Method | Path | Handler | Permission / guard |
 |---|---|---|---|
@@ -595,18 +830,55 @@ Service functions: `account_payload`, `allocate_payment`, `close_period`, `creat
 | GET | `/journals/{journal_id}` | `get_journal` | `journal_entry.read` |
 | PUT | `/journals/{journal_id}` | `update_journal` | `journal_entry.create` |
 | POST | `/journals/{journal_id}/post` | `post_journal` | `journal_entry.post` |
-| DELETE | `/posting-rules` | `delete_posting_rules` | `configuration.manage` |
-| GET | `/posting-rules` | `list_posting_rules` | `configuration.manage` |
-| POST | `/posting-rules` | `create_posting_rule` | `configuration.manage` |
-| GET | `/posting-rules/{rule_id}` | `get_posting_rule` | `configuration.manage` |
-| PUT | `/posting-rules/{rule_id}` | `update_posting_rule` | `configuration.manage` |
-| DELETE | `/postingRules` | `delete_posting_rules` | `configuration.manage` |
-| GET | `/postingRules` | `list_posting_rules` | `configuration.manage` |
-| POST | `/postingRules` | `create_posting_rule` | `configuration.manage` |
-| GET | `/postingRules/{rule_id}` | `get_posting_rule` | `configuration.manage` |
-| PUT | `/postingRules/{rule_id}` | `update_posting_rule` | `configuration.manage` |
+| DELETE | `/posting-rules` | `delete_posting_rules` | `posting_rule.manage` |
+| GET | `/posting-rules` | `list_posting_rules` | `posting_rule.read` |
+| POST | `/posting-rules` | `create_posting_rule` | `posting_rule.manage` |
+| GET | `/posting-rules/{rule_id}` | `get_posting_rule` | `posting_rule.read` |
+| PUT | `/posting-rules/{rule_id}` | `update_posting_rule` | `posting_rule.manage` |
+| DELETE | `/postingRules` | `delete_posting_rules` | `posting_rule.manage` |
+| GET | `/postingRules` | `list_posting_rules` | `posting_rule.read` |
+| POST | `/postingRules` | `create_posting_rule` | `posting_rule.manage` |
+| GET | `/postingRules/{rule_id}` | `get_posting_rule` | `posting_rule.read` |
+| PUT | `/postingRules/{rule_id}` | `update_posting_rule` | `posting_rule.manage` |
 
-### A.6 Reporting (`reports`)
+### A.6 Shared record status (`status`)
+
+Tables: none — the module owns no storage.
+
+Service functions: `change_status`, `policy_for`, `serialize_policy`.
+
+Every collection that owns a lifecycle `status` changes it through this one small
+module. `policy.py` is the single source of truth: which statuses a collection
+can hold, which transitions are legal from each one, which permission each
+requires, and who applies it — `kind: "status"` is a plain, audited status write
+(activate / deactivate / mark / reopen) that this endpoint performs, while
+`kind: "command"` belongs to the collection's own workflow endpoint (posting,
+reversal, issuing a charge, closing a period, the quotation workflow). The table
+is code-defined on purpose (`docs/17` §4): a configuration mistake must not be
+able to weaken a workflow or an authorization rule.
+
+`service.py` resolves the policy, proves the transition is legal and permitted,
+refuses a `command` transition with `TRANSITION_REQUIRES_COMMAND` (so an
+accounting status can never be written outside its posting engine), calls the
+collection's existing service to apply a plain status write, and records one
+audit event with the previous status, the new status, the actor and the
+timestamp.
+
+| Method | Path | Handler | Permission / guard |
+|---|---|---|---|
+| GET | `/{collection}/status-policy` | `read_status_policy` | authenticated; transitions filtered to the caller's permissions |
+| POST | `/{collection}/{item_id}/status` | `change_record_status` | the transition's own permission (`master.reference.manage`, `chart_of_accounts.manage`, `posting_rule.manage`, `configuration.manage`, `accounting_period.close`, `service_order.update`, `user.manage`, `role.manage`…) |
+
+The router is registered before the data modules so the literal
+`/{collection}/status-policy` wins over the generic `/{collection}/{item_id}`
+lookup, and the `POST` path has three segments, which no other router claims.
+
+Status is no longer an editable form field anywhere: the create/edit forms keep
+the Status *column* in the list and the colour-coded badge, and every transition
+is offered from the row's "..." menu (`useRecordStatus`), which renders only what
+the policy returns.
+
+### A.7 Reporting (`reports`)
 
 Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `ledger_lines`, `payables`, `profitability`, `quotation_performance`, `receivables`, `service_order_report`
 
@@ -627,7 +899,7 @@ Service functions: `dashboard`, `expenses`, `financial_summary`, `income`, `ledg
 | GET | `/reports/service-order-profitability` | `profitability` | `report.read` |
 | GET | `/reports/service-orders` | `service_orders_report` | `report.read` |
 
-### A.7 Master data, configuration and generic collections (`master_data`)
+### A.8 Master data, configuration and generic collections (`master_data`)
 
 Tables: `places`, `trade_directions`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `transport_assets`, `customer_customs_accounts`, `component_attributes`, `component_groups`, `component_group_attributes`, `component_tabs`, `component_tab_groups`, `module_records`
 
@@ -757,7 +1029,7 @@ Service functions: `apply_input`, `create_generic`, `create_reference`, `delete_
 | PUT | `/transportTypes/{item_id}` | `update_transportTypes` | `master.reference.manage` / `configuration.manage` |
 | GET | `/ui-schemas/{page:path}` | `get_ui_schema` | authenticated |
 
-### A.8 Settings and search (`settings`)
+### A.9 Settings and search (`settings`)
 
 Service functions: `answer`, `connection_result`, `deep_merge`, `get_app_config`, `get_app_info`, `redact_app_config`, `reset_app_info`, `search`, `update_app_config`, `update_app_info`
 
@@ -776,7 +1048,7 @@ Service functions: `answer`, `connection_result`, `deep_merge`, `get_app_config`
 | POST | `/settings/app-info/reset` | `reset_app_info` | `configuration.manage` |
 | POST | `/settings/reset-data` | `reset_data` | `settings.manage` |
 
-### A.9 Backup (`backup`)
+### A.10 Backup (`backup`)
 
 Tables: `backup_runs`, `backup_records`, `backup_states`, `backup_logs`
 
@@ -791,7 +1063,7 @@ Service functions: `active_run_id`, `backupable_columns`, `build_client`, `creat
 | GET | `/backup/status` | `backup_status` | `backup.read` |
 | POST | `/backup/test-connection` | `test_connection` | `backup.manage` |
 
-### A.10 Audit (`audit`)
+### A.11 Audit (`audit`)
 
 Tables: `audit_events`
 
@@ -896,7 +1168,7 @@ Nuxt file-based routes. `permission` is the `definePageMeta` page permission enf
 | `components/common/` | `AppAuthLocaleSwitch.vue`, `AppColorPicker.vue`, `AppConfirmDialog.vue`, `AppConfirmHost.vue`, `AppConnectionStatusCard.vue`, `AppDatePickerPopover.vue`, `AppDateRangeFilter.vue`, `AppDocumentActionButton.vue`, `AppEntityDialog.vue`, `AppExportDialog.vue`, `AppFilterMenu.vue`, `AppFilterSelect.vue`, `AppImageUploadField.vue`, `AppInputDate.vue`, `AppLiveSearch.vue`, `AppMentionMultiInput.vue`, `AppReferenceSelect.vue`, `AppRolePermissionMatrix.vue`, `AppSecretInput.vue`, `AppSortableList.vue` |
 | `components/dashboard/` | `AppChartGrid.vue`, `AppSummaryCard.vue` |
 | `components/document/` | `AppCommentsActivity.vue`, `AppComponentTabs.vue`, `AppDocumentContentShell.vue`, `AppDocumentForm.vue`, `AppDocumentPage.vue`, `AppDocumentTabBar.vue`, `AppDynamicFieldRenderer.vue`, `AppDynamicTableField.vue`, `AppFieldGrid.vue`, `SystemSettingsPage.vue` |
-| `components/freight/` | `AppLineTable.vue`, `DocumentView.vue`, `DynamicDataTable.vue`, `JobCharges.vue`, `JobContainers.vue`, `JobDetail.vue`, `JobEmptyState.vue`, `JobFiles.vue`, `JobFinance.vue`, `JobLineTable.vue`, `JobOverview.vue`, `JobRoute.vue`, `JobSectionHeader.vue`, `JobSummaryStrip.vue`, `ModulePage.vue`, `ReportsView.vue`, `WorkspaceView.vue` |
+| `components/freight/` | `AppLineTable.vue`, `DocumentView.vue`, `DynamicDataTable.vue`, `JobCharges.vue`, `JobContainers.vue`, `JobDetail.vue`, `JobEmptyState.vue`, `JobFiles.vue`, `JobFinance.vue`, `JobLineTable.vue`, `JobOverview.vue`, `JobRoute.vue`, `JobSectionHeader.vue`, `ModulePage.vue`, `ReportsView.vue`, `WorkspaceView.vue` |
 | `components/layout/` | `AppAboutDialog.vue`, `AppHeader.vue`, `AppHeaderPageActions.vue`, `AppSlidebar.vue`, `AppUserProfileDialog.vue`, `UserMenu.vue` |
 | `components/print/` | `BankBlock.vue`, `DebitNoteLayout.vue`, `DocumentPreview.vue`, `FooterBar.vue`, `IssuerHeader.vue`, `LinesTable.vue`, `MetaGrid.vue`, `SignatureBlock.vue`, `TaxInvoiceLayout.vue`, `TemplateModal.vue`, `TotalsBlock.vue` |
 | `components/table/` | `AppListTable.vue`, `AppRelatedRecords.vue`, `AppSaveGrid.vue`, `AppTableRowMeta.vue` |
@@ -930,7 +1202,6 @@ Nuxt file-based routes. `permission` is the `definePageMeta` page permission enf
 - `composables/layout/useAppPageTitle.ts`
 - `composables/layout/useMenu.ts`
 - `composables/layout/useUserMenu.ts`
-- `composables/lcs/useLcs.ts`
 - `composables/print/usePrintBilingual.ts`
 - `composables/search/useGlobalSearch.ts`
 - `composables/search/useSearch.ts`
@@ -1020,6 +1291,14 @@ Nuxt file-based routes. `permission` is the `definePageMeta` page permission enf
 - `utils/object-path.ts`
 - `utils/pagination.ts`
 - `utils/role/permissions.ts`
+- `utils/table/line-table-rules.ts`
+- `utils/validation/api-error.ts`
+- `utils/validation/component-rules.ts`
+- `utils/validation/error-paths.ts`
+- `utils/validation/field-rules.ts`
+- `utils/validation/focus.ts`
+- `utils/validation/messages.ts`
+- `utils/validation/record-validation.ts`
 - `utils/search/text-extract.ts`
 - `utils/security/csrf.ts`
 - `utils/security/files.ts`

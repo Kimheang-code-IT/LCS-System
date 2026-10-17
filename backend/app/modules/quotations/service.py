@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +64,18 @@ async def resolve_party_by_id(session: AsyncSession, party_id: Any) -> BusinessP
     return party
 
 
+def new_party_code(now: datetime | None = None) -> str:
+    """Return a party code that is unique among sibling placeholders.
+
+    The former second-precision code (``P-YYMMDDHHMMSS``) was not unique: two
+    customers created in the same second — two quotations saved back to back —
+    violated the active ``party_code`` index and the request failed. The timestamp
+    is kept for readability and a random suffix removes the collision.
+    """
+    stamp = (now or datetime.now(UTC)).strftime("%y%m%d%H%M%S")
+    return f"P-{stamp}-{uuid4().hex[:4].upper()}"
+
+
 async def resolve_party_by_name(session: AsyncSession, name: str | None, context: RequestContext, role: str = "CUSTOMER") -> BusinessParty:
     if name:
         party = (
@@ -77,8 +90,25 @@ async def resolve_party_by_name(session: AsyncSession, name: str | None, context
         ).scalars().first()
         if party is not None:
             return party
+    # The unique index is partial (active rows only), so only an active code blocks.
+    for _ in range(5):
+        party_code = new_party_code()
+        clash = (
+            await session.execute(
+                select(BusinessParty.id).where(
+                    BusinessParty.party_code == party_code, BusinessParty.deleted_at.is_(None)
+                )
+            )
+        ).first()
+        if clash is None:
+            break
+    else:
+        raise Conflict(
+            "PARTY_CODE_UNAVAILABLE",
+            "Could not allocate a unique party code; please try again.",
+        )
     created = BusinessParty(
-        party_code=f"P-{datetime.now(UTC).strftime('%y%m%d%H%M%S')}",
+        party_code=party_code,
         legal_name=name or "Unnamed Party",
         display_name=name or "Unnamed Party",
         roles=[role.strip().title() or "Customer"],
@@ -368,6 +398,11 @@ async def _clone_revision(
     source: QuotationRevision,
     created_by_user_id: int | None = None,
 ) -> QuotationRevision:
+    # Serialise revision allocation on the quotation header. Two concurrent
+    # "create revision" requests would otherwise both read the same MAX() and
+    # race for revision_no; the unique (quotation_id, revision_no) constraint
+    # would turn the loser into a 500 instead of a clean second draft.
+    await session.execute(select(Quotation.id).where(Quotation.id == quotation.id).with_for_update())
     next_no = (
         await session.scalar(select(func.max(QuotationRevision.revision_no)).where(QuotationRevision.quotation_id == quotation.id)) or 0
     ) + 1
@@ -500,6 +535,12 @@ async def _revision_with_quotation(session: AsyncSession, revision_id: int) -> t
     return quotation, revision
 
 
+async def revision_status(session: AsyncSession, revision_id: int) -> str | None:
+    """Current status of one revision, for the audit trail of a transition."""
+    revision = await session.get(QuotationRevision, revision_id)
+    return None if revision is None else str(revision.status)
+
+
 async def send_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:
     quotation, revision = await _revision_with_quotation(session, revision_id)
     if revision.status == "SENT":
@@ -540,6 +581,186 @@ async def accept_revision(session: AsyncSession, context: RequestContext, revisi
         other.status = "SUPERSEDED"
     await session.commit()
     return quotation_record(quotation, revision, quotation.data or {})
+
+
+async def reject_revision(session: AsyncSession, context: RequestContext, revision_id: int, reason: str | None = None) -> dict:
+    """Record a customer rejection instead of silently leaving the revision SENT.
+
+    Rejection is final for that revision: its terms stay frozen and a follow-up
+    offer has to be a new revision, which keeps the approval history readable.
+    """
+    quotation, revision = await _revision_with_quotation(session, revision_id)
+    if revision.status == "REJECTED":
+        return quotation_record(quotation, revision, quotation.data or {})
+    if revision.status not in {"SENT", "DRAFT"}:
+        raise InvalidState(f"Cannot reject a revision in status {revision.status}.")
+    revision.status = "REJECTED"
+    revision.rejected_at = datetime.now(UTC)
+    if reason:
+        revision.data = jsonable({**(revision.data or {}), "rejectionReason": reason})
+    if quotation.current_revision_no == revision.revision_no and not any(
+        other.status in {"DRAFT", "SENT", "ACCEPTED"}
+        for other in await QuotationRepository(session).revisions(quotation.id)
+        if other.id != revision.id
+    ):
+        # Only reflect the rejection on the header when no other revision can
+        # still be accepted, so a rejected revision cannot hide a live offer.
+        quotation.status = "REJECTED"
+    await session.commit()
+    return quotation_record(quotation, revision, quotation.data or {})
+
+
+async def cancel_revision(session: AsyncSession, context: RequestContext, revision_id: int, reason: str | None = None) -> dict:
+    """Withdraw a revision the seller no longer offers.
+
+    Cancelling differs from rejecting: nobody declined the offer, it was pulled
+    back before a decision. Only a draft or a sent revision can be withdrawn, and
+    the header mirrors it only when no other revision is still live — the same
+    rule the rejection path uses, so a cancelled revision cannot hide a live
+    offer. The revision's terms stay frozen, exactly as after a rejection.
+    """
+    quotation, revision = await _revision_with_quotation(session, revision_id)
+    if revision.status == "CANCELLED":
+        return quotation_record(quotation, revision, quotation.data or {})
+    if revision.status not in {"DRAFT", "SENT"}:
+        raise InvalidState(f"Cannot cancel a revision in status {revision.status}.")
+    revision.status = "CANCELLED"
+    if reason:
+        revision.data = jsonable({**(revision.data or {}), "cancellationReason": reason})
+    if quotation.current_revision_no == revision.revision_no and not any(
+        other.status in {"DRAFT", "SENT", "ACCEPTED"}
+        for other in await QuotationRepository(session).revisions(quotation.id)
+        if other.id != revision.id
+    ):
+        quotation.status = "CANCELLED"
+    await session.commit()
+    return quotation_record(quotation, revision, quotation.data or {})
+
+
+# Fields compared by the revision diff. Ordered so the output reads header-first.
+_COMPARE_HEADER_FIELDS: tuple[tuple[str, str], ...] = (
+    ("quotationDate", "quotation_date"),
+    ("validUntil", "valid_until"),
+    ("currency", "currency_code"),
+    ("status", "status"),
+    ("description", "description"),
+    ("notes", "notes"),
+    ("subtotal", "subtotal_amount"),
+    ("discount", "discount_amount"),
+    ("tax", "tax_amount"),
+    ("total", "total_amount"),
+)
+
+
+def _comparison_value(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+async def compare_revisions(
+    session: AsyncSession, context: RequestContext, revision_id: int, other_revision_id: int
+) -> dict:
+    """Diff two revisions of the same quotation without touching either one.
+
+    Only the same quotation can be compared: comparing across quotations would
+    imply a commercial relationship that does not exist.
+    """
+    left = await session.get(QuotationRevision, revision_id)
+    if left is None:
+        raise NotFound("Quotation revision not found.")
+    right = await session.get(QuotationRevision, other_revision_id)
+    if right is None:
+        raise NotFound("Quotation revision not found.")
+    if left.quotation_id != right.quotation_id:
+        raise ValidationFailed(
+            "Only revisions of the same quotation can be compared.",
+            {"revision": "The two revisions belong to different quotations."},
+        )
+
+    header_changes = []
+    for label, attribute in _COMPARE_HEADER_FIELDS:
+        before = _comparison_value(getattr(left, attribute, None))
+        after = _comparison_value(getattr(right, attribute, None))
+        if before != after:
+            header_changes.append({"field": label, "from": before, "to": after})
+
+    def line_key(line: QuotationRevisionLine) -> int:
+        return int(line.line_no)
+
+    left_lines = {line_key(line): line for line in await _revision_lines(session, left.id)}
+    right_lines = {line_key(line): line for line in await _revision_lines(session, right.id)}
+    line_changes = []
+    for line_no in sorted(set(left_lines) | set(right_lines)):
+        before, after = left_lines.get(line_no), right_lines.get(line_no)
+        if before is None or after is None:
+            line_changes.append(
+                {
+                    "lineNo": line_no,
+                    "change": "added" if before is None else "removed",
+                    "from": _revision_line_payload(before) if before else None,
+                    "to": _revision_line_payload(after) if after else None,
+                }
+            )
+            continue
+        differences = {}
+        for field, attribute in (
+            ("description", "service_description"),
+            ("quantity", "quantity"),
+            ("unitPrice", "unit_price"),
+            ("discountRate", "discount_rate"),
+            ("taxRate", "tax_rate"),
+            ("lineTotal", "line_total"),
+        ):
+            if _comparison_value(getattr(before, attribute, None)) != _comparison_value(getattr(after, attribute, None)):
+                differences[field] = {
+                    "from": _comparison_value(getattr(before, attribute, None)),
+                    "to": _comparison_value(getattr(after, attribute, None)),
+                }
+        if differences:
+            line_changes.append({"lineNo": line_no, "change": "modified", "fields": differences})
+
+    left_total = _comparison_value(left.total_amount) or 0.0
+    right_total = _comparison_value(right.total_amount) or 0.0
+    return {
+        "quotationId": str(left.quotation_id),
+        "from": {"revisionId": str(left.id), "revisionNo": left.revision_no, "status": left.status},
+        "to": {"revisionId": str(right.id), "revisionNo": right.revision_no, "status": right.status},
+        "headerChanges": header_changes,
+        "lineChanges": line_changes,
+        "totals": {
+            "from": left_total,
+            "to": right_total,
+            "difference": float(right_total) - float(left_total),
+        },
+        "changed": bool(header_changes or line_changes),
+    }
+
+
+def _revision_line_payload(line: QuotationRevisionLine | None) -> dict[str, Any] | None:
+    if line is None:
+        return None
+    return {
+        "lineNo": line.line_no,
+        "description": line.service_description,
+        "quantity": float(line.quantity or 0),
+        "unitPrice": float(line.unit_price or 0),
+        "lineTotal": float(line.line_total or 0),
+    }
+
+
+async def _revision_lines(session: AsyncSession, revision_id: int) -> list[QuotationRevisionLine]:
+    return list(
+        (
+            await session.execute(
+                select(QuotationRevisionLine)
+                .where(QuotationRevisionLine.quotation_revision_id == revision_id)
+                .order_by(QuotationRevisionLine.line_no)
+            )
+        ).scalars().all()
+    )
 
 
 async def convert_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:

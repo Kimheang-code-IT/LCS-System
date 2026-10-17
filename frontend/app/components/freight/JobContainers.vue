@@ -8,21 +8,21 @@ import {
 import { formatMoney } from '~/composables/freight/useFreight'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { createClientId } from '~/utils/client-id'
+import { focusField } from '~/utils/validation/focus'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import {
-  duplicateContainerNumber,
+  containerRowIssues,
   firstOpenRequirement,
-  invalidGrossWeight,
   jobActualContainers,
   jobContainerPaymentRows,
   jobContainerPaymentTotals,
   jobContainerRequirements,
-  missingContainerNumber,
   persistableActuals,
   persistablePayments,
   persistableRequirements,
   requirementOptionLabel,
   withRequirementProgress,
+  type ContainerRowIssue,
 } from '~/utils/freight/job-containers'
 
 const props = withDefaults(defineProps<{
@@ -50,13 +50,12 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const route = useRoute()
 const store = useFreightStore()
-const toast = useToast()
 const { localization } = useAppLocalization()
 const requirementRows = ref<Array<Record<string, unknown>>>([])
 const actualRows = ref<Array<Record<string, unknown>>>([])
 const paymentRows = ref<Array<Record<string, unknown>>>([])
 
-const totals = computed(() => jobContainerPaymentTotals(paymentRows.value, props.job.vatRate))
+const totals = computed(() => jobContainerPaymentTotals(paymentRows.value, props.job.vatRate, props.job.discount))
 const currency = computed(() => String(props.job.currency || localization.value.currency))
 const canEdit = computed(() => props.editable || props.isCreate)
 const canEditPayments = computed(() =>
@@ -161,7 +160,7 @@ function persist() {
   const requirements = persistableRequirements(requirementRows.value)
   const actuals = persistableActuals(actualRows.value)
   const payments = persistablePayments(paymentRows.value)
-  const nextTotals = jobContainerPaymentTotals(payments, props.job.vatRate)
+  const nextTotals = jobContainerPaymentTotals(payments, props.job.vatRate, props.job.discount)
   const firstActual = actuals[0] || {}
   const patch = {
     containerRequirements: requirements,
@@ -187,6 +186,28 @@ function persist() {
   }
 }
 
+const ISSUE_MESSAGES: Record<ContainerRowIssue['code'], string> = {
+  missingContainerNo: 'freight.ui.containerNoRequired',
+  grossLessThanNet: 'freight.ui.grossLessThanNet',
+  duplicateContainerNo: 'freight.ui.duplicateContainerNo',
+  containerNoInUse: 'freight.ui.containerNoInUse',
+}
+
+/** Inline cell errors for the actual-container grid (`actualContainers.<row>.<column>`). */
+const actualFieldErrors = ref<Record<string, string>>({})
+
+function validateActualRows(rows: Array<Record<string, unknown>>) {
+  const others = store.list('actualContainers').filter(row => String(row.jobNo || '') !== String(props.job.jobNo || ''))
+  const issues = containerRowIssues(rows, others)
+  const errors: Record<string, string> = {}
+  for (const issue of issues) {
+    const key = `actualContainers.${issue.index}.${issue.column}`
+    if (!(key in errors)) errors[key] = t(ISSUE_MESSAGES[issue.code])
+  }
+  actualFieldErrors.value = errors
+  return errors
+}
+
 function setActuals(value: Array<Record<string, unknown>>) {
   const next = withIds(value, 'ac').map((row) => {
     if (row.containerType || row.containerRequirementId) return row
@@ -199,18 +220,12 @@ function setActuals(value: Array<Record<string, unknown>>) {
       status: row.status || 'Expected',
     }
   })
-  if (missingContainerNumber(next)) {
-    toast.add({ title: t('freight.ui.containerNoRequired'), color: 'error' })
-    return
-  }
-  if (invalidGrossWeight(next)) {
-    toast.add({ title: t('freight.ui.grossLessThanNet'), color: 'error' })
-    return
-  }
-  const others = store.list('actualContainers').filter(row => String(row.jobNo || '') !== String(props.job.jobNo || ''))
-  const duplicate = duplicateContainerNumber(next, others)
-  if (duplicate) {
-    toast.add({ title: t('freight.ui.duplicateContainerNo'), color: 'error' })
+  const errors = validateActualRows(next)
+  // Block the write: the invalid row stays on screen with its message and no
+  // valid row is discarded. This grid only renders inside the Containers tab,
+  // so the field is already on screen and only needs scrolling + focus.
+  if (Object.keys(errors).length) {
+    void focusField(Object.keys(errors)[0]!)
     return
   }
   actualRows.value = next
@@ -285,35 +300,64 @@ watch(() => props.job.id, loadRows, { immediate: true })
 
 <template>
   <div class="space-y-6">
-    <FreightJobLineTable
+    <FreightAppLineTable
       :table="actualTable"
       :model-value="actualRows"
       :disabled="!canEdit"
       :extra-row-menu-items="actualContainerPrintActions"
+      :field-errors="actualFieldErrors"
       @update:model-value="setActuals"
     />
-    <FreightJobLineTable
+    <FreightAppLineTable
       :table="paymentTable"
       :model-value="paymentRows"
       :disabled="!canEditPayments"
       :row-actions="paymentRowAction"
       @update:model-value="setPayments"
     />
-    <div class="ms-auto grid w-full max-w-sm gap-1 px-1 py-1.5 text-xs">
+    <div class="ms-auto grid w-full max-w-sm gap-1.5 px-1 py-2 text-sm">
       <div class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ t('freight.fields.subtotal') }}</span>
         <span class="font-medium tabular-nums text-highlighted">{{ money(totals.subtotal) }}</span>
       </div>
-      <div v-if="totals.discount" class="flex items-center justify-between gap-4">
+      <div class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ t('freight.fields.discount') }}</span>
-        <span class="font-medium tabular-nums text-highlighted">{{ money(totals.discount) }}</span>
+        <UInputNumber
+          :model-value="Number(props.job.discount || 0)"
+          :min="0"
+          :increment="false"
+          :decrement="false"
+          :disabled="!canEditPayments"
+          size="md"
+          class="w-40 text-right"
+          :aria-label="t('freight.fields.discount')"
+          @update:model-value="value => emit('update:job', { discount: value ?? 0 })"
+        />
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-muted">{{ t('containerPaymentTaxRate') }}</span>
+        <div class="flex w-40 items-center gap-2">
+          <UInputNumber
+            :model-value="Number(props.job.vatRate || 0)"
+            :min="0"
+            :max="100"
+            :increment="false"
+            :decrement="false"
+            :disabled="!canEditPayments"
+            size="md"
+            class="w-full text-right"
+            :aria-label="t('containerPaymentTaxRate')"
+            @update:model-value="value => emit('update:job', { vatRate: value ?? 0 })"
+          />
+          <span class="text-muted">%</span>
+        </div>
       </div>
       <div class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ t('freight.fields.tax') }}</span>
         <span class="font-medium tabular-nums text-highlighted">{{ money(totals.vat) }}</span>
       </div>
       <div class="mt-1 flex items-center justify-between gap-4 border-t border-default pt-2 text-base">
-        <span class="font-semibold text-highlighted">{{ t('freight.fields.total') }}</span>
+        <span class="font-semibold text-highlighted">{{ t('freight.fields.grandTotal') }}</span>
         <span class="font-bold tabular-nums text-primary">{{ money(totals.total) }}</span>
       </div>
     </div>

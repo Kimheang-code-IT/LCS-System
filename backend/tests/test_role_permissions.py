@@ -170,8 +170,60 @@ async def test_role_search_and_status_filter(client):
     )
     found = await client.get("/api/v1/roles", headers=headers, params={"q": "Searchable"})
     assert found.status_code == 200
-    assert any(row["code"] == "SEARCH_ME" for row in found.json()["data"])
+    assert any(row["code"] == "SEARCH_ME" for row in found.json()["data"]["items"])
 
     filtered = await client.get("/api/v1/roles", headers=headers, params={"status": "INACTIVE"})
     assert filtered.status_code == 200
-    assert all(row["status"] == "INACTIVE" for row in filtered.json()["data"])
+    assert all(row["status"] == "INACTIVE" for row in filtered.json()["data"]["items"])
+
+
+async def test_role_pagination_duplicate_and_assigned_users(client):
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/roles",
+        headers=headers,
+        json={"name": "Dispatch Lead", "permissions": ["operations.service_orders.view"]},
+    )
+    assert created.status_code == 201, created.text
+    role = created.json()["data"]
+
+    duplicate = await client.post(
+        f"/api/v1/roles/{role['id']}/duplicate",
+        headers=headers,
+        json={},
+    )
+    assert duplicate.status_code == 201, duplicate.text
+    copied = duplicate.json()["data"]
+    assert copied["id"] != role["id"]
+    assert copied["name"] == "Dispatch Lead Copy"
+    assert copied["permissions"] == role["permissions"]
+
+    user = await client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "username": "dispatch.lead",
+            "displayName": "Dispatch Lead User",
+            "email": "dispatch.lead@example.com",
+            "password": "Passw0rd!",
+            "role": copied["code"],
+        },
+    )
+    assert user.status_code == 201, user.text
+    detail = await client.get(f"/api/v1/roles/{copied['id']}", headers=headers)
+    assert detail.status_code == 200
+    payload = detail.json()["data"]
+    assert payload["userCount"] == 1
+    assert payload["assignedUsers"][0]["username"] == "dispatch.lead"
+
+    first_page = await client.get(
+        "/api/v1/roles",
+        headers=headers,
+        params={"page": 1, "page_size": 1, "sort_by": "id", "sort_order": "asc"},
+    )
+    assert first_page.status_code == 200
+    page = first_page.json()["data"]
+    assert len(page["items"]) == 1
+    assert page["meta"]["page"] == 1
+    assert page["meta"]["page_size"] == 1
+    assert page["meta"]["total"] >= 2

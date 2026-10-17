@@ -6,9 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_permission
+from app.core.exceptions import NotFound
 from app.core.pagination import PageParams, page_params
+from app.core.serialization import jsonable
 from app.modules.audit.service import write_audit
 from app.modules.finance import service
+from app.modules.finance.posting_rules import (
+    POSTING_RULE_CREATED,
+    POSTING_RULE_DELETED,
+    POSTING_RULE_ENTITY,
+    POSTING_RULE_UPDATED,
+)
 
 router = APIRouter()
 
@@ -207,11 +215,19 @@ async def get_sequence(
 
 
 # --- Posting rules -----------------------------------------------------------
+async def _posting_rule_snapshot(session: AsyncSession, context: RequestContext, rule_id: int) -> dict | None:
+    """Audit "before" image; a rule that is already gone is simply not audited."""
+    try:
+        return jsonable(await service.get_posting_rule(session, context, rule_id))
+    except NotFound:
+        return None
+
+
 @router.get("/posting-rules")
 @router.get("/postingRules")
 async def list_posting_rules(
     page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_posting_rules(session, context, page)}
@@ -221,17 +237,31 @@ async def list_posting_rules(
 @router.post("/posting-rules", status_code=status.HTTP_201_CREATED)
 async def create_posting_rule(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.create_posting_rule(session, context, payload)}
+    rule = await service.create_posting_rule(session, context, payload)
+    await write_audit(
+        session,
+        context,
+        event_type=POSTING_RULE_CREATED,
+        entity_type=POSTING_RULE_ENTITY,
+        entity_id=int(rule["id"]),
+        action="create",
+        after=jsonable(rule),
+    )
+    await session.commit()
+    return {"data": rule}
 
 
+# Route ordering: the literal ``/posting-rules/{rule_id}`` pattern is declared
+# after the collection routes. FastAPI matches in registration order, and the
+# alternates exist because the collection is addressed by two spellings.
 @router.get("/postingRules/{rule_id}")
 @router.get("/posting-rules/{rule_id}")
 async def get_posting_rule(
     rule_id: str,
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.get_posting_rule(session, context, int(rule_id))}
@@ -242,21 +272,48 @@ async def get_posting_rule(
 async def update_posting_rule(
     rule_id: str,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.update_posting_rule(session, context, int(rule_id), payload)}
+    before = jsonable(await service.get_posting_rule(session, context, int(rule_id)))
+    rule = await service.update_posting_rule(session, context, int(rule_id), payload)
+    await write_audit(
+        session,
+        context,
+        event_type=POSTING_RULE_UPDATED,
+        entity_type=POSTING_RULE_ENTITY,
+        entity_id=int(rule_id),
+        action="update",
+        before=before,
+        after=jsonable(rule),
+    )
+    await session.commit()
+    return {"data": rule}
 
 
 @router.delete("/postingRules")
 @router.delete("/posting-rules")
 async def delete_posting_rules(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    before = [await _posting_rule_snapshot(session, context, rule_id) for rule_id in ids]
     await service.delete_posting_rules(session, context, ids)
+    for rule_id, snapshot in zip(ids, before, strict=True):
+        if snapshot is None:
+            continue
+        await write_audit(
+            session,
+            context,
+            event_type=POSTING_RULE_DELETED,
+            entity_type=POSTING_RULE_ENTITY,
+            entity_id=rule_id,
+            action="delete",
+            before=snapshot,
+        )
+    await session.commit()
     return {"data": {"removed": len(ids)}}
 
 

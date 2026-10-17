@@ -7,9 +7,35 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_permission
 from app.core.pagination import PageParams, page_params
+from app.modules.audit.service import write_audit
 from app.modules.quotations import service
 
 router = APIRouter()
+
+
+async def _record_revision_status_change(
+    session: AsyncSession,
+    context: RequestContext,
+    revision_id: int,
+    before: str | None,
+    record: dict,
+    event_type: str,
+    action: str,
+    reason: str | None = None,
+) -> None:
+    """Every quotation transition leaves one audit row with both statuses."""
+    await write_audit(
+        session,
+        context,
+        event_type=event_type,
+        entity_type="quotation_revision",
+        entity_id=revision_id,
+        action=action,
+        before={"status": before} if before else None,
+        after={"status": record.get("revisionStatus")},
+        reason=reason,
+    )
+    await session.commit()
 
 
 @router.get("/quotations")
@@ -92,8 +118,11 @@ async def send_revision(
     context: RequestContext = Depends(require_permission("quotation.send")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.revision_status(session, int(revision_id))
     record = await service.send_revision(session, context, int(revision_id))
-    await session.commit()
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_SENT", "send",
+    )
     return {"data": record}
 
 
@@ -104,7 +133,11 @@ async def submit_revision(
     context: RequestContext = Depends(require_permission("quotation.send")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.revision_status(session, int(revision_id))
     record = await service.submit_revision(session, context, int(revision_id))
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_SENT", "submit",
+    )
     return {"data": record}
 
 
@@ -115,9 +148,59 @@ async def accept_revision(
     context: RequestContext = Depends(require_permission("quotation.accept")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.revision_status(session, int(revision_id))
     record = await service.accept_revision(session, context, int(revision_id))
-    await session.commit()
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_ACCEPTED", "accept",
+    )
     return {"data": record}
+
+
+@router.post("/quotation-revisions/{revision_id}/reject")
+async def reject_revision(
+    revision_id: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("quotation.accept")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Rejecting is approval authority: the same role that may accept may reject."""
+    reason = payload.get("reason") or payload.get("notes")
+    before = await service.revision_status(session, int(revision_id))
+    record = await service.reject_revision(session, context, int(revision_id), str(reason) if reason else None)
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_REJECTED", "reject",
+        str(reason) if reason else None,
+    )
+    return {"data": record}
+
+
+@router.post("/quotation-revisions/{revision_id}/cancel")
+async def cancel_revision(
+    revision_id: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("quotation.update_draft")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Withdrawing an offer is edit authority: no customer decision is involved."""
+    reason = payload.get("reason") or payload.get("notes")
+    before = await service.revision_status(session, int(revision_id))
+    record = await service.cancel_revision(session, context, int(revision_id), str(reason) if reason else None)
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_CANCELLED", "cancel",
+        str(reason) if reason else None,
+    )
+    return {"data": record}
+
+
+@router.get("/quotation-revisions/{revision_id}/compare/{other_revision_id}")
+async def compare_revisions(
+    revision_id: str,
+    other_revision_id: str,
+    context: RequestContext = Depends(require_permission("quotation.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Diff two revisions of one quotation; neither revision is modified."""
+    return {"data": await service.compare_revisions(session, context, int(revision_id), int(other_revision_id))}
 
 
 @router.post("/quotation-revisions/{revision_id}/convert", status_code=status.HTTP_201_CREATED)
@@ -127,6 +210,9 @@ async def convert_revision(
     context: RequestContext = Depends(require_permission("quotation.convert")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.revision_status(session, int(revision_id))
     record = await service.convert_revision(session, context, int(revision_id))
-    await session.commit()
+    await _record_revision_status_change(
+        session, context, int(revision_id), before, record, "QUOTATION_CONVERTED", "convert",
+    )
     return {"data": record}

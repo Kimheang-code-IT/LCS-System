@@ -5,7 +5,7 @@ from collections import defaultdict
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.pagination import PageParams, list_sort_orders
+from app.core.pagination import PageParams, count_query, list_sort_orders
 from app.modules.auth.models import (
     Permission,
     Role,
@@ -90,17 +90,21 @@ class AuthRepository:
 
     async def roles_with_permissions(
         self, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
-    ) -> list[tuple[Role, list[str]]]:
+    ) -> tuple[list[tuple[Role, list[str]]], int]:
         orders = list_sort_orders(Role, page, Role.id) if page else [Role.id]
         stmt = select(Role)
         if q:
             pattern = f"%{q}%"
             stmt = stmt.where(or_(Role.name.ilike(pattern), Role.code.ilike(pattern)))
         if status:
-            stmt = stmt.where(Role.status == status)
-        roles = list((await self.session.execute(stmt.order_by(*orders))).scalars().all())
+            stmt = stmt.where(Role.status == status.upper())
+        total = await count_query(self.session, stmt)
+        query = stmt.order_by(*orders)
+        if page:
+            query = query.offset(page.offset).limit(page.page_size)
+        roles = list((await self.session.execute(query)).scalars().all())
         if not roles:
-            return []
+            return [], total
         permission_result = await self.session.execute(
             select(RolePermission.role_id, Permission.code)
             .join(Permission, Permission.id == RolePermission.permission_id)
@@ -109,4 +113,4 @@ class AuthRepository:
         permissions: defaultdict[int, list[str]] = defaultdict(list)
         for role_id, code in permission_result.all():
             permissions[role_id].append(code)
-        return [(role, permissions[role.id]) for role in roles]
+        return [(role, permissions[role.id]) for role in roles], total

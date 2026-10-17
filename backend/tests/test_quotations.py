@@ -52,6 +52,30 @@ async def test_quotation_rejects_unknown_customer_party_id(client):
     assert "customerPartyId" in response.json()["field_errors"]
 
 
+async def test_two_new_customers_saved_in_the_same_second_do_not_collide(client):
+    """Regression: the placeholder party code was unique only per second.
+
+    ``resolve_party_by_name`` stamped ``P-YYMMDDHHMMSS``, so two quotations for
+    two brand-new customers saved back to back raised a UNIQUE violation on the
+    active ``party_code`` index instead of creating the second customer.
+    """
+    headers = await login(client)
+    created = [
+        await _create_quotation(client, headers, {"customer": name, "amount": 25})
+        for name in ("Same Second Customer A", "Same Second Customer B")
+    ]
+    assert created[0]["customerPartyId"] != created[1]["customerPartyId"], (
+        "each new customer must get its own business party"
+    )
+
+    codes = []
+    for row in created:
+        party = await client.get(f"/api/v1/businessParties/{row['customerPartyId']}", headers=headers)
+        assert party.status_code == 200, party.text
+        codes.append(party.json()["data"]["partyCode"])
+    assert len(set(codes)) == 2, f"party codes must be unique, got {codes}"
+
+
 async def test_quotation_update_switches_customer_party(client):
     headers = await login(client)
     parties = (await client.get("/api/v1/businessParties", headers=headers, params={"page_size": 200})).json()["data"]["items"]

@@ -1,0 +1,118 @@
+import { describe, expect, it } from 'vitest'
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  generateStrongPassword,
+  validatePasswordStrength,
+} from '../app/utils/validation/field-rules'
+import { issueMessage, ISSUE_KEYS } from '../app/utils/validation/messages'
+import { compactAuthUser } from '../app/utils/auth/session'
+
+/**
+ * The password policy is mirrored from the backend (`app/core/security.py`).
+ * A mismatch is a bad experience rather than a hole — the server validates every
+ * password it is given — but it means the same password passes here and is
+ * refused there, so the constants and the common-password list are pinned.
+ */
+describe('password policy', () => {
+  it('mirrors the backend minimum and maximum', () => {
+    expect(PASSWORD_MIN_LENGTH).toBe(8)
+    expect(PASSWORD_MAX_LENGTH).toBe(128)
+  })
+
+  it('refuses a password below the minimum', () => {
+    const issue = validatePasswordStrength('short')
+    expect(issue).toEqual({ code: 'minLength', params: { minLength: PASSWORD_MIN_LENGTH } })
+  })
+
+  it('refuses a password above the maximum', () => {
+    const issue = validatePasswordStrength('a'.repeat(PASSWORD_MAX_LENGTH + 1))
+    expect(issue).toEqual({ code: 'maxLength', params: { maxLength: PASSWORD_MAX_LENGTH } })
+  })
+
+  it('refuses the values the backend refuses outright', () => {
+    // Mirrors validate_password_strength in backend/app/core/security.py, which
+    // also checks the length first. `letmein` is shorter than the minimum, so
+    // the length message is the one the user sees - same as on the server.
+    for (const weak of ['password', 'password123', 'changeme', 'changeme123', 'admin123', 'qwerty123']) {
+      expect(validatePasswordStrength(weak), weak).toEqual({ code: 'commonPassword' })
+      // Casing and padding must not slip past it.
+      expect(validatePasswordStrength(` ${weak.toUpperCase()} `), weak).toEqual({ code: 'commonPassword' })
+    }
+    expect(validatePasswordStrength('letmein')).toEqual({
+      code: 'minLength',
+      params: { minLength: PASSWORD_MIN_LENGTH },
+    })
+  })
+
+  it('accepts a password that meets the policy', () => {
+    expect(validatePasswordStrength('Sup3r-Secret-9')).toBeNull()
+    expect(validatePasswordStrength('correct horse battery staple')).toBeNull()
+  })
+
+  it('has copy for every code it can return', () => {
+    expect(ISSUE_KEYS.minLength).toBe('validation.minLength')
+    expect(ISSUE_KEYS.maxLength).toBe('validation.maxLength')
+    expect(ISSUE_KEYS.commonPassword).toBe('validation.commonPassword')
+  })
+
+  it('renders a message that names the field', () => {
+    const t = (key: string, params?: Record<string, unknown>) =>
+      `${key}${params ? `|${JSON.stringify(params)}` : ''}`
+    const issue = validatePasswordStrength('short')
+    expect(issueMessage(t, issue!, 'New password')).toContain('validation.minLength')
+  })
+})
+
+describe('generated passwords', () => {
+  it('satisfies the policy it is generated against', () => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      expect(validatePasswordStrength(generateStrongPassword())).toBeNull()
+    }
+  })
+
+  it('honours the requested length', () => {
+    expect(generateStrongPassword(24)).toHaveLength(24)
+  })
+
+  it('does not repeat itself', () => {
+    // 200 draws from a 57-character alphabet: a constant generator would collide
+    // immediately, so a small sample is enough to catch one.
+    const drawn = new Set(Array.from({ length: 200 }, () => generateStrongPassword()))
+    expect(drawn.size).toBeGreaterThan(190)
+  })
+
+  it('never ends with the symbol, so copying it by hand cannot pick up a space', () => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const password = generateStrongPassword()
+      expect(/[A-Za-z0-9]$/.test(password)).toBe(true)
+      expect(/[^A-Za-z0-9]/.test(password)).toBe(true)
+    }
+  })
+
+  it('omits glyphs that are easily confused when read aloud', () => {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      expect(generateStrongPassword()).not.toMatch(/[Il1O0]/)
+    }
+  })
+})
+
+describe('session snapshot', () => {
+  it('carries the forced password change in the cookie-safe user', () => {
+    // Dropping it here would let a page reload show a signed-in shell that the
+    // API refuses on every request.
+    const compact = compactAuthUser({
+      id: 1,
+      name: 'Temporary',
+      email: 'temporary@example.com',
+      mustChangePassword: true,
+      permissions: ['dashboard.view'],
+    })
+    expect(compact.mustChangePassword).toBe(true)
+  })
+
+  it('leaves the flag off a normal session', () => {
+    const compact = compactAuthUser({ name: 'Normal', email: 'normal@example.com' })
+    expect(compact.mustChangePassword).toBeUndefined()
+  })
+})

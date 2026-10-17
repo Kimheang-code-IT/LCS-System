@@ -8,16 +8,15 @@ import {
   asNumber,
   defaultStatusForModule,
   emptyFreightRecord,
-  formatMoney,
   statusColor,
   useFreightLabel,
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
 import { FINANCE_REVERSE_FORM_FIELDS } from '~/config/job-workspace-forms'
+import { FINANCIAL_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
-import { isLcsDomainError } from '~/utils/freight/errors'
 import { financeDomainStatus, isRecordReadOnly, quotationDomainStatus } from '~/utils/freight/states'
 import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys } from '~/utils/role/permissions'
 import type { AppRolePermissionRow } from '~/types/entities'
@@ -46,19 +45,30 @@ import {
   normalizeComponentTemplateRecord,
 } from '~/utils/freight/component-instance-mode'
 import type { PrintTemplateId } from '~/config/print-templates'
+import type { RecordStatusTransition } from '~/types/status'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { splitDocumentHeaderActions } from '~/utils/layout/document-header-actions'
-import type { FreightAction } from '~/config/freight-modules'
+import type { FreightAction, FreightTable } from '~/config/freight-modules'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useDocumentActions } from '~/composables/freight/useDocumentActions'
+import { useRecordStatus } from '~/composables/freight/useRecordStatus'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateDocumentFields, validateTableRows } from '~/utils/validation/record-validation'
+import { focusField } from '~/utils/validation/focus'
+import { parseRowKey } from '~/utils/validation/error-paths'
+import { apiErrorMessage } from '~/utils/validation/api-error'
+import type { ValidationFailure } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
+import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
+import { unwrapApiData } from '~/repositories/http/response'
+import type { ApiResponse } from '~/types/common'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const store = useFreightStore()
 const auth = useAuthStore()
-const { t } = useI18n()
+const { t, te } = useI18n()
 const toast = useToast()
 const { moduleTitle, moduleSingular, fieldLabel, actionLabel } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
@@ -66,6 +76,7 @@ const { confirm } = useConfirm()
 const lcs = useLcs()
 const { localization } = useAppLocalization()
 const moduleRecord = useModuleRecord(module)
+const api = useApi()
 
 const saving = ref(false)
 const activeTab = ref('general')
@@ -73,24 +84,87 @@ const printOpen = ref(false)
 const model = ref<FreightRecord>({ id: '' } as FreightRecord)
 const originalModel = ref<FreightRecord | null>(null)
 const notFound = ref(false)
-const fieldErrors = ref<Record<string, string>>({})
 const revisionHistory = ref<Array<Record<string, unknown>>>([])
+const duplicatingRole = ref(false)
 
-/** Backend field errors may be snake_case (Pydantic); field keys are camelCase. */
-function normalizeFieldErrors(errors: Record<string, string> | undefined): Record<string, string> {
-  const normalized: Record<string, string> = {}
-  for (const [key, message] of Object.entries(errors || {})) {
-    normalized[key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())] = message
+/** Locate a rendered field so validation copy and the summary share one label. */
+function findField(key: string) {
+  for (const tab of tabs.value) {
+    for (const section of tab.sections) {
+      const field = section.fields.find(item => item.key === key)
+      if (field) return { tab, section, field }
+    }
   }
-  return normalized
+  return undefined
 }
+
+/** Row-scoped keys (`lines.1.amount`) resolve back to their table field. */
+function findFieldOwner(key: string) {
+  return findField(key) ?? findField(key.split('.')[0]!)
+}
+
+/** Locally translated label for a rendered document field, including a cell. */
+function fieldKeyLabel(key: string) {
+  const row = parseRowKey(key)
+  const owner = findFieldOwner(key)
+  if (!owner) return ''
+  if (row) {
+    // A cell message names its column, never the composite model key.
+    const columns = (owner.field.meta?.table as FreightTable | undefined)?.columns || []
+    const column = columns.find(item => item.key === row.column)
+    return column
+      ? fieldLabel({ ...column, label: column.label || column.key })
+      : fieldLabel({ key: row.column, label: row.column })
+  }
+  const field = owner.field
+  return fieldLabel({
+    key: field.key,
+    label: field.label || field.key,
+    ...(field.labelKey ? { labelKey: field.labelKey } : {}),
+  })
+}
+
+/**
+ * Shared validation. `order` follows the rendered tab → section → field order
+ * so "first invalid field" is the first one the user can actually see.
+ */
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  label: fieldKeyLabel,
+  order: () => tabs.value.flatMap(tab => tab.sections.flatMap(section => section.fields.map(field => field.key))),
+  groupLabel: (key) => {
+    const owner = findFieldOwner(key)
+    if (!owner) return undefined
+    const tabLabel = owner.tab.labelKey && te(owner.tab.labelKey) ? t(owner.tab.labelKey) : owner.tab.label
+    const sectionLabel = owner.section.titleKey && te(owner.section.titleKey)
+      ? t(owner.section.titleKey)
+      : owner.section.title
+    return [tabLabel, sectionLabel].filter(Boolean).join(' › ')
+  },
+  reveal: (key) => {
+    const owner = findFieldOwner(key)
+    if (!owner) return false
+    if (activeTab.value === owner.tab.id) return true
+    activeTab.value = owner.tab.id
+    return true
+  },
+})
+
+const fieldErrors = validation.fieldErrors
 
 function clearFieldError(key: string) {
-  if (!fieldErrors.value[key]) return
-  fieldErrors.value = Object.fromEntries(
-    Object.entries(fieldErrors.value).filter(([fieldKey]) => fieldKey !== key),
-  )
+  validation.clearFieldError(key)
 }
+
+/**
+ * Status changes (activate / deactivate / mark / finish / issue / post /
+ * reverse / close / reopen) run through the shared status manager, so the
+ * record page and the list offer exactly the same legal transitions.
+ */
+const { menuItem: statusMenuItem } = useRecordStatus(module, {
+  onError: (message) => { validation.addFormError(message) },
+  onChanged: () => load(),
+})
 
 const {
   commentBody,
@@ -139,6 +213,13 @@ async function load() {
     const query = route.query
     for (const [key, value] of Object.entries(query)) {
       if (typeof value === 'string' && value) model.value[key] = value
+    }
+    // A financial document is an invoice unless the caller asked for another type,
+    // which is also the type the backend defaults to. The Overview fields, the
+    // settlement group and the tab set all depend on it, so an empty document type
+    // must never reach the renderer.
+    if (module.value.collection === 'debitNotes' && !model.value.documentType) {
+      model.value.documentType = FINANCIAL_DOCUMENT_TYPES[0]
     }
     applyRoleMatrix()
     return
@@ -232,51 +313,32 @@ const periodClosed = computed(() => {
     })
   return String(period?.status || '') === 'CLOSED'
 })
-const postingPreview = computed(() => {
-  if (module.value?.collection !== 'debitNotes') return null
-  const period = store.list('accountingPeriods').find(row => row.id === model.value.periodId)
-  const total = asNumber(model.value.total || model.value.amount)
-  const type = String(model.value.documentType || 'CUSTOMER_INVOICE')
-  return {
-    periodName: String(period?.name || period?.code || model.value.periodId || ''),
-    total,
-    type,
-    difference: 0,
-  }
-})
-
-function postingAccountLabels(type: string) {
-  if (type === 'SUPPLIER_BILL') {
-    return { debit: t('lcs.finance.accounts.expense'), credit: t('lcs.finance.accounts.ap') }
-  }
-  if (type === 'CUSTOMER_RECEIPT') {
-    return { debit: t('lcs.finance.accounts.cashBank'), credit: t('lcs.finance.accounts.ar') }
-  }
-  return { debit: t('lcs.finance.accounts.ar'), credit: t('lcs.finance.accounts.revenue') }
-}
-
-const postingPreviewItems = computed(() => {
-  const preview = postingPreview.value
-  if (!preview) return []
-  const accounts = postingAccountLabels(preview.type)
-  return [
-    { label: t('lcs.finance.documentTotal'), value: formatMoney(preview.total), strong: false },
-    { label: t('freight.fields.debitAccount'), value: accounts.debit, strong: false },
-    { label: t('freight.fields.creditAccount'), value: accounts.credit, strong: false },
-    { label: t('freight.fields.balanceDifference'), value: preview.difference.toFixed(2), strong: true },
-  ]
-})
-
 const reverseOpen = ref(false)
 const reverseDraft = reactive<Record<string, unknown>>({ reason: '' })
+const reverseErrors = ref<string[]>([])
 const reversing = ref(false)
+
+/**
+ * Password dialog. One instance serves both jobs: choosing a new password for an
+ * existing account, and showing the password of a just-created one before it
+ * leaves the screen. `handoverLeaving` holds the post-save navigation until the
+ * administrator has dismissed the reveal, so the password cannot be lost behind
+ * a route change.
+ */
+const passwordDialog = reactive({
+  open: false,
+  mode: 'set' as 'set' | 'handover',
+  userId: '',
+  userLabel: '',
+  revealedPassword: '',
+})
+const handoverLeaving = ref(false)
 const canMutateRecord = computed(() => {
   if (!module.value || readOnly.value || isCreate.value || !model.value.id) return false
   if (module.value.collection === 'users') return lcs.can('user.manage')
   if (module.value.collection === 'roles') return lcs.can('role.manage')
   return true
 })
-const deactivationOnly = computed(() => module.value?.group === 'master' || module.value?.collection === 'documentSequences')
 
 function headerActionMenuItem(action: FreightAction): DropdownMenuItem {
   return {
@@ -311,6 +373,21 @@ const quotationAvailability = computed(() => quotationActionAvailability(
   },
   { hasServiceOrder: Boolean(relatedServiceOrder()) },
 ))
+
+/**
+ * The quotation status transitions keep their availability rules (a converted
+ * quotation must not offer Convert again, and a dirty draft is saved first), so
+ * the shared status menu offers exactly what those rules allow.
+ */
+function transitionsAvailableForQuotation(transition: RecordStatusTransition): boolean {
+  const availability = quotationAvailability.value
+  if (transition.action === 'send') return availability.send && !quotationDraftDirty.value
+  if (transition.action === 'accept') return availability.accept && !quotationDraftDirty.value
+  if (transition.action === 'convert') return availability.convert && !quotationDraftDirty.value
+  if (transition.action === 'reject') return lcs.can('quotation.accept')
+  if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
+  return true
+}
 
 const quotationHeaderActions = computed<FreightAction[]>(() => {
   if (module.value?.collection !== 'quotations') return []
@@ -378,6 +455,13 @@ const headerActions = computed(() => {
         return String(status).toUpperCase() === 'DRAFT' && lcs.can('journal_entry.post') && lines.length > 0 && asNumber(model.value.debitTotal) > 0 && asNumber(model.value.balanceDifference) === 0
       }
     }
+    if (collection === 'users') {
+      // An unsaved account has nothing to set a password on, and a delegated
+      // reader without user.manage cannot reach the endpoint anyway.
+      if (action.key === 'setPassword') {
+        return !isCreate.value && Boolean(model.value.id) && lcs.can('user.manage')
+      }
+    }
     return true
   })
 })
@@ -405,7 +489,7 @@ const protectedSystemRecord = computed(() =>
   isProtectedManagementRecord(module.value?.collection, model.value),
 )
 
-const tabs = computed(() => {
+const formTabs = computed(() => {
   if (!module.value) return []
   const compiled = moduleDocumentTabs(module.value, {
     isCreate: isCreate.value,
@@ -419,7 +503,18 @@ const tabs = computed(() => {
       ? ['documentType', 'year']
       : module.value.collection === 'users' && model.value.isProtectedSystemAccount === true
         ? ['role']
-        : [],
+        : module.value.collection === 'debitNotes' && !isCreate.value
+          // The document number was allocated from this type's sequence and the
+          // backend refuses a later switch, so it is not editable once created.
+          ? ['documentType']
+          : [],
+    // Tabs and fields are scoped to the document type and status, both of which the
+    // user can change while the form is open, so they are inputs to this computed.
+    documentType: String(model.value.documentType || ''),
+    status: String(model.value.status || ''),
+    // ...and the record itself, so a `visibleWhen` rule (the exchange rate while
+    // the document currency is not the base currency) follows the form live.
+    record: model.value,
   })
   if (module.value.collection === 'roles' && model.value.isSystemRole === true) {
     return compiled.map(tab => ({
@@ -446,6 +541,19 @@ const tabs = computed(() => {
     })),
   }))
 })
+
+/**
+ * The Posting Rule History tab.
+ *
+ * A posting rule is configuration, not a workflow document, so the question an
+ * administrator has after a posting goes somewhere unexpected is "what changed
+ * about this rule, and what did it post?" — which is a tab beside the form, not
+ * a second screen. The tab carries no fields; its content is rendered through
+ * the document page's `tab-extra` slot.
+ *
+ * Only on an existing rule: a create form has nothing to look back on.
+ */
+const tabs = computed(() => formTabs.value)
 
 watch(tabs, (value) => {
   if (!value.some(tab => tab.id === activeTab.value)) activeTab.value = value[0]?.id || 'general'
@@ -601,8 +709,10 @@ async function deleteQuotation() {
     await navigateTo('/quotations')
   }
   catch (error) {
-    if (!isLcsDomainError(error)) throw error
-    toast.add({ title: error.message, color: 'error' })
+    // A dependency refusal ("still referenced by…") is a page-level message,
+    // not a toast and not a field error: it has no single input to own it.
+    validation.reset()
+    validation.applyServerError(error)
   }
 }
 
@@ -616,7 +726,6 @@ const documentActions = useDocumentActions({
   toast: toast.add,
   t,
   canMutateRecord,
-  deactivationOnly,
   printOpen,
 })
 
@@ -629,6 +738,7 @@ const quotationCommands = useQuotationCommands({
   t,
   quotationDraftDirty,
   relatedServiceOrder: () => relatedServiceOrder() as FreightRecord | null | undefined,
+  onError: message => validation.addFormError(message),
 })
 
 const financeCommands = useFinanceCommands({
@@ -637,11 +747,11 @@ const financeCommands = useFinanceCommands({
   store,
   toast: toast.add,
   t,
-  currentUserName: computed(() => String(currentUser.value?.name || 'Current User')),
   periodClosed,
   recalculate,
   traceLink,
   openReverse: () => { reverseOpen.value = true },
+  onError: message => validation.addFormError(message),
 })
 
 const moreItems = computed<DropdownMenuItem[][]>(() => {
@@ -681,35 +791,32 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
     items.push(headerActionMenuItem(action))
   }
 
-  if (!isQuotation && canMutateRecord.value) {
-    if (!protectedSystemRecord.value) {
-      const status = String(model.value.status || '').trim().toUpperCase()
-      if (status === 'ACTIVE' || status === 'INACTIVE') {
-        const active = status === 'ACTIVE'
-        items.push({
-          label: t(active ? 'freight.ui.deactivate' : 'freight.ui.activate'),
-          icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-          color: active ? 'warning' as const : 'success' as const,
-          onSelect: () => { void setRecordStatus(active ? 'INACTIVE' : 'ACTIVE') },
-        })
-        // Active records must be deactivated first; only inactive records can be deleted.
-        if (!active) {
-          items.push({
-            label: t('freight.ui.delete'),
-            icon: 'i-lucide-trash-2',
-            color: 'error' as const,
-            onSelect: () => { void deleteRecord() },
-          })
-        }
-      }
-      else {
-        items.push({
-          label: t(deactivationOnly.value ? 'freight.ui.deactivate' : 'freight.ui.delete'),
-          icon: deactivationOnly.value ? 'i-lucide-circle-off' : 'i-lucide-trash-2',
-          color: deactivationOnly.value ? 'warning' as const : 'error' as const,
-          onSelect: () => { void deleteRecord() },
-        })
-      }
+  if (module.value?.collection === 'roles' && !isCreate.value && model.value.id && lcs.can('role.manage')) {
+    items.push({
+      label: t('lcs.document.duplicate'),
+      icon: 'i-lucide-copy-plus',
+      onSelect: () => { void duplicateCurrentRole() },
+    })
+  }
+
+  if (canMutateRecord.value && !protectedSystemRecord.value) {
+    // Change Status is policy-driven: only transitions that are legal from this
+    // record's status and permitted for this caller are offered. Financial
+    // documents still run the posting and reversal engines through their own
+    // endpoints — the status is never written directly.
+    const statusItem = statusMenuItem(model.value, {
+      allowTransition: transition => module.value?.collection !== 'quotations'
+        || transitionsAvailableForQuotation(transition),
+    })
+    if (statusItem) items.push(statusItem)
+    // Active records must be deactivated first; only inactive records can be deleted.
+    if (String(model.value.status || '').trim().toUpperCase() === 'INACTIVE') {
+      items.push({
+        label: t('freight.ui.delete'),
+        icon: 'i-lucide-trash-2',
+        color: 'error' as const,
+        onSelect: () => { void deleteRecord() },
+      })
     }
   }
 
@@ -778,15 +885,10 @@ function setFieldValue(key: string, value: unknown) {
 }
 
 function setTable(key: string, rows: Array<Record<string, unknown>>) {
-  if (key === 'allocations') {
-    const paymentTotal = asNumber(model.value.total || model.value.amount || model.value.received)
-    const allocated = rows.reduce((sum, row) => sum + asNumber(row.amount), 0)
-    const exceedsTarget = rows.some(row => asNumber(row.amount) > asNumber(row.targetOutstanding || row.outstandingAmount))
-    if (allocated > paymentTotal || exceedsTarget) {
-      toast.add({ title: t('freight.ui.allocationExceeds'), color: 'error' })
-      return
-    }
-  }
+  // Any structural edit (add / remove / reorder / cell change) invalidates the
+  // row-indexed errors of that table; they are recomputed on the next submit so
+  // a message can never end up pointing at the wrong row.
+  validation.clearTableErrors(key)
   model.value = { ...model.value, [key]: rows }
   recalculate()
 }
@@ -796,33 +898,128 @@ function recalculate() {
   model.value = recalculateFreightRecord(module.value, model.value)
 }
 
+/**
+ * Client-side gate. Runs before every create/update so an invalid form never
+ * reaches the API; business rules that need the whole record live here too,
+ * so their message lands on the input that caused them.
+ */
+function collectValidationFailures(isNew: boolean): ValidationFailure[] {
+  const current = module.value
+  if (!current) return []
+  const failures = validateDocumentFields({
+    fields: current.fields.filter(field => field.key !== 'status'),
+    model: model.value as Record<string, unknown>,
+    isCreate: isNew,
+    label: fieldKeyLabel,
+    skipKeys: [],
+    formRules: businessRuleFailures(isNew),
+  })
+
+  for (const table of current.tables || []) {
+    const rows = Array.isArray(model.value[table.key])
+      ? model.value[table.key] as Array<Record<string, unknown>>
+      : []
+    if (READ_ONLY_TABLES.has(table.key) || table.kind === 'files') continue
+    failures.push(...validateTableRows({
+      table,
+      rows,
+      label: fieldKeyLabel,
+      columnLabel: column => fieldLabel({ ...column, label: column.label || column.key }),
+    }))
+  }
+  return failures
+}
+
+/** Tables the document renders for information only; never validated. */
+const READ_ONLY_TABLES = new Set(['revisionHistory', 'sourceRelationships', 'attachments'])
+
+/**
+ * Cross-field and cross-record rules that a single field rule cannot express.
+ * Each returns a failure aimed at the input the user must actually change.
+ */
+function businessRuleFailures(isNew: boolean): Record<string, (record: Record<string, unknown>) => ValidationFailure | null> {
+  const current = module.value
+  if (!current) return {}
+  const rules: Record<string, (record: Record<string, unknown>) => ValidationFailure | null> = {}
+
+  if (current.collection === 'componentTemplates') {
+    rules.maximumInstances = () => {
+      const minimum = Number(model.value.minimumInstances || 0)
+      const maximum = Number(model.value.maximumInstances || 0)
+      if (minimum < 0 || maximum < 0 || (maximum > 0 && maximum < minimum)) {
+        return {
+          key: 'maximumInstances',
+          code: 'custom',
+          message: t('freight.ui.invalidInstanceLimits'),
+          label: fieldKeyLabel('maximumInstances'),
+        }
+      }
+      return null
+    }
+  }
+
+  if (current.collection === 'journals') {
+    // Debit must equal credit — a cross-field rule the backend also enforces.
+    rules.lines = () => (Number(model.value.balanceDifference || 0) === 0
+      ? null
+      : {
+          key: 'lines',
+          code: 'balanced',
+          label: fieldKeyLabel('lines'),
+        })
+  }
+
+  if (current.collection === 'debitNotes') {
+    rules.allocations = () => {
+      const rows = Array.isArray(model.value.allocations) ? model.value.allocations as Array<Record<string, unknown>> : []
+      if (!rows.length) return null
+      const total = asNumber(model.value.total || model.value.amount)
+      const allocated = rows.reduce((sum, row) => sum + asNumber(row.amount), 0)
+      const exceedsTarget = rows.some(row => asNumber(row.amount) > asNumber(row.targetOutstanding || row.outstandingAmount))
+      if (allocated > total || exceedsTarget) {
+        return {
+          key: 'allocations',
+          code: 'custom',
+          message: t('freight.ui.allocationExceeds'),
+          label: fieldKeyLabel('allocations'),
+        }
+      }
+      return null
+    }
+  }
+
+  if (current.collection === 'componentTemplates' && !isNew && originalModel.value
+    && String(model.value.instanceMode) !== String(originalModel.value.instanceMode || 'SINGLE')) {
+    const used = store.list('serviceComponents').some(row =>
+      String(row.templateCode) === String(model.value.code)
+      && String(row.templateVersion) === String(model.value.version),
+    )
+    if (used) {
+      rules.instanceMode = () => ({
+        key: 'instanceMode',
+        code: 'custom',
+        message: t('freight.ui.cardinalityVersionRequired'),
+        label: fieldKeyLabel('instanceMode'),
+      })
+    }
+  }
+
+  return rules
+}
+
 async function save(status?: string) {
   if (!module.value || readOnly.value) return
+  // Guard against a double click / repeated Enter while the request is pending.
+  if (saving.value) return
   saving.value = true
-  fieldErrors.value = {}
+  validation.submitting.value = true
+  validation.reset()
   try {
     recalculate()
     const payload = { ...model.value }
     if (status) payload.status = status
     if (module.value.collection === 'componentTemplates') {
       Object.assign(payload, normalizeComponentTemplateRecord(payload))
-      const minimum = Number(payload.minimumInstances || 0)
-      const maximum = Number(payload.maximumInstances || 0)
-      if (minimum < 0 || maximum < 0 || (maximum > 0 && maximum < minimum)) {
-        toast.add({ title: t('freight.ui.invalidInstanceLimits'), color: 'error' })
-        return
-      }
-      if (!isCreate.value && originalModel.value
-        && String(payload.instanceMode) !== String(originalModel.value.instanceMode || 'SINGLE')) {
-        const used = store.list('serviceComponents').some(row =>
-          String(row.templateCode) === String(payload.code)
-          && String(row.templateVersion) === String(payload.version),
-        )
-        if (used) {
-          toast.add({ title: t('freight.ui.cardinalityVersionRequired'), color: 'error' })
-          return
-        }
-      }
     }
     if (module.value.collection === 'tradeDirectionComponents') {
       Object.assign(payload, normalizeComponentAssignmentRecord(payload))
@@ -834,6 +1031,16 @@ async function save(status?: string) {
       payload.permissions = keys
       payload.permissionCount = keys.length
     }
+    if (module.value.collection === 'debitNotes') {
+      // A line's account code is derived from the posting rules for display, so it
+      // is stripped before saving: the rule in force at posting time decides, and a
+      // form that was merely opened and saved must not pin an account of its own.
+      payload.lines = (Array.isArray(payload.lines) ? payload.lines : []).map((line) => {
+        const next = { ...(line as Record<string, unknown>) }
+        delete next.accountCode
+        return next
+      })
+    }
     if (module.value.collection === 'documentSequences') {
       payload.prefix = String(payload.prefix || '').trim()
       const sequenceYear = Number(payload.year)
@@ -844,60 +1051,42 @@ async function save(status?: string) {
       payload.paddingLength = paddingLength
       payload.status = String(payload.status || 'ACTIVE').toUpperCase()
       payload.nextNumberPreview = documentSequencePreview(payload)
+    }
 
-      if (!Number.isInteger(sequenceYear) || sequenceYear < 1000 || sequenceYear > 9999) {
-        toast.add({ title: 'Year must be a positive 4-digit year.', color: 'error' })
-        return
-      }
-      if (!Number.isInteger(lastValue) || lastValue < 0) {
-        toast.add({ title: 'Last Value must be a whole number greater than or equal to 0.', color: 'error' })
-        return
-      }
-      if (!Number.isInteger(paddingLength) || paddingLength <= 0) {
-        toast.add({ title: 'Padding Length must be a whole number greater than 0.', color: 'error' })
-        return
-      }
-      if (!['ACTIVE', 'INACTIVE'].includes(String(payload.status))) {
-        toast.add({ title: 'Status must be ACTIVE or INACTIVE.', color: 'error' })
-        return
-      }
+    const isNew = isCreate.value || !payload.id
+    const failures = collectValidationFailures(isNew)
+    if (failures.length) {
+      validation.applyFailures(failures)
+      await validation.focusFirstInvalid()
+      return
+    }
+
+    if (module.value.collection === 'documentSequences') {
       const duplicate = store.list('documentSequences').find(row =>
         String(row.id) !== String(payload.id || '')
         && String(row.documentType) === String(payload.documentType)
         && Number(row.year) === Number(payload.year),
       )
       if (duplicate) {
-        toast.add({
-          title: 'A document sequence already exists for this document type and year.',
-          description: `${documentSequenceTypeLabel(payload.documentType)} / ${payload.year}`,
-          color: 'error',
-        })
+        validation.setFieldError('year', t('validation.duplicateSequence', {
+          type: documentSequenceTypeLabel(payload.documentType),
+          year: payload.year,
+        }))
+        await validation.focusFirstInvalid()
         return
       }
       if (!isCreate.value && originalModel.value && Number(payload.lastValue) !== Number(originalModel.value.lastValue)) {
         const ok = await confirm({
           kind: 'generic',
-          title: 'Change the last sequence value?',
-          description: 'Changing the last value can create duplicate or skipped document numbers. Continue only after verifying the numbering history.',
-          confirmLabel: 'Change Last Value',
+          title: t('lcs.document.sequenceChangeTitle'),
+          description: t('lcs.document.sequenceChangeDescription'),
+          confirmLabel: t('lcs.document.sequenceChangeConfirm'),
           confirmColor: 'warning',
         })
         if (!ok) return
       }
     }
-    const isNew = isCreate.value || !payload.id
-    const missing = module.value.fields.filter((field) => {
-      // A create-only field (the initial password) is not submitted on update.
-      if (field.createOnly && !isNew) return false
-      if (module.value?.collection === 'jobCharges' && field.key === 'chargeNo' && !String(payload.jobNo || '').trim()) {
-        return !String(payload.chargeNo ?? '').trim()
-      }
-      return field.required && !field.computed && !String(payload[field.key] ?? '').trim()
-    })
-    if (missing.length) {
-      toast.add({ title: t('freight.ui.missingRequired'), description: missing.map(fieldLabel).join(', '), color: 'error' })
-      return
-    }
+
     if (isNew) {
       payload.createdAt ||= new Date().toISOString()
       payload.createdBy ||= String(currentUser.value?.name || 'Current User')
@@ -907,6 +1096,18 @@ async function save(status?: string) {
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
     toast.add({ title: t('freight.ui.save'), color: 'success' })
+    // A newly created account's password cannot be read back afterwards — the
+    // server keeps only a digest — so it is shown once, here, before leaving the
+    // form. Skipping this would leave the administrator unable to tell the user
+    // what to sign in with.
+    if (isNew && module.value.collection === 'users' && String(payload.password || '')) {
+      passwordDialog.userId = String((saved as Record<string, unknown>).id || '')
+      passwordDialog.userLabel = String(payload.displayName || payload.username || '')
+      passwordDialog.revealedPassword = String(payload.password)
+      passwordDialog.mode = 'handover'
+      passwordDialog.open = true
+      return
+    }
     // "Add new" from a reference select: return to the originating document and
     // hand back the created value so the field can auto-select it.
     const pickField = String(route.query.pickField || '')
@@ -925,37 +1126,90 @@ async function save(status?: string) {
     }
     // Every save (create or update) returns to the list so the refreshed table
     // is visible immediately.
-    await navigateTo(module.value.path)
+    await leaveAfterSave()
   }
   catch (error) {
-    if (!isLcsDomainError(error)) throw error
-    const errors = normalizeFieldErrors(error.field_errors)
-    if (Object.keys(errors).length) {
-      // Show validation issues on the offending fields instead of a toast.
-      fieldErrors.value = errors
-    }
-    else {
-      toast.add({ title: error.message, color: 'error' })
-    }
+    // Every rejected request lands on a field (or the form-level summary) and
+    // navigates to the first one. Validation errors never become a toast.
+    validation.applyServerError(error)
+    await validation.focusFirstInvalid()
   }
   finally {
     saving.value = false
+    validation.submitting.value = false
   }
 }
 
-async function setRecordStatus(next: 'ACTIVE' | 'INACTIVE') {
-  if (!module.value || !canMutateRecord.value) return
-  const status = module.value.collection === 'documentSequences'
-    ? next
-    : (next === 'ACTIVE' ? 'Active' : 'Inactive')
-  model.value = { ...model.value, status } as FreightRecord
-  await moduleRecord.update(String(model.value.id || ''), model.value)
-  originalModel.value = { ...model.value }
-  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
+/**
+ * Return to the list once the password handover (if any) has been dismissed, so
+ * the administrator cannot lose the password behind a navigation.
+ */
+async function leaveAfterSave() {
+  if (!module.value) return
+  if (passwordDialog.open && passwordDialog.mode === 'handover') {
+    handoverLeaving.value = true
+    return
+  }
+  await navigateTo(module.value.path)
+}
+
+/** The handover dialog closed: now it is safe to leave the form. */
+async function onPasswordDialogClosed(opened: boolean) {
+  if (opened || !handoverLeaving.value) return
+  handoverLeaving.value = false
+  if (module.value) await navigateTo(module.value.path)
+}
+
+/**
+ * Setting another account's password. The dialog owns the form and the reveal;
+ * the password is shown *after* the server accepts it, so the administrator
+ * hands over one that is known to work rather than one that might have been
+ * rejected for a policy reason.
+ */
+function openPasswordDialog() {
+  if (!model.value.id) return
+  passwordDialog.userId = String(model.value.id)
+  passwordDialog.userLabel = String(model.value.displayName || model.value.username || '')
+  passwordDialog.revealedPassword = ''
+  passwordDialog.mode = 'set'
+  passwordDialog.open = true
+}
+
+async function duplicateCurrentRole() {
+  if (module.value?.collection !== 'roles' || !model.value.id || duplicatingRole.value) return
+  duplicatingRole.value = true
+  try {
+    const duplicated = unwrapApiData(await api.post<ApiResponse<FreightRecord>>(
+      ApiV1Endpoints.ROLE_DUPLICATE(String(model.value.id)),
+      {},
+    ))
+    await store.reload()
+    toast.add({ title: t('lcs.document.duplicate'), color: 'success' })
+    await navigateTo(`${module.value.path}/${duplicated.id}`)
+  }
+  catch (error) {
+    validation.reset()
+    validation.applyServerError(error)
+  }
+  finally {
+    duplicatingRole.value = false
+  }
 }
 
 async function openPrint(templateId: PrintTemplateId) {
   await documentActions.openPrint(templateId)
+}
+
+/**
+ * Workflow actions (send, accept, post, issue, reverse, delete…) fail for
+ * business-rule reasons — "period is closed", "already approved". Those have
+ * no input to own them, so they become a page-level message rather than a
+ * toast; field-addressable refusals still land on their field.
+ */
+function reportCommandError(error: unknown) {
+  validation.reset()
+  validation.applyServerError(error)
+  void validation.focusFirstInvalid()
 }
 
 async function runAction(key: string) {
@@ -968,9 +1222,6 @@ async function runAction(key: string) {
     if (key === 'send' && module.value.collection === 'quotations') return quotationCommands.send()
     if (key === 'submit' && module.value.collection === 'quotations') return quotationCommands.submit()
     if (key === 'accept' && module.value.collection === 'quotations') return quotationCommands.accept()
-    if ((key === 'reject' || key === 'cancel') && module.value.collection === 'quotations') {
-      return quotationCommands.rejectOrCancel(key)
-    }
     if (key === 'createRevision' && module.value.collection === 'quotations') return quotationCommands.createRevision()
     if (key === 'convertJob') return quotationCommands.convertJob()
     if (key === 'issue' && module.value.collection === 'jobCharges') return financeCommands.issueCharge()
@@ -979,12 +1230,13 @@ async function runAction(key: string) {
     if (key === 'backToServiceCharge' && module.value.collection === 'debitNotes') return financeCommands.backToServiceCharge()
     if (key === 'post' && module.value.collection === 'debitNotes') return financeCommands.postDocument()
     if (key === 'postJournal' && module.value.collection === 'journals') return financeCommands.postJournal()
+    if (key === 'setPassword' && module.value.collection === 'users') return openPasswordDialog()
     if (key === 'reverse' && module.value.collection === 'debitNotes') return financeCommands.reverseDocument()
     if (key === 'delete') return documentActions.deleteRecord()
     if (key === 'recordPayment') return financeCommands.recordPayment()
   }
   catch (error) {
-    lcs.reportError(error)
+    reportCommandError(error)
   }
 }
 
@@ -996,9 +1248,12 @@ async function confirmReverse() {
   if (!module.value) return
   const reason = String(reverseDraft.reason || '').trim()
   if (!reason) {
-    toast.add({ title: t('freight.ui.missingRequired'), color: 'error' })
+    reverseErrors.value = [t('validation.required', { field: t('lcs.finance.reverseReason') })]
+    await nextTick()
+    await focusField('reverse.reason')
     return
   }
+  reverseErrors.value = []
   reversing.value = true
   try {
     const saved = await lcs.runCommand('finance.reverse', String(model.value.id), keyValue =>
@@ -1009,7 +1264,7 @@ async function confirmReverse() {
     toast.add({ title: t('freight.ui.documentReversed'), color: 'success' })
   }
   catch (error) {
-    lcs.reportError(error)
+    reverseErrors.value = [apiErrorMessage(error, t('api.somethingWentWrong'))]
   }
   finally {
     reversing.value = false
@@ -1027,6 +1282,9 @@ async function confirmReverse() {
 :saving="saving"
 :read-only="readOnly"
 :field-errors="fieldErrors"
+      :on-field-edit="clearFieldError"
+      :summary-items="validation.summaryItems.value"
+      :form-errors="validation.formErrors.value"
       :can-save="!readOnly && module.collection !== 'quotations'"
       :save-label="documentSaveLabel"
       :confirm-save="false"
@@ -1053,11 +1311,20 @@ content-wide
 @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
 @refresh="load"
+@select-error="validation.focusFieldKey($event)"
 @submit-comment="submitComment"
 @update-comment="updateComment"
       @delete-comment="deleteComment"
 @navigate-previous="navigatePrevious"
 @navigate-next="navigateNext">
+      <FreightUserPasswordDialog
+        :open="passwordDialog.open"
+        :mode="passwordDialog.mode"
+        :user-id="passwordDialog.userId"
+        :user-label="passwordDialog.userLabel"
+        :revealed-password="passwordDialog.revealedPassword"
+        @update:open="onPasswordDialogClosed" />
+
       <template #actions>
         <CommonAppDocumentActionButton
           v-for="action in primaryHeaderActions"
@@ -1072,33 +1339,10 @@ content-wide
 
       <template #before-form>
         <DocumentAppDocumentContentShell
-v-if="(postingPreview && String(model.status) === 'Draft')
-          || (module.collection === 'debitNotes' && (periodClosed || String(model.status) === 'Posted'))"
+v-if="module.collection === 'debitNotes' && periodClosed"
 wide
           class="space-y-4 pt-6">
-          <UCard v-if="postingPreview && String(model.status) === 'Draft'" variant="subtle">
-            <template #header>
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <p class="font-semibold text-highlighted">{{ $t('lcs.finance.postingConfirmation') }}</p>
-                  <p class="text-xs text-muted">{{ $t('lcs.finance.postingConfirmationHint') }}</p>
-                </div>
-                <UBadge :color="periodClosed ? 'error' : 'success'" variant="subtle">
-                  {{ periodClosed ? $t('lcs.finance.periodClosed') : postingPreview.periodName }}
-                </UBadge>
-              </div>
-            </template>
-            <dl class="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
-              <div v-for="item in postingPreviewItems" :key="item.label">
-                <dt class="text-xs text-muted">{{ item.label }}</dt>
-                <dd class="font-medium text-highlighted" :class="item.strong ? 'font-semibold text-success' : ''">
-                  {{ item.value }}
-                </dd>
-              </div>
-            </dl>
-          </UCard>
           <UAlert
-v-if="module.collection === 'debitNotes' && periodClosed"
 color="error"
 variant="subtle"
             icon="i-lucide-calendar-off"
@@ -1114,10 +1358,16 @@ variant="subtle"
       :ui="{ content: 'w-[calc(100%-2rem)] max-w-md sm:max-w-md' }"
       @update:open="value => !value && (reverseOpen = false)">
       <template #body>
+        <CommonAppFormErrorSummary class="mb-4" :form-errors="reverseErrors" />
         <DocumentAppFieldGrid
 :fields="FINANCE_REVERSE_FORM_FIELDS"
 :model="reverseDraft"
-          @update="(key, value) => { reverseDraft[key] = value }" />
+          :field-errors="{ 'reason': reverseErrors[0] || '' }"
+          key-prefix="reverse."
+          @update="(key, value) => {
+            reverseDraft[key] = value
+            if (key === 'reason' && reverseErrors.length) reverseErrors = []
+          }" />
       </template>
       <template #footer>
         <div class="flex justify-end gap-2">

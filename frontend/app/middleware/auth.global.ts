@@ -13,6 +13,8 @@ const PERMITTED_LANDING_ROUTES = [
 ] as const
 
 const SETUP_PATH = '/auth/setup'
+/** Where an administrator-set password has to be replaced before anything else. */
+const FORCED_PASSWORD_PATH = '/auth/change-password'
 
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
@@ -59,6 +61,24 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
   if (auth.isLoggedIn && isPublicPage) {
     return navigateTo(safeInternalPath(to.query.redirect) || '/', { replace: true })
   }
+
+  // A password an administrator set has to be replaced before anything else.
+  // The API refuses every other route while it stands, so letting the user
+  // through here would only produce a screen full of failed requests.
+  if (auth.isLoggedIn) {
+    const mustChange = auth.user?.mustChangePassword === true
+    if (mustChange && routePath !== FORCED_PASSWORD_PATH) {
+      return navigateTo(FORCED_PASSWORD_PATH, { replace: true })
+    }
+    if (!mustChange && routePath === FORCED_PASSWORD_PATH) {
+      return navigateTo('/', { replace: true })
+    }
+  }
+
+  // Role and permission changes are authoritative immediately on the API.
+  // Refresh the lightweight identity snapshot during navigation so menus and
+  // route guards converge without requiring the user to sign out.
+  if (import.meta.client && auth.isLoggedIn) await auth.refreshSession()
 
   const permission = typeof to.meta.permission === 'string' && to.meta.permission
     ? to.meta.permission

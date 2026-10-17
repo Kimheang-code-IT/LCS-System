@@ -1,0 +1,71 @@
+{
+  // Project configuration for the LCS Freight Forwarding System.
+  // Locations and precedence are documented at https://opencode.ai/v2/docs/config.
+  // Contains no credentials: providers and models stay in the user's global
+  // config, so this file never overrides a developer's model choice.
+  "$schema": "https://opencode.ai/config.json",
+
+  // Ordered rules; the LAST matching rule wins. `/permissions` in the TUI shows
+  // what is currently in force.
+  "permissions": [
+    // --- Secrets: never let a key or credential reach a model context. ---
+    // Denying read also keeps the content out of tool output and transcripts.
+    // docs/lcssystem.pem is the EC2 deploy key; it must never be read by an agent.
+    { "action": "read", "resource": "*.pem", "effect": "deny" },
+    { "action": "read", "resource": "*.key", "effect": "deny" },
+    { "action": "read", "resource": "*.p12", "effect": "deny" },
+    { "action": "read", "resource": "*.pfx", "effect": "deny" },
+    { "action": "read", "resource": "*id_rsa*", "effect": "deny" },
+
+    // --- Secrets: never let an agent rewrite real environment files. ---
+    // `.env.example` is deliberately allowed and must stay last so it wins.
+    { "action": "edit", "resource": "*.pem", "effect": "deny" },
+    { "action": "edit", "resource": "*.key", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env.*", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env.example", "effect": "allow" },
+
+    // --- Database dumps contain real records; never rewrite one. ---
+    { "action": "edit", "resource": "backups/*", "effect": "deny" },
+    { "action": "edit", "resource": "*.dump", "effect": "deny" },
+
+    // --- Irreversible or production-affecting commands require approval. ---
+    // Patterns match the whole normalised command, hence the leading `*`.
+    // The task brief forbids destructive operations without explicit approval.
+    { "action": "shell", "resource": "*git push*", "effect": "ask" },
+    { "action": "shell", "resource": "*git reset --hard*", "effect": "ask" },
+    { "action": "shell", "resource": "*git clean -*", "effect": "ask" },
+    { "action": "shell", "resource": "*git branch -D*", "effect": "ask" },
+    { "action": "shell", "resource": "*alembic downgrade*", "effect": "ask" },
+    { "action": "shell", "resource": "*DROP DATABASE*", "effect": "ask" },
+    { "action": "shell", "resource": "*DROP TABLE*", "effect": "ask" },
+    { "action": "shell", "resource": "*dropdb*", "effect": "ask" },
+    { "action": "shell", "resource": "*down -v*", "effect": "ask" },
+    { "action": "shell", "resource": "*volume rm*", "effect": "ask" },
+    { "action": "shell", "resource": "*volume prune*", "effect": "ask" },
+    { "action": "shell", "resource": "*system prune*", "effect": "ask" },
+    { "action": "shell", "resource": "*rm -rf*", "effect": "ask" },
+    { "action": "shell", "resource": "*reset-data*", "effect": "ask" }
+
+    // To require approval for every shell command instead, add this as the FIRST
+    // entry above (it still loses to the specific rules that follow it):
+    //   { "action": "shell", "resource": "*", "effect": "ask" },
+  ],
+
+  // Build output and caches must not trigger file-watch churn on every gate run.
+  "watcher": {
+    "ignore": [
+      "**/.venv/**",
+      "**/node_modules/**",
+      "**/.nuxt/**",
+      "**/.output/**",
+      "**/dist/**",
+      "**/__pycache__/**",
+      "**/.pytest_cache/**",
+      "**/.ruff_cache/**",
+      "**/coverage/**",
+      "backend/storage/**",
+      "backups/**"
+    ]
+  }
+}

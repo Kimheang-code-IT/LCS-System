@@ -82,6 +82,17 @@ async def test_admin_finance_detail_and_delete_endpoints(client):
     assert created_account.status_code == 201, created_account.text
     account_id = created_account.json()["data"]["id"]
     assert (await client.get(f"/api/v1/chartOfAccounts/{account_id}", headers=headers)).status_code == 200
+
+    # Deleting is a two-step rule: an active account is refused, and only an
+    # inactive, unreferenced one may go (see app/core/deletion.py).
+    refused = await client.request("DELETE", "/api/v1/chartOfAccounts", headers=headers, json={"ids": [account_id]})
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "RECORD_ACTIVE"
+
+    deactivated = await client.put(
+        f"/api/v1/chartOfAccounts/{account_id}", headers=headers, json={"status": "INACTIVE"}
+    )
+    assert deactivated.status_code == 200, deactivated.text
     deleted = await client.request("DELETE", "/api/v1/chartOfAccounts", headers=headers, json={"ids": [account_id]})
     assert deleted.status_code == 200, deleted.text
     assert (await client.get(f"/api/v1/chartOfAccounts/{account_id}", headers=headers)).status_code == 404
@@ -116,7 +127,7 @@ async def test_admin_finance_detail_and_delete_endpoints(client):
 async def test_admin_role_and_user_endpoints(client):
     headers = await login(client)
 
-    roles = (await client.get("/api/v1/roles", headers=headers)).json()["data"]
+    roles = (await client.get("/api/v1/roles", headers=headers)).json()["data"]["items"]
     role_id = roles[0]["id"]
     assert (await client.get(f"/api/v1/roles/{role_id}", headers=headers)).status_code == 200
 

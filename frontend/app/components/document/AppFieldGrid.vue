@@ -4,13 +4,21 @@ import { useFreightLabel } from '~/composables/freight/useFreight'
 import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/document-sequences'
 import { resolveFormFieldHelp } from '~/utils/field-help'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { formFieldError } from '~/utils/validation/form-field-error'
 
-defineProps<{
+const props = withDefaults(defineProps<{
   fields: FreightField[]
   model: Record<string, unknown>
   disabled?: boolean
   compact?: boolean
-}>()
+  /** Inline messages keyed by field key; rendered under the matching input. */
+  fieldErrors?: Record<string, string>
+  /** Prefix for the focus key, so a dialog form cannot collide with the page. */
+  keyPrefix?: string
+}>(), {
+  fieldErrors: () => ({}),
+  keyPrefix: '',
+})
 
 const emit = defineEmits<{
   update: [key: string, value: unknown]
@@ -20,6 +28,16 @@ const { t, te } = useI18n()
 const { fieldLabel } = useFreightLabel()
 
 const store = useFreightStore()
+
+function errorFor(field: FreightField) {
+  // `undefined`, never `''`: an empty string casts to `true` on
+  // `UFormField.error` (Boolean before String) and reds out a clean field.
+  return formFieldError(props.fieldErrors, field.key)
+}
+
+function updateField(field: FreightField, value: unknown) {
+  emit('update', field.key, value)
+}
 
 function selectOptionLabel(field: FreightField, value: string, explicitLabel?: string) {
   if (explicitLabel) return explicitLabel
@@ -79,8 +97,10 @@ function spanClass(field: FreightField) {
       <UFormField
         v-if="field.type === 'checkbox'"
         :help="helpFor(field)"
+        :error="errorFor(field)"
         class="min-w-0"
         :class="spanClass(field)"
+        :data-field-key="`${keyPrefix}${field.key}`"
       >
         <div class="flex min-h-11 items-center pt-1">
           <UCheckbox
@@ -89,7 +109,7 @@ function spanClass(field: FreightField) {
             :false-value="checkboxFalse(field)"
             :disabled="disabled || field.computed"
             size="md"
-            @update:model-value="emit('update', field.key, $event)"
+            @update:model-value="updateField(field, $event)"
           >
             <template #label>
               <span class="inline-flex items-center gap-2 text-base text-highlighted">
@@ -108,8 +128,10 @@ function spanClass(field: FreightField) {
         :label="fieldLabel(field)"
         :required="Boolean(field.required)"
         :help="helpFor(field)"
+        :error="errorFor(field)"
         class="min-w-0"
         :class="spanClass(field)"
+        :data-field-key="`${keyPrefix}${field.key}`"
       >
         <CommonAppReferenceSelect
           v-if="field.type === 'select'"
@@ -120,7 +142,7 @@ function spanClass(field: FreightField) {
           :disabled="disabled || field.computed"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
         <CommonAppReferenceSelect
           v-else-if="field.type === 'multiselect'"
@@ -132,7 +154,7 @@ function spanClass(field: FreightField) {
           :disabled="disabled"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
         <UInputNumber
           v-else-if="field.type === 'number'"
@@ -142,7 +164,7 @@ function spanClass(field: FreightField) {
           :decrement="false"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event ?? 0)"
+          @update:model-value="updateField(field, $event ?? 0)"
         />
         <UTextarea
           v-else-if="field.type === 'textarea'"
@@ -152,7 +174,7 @@ function spanClass(field: FreightField) {
           size="md"
           autoresize
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
         <CommonAppInputDate
           v-else-if="field.type === 'date' || field.type === 'datetime'"
@@ -162,7 +184,7 @@ function spanClass(field: FreightField) {
           :required="Boolean(field.required)"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
         <UInput
           v-else-if="field.type === 'password'"
@@ -171,7 +193,7 @@ function spanClass(field: FreightField) {
           :disabled="disabled"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
         <UInput
           v-else-if="field.type === 'file'"
@@ -190,7 +212,7 @@ function spanClass(field: FreightField) {
           :disabled="disabled || field.computed"
           size="md"
           class="w-full"
-          @update:model-value="emit('update', field.key, $event)"
+          @update:model-value="updateField(field, $event)"
         />
       </UFormField>
     </template>

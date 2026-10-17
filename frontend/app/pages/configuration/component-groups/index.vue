@@ -2,6 +2,8 @@
 import type { ComponentGroup, ComponentGroupAttribute, ComponentRenderMode } from '~/types/component-config'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateDraftFields } from '~/utils/validation/record-validation'
 
 definePageMeta({
   titleKey: 'freight.pages.componentGroups',
@@ -10,10 +12,21 @@ definePageMeta({
 
 type GroupDraft = { id?: string, name: string, renderMode: ComponentRenderMode, description: string }
 
+/** Required inputs of the create/rename dialog, shared with the validator. */
+const GROUP_DRAFT_FIELDS = [
+  { key: 'name', label: 'Name', required: true },
+] as const
+
 const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const config = useComponentConfig()
+
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  label: key => GROUP_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  order: () => GROUP_DRAFT_FIELDS.map(field => field.key),
+})
 
 const selectedGroupId = ref('')
 const addAttributeId = ref<string | undefined>(undefined)
@@ -63,7 +76,17 @@ function startRename(group: ComponentGroup) {
 
 async function saveDraft() {
   const current = draft.value
-  if (!current.name.trim()) return
+  const failures = validateDraftFields(
+    current as unknown as Record<string, unknown>,
+    GROUP_DRAFT_FIELDS.map(field => ({ key: field.key, required: field.required })),
+    key => GROUP_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  )
+  if (failures.length) {
+    validation.applyFailures(failures)
+    void validation.focusFirstInvalid()
+    return
+  }
+  validation.reset()
   try {
     if (current.id) {
       await config.updateGroup(current.id, {
@@ -85,8 +108,9 @@ async function saveDraft() {
     dialogOpen.value = false
     toast.add({ title: t('freight.ui.save'), color: 'success' })
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    validation.applyServerError(error)
+    void validation.focusFirstInvalid()
   }
 }
 
@@ -110,8 +134,8 @@ async function addAttribute(attributeId: string | undefined) {
     addAttributeId.value = undefined
     toast.add({ title: t('freight.ui.save'), color: 'success' })
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    validation.applyServerError(error)
   }
 }
 
@@ -239,14 +263,21 @@ async function removeMembership(row: ComponentGroupAttribute) {
       :title="draft.id ? 'Rename group' : 'Add group'"
       :saving="config.saving.value"
       :confirm-label="draft.id ? 'Save' : 'Create'"
+      :form-errors="validation.formErrors.value"
       @confirm="saveDraft"
     >
       <div class="space-y-4">
-        <UFormField label="Name" required>
+        <UFormField
+          label="Name"
+          required
+          :error="validation.fieldErrors.value.name"
+          data-field-key="name"
+        >
           <UInput
             v-model="draft.name"
             placeholder="Group name"
             class="w-full"
+            @update:model-value="validation.clearFieldError('name')"
             @keyup.enter="saveDraft"
           />
         </UFormField>

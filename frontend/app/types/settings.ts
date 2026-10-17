@@ -1,3 +1,5 @@
+import type { AppLanguageCode } from '~/utils/constants/app-languages'
+
 export type ConnectionStatus =
   | 'not_tested'
   | 'testing'
@@ -91,7 +93,7 @@ export interface TelegramConfig {
   botUsername?: string
   connectionMode: TelegramConnectionMode
   defaultDestinationId?: string
-  messageLanguage: 'en' | 'km'
+  messageLanguage: AppLanguageCode
   includeRecordLink: boolean
   includeAssignedOfficer: boolean
   connectionStatus: ConnectionStatus
@@ -119,8 +121,8 @@ export interface AppConfigGeneral {
 }
 
 export interface AppConfigLocalization {
-  defaultLanguage: 'en' | 'km'
-  availableLanguages: Array<'en' | 'km'>
+  defaultLanguage: AppLanguageCode
+  availableLanguages: Array<AppLanguageCode>
   timezone: string
   dateFormat: string
   timeFormat: string
@@ -138,7 +140,7 @@ export interface AppConfigNotifications {
   quietHoursEnabled: boolean
   quietHoursStart?: string
   quietHoursEnd?: string
-  language: 'en' | 'km'
+  language: AppLanguageCode
   rules: NotificationRule[]
 }
 

@@ -14,9 +14,6 @@ export type ServiceChargeStatus = 'DRAFT' | 'ISSUED'
 
 export type FinancialDocumentStatus = 'DRAFT' | 'POSTED' | 'REVERSED' | 'CANCELLED'
 
-export type ComponentInstanceMode = 'SINGLE' | 'REPEATABLE'
-export type ComponentInstanceModeOverride = 'INHERIT' | ComponentInstanceMode
-
 export type LcsErrorCode =
   | 'AUTH_REQUIRED'
   | 'ACCESS_DENIED'

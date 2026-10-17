@@ -138,6 +138,60 @@ describe('moduleDocumentTabs', () => {
     ])
   })
 
+  it('scopes the financial-document fields and tabs to the document type', () => {
+    const module = getFreightModule('/finance/documents')!
+    const overview = (options: { documentType?: string, status?: string }) =>
+      moduleDocumentTabs(module, options).find(tab => tab.id === 'overview')!
+        .sections[0]!.fields.map(field => field.key)
+
+    // An invoice settles on credit terms but never moves money through a bank
+    // account: due date in, settlement fields out.
+    const invoice = overview({ documentType: 'CUSTOMER_INVOICE' })
+    expect(invoice).toContain('dueDate')
+    expect(invoice).toContain('partyId')
+    expect(invoice).toContain('total')
+    expect(invoice).not.toContain('paymentMethod')
+    expect(invoice).not.toContain('financialAccountId')
+    expect(invoice).not.toContain('valueDate')
+
+    // A receipt is the opposite: money moves, and there is nothing to settle later.
+    const receipt = overview({ documentType: 'CUSTOMER_RECEIPT' })
+    expect(receipt).toContain('paymentMethod')
+    expect(receipt).toContain('financialAccountId')
+    expect(receipt).toContain('valueDate')
+    expect(receipt).not.toContain('dueDate')
+  })
+
+  it('hides the allocation and journal tabs where they cannot apply', () => {
+    const module = getFreightModule('/finance/documents')!
+    const tabIds = (options: { documentType?: string, status?: string }) =>
+      moduleDocumentTabs(module, options).map(tab => tab.id)
+
+    // Only an invoice, bill, receipt or payment carries allocations.
+    expect(tabIds({ documentType: 'CUSTOMER_INVOICE' })).toContain('allocation')
+    expect(tabIds({ documentType: 'CUSTOMER_RECEIPT' })).toContain('allocation')
+    expect(tabIds({ documentType: 'TRANSFER' })).not.toContain('allocation')
+    expect(tabIds({ documentType: 'ADJUSTMENT' })).not.toContain('allocation')
+
+    // The journal exists once the document is posted, and a reversal posts a second.
+    expect(tabIds({ documentType: 'CUSTOMER_INVOICE', status: 'Draft' })).not.toContain('journal')
+    expect(tabIds({ documentType: 'CUSTOMER_INVOICE', status: 'Posted' })).toContain('journal')
+    expect(tabIds({ documentType: 'CUSTOMER_INVOICE', status: 'Reversed' })).toContain('journal')
+
+    // Lines, traceability and files apply to every type.
+    const transfer = tabIds({ documentType: 'TRANSFER' })
+    expect(transfer).toEqual(expect.arrayContaining(['overview', 'lines', 'traceability', 'files']))
+  })
+
+  it('keeps every tab and field when the document type is unknown', () => {
+    const tabs = moduleDocumentTabs(getFreightModule('/finance/documents')!)
+    expect(tabs.map(tab => tab.id)).toContain('journal')
+    expect(tabs.map(tab => tab.id)).toContain('allocation')
+    const fields = tabs.flatMap(tab => tab.sections.flatMap(section => section.fields.map(field => field.key)))
+    expect(fields).toContain('paymentMethod')
+    expect(fields).toContain('dueDate')
+  })
+
   it('puts roles on AppDocumentForm with a permission matrix field', () => {
     const tabs = moduleDocumentTabs(getFreightModule('/administration/roles')!)
     expect(tabs).toHaveLength(1)
@@ -209,6 +263,8 @@ describe('moduleDocumentTabs', () => {
     ])
     expect(columns.find(column => column.key === 'containerType')?.type).toBe('select')
     expect(columns.find(column => column.key === 'transportBy')?.type).toBe('select')
+    // A quoted rate is the rate the customer pays: no discount or tax step, so the
+    // line total carries no inline fields.
     expect(columns.find(column => column.key === 'lineTotal')?.inlineFields).toBeUndefined()
   })
 

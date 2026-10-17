@@ -3,6 +3,9 @@ import { DOCUMENT_SEQUENCE_STATUSES, DOCUMENT_SEQUENCE_TYPES } from '~/utils/doc
 import {
   ACCOUNT_TYPES,
   ACTIVE_STATUS,
+  CURRENCY_RATE_STATUSES,
+  FINANCIAL_DOCUMENT_STATUSES,
+  FINANCIAL_DOCUMENT_TYPES,
   PARTY_ROLES,
   PERIOD_STATUS,
 } from './freight-options'
@@ -16,7 +19,7 @@ const field = (
   section = 'General',
   sectionKm = 'ព័ត៌មានទូទៅ',
   type: FreightField['type'] = 'text',
-  options?: readonly string[],
+  options?: FreightField['options'],
   required = false,
   extra: Partial<FreightField> = {},
 ): FreightField => ({ key, label, labelKm, section, sectionKm, type, options, required, ...extra })
@@ -99,15 +102,44 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/master-data/currencies', title: 'Currencies', titleKm: 'រូបិយប័ណ្ណ', singular: 'Currency', singularKm: 'រូបិយប័ណ្ណ',
     description: 'ISO currencies used for pricing, invoices and accounting.', descriptionKm: 'រូបិយប័ណ្ណ ISO សម្រាប់តម្លៃ វិក្កយបត្រ និងគណនេយ្យ។',
     icon: 'i-lucide-coins', group: 'master', permission: 'master.reference.view', collection: 'currencies', titleField: 'name', kind: 'standard', canCreate: true,
-    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('symbol', 'Symbol', 'សញ្ញា'), column('status', 'Status', 'ស្ថានភាព')],
+    columns: [column('code', 'Code', 'លេខកូដ'), column('name', 'Name', 'ឈ្មោះ'), column('symbol', 'Symbol', 'សញ្ញា'), column('decimalPlaces', 'Decimals', 'ខ្ទង់ទសភាគ'), column('status', 'Status', 'ស្ថានភាព')],
     fields: [
       field('code', 'Code', 'លេខកូដ', undefined, undefined, 'text', undefined, true),
       field('name', 'Name', 'ឈ្មោះ', undefined, undefined, 'text', undefined, true),
       field('symbol', 'Symbol', 'សញ្ញា'),
+      field('decimalPlaces', 'Decimal Places', 'ខ្ទង់ទសភាគ', undefined, undefined, 'number', undefined, true, { rule: { integer: true, min: 0, max: 6 } }),
       field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
       field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS),
     ],
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
+  }),
+
+  // The rate store the document form resolves from. Only an APPROVED row is ever
+  // applied, and a pair is unique per effective date; the resolution rules live in
+  // `backend/app/modules/master_data/currency_rates.py`.
+  //
+  // This collection has no sidebar page and no `app/pages/master-data/currency-rates`
+  // directory: the owner asked for it to stay out of the menu, and the store is
+  // maintained through the `currencyRates` master-data API (`/api/v1/currencyRates`).
+  // Adding a page means adding the page directory *and* a `useMenu.ts` link back.
+  module({
+    path: '/master-data/currency-rates', title: 'Currency Rates', titleKm: 'អត្រាប្តូរប្រាក់', singular: 'Currency Rate', singularKm: 'អត្រាប្តូរប្រាក់',
+    description: 'Approved conversion rates between currencies, effective from a date. A document in another currency resolves its rate from the newest approved row.', descriptionKm: 'អត្រាប្តូរប្រាក់ដែលបានអនុម័តរវាងរូបិយប័ណ្ណ ចាប់ផ្តើមអនុវត្តពីកាលបរិច្ឆេទមួយ។ ឯកសារជារូបិយប័ណ្ណផ្សេង យកអត្រាពីជួរដែលបានអនុម័តថ្មីបំផុត។',
+    icon: 'i-lucide-repeat', group: 'master', permission: 'master.reference.view', collection: 'currencyRates', titleField: 'fromCurrencyCode', kind: 'standard', canCreate: true,
+    columns: [
+      column('fromCurrencyCode', 'From', 'ពី'), column('toCurrencyCode', 'To', 'ទៅ'), column('rate', 'Rate', 'អត្រា'),
+      column('effectiveDate', 'Effective Date', 'កាលបរិច្ឆេទអនុវត្ត'), column('status', 'Status', 'ស្ថានភាព'),
+    ],
+    fields: [
+      field('fromCurrencyCode', 'From Currency', 'រូបិយប័ណ្ណដើម', undefined, undefined, 'select', undefined, true),
+      field('toCurrencyCode', 'To Currency', 'រូបិយប័ណ្ណគោលដៅ', undefined, undefined, 'select', undefined, true),
+      field('effectiveDate', 'Effective Date', 'កាលបរិច្ឆេទអនុវត្ត', undefined, undefined, 'date', undefined, true),
+      field('rate', 'Rate', 'អត្រា', undefined, undefined, 'number', undefined, true, { rule: { min: 0.00000001 } }),
+      field('status', 'Status', 'ស្ថានភាព', undefined, undefined, 'select', CURRENCY_RATE_STATUSES, true),
+      field('source', 'Source', 'ប្រភព'),
+      field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
+    ],
+    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', CURRENCY_RATE_STATUSES)],
   }),
 
   module({
@@ -119,10 +151,10 @@ export const lcsReferenceModules: FreightModule[] = [
     ],
     fields: [
       field('documentType', 'Document Type', 'ប្រភេទឯកសារ', undefined, undefined, 'select', DOCUMENT_SEQUENCE_TYPES, true),
-      field('year', 'Year', 'ឆ្នាំ', undefined, undefined, 'number', undefined, true),
+      field('year', 'Year', 'ឆ្នាំ', undefined, undefined, 'number', undefined, true, { rule: { integer: true, min: 1000, max: 9999 } }),
       field('prefix', 'Prefix', 'បុព្វបទ', undefined, undefined, 'text', undefined, true),
-      field('lastValue', 'Starting / Last Value', 'តម្លៃចាប់ផ្តើម / ចុងក្រោយ', undefined, undefined, 'number', undefined, true),
-      field('paddingLength', 'Padding Length', 'ប្រវែងលេខ', undefined, undefined, 'number', undefined, true),
+      field('lastValue', 'Starting / Last Value', 'តម្លៃចាប់ផ្តើម / ចុងក្រោយ', undefined, undefined, 'number', undefined, true, { rule: { integer: true, nonNegative: true } }),
+      field('paddingLength', 'Padding Length', 'ប្រវែងលេខ', undefined, undefined, 'number', undefined, true, { rule: { integer: true, min: 1 } }),
       field('nextNumberPreview', 'Next Number Preview', 'លេខបន្ទាប់', undefined, undefined, 'text', undefined, false, { computed: true }),
     ],
     filters: [
@@ -136,6 +168,9 @@ export const lcsReferenceModules: FreightModule[] = [
     path: '/finance/chart-of-accounts', title: 'Chart of Accounts', titleKm: 'បញ្ជីគណនី', singular: 'Ledger Account', singularKm: 'គណនី', description: 'Double-entry ledger accounts.', descriptionKm: 'គណនីសៀវភៅធំសម្រាប់គណនេយ្យទ្វេភាគ។',
     icon: 'i-lucide-list-tree', group: 'finance', permission: 'finance.accounting.view', collection: 'chartOfAccounts', titleField: 'accountName', kind: 'standard', canCreate: true,
     columns: [column('accountCode', 'Account Code', 'លេខកូដគណនី'), column('accountName', 'Account Name', 'ឈ្មោះគណនី'), column('accountType', 'Account Type', 'ប្រភេទគណនី'), column('parentCode', 'Parent Account', 'គណនីមេ'), column('normalBalance', 'Normal Balance', 'សមតុល្យធម្មតា'), column('postable', 'Postable', 'អាចចុះបញ្ជី'), column('status', 'Status', 'ស្ថានភាព')],
+    // The status field is the create default (`defaultStatusForModule` uses its
+    // first option); `moduleDocumentTabs` keeps it off every form, so the
+    // status itself is only changed from the record's "..." menu.
     fields: [field('accountCode', 'Account Code', 'លេខកូដគណនី', undefined, undefined, 'text', undefined, true), field('accountName', 'Account Name', 'ឈ្មោះគណនី', undefined, undefined, 'text', undefined, true), field('accountType', 'Account Type', 'ប្រភេទគណនី', undefined, undefined, 'select', ACCOUNT_TYPES), field('parentCode', 'Parent Account', 'គណនីមេ', 'Structure', 'រចនាសម្ព័ន្ធ'), field('normalBalance', 'Normal Balance', 'សមតុល្យធម្មតា', 'Structure', 'រចនាសម្ព័ន្ធ', 'select', ['Debit', 'Credit']), field('postable', 'Is Postable', 'អាចចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'checkbox', YES_NO), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', ACTIVE_STATUS)],
     filters: [field('accountType', 'Account Type', 'ប្រភេទគណនី', '', '', 'select', ACCOUNT_TYPES), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ACTIVE_STATUS)],
   }),
@@ -163,5 +198,27 @@ export const lcsReferenceModules: FreightModule[] = [
     columns: [column('name', 'Period', 'រយៈពេល'), column('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម'), column('endDate', 'End Date', 'ថ្ងៃបញ្ចប់'), column('status', 'Status', 'ស្ថានភាព'), column('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី'), column('closedBy', 'Closed By', 'បិទដោយ'), column('closedAt', 'Closed At', 'ពេលបិទ')],
     fields: [field('year', 'Year', 'ឆ្នាំ', undefined, undefined, 'number'), field('month', 'Month', 'ខែ', undefined, undefined, 'number'), field('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម', undefined, undefined, 'date'), field('endDate', 'End Date', 'ថ្ងៃបញ្ចប់', undefined, undefined, 'date'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', PERIOD_STATUS), field('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'number', undefined, false, { computed: true }), field('closedBy', 'Closed By', 'បិទដោយ', 'Closure', 'ការបិទ', 'text', undefined, false, { computed: true }), field('closedAt', 'Closed At', 'ពេលបិទ', 'Closure', 'ការបិទ', 'datetime', undefined, false, { computed: true })],
     filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['OPEN', 'CLOSED', 'REOPENED'])],
+  }),
+  module({
+    path: '/finance/posting-rules', title: 'Posting Rules', titleKm: 'ច្បាប់ចុះបញ្ជី', singular: 'Posting Rule', singularKm: 'ច្បាប់ចុះបញ្ជី', description: 'Which ledger accounts a document type posts through.', descriptionKm: 'គណនីក្បត់គ្រប់អ្វីដែលប្រភេទឯកសារនីមួយៗចុះបញ្ជីតាម.',
+    icon: 'i-lucide-git-branch', group: 'finance', permission: 'finance.posting_rules.view', collection: 'postingRules', titleField: 'documentTypeLabel', kind: 'standard', canCreate: true,
+    // Accounts are selected by code from the live chart of accounts; the backend
+    // re-validates postability on write, so a stale list can never post an entry
+    // to a header account.
+    columns: [column('documentTypeLabel', 'Document Type', 'ប្រភេទឯកសារ'), column('feeType', 'Fee Type', 'ប្រភេទថ្លៃ'), column('debitAccount', 'Debit Account', 'គណនីឥណពន្ធ'), column('creditAccount', 'Credit Account', 'គណនីឥណទាន'), column('taxAccount', 'Tax Account', 'គណនីពន្ធ'), column('priority', 'Priority', 'អាទិភាព'), column('status', 'Status', 'ស្ថានភាព')],
+    fields: [
+      field('documentType', 'Document Type', 'ប្រភេទឯកសារ', undefined, undefined, 'select', FINANCIAL_DOCUMENT_TYPES, true),
+      field('feeTypeId', 'Fee Type (optional)', 'ប្រភេទថ្លៃ (ស្រេចចិត្ត)', undefined, undefined, 'select'),
+      field('description', 'Description', 'បរិយាយ', undefined, undefined, 'textarea', undefined, false, { colSpan: 2 }),
+      field('debitAccount', 'Debit Account', 'គណនីឥណពន្ធ', 'Accounts', 'គណនី', 'select', undefined, true),
+      field('creditAccount', 'Credit Account', 'គណនីឥណទាន', 'Accounts', 'គណនី', 'select', undefined, true),
+      field('taxAccount', 'Tax Account', 'គណនីពន្ធ', 'Accounts', 'គណនី', 'select'),
+      field('priority', 'Priority', 'អាទិភាព', 'Control', 'ការគ្រប់គ្រង', 'number', undefined, false, { rule: { min: 0 } }),
+      field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', FINANCIAL_DOCUMENT_STATUSES, true),
+    ],
+    filters: [
+      field('documentType', 'Document Type', 'ប្រភេទឯកសារ', '', '', 'select', FINANCIAL_DOCUMENT_TYPES),
+      field('status', 'Status', 'ស្ថានភាព', '', '', 'select', FINANCIAL_DOCUMENT_STATUSES),
+    ],
   }),
 ]

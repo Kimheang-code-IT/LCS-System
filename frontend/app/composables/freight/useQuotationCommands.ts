@@ -15,8 +15,14 @@ export function useQuotationCommands(options: {
   t: (key: string, ...args: unknown[]) => string
   quotationDraftDirty: Ref<boolean>
   relatedServiceOrder: () => FreightRecord | null | undefined
+  /**
+   * Page-level refusal channel. "Save the draft first" and "accept before
+   * converting" are workflow notices, not validation errors, so they render
+   * next to the form instead of as a toast.
+   */
+  onError: (message: string) => void
 }) {
-  const { lcs, model, store, confirm, toast, t, quotationDraftDirty, relatedServiceOrder } = options
+  const { lcs, model, store, confirm, toast, t, quotationDraftDirty, relatedServiceOrder, onError } = options
 
   // Revision-level endpoints (send/submit/accept/convert) require the revision
   // id, not the quotation id. Fall back to the quotation id only when the
@@ -25,7 +31,7 @@ export function useQuotationCommands(options: {
 
   function guardSaved(): boolean {
     if (quotationDraftDirty.value) {
-      toast({ title: t('freight.ui.missingRequired'), description: t('freight.ui.quotationSaveBeforeSubmit'), color: 'warning' })
+      onError(t('freight.ui.quotationSaveBeforeSubmit'))
       return false
     }
     return true
@@ -70,12 +76,6 @@ export function useQuotationCommands(options: {
     toast({ title: t('freight.ui.quotationAccepted'), color: 'success' })
   }
 
-  async function rejectOrCancel(key: 'reject' | 'cancel') {
-    const nextStatus = key === 'reject' ? 'Rejected' : 'Cancelled'
-    model.value = store.save('quotations', { ...model.value, status: nextStatus })
-    toast({ title: t(key === 'reject' ? 'freight.ui.quotationRejected' : 'freight.ui.quotationCancelled'), color: key === 'reject' ? 'error' : 'warning' })
-  }
-
   /** Re-quotation: clones the latest revision into a new editable draft. */
   async function createRevision() {
     const ok = await confirm({
@@ -100,7 +100,7 @@ export function useQuotationCommands(options: {
     }
     if (!guardSaved()) return
     if (quotationDomainStatus(model.value.status) !== 'ACCEPTED') {
-      toast({ title: t('freight.ui.convertRequiresAccepted'), color: 'warning' })
+      onError(t('freight.ui.convertRequiresAccepted'))
       return
     }
     const ok = await confirm({
@@ -124,7 +124,6 @@ export function useQuotationCommands(options: {
     send,
     submit,
     accept,
-    rejectOrCancel,
     createRevision,
     convertJob,
   }

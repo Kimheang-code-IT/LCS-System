@@ -56,7 +56,9 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  // Google Fonts via @nuxt/fonts — Inter (Latin) + Noto Sans Khmer (Khmer script)
+  // Google Fonts via @nuxt/fonts — Inter (Latin), Noto Sans Khmer (Khmer script),
+  // Noto Sans SC (Simplified Chinese). Each script's font is `global: true` so the
+  // correct family applies no matter which language is selected.
   fonts: {
     provider: 'google',
     defaults: {
@@ -76,6 +78,13 @@ export default defineNuxtConfig({
         provider: 'google',
         weights: [400, 500, 600, 700],
         subsets: ['khmer'],
+        global: true,
+      },
+      {
+        name: 'Noto Sans SC',
+        provider: 'google',
+        weights: [400, 500, 600, 700],
+        subsets: ['chinese-simplified'],
         global: true,
       },
     ],
@@ -109,6 +118,11 @@ export default defineNuxtConfig({
         code: 'km',
         name: 'ភាសាខ្មែរ',
         file: 'km.json',
+      },
+      {
+        code: 'zh',
+        name: '中文',
+        file: 'zh.json',
       },
     ],
     defaultLocale: 'en',

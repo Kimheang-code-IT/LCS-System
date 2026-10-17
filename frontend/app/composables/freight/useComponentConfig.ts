@@ -7,6 +7,8 @@ import type {
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabInput,
+  ConfigurationVersion,
+  ConfigurationVersionPreview,
 } from '~/types/component-config'
 import type { ComponentGroupAttributeInput } from '~/repositories/contracts/component-config'
 import { useLcsRepositories } from '~/repositories'
@@ -191,12 +193,47 @@ export function useComponentConfig() {
     return withSaving(async () => { tabGroups.value = await componentConfig.reorderTabGroups(tabId, orderedIds) })
   }
 
+  // --- Published configuration versions -------------------------------------
+  // Editing a tab changes the live form; publishing freezes the result so the
+  // orders already captured under the old layout keep rendering unchanged.
+  const versions = ref<ConfigurationVersion[]>([])
+  const preview = ref<ConfigurationVersionPreview | null>(null)
+
+  async function loadConfigurationVersions() {
+    return run(async () => { versions.value = await componentConfig.listConfigurationVersions() })
+  }
+
+  async function loadConfigurationPreview() {
+    return run(async () => { preview.value = await componentConfig.previewConfigurationVersion() })
+  }
+
+  async function publishConfiguration(changeNote?: string) {
+    return withSaving(async () => {
+      const published = await componentConfig.publishConfigurationVersion(changeNote)
+      versions.value = [published, ...versions.value.map(version => (
+        version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
+      ))]
+      await loadConfigurationPreview()
+      return published
+    })
+  }
+
+  async function retireConfiguration(id: string) {
+    return withSaving(async () => {
+      const retired = await componentConfig.retireConfigurationVersion(id)
+      versions.value = versions.value.map(version => (version.id === id ? retired : version))
+      return retired
+    })
+  }
+
   return {
     attributes,
     groups,
     groupAttributes,
     tabs,
     tabGroups,
+    versions,
+    preview,
     loading,
     saving,
     error,
@@ -221,5 +258,9 @@ export function useComponentConfig() {
     addTabGroup,
     removeTabGroup,
     reorderTabGroups,
+    loadConfigurationVersions,
+    loadConfigurationPreview,
+    publishConfiguration,
+    retireConfiguration,
   }
 }

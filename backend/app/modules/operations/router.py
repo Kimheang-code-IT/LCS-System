@@ -10,6 +10,7 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
 from app.core.pagination import PageParams, page_params
+from app.modules.master_data import config_versions
 from app.modules.operations import component_tabs as component_tabs_service
 from app.modules.operations import service
 
@@ -64,6 +65,79 @@ async def add_container(
     container = await service.add_container(session, context, identifier, payload)
     await session.commit()
     return {"data": container}
+
+
+@router.get("/service-orders/{identifier}/movements")
+async def list_movements(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("service_order.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.list_movements(session, context, identifier)}
+
+
+@router.post("/service-orders/{identifier}/movements", status_code=status.HTTP_201_CREATED)
+async def save_movement(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.save_movement(session, context, identifier, payload)}
+
+
+@router.delete("/service-orders/{identifier}/movements")
+async def delete_movements(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    removed = await service.delete_movements(session, context, identifier, ids)
+    return {"data": {"removed": removed}}
+
+
+@router.get("/service-orders/{identifier}/milestones")
+async def list_milestones(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("service_order.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.list_milestones(session, context, identifier)}
+
+
+@router.post("/service-orders/{identifier}/milestones", status_code=status.HTTP_201_CREATED)
+async def save_milestone(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.save_milestone(session, context, identifier, payload)}
+
+
+@router.delete("/service-orders/{identifier}/milestones")
+async def delete_milestones(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    removed = await service.delete_milestones(session, context, identifier, ids)
+    return {"data": {"removed": removed}}
+
+
+@router.get("/service-orders/{identifier}/configuration-version")
+async def get_service_order_configuration_version(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("service_order.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """The published configuration snapshot this order was captured under."""
+    order = await service.resolve_order(session, context, identifier)
+    return {"data": await config_versions.version_for_order(session, order)}
 
 
 @router.get("/service-orders/{identifier}/component-tabs")
@@ -176,7 +250,12 @@ async def finish_service_order(
     context: RequestContext = Depends(require_permission("service_order.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.finish_service_order(session, context, identifier)}
+    before = await service.order_status(session, identifier)
+    record = await service.finish_service_order(session, context, identifier)
+    await service.record_order_status_change(
+        session, context, record, before, "SERVICE_ORDER_FINISHED", "finish",
+    )
+    return {"data": record}
 
 
 @router.get("/service-charges")
@@ -234,7 +313,9 @@ async def issue_service_charge(
     context: RequestContext = Depends(require_permission("service_charge.issue")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.charge_status(session, int(charge_id))
     charge = await service.issue_charge(session, context, int(charge_id))
+    await service.record_charge_status_change(session, context, int(charge_id), before, charge)
     await session.commit()
     return {"data": charge}
 
@@ -255,9 +336,11 @@ async def create_finance_invoice(
 async def presign_attachment(
     payload: dict = Body(default={}),
     context: RequestContext = Depends(require_permission("attachment.upload")),
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {
-        "data": service.presign(
+        "data": await service.presign(
+            session,
             str(payload.get("file_name") or payload.get("fileName") or "file"),
             str(payload.get("mime_type") or payload.get("mimeType") or ""),
         )
@@ -274,18 +357,15 @@ async def list_attachments(
     return {"data": await service.list_attachments(session, context, module or "", record_no or "")}
 
 
-@router.post("/attachments", status_code=status.HTTP_201_CREATED)
-async def create_attachment(
+@router.delete("/attachments")
+async def delete_attachments(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("attachment.upload")),
+    context: RequestContext = Depends(require_permission("attachment.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {
-        "data": service.presign(
-            str(payload.get("file_name") or payload.get("fileName") or "file"),
-            str(payload.get("mime_type") or payload.get("mimeType") or ""),
-        )
-    }
+    """Soft-delete attachments so they stop being listed, served, or linked."""
+    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    return {"data": {"removed": await service.delete_attachments(session, context, ids)}}
 
 
 @router.get("/attachments/file/{storage_key:path}")

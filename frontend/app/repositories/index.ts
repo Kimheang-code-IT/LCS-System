@@ -8,6 +8,7 @@ import type {
   ReportsRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
+  UserAdminRepository,
 } from '~/repositories/contracts/lcs'
 import { createHttpAppConfigRepository, createHttpAppInfoRepository, createHttpBackupRepository } from '~/repositories/http/settings'
 import { createHttpComponentConfigRepository } from '~/repositories/http/component-config'
@@ -21,6 +22,7 @@ import {
   createHttpReportsRepository,
   createHttpServiceChargeRepository,
   createHttpUiSchemaRepository,
+  createHttpUserAdminRepository,
 } from '~/repositories/http/lcs'
 import { createHttpModuleRepository } from '~/repositories/http/module'
 import type { FreightModule } from '~/config/freight-modules'
@@ -42,6 +44,7 @@ let attachmentRepo: AttachmentRepository
 let uiSchemaRepo: UiSchemaRepository
 let reportsRepo: ReportsRepository
 let archiveRepo: ArchiveRepository
+let userAdminRepo: UserAdminRepository
 
 function ensureRepositories() {
   if (initialized) return
@@ -59,6 +62,7 @@ function ensureRepositories() {
   uiSchemaRepo = createHttpUiSchemaRepository()
   reportsRepo = createHttpReportsRepository()
   archiveRepo = createHttpArchiveRepository()
+  userAdminRepo = createHttpUserAdminRepository()
 }
 
 export function useArchiveRepository(): ArchiveRepository {
@@ -83,6 +87,7 @@ export function useLcsRepositories() {
     attachments: attachmentRepo!,
     uiSchema: uiSchemaRepo!,
     reports: reportsRepo!,
+    users: userAdminRepo!,
   }
 }
 

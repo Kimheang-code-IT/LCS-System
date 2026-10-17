@@ -6,19 +6,11 @@ this checklist before deploying the hardened release.
 
 ## 1. Configure production secrets
 
-Create independent, randomly generated values (at least 32 characters) in the
-GitHub `production` environment for:
-
-- `POSTGRES_PASSWORD`
-- `JWT_SECRET_KEY`
-- `CSRF_SECRET_KEY`
-- `FIELD_ENCRYPTION_KEY`
-- `MINIO_ROOT_PASSWORD`
-- `S3_SECRET_KEY`
-- `AWS_SSH_KEY`
-
-Never reuse one value for multiple settings. Keep `S3_ACCESS_KEY` as a
-non-root application identity (the deployment defaults it to `lcs-app`).
+Create independent, randomly generated values (at least 32 characters) for every
+secret the deployment reads; the list lives with the deployment itself, in
+`docs/12_deployment_runbook.md` §17 ("Secrets and variables"). Never reuse one
+value for multiple settings. Keep `S3_ACCESS_KEY` as a non-root application
+identity (the deployment defaults it to `lcs-app`).
 
 If the current database already contains encrypted customs-account passwords,
 first deploy with `FIELD_ENCRYPTION_KEY` set to the **current** JWT signing

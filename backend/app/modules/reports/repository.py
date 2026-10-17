@@ -10,8 +10,8 @@ from app.modules.finance.models import (
     JournalEntry,
     JournalEntryLine,
 )
-from app.modules.master_data.models import BusinessParty
-from app.modules.operations.models import ServiceOrder, ServiceOrderCharge
+from app.modules.master_data.models import BusinessParty, ContainerType
+from app.modules.operations.models import ServiceOrder, ServiceOrderCharge, ServiceOrderContainer
 from app.modules.quotations.models import QuotationRevision
 
 
@@ -116,6 +116,81 @@ class ReportRepository:
             .outerjoin(charge_totals, charge_totals.c.service_order_id == ServiceOrder.id)
             .outerjoin(finance_totals, finance_totals.c.service_order_id == ServiceOrder.id)
             .order_by(ServiceOrder.id.desc())
+        )
+        result = await self.session.execute(stmt)
+        return [dict(row) for row in result.mappings().all()]
+
+    async def container_register_rows(self) -> list[dict]:
+        """Every container with the order, customer and type it belongs to."""
+        stmt = (
+            select(
+                ServiceOrderContainer.id,
+                ServiceOrderContainer.container_number,
+                ServiceOrderContainer.seal_serial,
+                ServiceOrderContainer.status,
+                ServiceOrderContainer.gross_weight_kg,
+                ServiceOrderContainer.pickup_date,
+                ServiceOrderContainer.return_date,
+                ServiceOrderContainer.service_order_id,
+                ServiceOrder.service_order_no,
+                BusinessParty.display_name.label("customer_name"),
+                ContainerType.name.label("container_type"),
+            )
+            .join(ServiceOrder, ServiceOrder.id == ServiceOrderContainer.service_order_id)
+            .outerjoin(BusinessParty, BusinessParty.id == ServiceOrder.customer_party_id)
+            .outerjoin(ContainerType, ContainerType.id == ServiceOrderContainer.container_type_id)
+            .order_by(ServiceOrder.service_order_no, ServiceOrderContainer.id)
+        )
+        result = await self.session.execute(stmt)
+        return [dict(row) for row in result.mappings().all()]
+
+    async def cash_flow_rows(self) -> list[dict]:
+        """Posted debit/credit movements on the ledger accounts mapped as cash/bank."""
+        stmt = (
+            select(
+                ChartOfAccount.id.label("account_id"),
+                ChartOfAccount.account_code,
+                ChartOfAccount.account_name,
+                func.coalesce(func.sum(JournalEntryLine.base_debit_amount), 0).label("debit"),
+                func.coalesce(func.sum(JournalEntryLine.base_credit_amount), 0).label("credit"),
+            )
+            .select_from(FinancialAccount)
+            .join(ChartOfAccount, ChartOfAccount.id == FinancialAccount.account_id)
+            .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .where(JournalEntry.status == "POSTED")
+            .group_by(ChartOfAccount.id, ChartOfAccount.account_code, ChartOfAccount.account_name)
+            .order_by(ChartOfAccount.account_code)
+        )
+        result = await self.session.execute(stmt)
+        return [dict(row) for row in result.mappings().all()]
+
+    async def posted_trial_balance_rows(self) -> list[dict]:
+        """Posted debit/credit totals per account.
+
+        Grouped in the database rather than aggregated in Python, and restricted to
+        POSTED journals via an inner join so a draft never contributes. Uses the
+        base-currency columns so the two sides stay comparable across currencies.
+        """
+        stmt = (
+            select(
+                ChartOfAccount.id.label("account_id"),
+                ChartOfAccount.account_code,
+                ChartOfAccount.account_name,
+                ChartOfAccount.account_type,
+                func.coalesce(func.sum(JournalEntryLine.base_debit_amount), 0).label("total_debit"),
+                func.coalesce(func.sum(JournalEntryLine.base_credit_amount), 0).label("total_credit"),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .where(JournalEntry.status == "POSTED")
+            .group_by(
+                ChartOfAccount.id,
+                ChartOfAccount.account_code,
+                ChartOfAccount.account_name,
+                ChartOfAccount.account_type,
+            )
+            .order_by(ChartOfAccount.account_code)
         )
         result = await self.session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]

@@ -2,6 +2,7 @@ import { freightModules, type FreightModule } from '~/config/freight-modules'
 import type { FreightRecord } from '~/types/record'
 import { unwrapApiData } from '~/repositories/http/response'
 import { createClientId } from '~/utils/client-id'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import {
   JOB_DERIVED_COLLECTIONS,
   endpointFor,
@@ -12,12 +13,27 @@ import {
 export const useFreightStore = defineStore('freight', () => {
   const revision = ref(0)
   const api = useApi()
-  const toast = useToast()
   const { t } = useI18n()
+
+  /**
+   * Fire-and-forget writes cannot be attributed to a single input, so their
+   * failures are published here and rendered as a page-level message instead of
+   * a toast. A form submit never uses this path — it awaits the request and
+   * maps the response onto its fields.
+   */
+  const lastError = ref<string | null>(null)
 
   const remoteCache = ref<Record<string, FreightRecord[]>>({})
   const remoteLoaded = ref<Record<string, boolean>>({})
   const inflight = new Map<string, Promise<void>>()
+
+  function recordFailure(error: unknown) {
+    lastError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
+  }
+
+  function clearError() {
+    lastError.value = null
+  }
 
   function bumpRevision() {
     revision.value += 1
@@ -146,8 +162,8 @@ export const useFreightStore = defineStore('freight', () => {
       const saved = unwrapApiData(response) as FreightRecord | undefined
       if (saved && typeof saved === 'object' && !Array.isArray(saved)) upsertRemoteCache(collection, saved)
     }
-    catch {
-      toast.add({ title: t('api.somethingWentWrong'), color: 'error' })
+    catch (error) {
+      recordFailure(error)
     }
   }
 
@@ -187,8 +203,8 @@ export const useFreightStore = defineStore('freight', () => {
           return saved
         }
       }
-      catch {
-        toast.add({ title: t('api.somethingWentWrong'), color: 'error' })
+      catch (error) {
+        recordFailure(error)
       }
     }
     const optimistic = { ...record, id: createClientId(prefix) } as FreightRecord
@@ -207,8 +223,8 @@ export const useFreightStore = defineStore('freight', () => {
             for (const id of ids) await api.delete(endpoint.itemPath(id))
           }
         }
-        catch {
-          toast.add({ title: t('api.somethingWentWrong'), color: 'error' })
+        catch (error) {
+          recordFailure(error)
         }
       })()
     }
@@ -230,5 +246,7 @@ export const useFreightStore = defineStore('freight', () => {
     create,
     remove,
     related,
+    lastError,
+    clearError,
   }
 })

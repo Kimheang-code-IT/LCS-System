@@ -3,6 +3,7 @@ import * as z from 'zod'
 import type { FormSubmitEvent } from '@nuxt/ui'
 import { useAuth } from '~/composables/auth/useAuth'
 import { useAuthStore } from '~/stores/auth'
+import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
 import { resolveUserAvatar } from '~/utils/auth/user-avatar'
 
 const open = defineModel<boolean>('open', { default: false })
@@ -16,6 +17,15 @@ const submitting = ref(false)
 const avatarSubmitting = ref(false)
 const avatarInputRef = ref<HTMLInputElement | null>(null)
 const photoPreviewOpen = ref(false)
+/**
+ * Rejections are shown next to the control they belong to, never as a toast:
+ * `avatarError` for the photo control, `passwordError` for the password form.
+ */
+const avatarError = ref('')
+const passwordError = ref('')
+const passwordForm = useTemplateRef<{
+  formRef?: { setErrors: (errors: Array<{ name: string, message: string }>) => void, clear: () => void }
+} | null>('passwordForm')
 
 const profile = computed(() => {
   const user = auth.user
@@ -80,14 +90,15 @@ async function onAvatarPick(event: Event) {
   if (!file || avatarSubmitting.value) return
 
   if (!SAFE_RASTER_IMAGE_TYPES.includes(file.type as (typeof SAFE_RASTER_IMAGE_TYPES)[number])) {
-    toast.add({ title: t('lcs.common.imageInvalidType'), color: 'error' })
+    avatarError.value = t('lcs.common.imageInvalidType')
     return
   }
   if (!isSafeRasterImage(file, 2)) {
-    toast.add({ title: t('lcs.common.imageTooLarge', { size: 2 }), color: 'error' })
+    avatarError.value = t('lcs.common.imageTooLarge', { size: 2 })
     return
   }
 
+  avatarError.value = ''
   avatarSubmitting.value = true
   try {
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -104,12 +115,8 @@ async function onAvatarPick(event: Event) {
       color: 'success',
     })
   }
-  catch {
-    toast.add({
-      title: t('lcs.userProfile.photoUpdateFailed'),
-      description: t('lcs.userProfile.photoUpdateFailedDesc'),
-      color: 'error',
-    })
+  catch (error) {
+    avatarError.value = apiErrorMessage(error, t('lcs.userProfile.photoUpdateFailed'))
   }
   finally {
     avatarSubmitting.value = false
@@ -118,6 +125,7 @@ async function onAvatarPick(event: Event) {
 
 async function onRemoveAvatar() {
   if (avatarSubmitting.value || !hasCustomAvatar.value) return
+  avatarError.value = ''
   avatarSubmitting.value = true
   try {
     await removeProfileAvatar()
@@ -128,12 +136,8 @@ async function onRemoveAvatar() {
       color: 'success',
     })
   }
-  catch {
-    toast.add({
-      title: t('lcs.userProfile.photoRemoveFailed'),
-      description: t('lcs.userProfile.photoRemoveFailedDesc'),
-      color: 'error',
-    })
+  catch (error) {
+    avatarError.value = apiErrorMessage(error, t('lcs.userProfile.photoRemoveFailed'))
   }
   finally {
     avatarSubmitting.value = false
@@ -143,6 +147,8 @@ async function onRemoveAvatar() {
 async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
   if (submitting.value) return
   submitting.value = true
+  passwordError.value = ''
+  passwordForm.value?.formRef?.clear()
   try {
     await changePassword({
       currentPassword: event.data.currentPassword,
@@ -158,12 +164,14 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
     passwordState.password = ''
     passwordState.passwordConfirmation = ''
   }
-  catch {
-    toast.add({
-      title: t('lcs.userProfile.passwordChangeFailed'),
-      description: t('lcs.userProfile.passwordChangeFailedDesc'),
-      color: 'error',
-    })
+  catch (error) {
+    // A wrong current password belongs on that input; anything else is a
+    // form-level notice directly above the form.
+    const entries = Object.entries(normalizeApiError(error).fieldErrors)
+      .filter(([name, message]) => name in passwordState && message)
+      .map(([name, message]) => ({ name, message }))
+    if (entries.length) passwordForm.value?.formRef?.setErrors(entries)
+    else passwordError.value = apiErrorMessage(error, t('lcs.userProfile.passwordChangeFailed'))
   }
   finally {
     submitting.value = false
@@ -226,6 +234,14 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
               :accept="SAFE_RASTER_IMAGE_ACCEPT"
               @change="onAvatarPick"
             >
+          <p
+              v-if="avatarError"
+              class="flex items-start gap-1.5 text-sm text-error"
+              role="alert"
+            >
+              <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>{{ avatarError }}</span>
+            </p>
           </div>
           <div class="min-w-0 max-w-full space-y-1">
             <h3 class="truncate text-lg font-semibold text-highlighted sm:text-xl">
@@ -242,7 +258,17 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
             {{ t('lcs.userProfile.tabs.password') }}
           </h4>
 
+          <p
+            v-if="passwordError"
+            class="flex items-start gap-1.5 text-sm text-error"
+            role="alert"
+          >
+            <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>{{ passwordError }}</span>
+          </p>
+
           <UForm
+            ref="passwordForm"
             :schema="passwordSchema"
             :state="passwordState"
             class="space-y-4"

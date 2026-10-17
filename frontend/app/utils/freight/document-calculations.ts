@@ -14,6 +14,13 @@ import type { FreightModule } from '~/config/freight-modules'
 import type { FreightRecord } from '~/types/record'
 import { documentSequencePreview } from '~/utils/document-sequences'
 import { toFiniteNumber } from '~/utils/format/number'
+import {
+  baseAmount,
+  currencyPrecision,
+  rateDirection,
+  roundMoney,
+  sameCurrency,
+} from '~/utils/freight/fx'
 
 type Row = Record<string, unknown>
 
@@ -23,7 +30,8 @@ export type DocumentCalculationModule = Pick<FreightModule, 'kind' | 'collection
 const asNumber = toFiniteNumber
 
 function round2(value: number): number {
-  return Number(value.toFixed(2))
+  // One rounding rule for frontend money: the shared helper in `fx.ts`.
+  return roundMoney(value, 2)
 }
 
 function rowsOf(record: FreightRecord, key: string): Row[] {
@@ -37,9 +45,10 @@ function recalculateQuotation(record: FreightRecord): FreightRecord {
   if (pricingLines.length) {
     const normalized = pricingLines.map((row) => {
       const rowSubtotal = asNumber(row.quantity) * asNumber(row.unitPrice)
-      const rowDiscount = asNumber(row.discountAmount)
+      // Accept both key spellings; see computePricingLine for why.
+      const rowDiscount = asNumber(row.discountAmount ?? row.discount)
       const taxable = Math.max(0, rowSubtotal - rowDiscount)
-      const rowTax = asNumber(row.taxAmount)
+      const rowTax = asNumber(row.taxAmount ?? row.tax)
       return {
         ...row,
         subtotal: round2(rowSubtotal),
@@ -141,6 +150,38 @@ function recalculateDocumentLines(record: FreightRecord): FreightRecord {
   }
 }
 
+/**
+ * Currency conversion for a financial document.
+ *
+ * A document already in the company's base currency always carries rate 1 — the
+ * rate field is not part of it — so the form shows 1 rather than whatever was
+ * typed before the currency changed. Otherwise the converted total follows the
+ * rate and the document total, rounded with the currency's configured precision,
+ * and the direction is rendered for the operator. The backend stores the same
+ * figures and re-derives them when the document posts, so this preview cannot
+ * disagree with the ledger.
+ */
+function recalculateDocumentCurrency(record: FreightRecord): FreightRecord {
+  const baseCurrency = String(record.baseCurrency ?? '').trim().toUpperCase()
+  const currency = String(record.currency ?? '').trim().toUpperCase()
+  if (!baseCurrency || !currency) return record
+  const places = currencyPrecision(record.currencyPrecision)
+
+  if (sameCurrency(currency, baseCurrency)) {
+    return {
+      ...record,
+      exchangeRate: 1,
+      baseTotalAmount: baseAmount(record.total, 1, places),
+      rateDirection: '',
+    }
+  }
+  return {
+    ...record,
+    baseTotalAmount: baseAmount(record.total, record.exchangeRate, places),
+    rateDirection: rateDirection(currency, baseCurrency, record.exchangeRate),
+  }
+}
+
 /** Journal entry debit/credit totals and balance difference. */
 function recalculateJournalLines(record: FreightRecord): FreightRecord {
   const lines = rowsOf(record, 'lines')
@@ -192,6 +233,7 @@ export function recalculateFreightRecord(
   if (module.kind === 'debit-note') next = recalculateDebitNoteCharges(next)
   if (module.collection === 'jobCharges' && Array.isArray(next.feeLines)) next = recalculateFeeLines(next)
   if (module.collection === 'debitNotes' && Array.isArray(next.lines)) next = recalculateDocumentLines(next)
+  if (module.collection === 'debitNotes') next = recalculateDocumentCurrency(next)
   if (module.collection === 'journals' && Array.isArray(next.lines)) next = recalculateJournalLines(next)
   if (module.path.includes('customer-payments') || String(next.documentType) === 'CUSTOMER_RECEIPT') {
     next = recalculateCustomerPayment(next)

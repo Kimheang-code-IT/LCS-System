@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import cache
 from app.core.config import settings
 from app.core.context import RequestContext
-from app.modules.finance.models import ChartOfAccount, FinancialDocument, JournalEntry, JournalEntryLine
+from app.modules.finance.models import (
+    ChartOfAccount,
+    FinancialAccount,
+    FinancialDocument,
+    JournalEntry,
+    JournalEntryLine,
+)
 from app.modules.master_data.models import BusinessParty
 from app.modules.operations.models import ServiceOrder
 from app.modules.quotations.models import Quotation
@@ -233,6 +239,229 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
     return items
 
 
+async def trial_balance(session: AsyncSession, context: RequestContext) -> dict:
+    """Posted debit/credit totals per account plus the balance control.
+
+    Reads only POSTED journals, and sums the base-currency columns so a
+    multi-currency ledger is not added up in mixed denominations. A reversed
+    document is represented by its own reversal journal, so summing POSTED entries
+    cannot double-count it.
+
+    ``balanced`` is the control: the sum of every debit must equal the sum of every
+    credit, and the net across all accounts must be zero. A false value means the
+    ledger is broken and must not be reported as a financial statement.
+    """
+    cache_parts = ("trial-balance", _cache_scope(context))
+    cached = await cache.get_json("reports", *cache_parts)
+    if cached is not None:
+        return cached
+
+    rows = await ReportRepository(session).posted_trial_balance_rows()
+    items: list[dict] = []
+    totals = {"debit": Decimal("0"), "credit": Decimal("0")}
+    for row in rows:
+        debit = Decimal(str(row["total_debit"] or 0))
+        credit = Decimal(str(row["total_credit"] or 0))
+        totals["debit"] += debit
+        totals["credit"] += credit
+        items.append(
+            {
+                "accountId": str(row["account_id"]),
+                "accountCode": row["account_code"],
+                "accountName": row["account_name"],
+                "accountType": row["account_type"],
+                "debit": float(debit),
+                "credit": float(credit),
+                # Debit-normal presentation: a credit balance shows as negative.
+                "balance": float(debit - credit),
+            }
+        )
+
+    total_debit = round(float(totals["debit"]), 4)
+    total_credit = round(float(totals["credit"]), 4)
+    result = {
+        "items": items,
+        "totals": {
+            "debit": total_debit,
+            "credit": total_credit,
+            "difference": round(total_debit - total_credit, 4),
+        },
+        # Both must hold: the two sides must agree, and the whole ledger must net
+        # to zero. A non-zero net with equal sides would mean a sign error.
+        "balanced": total_debit == total_credit and round(total_debit - total_credit, 4) == 0,
+    }
+    await cache.set_json("reports", *cache_parts, value=result, ttl_seconds=settings.cache_ttl_report_seconds)
+    return result
+
+
+async def profit_loss(session: AsyncSession, context: RequestContext) -> dict:
+    """Revenue, expense and net result from POSTED journals.
+
+    Each account's amount is signed by its normal balance (credit-normal for
+    revenue), so a credit balance reads as positive revenue rather than a negative
+    debit. ``net`` is the control: revenue minus expense.
+
+    No period filter is applied here; the caller scopes by period through the
+    dashboard's granularity or a date filter. Documenting that explicitly is
+    deliberate — a statement that silently covers "all time" is worse than one that
+    says so.
+    """
+    cache_parts = ("profit-loss", _cache_scope(context))
+    cached = await cache.get_json("reports", *cache_parts)
+    if cached is not None:
+        return cached
+
+    revenue_rows = await _account_type_totals(session, context, "REVENUE")
+    expense_rows = await _account_type_totals(session, context, "EXPENSE")
+    revenue = round(sum(row["amount"] for row in revenue_rows), 4)
+    expense = round(sum(row["amount"] for row in expense_rows), 4)
+    result = {
+        "revenue": revenue,
+        "expense": expense,
+        "net": round(revenue - expense, 4),
+        "revenueAccounts": revenue_rows,
+        "expenseAccounts": expense_rows,
+        "basis": "POSTED journals, base currency",
+    }
+    await cache.set_json("reports", *cache_parts, value=result, ttl_seconds=settings.cache_ttl_report_seconds)
+    return result
+
+
+async def balance_sheet(session: AsyncSession, context: RequestContext) -> dict:
+    """Assets, liabilities and equity from POSTED journals, with the accounting control.
+
+    The control is ``assets == liabilities + equity + net result``. Retained
+    earnings are included explicitly as the current-period net result because this
+    installation does not post a year-end closing entry; folding it in silently
+    would hide the reason the two sides differ. ``balanced`` is true only when the
+    identity holds to the cent.
+    """
+    cache_parts = ("balance-sheet", _cache_scope(context))
+    cached = await cache.get_json("reports", *cache_parts)
+    if cached is not None:
+        return cached
+
+    asset_rows = await _account_type_totals(session, context, "ASSET")
+    liability_rows = await _account_type_totals(session, context, "LIABILITY")
+    equity_rows = await _account_type_totals(session, context, "EQUITY")
+    revenue_rows = await _account_type_totals(session, context, "REVENUE")
+    expense_rows = await _account_type_totals(session, context, "EXPENSE")
+
+    assets = round(sum(row["amount"] for row in asset_rows), 4)
+    liabilities = round(sum(row["amount"] for row in liability_rows), 4)
+    equity = round(sum(row["amount"] for row in equity_rows), 4)
+    net_result = round(
+        sum(row["amount"] for row in revenue_rows) - sum(row["amount"] for row in expense_rows), 4
+    )
+    right_side = round(liabilities + equity + net_result, 4)
+
+    result = {
+        "assets": assets,
+        "liabilities": liabilities,
+        "equity": equity,
+        "retainedEarnings": net_result,
+        "liabilitiesAndEquity": right_side,
+        "difference": round(assets - right_side, 4),
+        "balanced": abs(round(assets - right_side, 4)) < 0.0001,
+        "assetAccounts": asset_rows,
+        "liabilityAccounts": liability_rows,
+        "equityAccounts": equity_rows,
+        "basis": "POSTED journals, base currency",
+    }
+    await cache.set_json("reports", *cache_parts, value=result, ttl_seconds=settings.cache_ttl_report_seconds)
+    return result
+
+
+async def cash_flow(session: AsyncSession, context: RequestContext) -> dict:
+    """Cash movements through the accounts the administrator mapped as cash/bank.
+
+    Uses the same definition as the dashboard's cash balance, so the closing figure
+    here and that card can never disagree. Inflows and outflows are reported
+    separately, and the net movement plus the opening balance equals the closing
+    balance by construction — that identity is the reconciliation.
+    """
+    cache_parts = ("cash-flow", _cache_scope(context))
+    cached = await cache.get_json("reports", *cache_parts)
+    if cached is not None:
+        return cached
+
+    flows = await ReportRepository(session).cash_flow_rows()
+    items: list[dict] = []
+    inflow = Decimal("0")
+    outflow = Decimal("0")
+    for row in flows:
+        debit = Decimal(str(row["debit"] or 0))
+        credit = Decimal(str(row["credit"] or 0))
+        inflow += debit
+        outflow += credit
+        items.append(
+            {
+                "accountId": str(row["account_id"]),
+                "accountCode": row["account_code"],
+                "accountName": row["account_name"],
+                "inflow": float(debit),
+                "outflow": float(credit),
+                "net": float(debit - credit),
+            }
+        )
+
+    net = inflow - outflow
+    result = {
+        "inflow": float(inflow),
+        "outflow": float(outflow),
+        "net": float(net),
+        "closingBalance": float(net),
+        "accounts": items,
+        "basis": "POSTED journals on accounts mapped in financial_accounts, base currency",
+    }
+    await cache.set_json("reports", *cache_parts, value=result, ttl_seconds=settings.cache_ttl_report_seconds)
+    return result
+
+
+async def container_register(session: AsyncSession, context: RequestContext) -> dict:
+    """Container register: every container with its order, type and status counts.
+
+    Operational report required alongside the order register. Containers are
+    lifetime-tracked rather than archived, so nothing is filtered out here; the
+    status breakdown tells an operator where the boxes are.
+    """
+    cache_parts = ("container-register", _cache_scope(context))
+    cached = await cache.get_json("reports", *cache_parts)
+    if cached is not None:
+        return cached
+
+    rows = await ReportRepository(session).container_register_rows()
+    items = [
+        {
+            "id": str(row["id"]),
+            "containerNumber": row["container_number"],
+            "containerType": row["container_type"],
+            "sealSerial": row["seal_serial"],
+            "status": (row["status"] or "").upper(),
+            "serviceOrderId": str(row["service_order_id"]) if row["service_order_id"] else None,
+            "serviceOrderNo": row["service_order_no"],
+            "customer": row["customer_name"],
+            "grossWeightKg": _f(row["gross_weight_kg"]) if row["gross_weight_kg"] is not None else None,
+            "pickupDate": row["pickup_date"].isoformat() if row["pickup_date"] else None,
+            "returnDate": row["return_date"].isoformat() if row["return_date"] else None,
+        }
+        for row in rows
+    ]
+
+    by_status: dict[str, int] = {}
+    for item in items:
+        key = item["status"] or "UNKNOWN"
+        by_status[key] = by_status.get(key, 0) + 1
+
+    result = {
+        "items": items,
+        "total": len(items),
+        "byStatus": [{"status": status, "count": count} for status, count in sorted(by_status.items())],
+    }
+    await cache.set_json("reports", *cache_parts, value=result, ttl_seconds=settings.cache_ttl_report_seconds)
+    return result
+
+
 async def ledger_lines(session: AsyncSession, context: RequestContext) -> list[dict]:
     cache_parts = ("ledger-lines", _cache_scope(context))
     cached = await cache.get_json("reports", *cache_parts)
@@ -319,6 +548,11 @@ async def financial_summary(session: AsyncSession, context: RequestContext) -> d
 
 _AGING_BUCKETS = ["not_due", "d1_30", "d31_60", "d61_90", "d90_plus"]
 
+# Statuses a service order can actually hold. Mirrors ORDER_STATUS in
+# operations/service.py; kept here so reports never count a status the
+# application cannot produce.
+SERVICE_ORDER_LIFECYCLE = ("ACTIVE", "INACTIVE", "FINISHED")
+
 
 def _aging_bucket(due_date: Any, today: Any) -> str:
     if not due_date or not today:
@@ -374,14 +608,23 @@ async def _service_order_status_counts(
             stmt = stmt.where(ServiceOrder.created_at >= start)
     rows = (await session.execute(stmt.group_by(ServiceOrder.status))).all()
     counts = {status: int(count) for status, count in rows}
+
+    # The order lifecycle is a three-state one: ACTIVE / INACTIVE / FINISHED
+    # (see ORDER_STATUS in operations/service.py). The dashboard payload keeps its
+    # four legacy key names because the frontend contract depends on them, so the
+    # keys are mapped onto the states that actually exist rather than counted by
+    # name. Counting by name made every card report 0 on every installation.
     return {
-        "openOrders": counts.get("OPEN", 0),
-        "inProgressOrders": counts.get("IN_PROGRESS", 0),
-        "onHoldOrders": counts.get("ON_HOLD", 0),
-        "awaitingClosure": counts.get("COMPLETED", 0),
+        "openOrders": counts.get("ACTIVE", 0),
+        "inProgressOrders": counts.get("ACTIVE", 0),
+        "onHoldOrders": counts.get("INACTIVE", 0),
+        "awaitingClosure": counts.get("FINISHED", 0),
+        # Charts are data-driven, so they report the real lifecycle. The frontend
+        # KPI cards deep-link with the pre-simplification filter values and need
+        # the same mapping applied; tracked in docs/18_implementation_checklist.md.
         "byStatus": [
             {"status": status, "count": counts.get(status, 0)}
-            for status in ["OPEN", "IN_PROGRESS", "ON_HOLD", "COMPLETED"]
+            for status in SERVICE_ORDER_LIFECYCLE
         ],
     }
 
@@ -445,6 +688,29 @@ async def _journal_revenue_expense(
     return total_revenue, total_expense, points
 
 
+async def _cash_bank_balance(session: AsyncSession) -> float:
+    """Net posted balance of the ledger accounts configured as cash or bank.
+
+    Derived from the administrator's own mapping in ``financial_accounts`` rather
+    than from hardcoded account codes, so a renamed or re-coded chart of accounts
+    keeps working. Assets are debit-normal, so the balance is debit minus credit.
+    Only POSTED journals count, which makes this consistent with every other
+    balance in the dashboard. Amounts use the base-currency columns so a
+    multi-currency cash account is not summed in mixed denominations.
+    """
+    stmt = (
+        select(JournalEntryLine.base_debit_amount, JournalEntryLine.base_credit_amount)
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+        .join(FinancialAccount, FinancialAccount.account_id == JournalEntryLine.account_id)
+        .where(JournalEntry.status == "POSTED")
+    )
+    rows = (await session.execute(stmt)).all()
+    balance = 0.0
+    for debit, credit in rows:
+        balance = round(balance + _f(debit) - _f(credit), 4)
+    return balance
+
+
 async def _customers(session: AsyncSession, context: RequestContext) -> list[str]:
     stmt = (
         select(BusinessParty.display_name)
@@ -473,6 +739,7 @@ async def dashboard(session: AsyncSession, context: RequestContext, granularity:
         session, context, granularity
     )
     customer_list = await _customers(session, context)
+    cash_bank_balance = await _cash_bank_balance(session)
 
     receivables_total = round(sum(row["balance"] for row in receivable_rows), 4)
     payables_total = round(sum(row["balance"] for row in payable_rows), 4)
@@ -504,7 +771,7 @@ async def dashboard(session: AsyncSession, context: RequestContext, granularity:
             "receivables": receivables_total,
             "overdueReceivableCount": overdue_receivable_count,
             "payables": payables_total,
-            "cashBankBalance": 0.0,
+            "cashBankBalance": cash_bank_balance,
             "revenue": total_revenue,
             "expense": total_expense,
         },

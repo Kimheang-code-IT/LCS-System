@@ -24,6 +24,8 @@ type ApiErrorPayload = {
 
 type ApiFetchError = Error & {
     name: string
+    status?: number
+    statusCode?: number
     data?: ApiErrorPayload
     // ofetch wraps a cancelled fetch in a FetchError and keeps the original
     // AbortError (or TimeoutError) on the wrapped error's `cause`.
@@ -67,6 +69,16 @@ export function useApi() {
 
     function isAuthEndpoint(url: string) {
         return url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout')
+    }
+
+    /**
+     * Responses the owning form renders itself: the backend attaches
+     * `field_errors`, and the form maps each entry onto its input plus the
+     * error summary. Toasting here would duplicate the message and would also
+     * raise a notification for something the user can act on in place.
+     */
+    function isInlineValidationStatus(status: number) {
+        return status === 400 || status === 409 || status === 422
     }
 
     /**
@@ -205,7 +217,7 @@ export function useApi() {
                         return
                     }
 
-                    if (!options.suppressErrorToast) {
+                    if (!options.suppressErrorToast && !isInlineValidationStatus(response.status)) {
                         toast.add({
                             title: t('api.errorTitle', { status: response.status }),
                             description: response._data?.message || t('api.somethingWentWrong'),
@@ -243,7 +255,8 @@ export function useApi() {
 
             error.value = fetchError?.message || t('api.requestFailed')
 
-            if (fetchError.name === 'FetchError' && !handledAccessError && !options.suppressErrorToast) {
+            if (fetchError.name === 'FetchError' && !handledAccessError && !options.suppressErrorToast
+                && !isInlineValidationStatus(fetchError.status ?? fetchError.statusCode ?? 0)) {
                 toast.add({
                     title: t('api.connectionErrorTitle'),
                     description: t('api.connectionErrorDescription'),

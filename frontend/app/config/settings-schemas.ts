@@ -4,6 +4,7 @@ import {
   CURRENCY_OPTIONS,
   DATE_FORMAT_OPTIONS,
   LANDING_PAGE_OPTIONS,
+  LANGUAGE_OPTIONS,
   NUMBER_FORMAT_OPTIONS,
   PAGE_SIZE_OPTIONS,
   TIME_FORMAT_OPTIONS,
@@ -61,10 +62,13 @@ export const appConfigTabs: DocumentTabSchema[] = [
             key: 'localization.defaultLanguage',
             labelKey: 'lcs.settings.defaultLanguage',
             type: 'select',
-            options: [
-              { label: 'English', value: 'en' },
-              { label: 'Khmer', value: 'km' },
-            ],
+            options: LANGUAGE_OPTIONS,
+          },
+          {
+            key: 'localization.availableLanguages',
+            labelKey: 'lcs.settings.availableLanguages',
+            type: 'language-toggles',
+            colSpan: 2,
           },
           {
             key: 'localization.timezone',
@@ -144,10 +148,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
             key: 'telegram.messageLanguage',
             labelKey: 'lcs.settings.messageLanguage',
             type: 'select',
-            options: [
-              { label: 'English', value: 'en' },
-              { label: 'Khmer', value: 'km' },
-            ],
+            options: LANGUAGE_OPTIONS,
           },
           { key: 'telegram.includeOrganization', labelKey: 'lcs.settings.includeOrganization', type: 'boolean' },
           {

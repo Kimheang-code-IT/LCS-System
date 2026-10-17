@@ -54,6 +54,7 @@ export function useMenu() {
     '/finance/financial-accounts': 'finance.accounting.view',
     '/finance/journals': 'finance.accounting.view',
     '/finance/accounting-periods': 'finance.accounting.view',
+    '/finance/posting-rules': 'finance.posting_rules.view',
     ...Object.fromEntries(
       FREIGHT_REPORTS.map(report => [freightReportPath(report), reportRoutePermission(report)]),
     ),
@@ -111,15 +112,16 @@ export function useMenu() {
       { label: t('freight.nav.quotations'), icon: 'i-lucide-file-check-2', to: '/quotations', class: 'text-sm gap-2', onSelect: close },
       { label: t('freight.pages.serviceOrders'), icon: 'i-lucide-briefcase', to: '/service-orders', class: 'text-sm gap-2', onSelect: close },
       { label: t('freight.pages.serviceCharges'), icon: 'i-lucide-receipt-text', to: '/service-charges', class: 'text-sm gap-2', onSelect: close },
-      group('operations-reports', 'Operations Reports', 'i-lucide-chart-no-axes-column-increasing', reportLinks('operations')),
+      group('operations-reports', t('freight.nav.operationsReports'), 'i-lucide-chart-no-axes-column-increasing', reportLinks('operations')),
       group('finance', t('freight.nav.finance'), 'i-lucide-banknote', [
         pageLink(t('freight.pages.financialDocuments'), '/finance/documents'),
         pageLink(t('freight.pages.chartOfAccounts'), '/finance/chart-of-accounts'),
         pageLink(t('freight.pages.financialAccounts'), '/finance/financial-accounts'),
         pageLink(t('freight.pages.journals'), '/finance/journals'),
         pageLink(t('freight.pages.accountingPeriods'), '/finance/accounting-periods'),
+        pageLink(t('freight.pages.postingRules'), '/finance/posting-rules'),
       ]),
-      group('financial-reports', 'Financial Reports', 'i-lucide-chart-no-axes-combined', reportLinks('finance')),
+      group('financial-reports', t('freight.nav.financialReports'), 'i-lucide-chart-no-axes-combined', reportLinks('finance')),
       group('master', t('freight.nav.master'), 'i-lucide-database', [
         pageLink(t('freight.pages.businessParties'), '/master-data/business-parties'),
         pageLink(t('freight.pages.places'), '/master-data/places'),
@@ -134,6 +136,7 @@ export function useMenu() {
         pageLink(t('freight.pages.componentAttributes'), '/configuration/component-attributes'),
         pageLink(t('freight.pages.componentGroups'), '/configuration/component-groups'),
         pageLink(t('freight.pages.componentTabs'), '/configuration/component-tabs'),
+        pageLink(t('freight.pages.configurationVersions'), '/configuration/versions'),
       ]),
       group('administration', t('freight.nav.administration'), 'i-lucide-shield-check', [
         pageLink(t('freight.pages.users'), '/administration/users'),

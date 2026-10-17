@@ -1,6 +1,13 @@
 import type { FieldOption } from '~/types/common'
+import { APP_LANGUAGES } from '~/utils/constants/app-languages'
 
 /** Shared select options for settings / forms with fixed choice lists. */
+
+/** Native language names — these are identifiers, so they are never translated. */
+export const LANGUAGE_OPTIONS: FieldOption[] = APP_LANGUAGES.map(language => ({
+  label: language.name,
+  value: language.code,
+}))
 
 export const TIMEZONE_OPTIONS: FieldOption[] = [
   { label: 'Asia/Phnom_Penh (Cambodia)', value: 'Asia/Phnom_Penh' },

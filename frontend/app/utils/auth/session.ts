@@ -16,6 +16,9 @@ export function compactAuthUser(user: AuthUser): AuthUser {
     role: user.role,
     avatar: user.avatar,
     pageAccess: isAllAccess ? ['ALL_PAGES'] : undefined,
+    // Carried in the cookie so a page reload still routes to the forced change
+    // instead of briefly showing a signed-in shell the API would refuse.
+    mustChangePassword: user.mustChangePassword,
   }
 }
 

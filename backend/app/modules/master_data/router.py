@@ -8,7 +8,7 @@ from app.core.database import get_session
 from app.core.deps import get_current_context
 from app.core.pagination import PageParams, page_params
 from app.modules.master_data import component_config as component_config_service
-from app.modules.master_data import service
+from app.modules.master_data import config_versions, service
 
 
 def _read_guard(context: RequestContext) -> RequestContext:
@@ -54,6 +54,19 @@ def _config_manage_guard(context: RequestContext, action: str) -> RequestContext
         or context.is_platform_admin
     ):
         raise AccessDenied(f"Missing permission: {code}")
+    return context
+
+
+def _config_publish_guard(context: RequestContext) -> RequestContext:
+    """Publishing is stricter than editing: it changes the live form for everyone."""
+    from app.core.exceptions import AccessDenied
+
+    if not (
+        context.has_permission("service_order_config.publish")
+        or context.has_permission("configuration.manage")
+        or context.is_platform_admin
+    ):
+        raise AccessDenied("Missing permission: service_order_config.publish")
     return context
 
 
@@ -190,6 +203,56 @@ async def get_ui_schema(
 ) -> dict:
     _read_guard(context)
     return {"data": await service.get_ui_schema(session, page)}
+
+
+@router.get("/configuration-versions")
+async def list_configuration_versions(
+    page: PageParams = Depends(page_params),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await config_versions.list_versions(session, context, page)}
+
+
+@router.get("/configuration-versions/preview")
+async def preview_configuration_version(
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await config_versions.preview(session, context)}
+
+
+@router.post("/configuration-versions", status_code=status.HTTP_201_CREATED)
+async def publish_configuration_version(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_publish_guard(context)
+    note = payload.get("changeNote") or payload.get("change_note")
+    return {"data": await config_versions.publish(session, context, str(note) if note else None)}
+
+
+@router.get("/configuration-versions/{version_id}")
+async def get_configuration_version(
+    version_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_read_guard(context)
+    return {"data": await config_versions.get_version(session, context, version_id)}
+
+
+@router.post("/configuration-versions/{version_id}/retire")
+async def retire_configuration_version(
+    version_id: int,
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_publish_guard(context)
+    return {"data": await config_versions.retire(session, context, version_id)}
 
 
 @router.get("/component-tabs/meta/types")
