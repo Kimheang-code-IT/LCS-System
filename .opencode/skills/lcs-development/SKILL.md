@@ -1,6 +1,6 @@
 ---
 name: lcs-development
-description: Use when implementing, debugging, reviewing, testing, refactoring, or modifying the LCS System backend, frontend, database, API, finance, authentication, infrastructure, or deployment.
+description: Use as the umbrella working agreement for any LCS Freight Forwarding System change that does not clearly match a more specific skill - covering repository conventions, safe-change workflow, and validation gates.
 ---
 
 # LCS System Development Skill
@@ -10,6 +10,27 @@ description: Use when implementing, debugging, reviewing, testing, refactoring, 
 Use this skill whenever working on the LCS Freight Forwarding Platform.
 
 The goal is to make safe, consistent, production-quality changes without breaking existing business logic, database integrity, API contracts, permissions, finance logic, or deployment.
+
+## Companion skills
+
+This is the umbrella skill: it holds the working agreement that applies to every
+change. Load the focused skill as well when the task matches one of these:
+
+| Task | Skill |
+|---|---|
+| Inventorying the repo, classifying implementation status, producing a plan | `project-analysis` |
+| Schema, SQLAlchemy models, Alembic revisions, backfills, rollback | `database-migration` |
+| FastAPI routers, services, repositories, validation, pagination, errors | `fastapi-backend` |
+| Nuxt pages, components, composables, repositories, inline validation, i18n | `nuxt-frontend` |
+| Tabs, groups, attributes, field config, trade-direction scoping, config versions | `dynamic-ui-configuration` |
+| Quotation revisions, pricing, send/accept/reject, conversion | `quotation-management` |
+| Posting rules, journals, periods, payments, allocations, reversals, reports | `finance-accounting` |
+| Auth, permissions, single-role, sessions, audit, secrets | `security-rbac` |
+| Writing or running tests, interpreting a failing suite | `testing-qa` |
+| Compose, CI/CD, environments, backups, restore drills, release verification | `deployment-devops` |
+
+If a task spans several areas, load each relevant skill. Do not restate their
+contents here — keep this file to the shared working agreement.
 
 ## Project Context
 
