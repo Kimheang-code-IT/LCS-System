@@ -11,6 +11,11 @@ on:
         description: 'Existing immutable image tag to deploy (e.g. sha-c1ccaf8). Leave empty to build from this commit.'
         required: false
         default: ''
+      diagnose:
+        description: 'Only print runtime diagnostics from the host (no deploy, no changes)'
+        type: boolean
+        required: false
+        default: false
 
 # Least privilege by default; only the build job may publish images.
 permissions:
@@ -25,10 +30,55 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Read-only host inspection for outages that are invisible from the deploy log
+  # (nginx not listening, an exited container, a missing certificate volume).
+  # Never starts, stops or rewrites anything.
+  diagnose:
+    name: Runtime diagnostics
+    if: ${{ inputs.diagnose }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Dump host and container state
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          script: |
+            set -uo pipefail
+            cd /opt/lcs
+            if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
+            COMPOSE="$DOCKER compose -f compose.yml"
+            echo "--- .env (image tag only) ---"
+            sed -n 's/^IMAGE_TAG=/IMAGE_TAG=/p' .env || true
+            echo "--- compose ps -a ---"
+            $COMPOSE ps -a || true
+            echo "--- container states ---"
+            for name in ff-api ff-frontend ff-db ff-redis ff-minio; do
+              $DOCKER inspect -f "$name status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}}" "$name" 2>&1 || true
+            done
+            echo "--- ff-frontend logs ---"
+            $DOCKER logs --tail 100 ff-frontend 2>&1 || true
+            echo "--- ff-api logs ---"
+            $DOCKER logs --tail 40 ff-api 2>&1 || true
+            echo "--- nginx config test ---"
+            $COMPOSE run --rm --no-deps frontend nginx -t 2>&1 || true
+            echo "--- certificate volume ---"
+            $DOCKER run --rm -v freight_forwarding_certbot_etc:/etc/letsencrypt alpine sh -c 'ls -la /etc/letsencrypt/live 2>&1; ls -la /etc/letsencrypt/live/lcslog.minidev.in 2>&1' || true
+            echo "--- host listeners ---"
+            (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | head -20 || true
+            echo "--- disk ---"
+            df -h / || true
+
   # Decide what to deploy: a fresh immutable sha tag, or a manually supplied
   # existing tag (rollback / redeploy without rebuilding).
   resolve:
     name: Resolve deployment tag
+    if: ${{ !inputs.diagnose }}
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.resolve.outputs.image_tag }}
@@ -365,6 +415,30 @@ jobs:
               sleep 4
             done
             echo "Application did not become healthy within the retry window." >&2
+            # The readiness probe only sees "connection refused". Dump the state
+            # that explains it before rolling back, so a failed deploy is
+            # diagnosable from the workflow log alone.
+            echo "--- compose ps -a ---"
+            $COMPOSE ps -a || true
+            echo "--- ff-frontend logs ---"
+            $DOCKER logs --tail 100 ff-frontend 2>&1 || true
+            echo "--- ff-api logs ---"
+            $DOCKER logs --tail 40 ff-api 2>&1 || true
+            echo "--- nginx config test ---"
+            $COMPOSE run --rm --no-deps frontend nginx -t 2>&1 || true
+            echo "--- certificate volume ---"
+            $DOCKER run --rm -v freight_forwarding_certbot_etc:/etc/letsencrypt alpine sh -c 'ls -la /etc/letsencrypt/live 2>&1; ls -la /etc/letsencrypt/live/lcslog.minidev.in 2>&1' || true
+            # A healthy API with an unreachable site is an edge failure (nginx,
+            # TLS or network), not a bad release. Rolling the images back here
+            # only makes it worse: the database has already been migrated
+            # forward, so the previous image exits on an unknown Alembic head and
+            # takes the API down with it.
+            API_HEALTH="$($DOCKER inspect -f '{{.State.Health.Status}}' ff-api 2>/dev/null || echo unknown)"
+            if [ "$API_HEALTH" = "healthy" ]; then
+              echo "Backend is healthy; the failure is at the edge (nginx/TLS/network). Skipping the image rollback." >&2
+              exit 1
+            fi
+            echo "Backend health is '$API_HEALTH'; rolling back." >&2
             if [ -n "$PREVIOUS_IMAGE_TAG" ] && printf '%s' "$PREVIOUS_IMAGE_TAG" | grep -Eq '^sha-[0-9a-f]{7,40}$'; then
               echo "Rolling back application images to $PREVIOUS_IMAGE_TAG"
               $COMPOSE down --remove-orphans || true
