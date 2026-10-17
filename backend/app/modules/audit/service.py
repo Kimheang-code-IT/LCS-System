@@ -49,11 +49,15 @@ def serialize(event: AuditEvent, user_name: str | None = None) -> dict[str, Any]
     return {
         "id": event.id,
         "occurredAt": event.occurred_at.isoformat() if event.occurred_at else None,
+        # Without these the trail only says *that* something happened, never
+        # *what*, which makes it useless for tracing a posting rule change.
+        "eventType": event.event_type,
+        "entityType": event.entity_type,
+        "entityId": event.entity_id,
         "action": event.action,
         "result": event.result,
         "user": user_name or (str(event.actor_user_id) if event.actor_user_id is not None else ""),
         "ipAddress": event.ip_address,
-        "entityId": event.entity_id,
     }
 
 

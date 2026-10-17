@@ -58,10 +58,12 @@ export const JOB_ACTUAL_CONTAINER_TABLE: FreightTable = {
 }
 
 /**
- * Container payment grid. Discount is its own column (not an inline field of
- * the line total), notes open the shared row-note dialog from an icon-only
- * cell, and the trailing utility columns expose delete plus the per-row
- * invoice print handled by `JobContainers.vue`.
+ * Container payment grid. A payment sheet carries **one** discount and tax for
+ * the whole sheet, entered in the totals block below the table rather than a
+ * discount column repeated on every row, so a row is just quantity × unit price.
+ * Notes open the shared row-note dialog from an icon-only cell, and the trailing
+ * utility columns expose delete plus the per-row invoice print handled by
+ * `JobContainers.vue`.
  */
 export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
   key: 'containerPayments',
@@ -72,7 +74,6 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
     { key: 'feeType', label: 'Service / Fee', labelKm: 'សេវា / ថ្លៃ', labelKey: 'freight.ui.serviceFee', type: 'select', required: true },
     { key: 'quantity', label: 'Qty', labelKm: 'ចំនួន', labelKey: 'freight.ui.qty', type: 'number', required: true },
     { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកត្តរ', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true },
-    { key: 'discountAmount', label: 'Discount', labelKm: 'បញ្ចុះតម្លៃ', labelKey: 'freight.ui.discountCol', type: 'number' },
     { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
     { key: 'note', label: 'Note', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.note', type: 'note' },
     { key: '_delete', label: '', type: 'delete' },

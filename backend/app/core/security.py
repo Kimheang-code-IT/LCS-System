@@ -70,8 +70,16 @@ def _encode(payload: dict[str, Any], expires_delta: timedelta, token_type: str) 
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_access_token(subject: str | int, token_version: int = 0) -> str:
-    payload = {"sub": str(subject), "tv": int(token_version)}
+def create_access_token(subject: str | int, token_version: int = 0, *, must_change_password: bool = False) -> str:
+    """Encode an access token.
+
+    ``pwd`` marks a credential an administrator set, so the API can refuse every
+    route except changing it. Carrying the flag in the token rather than reading
+    the credential row means the check costs no query.
+    """
+    payload: dict[str, Any] = {"sub": str(subject), "tv": int(token_version)}
+    if must_change_password:
+        payload["pwd"] = 1
     return _encode(payload, timedelta(minutes=settings.access_token_expire_minutes), ACCESS_TOKEN_TYPE)
 
 

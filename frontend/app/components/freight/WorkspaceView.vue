@@ -28,6 +28,7 @@ import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/docum
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
 import { useModuleList } from '~/composables/freight/useModuleList'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
+import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 
@@ -45,8 +46,14 @@ const q = ref('')
 const pagination = ref<PaginationState>({ pageIndex: 0, pageSize: 20 })
 const filters = reactive<Record<string, string[]>>({})
 const rowSelection = ref<Record<string, boolean>>({})
+/** Page-level refusals from row / bulk commands (never a toast). */
+const pageErrors = ref<string[]>([])
+
+// Background (fire-and-forget) writes publish their failure on the store.
+watch(() => store.lastError, (message) => {
+  if (message && !pageErrors.value.includes(message)) pageErrors.value = [...pageErrors.value, message]
+})
 const pending = ref(false)
-const busyId = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 const sort = ref<ListSortSelection>(null)
@@ -54,6 +61,20 @@ const sort = ref<ListSortSelection>(null)
 const current = computed(() => module.value)
 const moduleList = useModuleList(current)
 const moduleRecord = useModuleRecord(current)
+
+/**
+ * Status changes are policy-driven: the backend says which transitions exist
+ * from the record's current status and which of them this caller may run, so
+ * the row menu can only ever offer a legal action.
+ */
+const {
+  busyId,
+  menuItem: statusMenuItem,
+  transitionsOf,
+} = useRecordStatus(module, {
+  onError: (message) => { pageErrors.value = [message] },
+  onChanged: refreshList,
+})
 const isJobList = computed(() => current.value?.collection === 'jobs')
 const dateField = computed(() => {
   const fields = current.value?.fields || []
@@ -270,12 +291,11 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     }
     if (canMutate.value) {
       items.push({
-        label: 'Edit',
+        label: t('freight.ui.edit'),
         icon: 'i-lucide-pencil',
         onSelect: () => openRow(row),
       })
     }
-    // Status toggle and conditional delete are appended by the shared block below.
   }
   if (collection === 'quotations') {
     const relatedJob = jobForQuotation(store.list('jobs'), row)
@@ -292,15 +312,20 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (availability.edit) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     }
-    if (availability.send) {
-      items.push({ label: t('freight.ui.send'), icon: 'i-lucide-send', onSelect: () => { void runRowAction('send', row) } })
-    }
-    if (availability.accept) {
-      items.push({ label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success', onSelect: () => { void runRowAction('accept', row) } })
-    }
-    if (availability.convert) {
-      items.push({ label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', onSelect: () => { void runRowAction('convert', row) } })
-    }
+    // Send / Accept / Reject / Convert are the quotation's status transitions;
+    // they come from the shared policy, gated by the quotation availability
+    // rules (a converted quotation must not offer Convert again).
+    const statusItem = statusMenuItem(row, {
+      allowTransition: (transition) => {
+        if (transition.action === 'send') return availability.send
+        if (transition.action === 'accept') return availability.accept
+        if (transition.action === 'convert') return availability.convert
+        if (transition.action === 'reject') return lcs.can('quotation.accept')
+        if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
+        return true
+      },
+    })
+    if (statusItem) items.push(statusItem)
     if (availability.revise) {
       items.push({ label: t('freight.ui.requote'), icon: 'i-lucide-git-branch', onSelect: () => { void runRowAction('createRevision', row) } })
     }
@@ -314,89 +339,64 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   else if (collection === 'jobCharges') {
     const status = chargeDomainStatus(row.status)
     if (status === 'DRAFT' && lcs.can('service_charge.create')) items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
-    if (status === 'DRAFT' && lcs.can('service_charge.issue')) items.push({ label: t('freight.ui.issue'), icon: 'i-lucide-send', onSelect: () => { void runRowAction('issueCharge', row) } })
     if (status === 'ISSUED' && !row.financialDocumentId && lcs.can('service_charge.convert_to_invoice')) items.push({ label: t('freight.ui.createFinanceInvoice'), icon: 'i-lucide-file-plus-2', onSelect: () => { void runRowAction('createInvoice', row) } })
   }
   else if (collection === 'debitNotes') {
     const status = financeDomainStatus(row.status)
     if (status === 'DRAFT' && lcs.can('financial_document.update_draft')) items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
-    if (status === 'DRAFT' && lcs.can('financial_document.post')) items.push({ label: t('freight.ui.post'), icon: 'i-lucide-check-circle-2', onSelect: () => { void runRowAction('postDocument', row) } })
     if (status === 'POSTED' && lcs.can('financial_document.allocate')) items.push({ label: t('freight.ui.allocate'), icon: 'i-lucide-split', onSelect: () => openRow(row) })
-    if (status === 'POSTED' && lcs.can('financial_document.reverse')) items.push({ label: t('freight.ui.reverse'), icon: 'i-lucide-undo-2', color: 'warning', onSelect: () => openRow(row) })
   }
-  else if (collection === 'accountingPeriods' && lcs.can('accounting_period.close')) {
-    const status = String(row.status || '').toUpperCase()
-    if (status === 'OPEN' || status === 'REOPENED') items.push({ label: t('freight.ui.closePeriod'), icon: 'i-lucide-lock', color: 'warning', onSelect: () => { void runRowAction('closePeriod', row) } })
-    if (status === 'CLOSED') items.push({ label: t('freight.ui.reopenPeriod'), icon: 'i-lucide-lock-open', onSelect: () => { void runRowAction('reopenPeriod', row) } })
+  if (collection !== 'quotations' && !isProtectedManagementRecord(collection, row)) {
+    // Change Status. The transitions come from the backend policy — legal from
+    // this record's status and permitted for this caller — so an action can
+    // never be offered that the API would refuse for being invalid. This also
+    // keeps the read-only Accounting Periods list actionable: closing and
+    // reopening are status transitions, not record edits.
+    const statusItem = statusMenuItem(row, {
+      confirmDescription: transition =>
+        transition.action === 'close' ? periodCloseSummary(row) : undefined,
+    })
+    if (statusItem) items.push(statusItem)
   }
-  if (canMutate.value && collection !== 'quotations' && !isProtectedManagementRecord(collection, row)) {
-    const status = recordStatusValue(row)
-    if (status === 'ACTIVE' || status === 'INACTIVE') {
-      const active = status === 'ACTIVE'
-      items.push({
-        label: t(active ? 'freight.ui.deactivate' : 'freight.ui.activate'),
-        icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-        color: active ? 'warning' : 'success',
-        onSelect: () => setRecordStatus(row, active ? 'INACTIVE' : 'ACTIVE'),
-      })
-      // Active records must be deactivated first; only inactive records can be deleted.
-      if (!active) {
-        items.push({
-          label: t('freight.ui.delete'),
-          icon: 'i-lucide-trash-2',
-          color: 'error',
-          onSelect: () => { void deleteIds([String(row.id)]) },
-        })
-      }
-    }
-    else if (deactivationOnly.value) {
-      items.push({
-        label: t('freight.ui.deactivate'),
-        icon: 'i-lucide-circle-off',
-        color: 'warning',
-        onSelect: () => { void deactivateIds([String(row.id)]) },
-      })
-    }
-    else {
-      items.push({
-        label: t('freight.ui.delete'),
-        icon: 'i-lucide-trash-2',
-        color: 'error',
-        onSelect: () => { void deleteIds([String(row.id)]) },
-      })
-    }
+  if (canMutate.value && collection !== 'quotations' && !isProtectedManagementRecord(collection, row)
+    && recordStatusValue(row) === 'INACTIVE') {
+    // Active records must be deactivated first; only inactive records can be deleted.
+    items.push({
+      label: t('freight.ui.delete'),
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      onSelect: () => { void deleteIds([String(row.id)]) },
+    })
   }
   return [items]
 }
 
+/** The closing check the period confirm used to describe inline. */
+function periodCloseSummary(row: Record<string, unknown>) {
+  const start = String(row.startDate || '').slice(0, 10)
+  const end = String(row.endDate || '').slice(0, 10)
+  const draftDocuments = store.list('debitNotes').filter(item =>
+    String(item.status).toUpperCase() === 'DRAFT'
+    && String(item.date || '').slice(0, 10) >= start
+    && String(item.date || '').slice(0, 10) <= end,
+  ).length
+  const unallocated = store.list('customerPayments').filter(item => Number(item.unallocatedAmount || 0) > 0).length
+  const unbalanced = store.list('journals').filter(item =>
+    String(item.status).toUpperCase() === 'DRAFT' && Number(item.balanceDifference || 0) !== 0,
+  ).length
+  return `${draftDocuments} unposted documents · ${unallocated} unallocated payments · ${unbalanced} journal issues. Closed periods reject new postings.`
+}
+
 async function runRowAction(action: string, row: Record<string, unknown>) {
+  pageErrors.value = []
   try {
     const id = String(row.id || '')
-    // Quotation revision endpoints need the revision id; other actions use the quotation id.
-    const revisionId = String(row.revisionId || row.id || '')
-    if (action === 'send') {
-      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationSendTitle'), description: t('freight.ui.quotationSendDescription'), confirmLabel: t('freight.ui.send') })
-      if (!ok) return
-      await lcs.runCommand('quotation.send', revisionId, key => lcs.quotations.send(revisionId, key))
-    }
-    else if (action === 'accept') {
-      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationAcceptTitle'), description: t('freight.ui.quotationAcceptDescription'), confirmLabel: t('freight.ui.accept'), confirmColor: 'primary' })
-      if (!ok) return
-      await lcs.runCommand('quotation.accept', revisionId, key => lcs.quotations.accept(revisionId, key))
-    }
-    else if (action === 'createRevision') {
+    if (action === 'createRevision') {
       const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationRequoteTitle'), description: t('freight.ui.quotationRequoteDescription'), confirmLabel: t('freight.ui.requote') })
       if (!ok) return
       const created = await lcs.quotations.createRevision(id)
       store.reload()
       await navigateTo(`/quotations/${created.id}`)
-      return
-    }
-    else if (action === 'convert') {
-      const ok = await confirm({ kind: 'submit', title: t('freight.ui.quotationConvertTitle'), description: t('freight.ui.quotationConvertDescription'), confirmLabel: t('freight.ui.convertServiceOrder'), confirmColor: 'primary' })
-      if (!ok) return
-      const job = await lcs.runCommand('quotation.convert', revisionId, key => lcs.quotations.convert(revisionId, key))
-      await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
       return
     }
     else if (action === 'delete') {
@@ -406,32 +406,18 @@ async function runRowAction(action: string, row: Record<string, unknown>) {
       toast.add({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
       return
     }
-    else if (action === 'reject' || action === 'cancel') {
-      store.save('quotations', { ...row, id, status: action === 'reject' ? 'Rejected' : 'Cancelled' } as FreightRecord)
-    }
-    else if (action === 'issueCharge') await lcs.runCommand('charge.issue', id, key => lcs.charges.issue(id, key))
     else if (action === 'createInvoice') {
       const invoice = await lcs.runCommand('charge.create-invoice', id, key => lcs.charges.createFinanceInvoice(id, key))
       await navigateTo(`/finance/documents/${invoice.id}`)
       return
     }
-    else if (action === 'postDocument') await lcs.runCommand('finance.post', id, key => lcs.finance.post(id, key))
-    else if (action === 'closePeriod') {
-      const draftDocuments = store.list('debitNotes').filter(item => String(item.status).toUpperCase() === 'DRAFT' && String(item.date || '').slice(0, 10) >= String(row.startDate || '') && String(item.date || '').slice(0, 10) <= String(row.endDate || '')).length
-      const unallocated = store.list('customerPayments').filter(item => Number(item.unallocatedAmount || 0) > 0).length
-      const unbalanced = store.list('journals').filter(item => String(item.status).toUpperCase() === 'DRAFT' && Number(item.balanceDifference || 0) !== 0).length
-      const ok = await confirm({ kind: 'generic', title: `Close ${String(row.name || row.code || 'accounting period')}?`, description: `${draftDocuments} unposted documents · ${unallocated} unallocated payments · ${unbalanced} journal issues. Closed periods reject new postings.`, confirmLabel: 'Close Period', confirmColor: 'warning' })
-      if (!ok) return
-      await lcs.runCommand('period.close', id, key => lcs.finance.closePeriod(id, key))
-    }
-    else if (action === 'reopenPeriod') {
-      store.save('accountingPeriods', { ...row, id, status: 'REOPENED', closedBy: '', closedAt: '', updatedAt: new Date().toISOString() } as FreightRecord)
-    }
     store.reload()
     toast.add({ title: t('freight.ui.actionCompleted'), color: 'success' })
   }
   catch (error) {
-    lcs.reportError(error)
+    // Workflow refusals (locked revision, closed period, dependency) are shown
+    // above the list — never as a toast.
+    pageErrors.value = [lcs.errorMessage(error)]
   }
 }
 
@@ -532,11 +518,12 @@ async function deleteIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
   const ok = await confirm({ kind: 'delete', count: ids.length })
   if (!ok) return
+  pageErrors.value = []
   try {
     await moduleRecord.remove(ids)
   }
   catch (error) {
-    lcs.reportError(error)
+    pageErrors.value = [lcs.errorMessage(error)]
     return
   }
   rowSelection.value = {}
@@ -546,10 +533,21 @@ async function deleteIds(ids: string[]) {
 
 async function deactivateIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
-  const status = current.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive'
-  for (const id of ids) {
-    const record = moduleList.items.value.find(row => String(row.id) === String(id))
-    if (record) await moduleRecord.update(String(id), { ...record, status })
+  pageErrors.value = []
+  try {
+    for (const id of ids) {
+      const record = moduleList.items.value.find(row => String(row.id) === String(id))
+      if (!record) continue
+      // The bulk action runs the same policy transition as the row menu, so it
+      // is validated and audited exactly like a single-row change.
+      const transition = transitionsOf(record).find(item => item.action === 'deactivate' && item.kind === 'status')
+      if (!transition) continue
+      await moduleRecord.changeStatus(String(id), transition.to)
+    }
+  }
+  catch (error) {
+    pageErrors.value = [lcs.errorMessage(error)]
+    return
   }
   rowSelection.value = {}
   toast.add({ title: t('freight.ui.deactivated'), color: 'success' })
@@ -558,17 +556,6 @@ async function deactivateIds(ids: string[]) {
 
 function recordStatusValue(row: Record<string, unknown>) {
   return String(row.status || '').trim().toUpperCase()
-}
-
-async function setRecordStatus(row: Record<string, unknown>, next: 'ACTIVE' | 'INACTIVE') {
-  if (!current.value || !canMutate.value) return
-  const status = current.value.collection === 'documentSequences'
-    ? next
-    : (next === 'ACTIVE' ? 'Active' : 'Inactive')
-  await moduleRecord.update(String(row.id || ''), { ...row, status })
-  rowSelection.value = {}
-  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
-  await refreshList()
 }
 
 function refresh() {
@@ -611,6 +598,8 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       @create="openCreate"
       @refresh="refresh"
     />
+
+    <CommonAppFormErrorSummary class="px-4 pt-3" :form-errors="pageErrors" />
 
     <TableAppListTable
       v-model:search="q"

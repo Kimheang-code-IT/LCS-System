@@ -26,6 +26,10 @@ async def _protected_admin(client, headers) -> dict:
     return next(item for item in users if item.get("isProtectedSystemAccount") is True)
 
 
+async def _roles(client, headers) -> list[dict]:
+    return (await client.get("/api/v1/roles", headers=headers)).json()["data"]["items"]
+
+
 async def test_user_has_exactly_one_role_and_replacement(client):
     headers = await login(client)
     user = await _create_user(
@@ -167,6 +171,21 @@ async def test_privilege_escalation_is_blocked(client):
     mgr_headers = await login(client, "role.mgr")
     assert mgr_headers
 
+    # Delegated role managers cannot add capabilities they do not possess to
+    # their own role or to a new role.
+    broaden_own_role = await client.put(
+        f"/api/v1/roles/{role.json()['data']['id']}",
+        headers=mgr_headers,
+        json={"permissions": ["admin.roles.edit", "admin.users.edit"]},
+    )
+    assert broaden_own_role.status_code == 403
+    create_powerful = await client.post(
+        "/api/v1/roles",
+        headers=mgr_headers,
+        json={"name": "Escalated Role", "permissions": ["admin.users.edit"]},
+    )
+    assert create_powerful.status_code == 403
+
     escalate = await client.post(
         f"/api/v1/users/{admin_id}/role-assignments",
         headers=mgr_headers,
@@ -203,6 +222,24 @@ async def test_self_lockout_guards(client):
         f"/api/v1/users/{admin_id}", headers=headers, json={"roles": []}
     )
     assert remove_last_admin.status_code == 403
+
+
+async def test_platform_admin_cannot_change_own_role(client):
+    headers = await login(client)
+    second = await _create_user(
+        client,
+        headers,
+        username="self.admin",
+        email="self.admin@example.com",
+        roles=["PLATFORM_ADMIN"],
+    )
+    own_headers = await login(client, "self.admin")
+    changed = await client.put(
+        f"/api/v1/users/{second['id']}",
+        headers=own_headers,
+        json={"roles": ["AUDITOR"]},
+    )
+    assert changed.status_code == 403, changed.text
 
 
 async def test_last_platform_admin_cannot_be_deactivated_by_others(client):
@@ -361,7 +398,7 @@ async def test_protected_admin_profile_can_change_and_normal_user_can_be_deleted
 
 async def test_builtin_admin_role_cannot_lose_permissions_or_be_deleted(client, session_factory):
     headers = await login(client)
-    roles = (await client.get("/api/v1/roles", headers=headers)).json()["data"]
+    roles = await _roles(client, headers)
     protected_role = next(role for role in roles if role.get("isSystemRole") is True)
 
     stripped = await client.put(
@@ -428,6 +465,13 @@ async def test_assigned_role_cannot_be_deleted(client):
     assert rejected.status_code == 409, rejected.text
     detail = await client.get(f"/api/v1/users/{user['id']}", headers=headers)
     assert detail.json()["data"]["roles"] == ["ASSIGNED_ROLE"]
+
+    deactivated = await client.put(
+        f"/api/v1/roles/{role.json()['data']['id']}",
+        headers=headers,
+        json={"status": "INACTIVE"},
+    )
+    assert deactivated.status_code == 409, deactivated.text
 
 
 async def test_permission_and_role_changes_take_effect_without_relogin(client):

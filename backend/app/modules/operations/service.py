@@ -4,12 +4,12 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
@@ -20,6 +20,7 @@ from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
 from app.core.storage import get_storage
+from app.modules.master_data import config_versions
 from app.modules.master_data.models import BusinessParty
 from app.modules.operations.models import (
     Attachment,
@@ -29,6 +30,8 @@ from app.modules.operations.models import (
     ServiceOrderChargeLine,
     ServiceOrderContainer,
     ServiceOrderContainerRequirement,
+    ServiceOrderMilestone,
+    ServiceOrderMovement,
     ServiceOrderPlace,
     ServiceOrderPricing,
     ServiceOrderPricingLine,
@@ -167,6 +170,9 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
         )
         session.add(order)
         await session.flush()
+        # Pin the order to the configuration in force right now, so a later
+        # publish cannot re-interpret the component rows it will collect.
+        await config_versions.stamp_service_order(session, order)
     else:
         # Only reassign when the caller actually supplied the field, otherwise a
         # partial save would silently repoint the order at another party/direction.
@@ -195,6 +201,82 @@ async def finish_service_order(session: AsyncSession, context: RequestContext, i
         await session.commit()
         await cache.bump("reports")
     return order_record(order, order.data or {})
+
+
+async def set_service_order_status(
+    session: AsyncSession, identifier: str | int, status: str
+) -> dict:
+    """Activate, deactivate or reopen a service order.
+
+    Finishing stays with :func:`finish_service_order` because it is a workflow
+    action; this is the plain status write the shared status endpoint uses for
+    the remaining lifecycle moves.
+    """
+    order = await OperationsRepository(session).resolve_order(identifier)
+    if order is None:
+        raise NotFound("Service order not found.")
+    order.status = normalize_order_status(status, order.status)
+    await session.commit()
+    await cache.bump("reports")
+    return order_record(order, order.data or {})
+
+
+async def order_status(session: AsyncSession, identifier: str | int) -> str | None:
+    """Current status of one order, for the audit trail of a transition."""
+    order = await OperationsRepository(session).resolve_order(identifier)
+    return None if order is None else str(order.status)
+
+
+async def record_order_status_change(
+    session: AsyncSession,
+    context: RequestContext,
+    record: dict,
+    before: str | None,
+    event_type: str,
+    action: str,
+) -> None:
+    """Every service-order transition leaves one audit row with both statuses."""
+    from app.modules.audit.service import write_audit
+
+    await write_audit(
+        session,
+        context,
+        event_type=event_type,
+        entity_type="service_order",
+        entity_id=int(record.get("id") or 0),
+        action=action,
+        before={"status": before} if before else None,
+        after={"status": record.get("rawStatus") or record.get("status")},
+    )
+    await session.commit()
+
+
+async def charge_status(session: AsyncSession, charge_id: int) -> str | None:
+    charge = await session.get(ServiceOrderCharge, charge_id)
+    return None if charge is None else str(charge.status)
+
+
+async def record_charge_status_change(
+    session: AsyncSession,
+    context: RequestContext,
+    charge_id: int,
+    before: str | None,
+    record: dict,
+) -> None:
+    """Issuing is the only charge transition; record it with both statuses."""
+    from app.modules.audit.service import write_audit
+
+    await write_audit(
+        session,
+        context,
+        event_type="SERVICE_CHARGE_ISSUED",
+        entity_type="service_charge",
+        entity_id=charge_id,
+        action="issue",
+        before={"status": before} if before else None,
+        after={"status": record.get("status")},
+    )
+    await session.commit()
 
 
 async def delete_service_orders(session: AsyncSession, ids: list[int]) -> int:
@@ -227,6 +309,9 @@ async def create_service_order_from_quotation(
     )
     session.add(order)
     await session.flush()
+    # Pin the order to the configuration published when the quotation converts,
+    # so a later publish cannot re-interpret its dynamic component rows.
+    await config_versions.stamp_service_order(session, order)
 
     for role in ("pickup", "border", "delivery"):
         value = data.get(role)
@@ -530,7 +615,12 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
             quantity = _decimal(line.get("quantity"), Decimal("1")) or Decimal("1")
             unit_price = _decimal(line.get("unitPrice"), Decimal("0")) or Decimal("0")
             discount = _decimal(line.get("discount"), Decimal("0")) or Decimal("0")
-            tax_rate = _decimal(line.get("tax"), Decimal("0")) or Decimal("0")
+            # The charge line editor exposes `taxRate` and the serializer emits the
+            # rate under `tax`, so accept both. Reading only `tax` silently dropped
+            # the rate a user typed: the server stored zero tax while the form showed
+            # a taxed total, and the resulting invoice carried no tax.
+            tax_rate_field = "taxRate" if line.get("taxRate") not in (None, "") else "tax"
+            tax_rate = _decimal(line.get(tax_rate_field), Decimal("0")) or Decimal("0")
             if quantity <= 0:
                 raise ValidationFailed("Charge quantity must be greater than zero.", {f"lines.{index}.quantity": "Must be positive"})
             if unit_price < 0:
@@ -542,7 +632,10 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                     {f"lines.{index}.discount": "Invalid discount"},
                 )
             if tax_rate < 0 or tax_rate > 100:
-                raise ValidationFailed("Charge tax rate must be between 0 and 100.", {f"lines.{index}.tax": "Invalid tax rate"})
+                raise ValidationFailed(
+                    "Charge tax rate must be between 0 and 100.",
+                    {f"lines.{index}.{tax_rate_field}": "Invalid tax rate"},
+                )
             tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
             line_total = base - discount + tax_amount
             container_id = _int_or_none(line.get("containerId") or line.get("serviceOrderContainerId"))
@@ -658,6 +751,38 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
     return [_attachment_payload(item) for item in links]
 
 
+async def delete_attachments(session: AsyncSession, context: RequestContext, ids: list[int]) -> int:
+    """Soft-delete attachments so they stop being served.
+
+    The row is flagged rather than removed: the file may be referenced by an audit
+    trail, and a hard delete would also have to remove the object from storage. The
+    storage object is deleted on a best-effort basis — a storage failure must not
+    leave the database claiming the file is still available.
+    """
+    if not ids:
+        return 0
+    attachments = (
+        await session.execute(select(Attachment).where(Attachment.id.in_(ids)))
+    ).scalars().all()
+    storage = get_storage()
+    removed = 0
+    for attachment in attachments:
+        if attachment.is_deleted:
+            continue
+        attachment.is_deleted = True
+        await session.execute(
+            delete(AttachmentLink).where(AttachmentLink.attachment_id == attachment.id)
+        )
+        try:
+            if storage.exists(attachment.storage_key):
+                storage.delete(attachment.storage_key)
+        except Exception:  # noqa: BLE001 - the flag is the source of truth, not the object store
+            pass
+        removed += 1
+    await session.commit()
+    return removed
+
+
 def _attachment_payload(attachment: Attachment) -> dict[str, Any]:
     storage = get_storage()
     url = (
@@ -694,14 +819,51 @@ _UPLOAD_TYPES = {
 }
 
 
-def _upload_metadata(file_name: str) -> tuple[str, str, str]:
+def _upload_metadata(file_name: str, allowed: set[str] | None = None) -> tuple[str, str, str]:
     clean_name = os.path.basename(str(file_name or "").replace("\\", "/")).strip()
     if not clean_name or len(clean_name) > 255 or clean_name in {".", ".."}:
         raise ValidationFailed("The file name is invalid.", {"file": "Invalid file name"})
     extension = os.path.splitext(clean_name)[1].lower().lstrip(".")
-    if extension not in settings.upload_allowed_extension_set or extension not in _UPLOAD_TYPES:
+    permitted = allowed if allowed is not None else settings.upload_allowed_extension_set
+    if extension not in permitted or extension not in _UPLOAD_TYPES:
         raise ValidationFailed("This file type is not allowed.", {"file": "Unsupported file type"})
     return clean_name, extension, _UPLOAD_TYPES[extension]
+
+
+async def effective_upload_extensions(session: AsyncSession) -> set[str]:
+    """The extensions uploads may use: the environment list minus any the
+    administrator disabled through ``app_settings('security').allowedUploadExtensions``.
+
+    The stored list can only *narrow* what the environment allows. It can never
+    widen it, because the environment list is the operator's control and
+    ``_UPLOAD_TYPES`` is the set the content-signature validator understands —
+    letting a database row add an extension the validator cannot inspect would
+    turn a validation rule into a hole.
+
+    A missing or unusable setting means "no restriction beyond the environment".
+    """
+    from app.modules.settings.service import get_app_config
+
+    allowed = set(settings.upload_allowed_extension_set)
+    try:
+        config = await get_app_config(session)
+    except Exception:  # noqa: BLE001 - a broken settings document must not block uploads
+        return allowed
+    security = config.get("security") if isinstance(config, dict) else None
+    security = security if isinstance(security, dict) else {}
+    configured = security.get("allowedUploadExtensions")
+    if not isinstance(configured, list):
+        return allowed
+    chosen = {
+        str(value).strip().lower().lstrip(".")
+        for value in configured
+        if str(value).strip()
+    }
+    if not chosen:
+        # An empty list is ambiguous, not "allow nothing": refusing every upload
+        # because a field was cleared would be a worse failure than ignoring it.
+        return allowed
+    return {extension for extension in allowed if extension in chosen and extension in _UPLOAD_TYPES}
 
 
 def _validate_upload_content(extension: str, content: bytes) -> None:
@@ -734,9 +896,9 @@ def _validate_upload_content(extension: str, content: bytes) -> None:
             raise ValidationFailed("The Office document is invalid.", {"file": "Invalid content"})
 
 
-def presign(file_name: str, mime_type: str = "") -> dict[str, Any]:
+async def presign(session: AsyncSession, file_name: str, mime_type: str = "") -> dict[str, Any]:
     storage = get_storage()
-    clean_name, _, content_type = _upload_metadata(file_name)
+    clean_name, _, content_type = _upload_metadata(file_name, await effective_upload_extensions(session))
     key = f"{uuid.uuid4().hex}-{clean_name}"
     if storage.supports_presign and settings.storage_presigned_uploads_enabled:
         upload_url = storage.presigned_put(key, content_type, settings.presigned_url_expire_seconds)
@@ -756,7 +918,7 @@ async def store_upload(
     session: AsyncSession, context: RequestContext, file_name: str, mime_type: str, content: bytes, storage_key: str | None = None
 ) -> dict:
     storage = get_storage()
-    clean_name, extension, content_type = _upload_metadata(file_name)
+    clean_name, extension, content_type = _upload_metadata(file_name, await effective_upload_extensions(session))
     max_bytes = settings.upload_max_size_mb * 1024 * 1024
     if not content or len(content) > max_bytes:
         raise ValidationFailed(
@@ -786,3 +948,332 @@ async def read_attachment(storage_key: str) -> tuple[bytes, str]:
     if not storage.exists(storage_key):
         raise NotFound("File not found.")
     return storage.get(storage_key)
+
+
+# --- Movements ---------------------------------------------------------------
+# A movement is one leg of the transport chain (origin -> destination, planned
+# and actual times). The tables existed but had no service or endpoints, so the
+# capability was unreachable from the application.
+
+# Movement statuses are plain values rather than an enum so a new state does not
+# need a migration; the API normalises casing and rejects anything unknown.
+MOVEMENT_STATUSES = ("PLANNED", "IN_TRANSIT", "ARRIVED", "COMPLETED", "CANCELLED")
+
+
+def _normalize_movement_status(value: Any, default: str = "PLANNED") -> str:
+    if value in (None, ""):
+        return default
+    candidate = str(value).strip().upper().replace(" ", "_").replace("-", "_")
+    return candidate if candidate in MOVEMENT_STATUSES else default
+
+
+def _as_utc(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _movement_payload(row: ServiceOrderMovement, *, transport_type: str | None = None) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "serviceOrderId": str(row.service_order_id),
+        "sequenceNo": row.sequence_no,
+        "transportTypeId": row.transport_type_id,
+        "transportType": transport_type,
+        "transportAssetId": row.transport_asset_id,
+        "originPlaceId": row.origin_place_id,
+        "destinationPlaceId": row.destination_place_id,
+        "plannedDeparture": row.planned_departure.isoformat() if row.planned_departure else None,
+        "actualDeparture": row.actual_departure.isoformat() if row.actual_departure else None,
+        "plannedArrival": row.planned_arrival.isoformat() if row.planned_arrival else None,
+        "actualArrival": row.actual_arrival.isoformat() if row.actual_arrival else None,
+        "status": row.status,
+        "notes": row.data.get("notes") if isinstance(row.data, dict) else None,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+async def list_movements(session: AsyncSession, context: RequestContext, identifier: str) -> list[dict]:
+    order = await resolve_order(session, context, identifier)
+    rows = (
+        await session.execute(
+            select(ServiceOrderMovement)
+            .where(ServiceOrderMovement.service_order_id == order.id)
+            .order_by(ServiceOrderMovement.sequence_no, ServiceOrderMovement.id)
+        )
+    ).scalars().all()
+    return [_movement_payload(row) for row in rows]
+
+
+async def save_movement(
+    session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]
+) -> dict:
+    """Create or update one movement leg.
+
+    ``sequence_no`` is unique per order, so the next free sequence is allocated on
+    create and a conflicting explicit value is rejected rather than silently
+    renumbering a leg that other records may reference.
+    """
+    order = await resolve_order(session, context, identifier)
+    if order.status == "INACTIVE":
+        raise InvalidState("Cannot change movements on an inactive service order.")
+
+    movement_id = _int_or_none(data.get("id"))
+    movement: ServiceOrderMovement | None = None
+    if movement_id is not None:
+        movement = await session.get(ServiceOrderMovement, movement_id)
+        if movement is None or movement.service_order_id != order.id:
+            raise NotFound("Movement not found on this service order.")
+
+    if movement is None:
+        if "sequenceNo" in data and data.get("sequenceNo") not in (None, ""):
+            sequence_no = int(data["sequenceNo"])
+        else:
+            highest = (
+                await session.execute(
+                    select(func.max(ServiceOrderMovement.sequence_no)).where(
+                        ServiceOrderMovement.service_order_id == order.id
+                    )
+                )
+            ).scalar()
+            sequence_no = int(highest or 0) + 1
+        if sequence_no <= 0:
+            raise ValidationFailed("Sequence must be a positive number.", {"sequenceNo": "Enter 1 or more."})
+        clash = (
+            await session.execute(
+                select(ServiceOrderMovement).where(
+                    ServiceOrderMovement.service_order_id == order.id,
+                    ServiceOrderMovement.sequence_no == sequence_no,
+                )
+            )
+        ).scalars().first()
+        if clash is not None:
+            raise Conflict(
+                "DUPLICATE_SEQUENCE",
+                f"Movement sequence {sequence_no} already exists on this service order.",
+                {"sequenceNo": "Already in use"},
+            )
+        movement = ServiceOrderMovement(service_order_id=order.id, sequence_no=sequence_no, data={})
+        session.add(movement)
+    elif "sequenceNo" in data and data.get("sequenceNo") not in (None, ""):
+        requested = int(data["sequenceNo"])
+        if requested != movement.sequence_no:
+            # (service_order_id, sequence_no) is unique, so a renumber that
+            # collides must be reported as a conflict rather than surfacing as a
+            # database error.
+            clash = (
+                await session.execute(
+                    select(ServiceOrderMovement).where(
+                        ServiceOrderMovement.service_order_id == order.id,
+                        ServiceOrderMovement.sequence_no == requested,
+                        ServiceOrderMovement.id != movement.id,
+                    )
+                )
+            ).scalars().first()
+            if clash is not None:
+                raise Conflict(
+                    "DUPLICATE_SEQUENCE",
+                    f"Movement sequence {requested} already exists on this service order.",
+                    {"sequenceNo": "Already in use"},
+                )
+            movement.sequence_no = requested
+
+    origin = await _resolve_place_id(session, data, "originPlaceId", "originPlace", "origin")
+    destination = await _resolve_place_id(session, data, "destinationPlaceId", "destinationPlace", "destination")
+    if origin is not None:
+        movement.origin_place_id = origin
+    if destination is not None:
+        movement.destination_place_id = destination
+
+    transport_type_id = _int_or_none(data.get("transportTypeId"))
+    if transport_type_id is None and data.get("transportType"):
+        from app.modules.master_data.service import resolve_reference_id
+
+        transport_type_id = await resolve_reference_id(session, "transport_type", value=data.get("transportType"))
+    if transport_type_id is not None:
+        movement.transport_type_id = transport_type_id
+    if data.get("transportAssetId") is not None:
+        movement.transport_asset_id = _int_or_none(data.get("transportAssetId"))
+
+    for camel, attribute in (
+        ("plannedDeparture", "planned_departure"),
+        ("actualDeparture", "actual_departure"),
+        ("plannedArrival", "planned_arrival"),
+        ("actualArrival", "actual_arrival"),
+    ):
+        if camel in data:
+            try:
+                setattr(movement, attribute, _as_utc(data.get(camel)))
+            except ValueError as exc:
+                raise ValidationFailed(
+                    "Movement times must be valid timestamps.", {camel: "Use an ISO-8601 date/time."}
+                ) from exc
+
+    movement.status = _normalize_movement_status(data.get("status"), movement.status or "PLANNED")
+    stored = dict(movement.data or {})
+    if "notes" in data:
+        stored["notes"] = data.get("notes")
+    movement.data = jsonable(stored)
+    await session.commit()
+    return _movement_payload(movement)
+
+
+async def delete_movements(session: AsyncSession, context: RequestContext, identifier: str, ids: list[int]) -> int:
+    order = await resolve_order(session, context, identifier)
+    rows = (
+        await session.execute(
+            select(ServiceOrderMovement).where(
+                ServiceOrderMovement.service_order_id == order.id, ServiceOrderMovement.id.in_(ids)
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        await session.delete(row)
+    await session.commit()
+    return len(rows)
+
+
+# --- Milestones --------------------------------------------------------------
+MILESTONE_STATUSES = ("PENDING", "IN_PROGRESS", "COMPLETED", "SKIPPED")
+
+
+def _normalize_milestone_status(value: Any, default: str = "PENDING") -> str:
+    if value in (None, ""):
+        return default
+    candidate = str(value).strip().upper().replace(" ", "_").replace("-", "_")
+    return candidate if candidate in MILESTONE_STATUSES else default
+
+
+def _milestone_payload(row: ServiceOrderMilestone) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "serviceOrderId": str(row.service_order_id),
+        "milestoneCode": row.milestone_code,
+        "milestoneName": row.milestone_name,
+        "sequenceNo": row.sequence_no,
+        "plannedAt": row.planned_at.isoformat() if row.planned_at else None,
+        "actualAt": row.actual_at.isoformat() if row.actual_at else None,
+        "status": row.status,
+        "notes": row.notes,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+async def list_milestones(session: AsyncSession, context: RequestContext, identifier: str) -> list[dict]:
+    order = await resolve_order(session, context, identifier)
+    rows = (
+        await session.execute(
+            select(ServiceOrderMilestone)
+            .where(ServiceOrderMilestone.service_order_id == order.id)
+            .order_by(ServiceOrderMilestone.sequence_no, ServiceOrderMilestone.id)
+        )
+    ).scalars().all()
+    return [_milestone_payload(row) for row in rows]
+
+
+async def save_milestone(
+    session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]
+) -> dict:
+    order = await resolve_order(session, context, identifier)
+    if order.status == "INACTIVE":
+        raise InvalidState("Cannot change milestones on an inactive service order.")
+
+    milestone_id = _int_or_none(data.get("id"))
+    milestone: ServiceOrderMilestone | None = None
+    if milestone_id is not None:
+        milestone = await session.get(ServiceOrderMilestone, milestone_id)
+        if milestone is None or milestone.service_order_id != order.id:
+            raise NotFound("Milestone not found on this service order.")
+
+    code = str(data.get("milestoneCode") or data.get("milestone_code") or "").strip().upper().replace(" ", "_")
+    name = str(data.get("milestoneName") or data.get("milestone_name") or "").strip()
+    if milestone is None:
+        if not code:
+            raise ValidationFailed("A milestone code is required.", {"milestoneCode": "Required"})
+        clash = (
+            await session.execute(
+                select(ServiceOrderMilestone).where(
+                    ServiceOrderMilestone.service_order_id == order.id,
+                    ServiceOrderMilestone.milestone_code == code,
+                )
+            )
+        ).scalars().first()
+        if clash is not None:
+            raise Conflict(
+                "DUPLICATE_MILESTONE",
+                f"Milestone '{code}' already exists on this service order.",
+                {"milestoneCode": "Already in use"},
+            )
+        milestone = ServiceOrderMilestone(
+            service_order_id=order.id,
+            milestone_code=code,
+            milestone_name=name or code.replace("_", " ").title(),
+            sequence_no=int(data.get("sequenceNo") or 1),
+            status=_normalize_milestone_status(data.get("status"), "PENDING"),
+            notes=data.get("notes"),
+        )
+        session.add(milestone)
+    else:
+        if code and code != milestone.milestone_code:
+            raise Conflict(
+                "MILESTONE_CODE_IMMUTABLE",
+                "A milestone code cannot change once created; add a new milestone instead.",
+                {"milestoneCode": "Cannot be changed"},
+            )
+        if name:
+            milestone.milestone_name = name
+        if data.get("sequenceNo") not in (None, ""):
+            milestone.sequence_no = int(data["sequenceNo"])
+        milestone.status = _normalize_milestone_status(data.get("status"), milestone.status)
+        if "notes" in data:
+            milestone.notes = data.get("notes")
+
+    for camel, attribute in (("plannedAt", "planned_at"), ("actualAt", "actual_at")):
+        if camel in data:
+            try:
+                setattr(milestone, attribute, _as_utc(data.get(camel)))
+            except ValueError as exc:
+                raise ValidationFailed(
+                    "Milestone times must be valid timestamps.", {camel: "Use an ISO-8601 date/time."}
+                ) from exc
+
+    await session.commit()
+    return _milestone_payload(milestone)
+
+
+async def delete_milestones(session: AsyncSession, context: RequestContext, identifier: str, ids: list[int]) -> int:
+    order = await resolve_order(session, context, identifier)
+    rows = (
+        await session.execute(
+            select(ServiceOrderMilestone).where(
+                ServiceOrderMilestone.service_order_id == order.id, ServiceOrderMilestone.id.in_(ids)
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        await session.delete(row)
+    await session.commit()
+    return len(rows)
+
+
+async def _resolve_place_id(
+    session: AsyncSession, data: dict[str, Any], id_key: str, *name_keys: str
+) -> int | None:
+    """Accept an explicit place id or resolve a place by name/code."""
+    explicit = _int_or_none(data.get(id_key))
+    if explicit is not None:
+        return explicit
+    for key in name_keys:
+        value = data.get(key)
+        if value in (None, ""):
+            continue
+        from app.modules.master_data.service import resolve_reference_id
+
+        return await resolve_reference_id(session, "place", value=value)
+    return None

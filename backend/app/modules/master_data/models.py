@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -59,6 +60,72 @@ class TradeDirection(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class Currency(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """Currency master data.
+
+    Currency used to be an unconstrained ``VARCHAR(3)`` on every money-bearing
+    table, so a typo silently created a currency nobody could report on. The
+    monetary columns keep their ``currency_code`` string for backward
+    compatibility, but new writes resolve it against this table.
+
+    ``decimal_places`` is the currency's own precision, used to round every
+    converted (base-currency) amount — JPY and KHR are configured with 0 rather
+    than being forced into two decimals they do not have.
+    """
+
+    __tablename__ = "currencies"
+    __table_args__ = (active_unique_index("uq_currencies_code_active", "code"),)
+
+    code: Mapped[str] = mapped_column(String(3), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    symbol: Mapped[str | None] = mapped_column(String(10))
+    numeric_code: Mapped[str | None] = mapped_column(String(3))
+    decimal_places: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class CurrencyRate(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """An approved conversion rate between two currencies, effective from a date.
+
+    ``rate`` answers "1 ``from_currency_code`` = rate ``to_currency_code``", the
+    direction the UI shows ("1 USD = 4,000 KHR"). A document stores the
+    conversion the other way round — ``base = amount * exchange_rate`` — so the
+    resolver in ``master_data/currency_rates.py`` inverts a pair when only the
+    inverse row exists, and the rate copied onto the document is what a posting
+    is later explained by.
+
+    Rates are versioned by ``effective_date``: a correction is a new row, never
+    an edit of one already used, which is why uniqueness is scoped to the pair
+    and the date. Only the resolver reads this table; nothing posts from it.
+    """
+
+    __tablename__ = "currency_rates"
+    __table_args__ = (
+        active_unique_index(
+            "uq_currency_rates_pair_date",
+            "from_currency_code",
+            "to_currency_code",
+            "effective_date",
+        ),
+        Index(
+            "ix_currency_rates_lookup",
+            "from_currency_code",
+            "to_currency_code",
+            "effective_date",
+            "status",
+        ),
+    )
+
+    from_currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    to_currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    source: Mapped[str | None] = mapped_column(String(80))
+    description: Mapped[str | None] = mapped_column(Text)
 
 
 class ContainerType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -146,6 +213,40 @@ class CustomerCustomsAccount(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
+class ConfigurationVersion(PKMixin, TimestampMixin, Base):
+    """A published snapshot of the dynamic Service Order configuration.
+
+    Tabs, groups and attributes are edited in place, so without a snapshot a
+    historical Service Order could no longer be rendered the way it was filled
+    in. Publishing copies the live configuration into ``config_snapshot`` and
+    stamps the rows that participated, which makes both the *definition* and the
+    *layout* of a saved order reproducible.
+
+    Exactly one version may be ``PUBLISHED`` at a time (partial unique index);
+    ``RETIRED`` keeps a snapshot readable after it stops being the current one.
+    ``config_snapshot`` is data only — nothing in it is executed.
+    """
+
+    __tablename__ = "configuration_versions"
+    __table_args__ = (
+        UniqueConstraint("version_no", name="uq_configuration_versions_no"),
+        Index(
+            "uq_configuration_versions_published",
+            "status",
+            unique=True,
+            postgresql_where=text("status = 'PUBLISHED'"),
+            sqlite_where=text("status = 'PUBLISHED'"),
+        ),
+    )
+
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
+    change_note: Mapped[str | None] = mapped_column(Text)
+    config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+
 class ComponentAttribute(PKMixin, TimestampMixin, Base):
     """Reusable dynamic-form attribute (field) in the global catalog.
 
@@ -225,6 +326,11 @@ class ComponentTab(PKMixin, TimestampMixin, Base):
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The published configuration this tab was part of. Historical orders keep
+    # resolving against the snapshot even after the tab is edited or removed.
+    config_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("configuration_versions.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class ComponentTabGroup(PKMixin, TimestampMixin, Base):

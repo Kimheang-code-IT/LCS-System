@@ -115,16 +115,16 @@ describe('service order containers', () => {
       'feeType',
       'quantity',
       'unitPrice',
-      'discountAmount',
       'lineTotal',
       'note',
       '_delete',
       '_invoice',
     ])
     const column = (key: string) => JOB_CONTAINER_PAYMENT_TABLE.columns.find(item => item.key === key)
-    // Discount is its own editable column, not an inline field of the line total.
-    expect(column('discountAmount')).toMatchObject({ type: 'number' })
-    expect(column('discountAmount')?.inlineFields).toBeUndefined()
+    // A payment sheet carries one discount and tax for the whole sheet, so there
+    // is no per-row discount column; the totals block owns those values instead.
+    expect(column('discountAmount')).toBeUndefined()
+    expect(JOB_CONTAINER_PAYMENT_TABLE.pricing).toBe(true)
     expect(column('lineTotal')).toMatchObject({ type: 'number', computed: true })
     expect(column('note')?.type).toBe('note')
     expect(column('_delete')?.type).toBe('delete')

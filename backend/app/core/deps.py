@@ -13,6 +13,36 @@ from app.core.security import decode_token
 from app.modules.auth import service as auth_service
 from app.modules.auth.models import User
 
+#: Routes a caller may still reach while a password change is outstanding. Each
+#: is needed to complete the change or to leave: refreshing the token keeps the
+#: session alive, reading the profile tells the UI who is signed in, and logout
+#: has to remain possible. Everything else answers
+#: ``403 PASSWORD_CHANGE_REQUIRED``.
+_PASSWORD_CHANGE_ALLOWED_SUFFIXES = (
+    "/auth/change-password",
+    "/auth/logout",
+    "/auth/refresh",
+    "/auth/me",
+)
+
+
+def _refuse_until_password_changed(request: Request, payload: dict) -> None:
+    """Block the API for a credential an administrator set.
+
+    The flag rides in the access token (``pwd``) rather than being read from the
+    database, so this costs no query. A token issued before the reset cannot
+    bypass it either: setting the flag revokes every session and bumps the token
+    version, so that token is already rejected above.
+    """
+    if not payload.get("pwd"):
+        return
+    path = request.url.path.rstrip("/")
+    if any(path.endswith(suffix) for suffix in _PASSWORD_CHANGE_ALLOWED_SUFFIXES):
+        return
+    raise AccessDenied(
+        "Your password was set by an administrator. Choose a new one to continue."
+    )
+
 
 async def get_current_context(
     request: Request,
@@ -42,6 +72,7 @@ async def get_current_context(
         raise AuthRequired("This account is not active.")
     if int(payload.get("tv", 0)) != int(getattr(user, "token_version", 0) or 0):
         raise AuthRequired("Session has been revoked. Please sign in again.")
+    _refuse_until_password_changed(request, payload)
     request_id = getattr(request.state, "request_id", None) or payload.get("jti", "")
     context = await auth_service.build_context(
         session,

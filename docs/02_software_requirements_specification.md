@@ -708,26 +708,15 @@ The baseline release is acceptable when:
 
 The frontend is a Nuxt 4 static SPA (`ssr: false`, built with `nuxt generate`) served by nginx, which also reverse-proxies `/api` so the browser is same-origin. Page access is checked with `useAuthStore().canAccessPage(pageId)`, and all data access goes through `app/repositories/*`, which is backed by `app/utils/api/freight-remote.ts` (`REMOTE_ENDPOINTS`).
 
-| Surface | Routes | Purpose |
-|---|---|---|
-| Public setup and auth | `/setup`, `/auth/login`, `/auth/forget-password`, `/auth/verify-code`, `/auth/reset-password` | First-run provisioning, login, and password reset |
-| Dashboard | `/` | Backend-served dashboard summary |
-| Operations | `/quotations`, `/service-orders`, `/service-charges` | Quotation lifecycle, service-order operations, and informational charges |
-| Finance | `/finance/documents`, `/finance/chart-of-accounts`, `/finance/financial-accounts`, `/finance/journals`, `/finance/accounting-periods` | Financial documents, chart of accounts, financial accounts, journals, and periods |
-| Master data | `/master-data/*` | Trade directions, places, container types, transport types, transport assets, fee types, and business parties |
-| Configuration | `/configuration/*` | Component groups, component templates, service-order tabs, and trade-direction components |
-| Administration | `/administration/users`, `/administration/roles`, `/administration/document-sequences`, `/administration/audit-logs`, `/administration/system-settings` | Users, roles, document sequences, audit logs, and system settings |
-| Reports | `/reports/:area/:slug` | Catalogue of 12 reports grouped into operations and finance |
-| Print | `/print/:collection/:id` | Printable document views |
+Every surface, its routes and the page file that implements it are catalogued
+once in `docs/05_solution_architecture.md` — Appendix C plus §16 "Frontend
+Architecture"; that is the route reference this specification points at.
 
 The report catalogue exposes: Service Order Register, Service Order Status, Containers, Profitability (operations); Revenue & Expense, Accounts Receivable, Accounts Payable, General Ledger, Trial Balance, Profit & Loss, Balance Sheet, and Cash Flow (finance). Reports filter by party, status, currency, and date as applicable, never by organization or branch.
 
 ## Appendix B — API conventions
 
-- **Base path:** every endpoint is served under `/api/v1`; interactive documentation is exposed through OpenAPI.
-- **Success envelope:** successful payloads are `{"data": ...}`; list endpoints return `{"data": {"items": [...], "meta": {"page", "page_size", "total"}}}`.
-- **Errors:** failures return `{code, message, request_id, field_errors}`. Authorization is `AUTH_REQUIRED` or `ACCESS_DENIED`; not-found references are `REFERENCE_NOT_FOUND`; request validation is `VALIDATION_ERROR`.
-- **Error codes:** `AUTH_REQUIRED`, `ACCESS_DENIED`, `REFERENCE_NOT_FOUND`, `VALIDATION_ERROR`, `INVALID_STATE_TRANSITION`, `REFERENCE_ACTIVE`, `ORDER_ACTIVE`, `DUPLICATE_NUMBER`, `DUPLICATE_CONVERSION`, `DUPLICATE_USERNAME`, `DUPLICATE_EMAIL`, `DUPLICATE_ROLE`, `INVALID_RESET_CODE`, `BACKUP_RUNNING`, `SETUP_COMPLETED`, `PERIOD_CLOSED`, `JOURNAL_UNBALANCED`, `DOCUMENT_ALREADY_REVERSED`, `ALLOCATION_EXCEEDS_BALANCE`, `CURRENCY_MISMATCH`.
-- **Auth:** the API issues a JWT access token (default 1440 minutes) and a rotating refresh token (default 30 days), accepted as `Authorization: Bearer` or as HttpOnly cookies; cookie-based writes use a CSRF cookie/header pair.
-- **Pagination:** list responses carry `items` plus a `meta` object with `page`, `page_size`, and `total`.
-- **Request tracing:** `request_id` is returned on errors and included in logs alongside a correlation identifier.
+The envelope, error, auth, pagination and tracing conventions are documented once
+in `docs/05_solution_architecture.md` §7, and the stable error-code catalogue —
+the exact list that used to be repeated here — is in
+`docs/04_functional_design.md` §11.

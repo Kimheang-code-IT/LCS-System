@@ -50,6 +50,9 @@ _PAGE_COLLECTION_PATHS: dict[str, str | None] = {
     "profitability": "/api/v1/profitability",
     "documentSequences": "/api/v1/document-sequences",
     "accountingPeriods": "/api/v1/accounting-periods",
+    # The rule history list is the audit trail scoped to one entity type, so it
+    # is served from the posting-rules resource rather than its own collection.
+    "postingRuleHistory": "/api/v1/posting-rules/history",
     "reports": None,
 }
 

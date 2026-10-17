@@ -17,6 +17,8 @@ export interface QuotationRepository {
   saveDraft: (record: FreightRecord) => Promise<FreightRecord>
   send: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   accept: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
+  reject: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
+  cancel: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
   createRevision: (quotationId: string) => Promise<FreightRecord>
   listRevisions: (quotationId: string) => Promise<FreightRecord[]>
   submit: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
@@ -58,12 +60,29 @@ export interface FinanceRepository {
   getJournal: (id: string) => Promise<FreightRecord>
   createJournal: (input: CreateRecordInput) => Promise<FreightRecord>
   saveJournal: (record: FreightRecord) => Promise<FreightRecord>
+  postJournal: (journalId: string, idempotencyKey: string) => Promise<FreightRecord>
   listPeriods: () => Promise<FreightRecord[]>
   closePeriod: (periodId: string, idempotencyKey: string) => Promise<FreightRecord>
 }
 
 export interface AuditRepository {
   list: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
+}
+
+export interface UserAdminRepository {
+  /**
+   * Set another account's password. The request sends either a password the
+   * administrator typed or one this module generated; the server hashes it and
+   * never returns it.
+   *
+   * ``mustChangePassword`` defaults to true on the server, so a temporary
+   * password cannot be kept in use.
+   */
+  setPassword: (
+    userId: string,
+    password: string,
+    options?: { mustChangePassword?: boolean },
+  ) => Promise<FreightRecord>
 }
 
 export interface AttachmentRepository {

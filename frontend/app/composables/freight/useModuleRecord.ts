@@ -79,6 +79,25 @@ export function useModuleRecord(module: Ref<FreightModule | undefined>) {
     }
   }
 
+  async function changeStatus(id: string, status: string, reason?: string) {
+    if (!module.value) throw new Error('Module is not available')
+    pending.value = true
+    error.value = null
+    try {
+      const repository = useModuleRepository(module.value)
+      const record = await repository.changeStatus(id, status, reason)
+      useFreightStore().reload()
+      return record
+    }
+    catch (err) {
+      error.value = err
+      throw err
+    }
+    finally {
+      pending.value = false
+    }
+  }
+
   return {
     pending,
     error,
@@ -86,5 +105,6 @@ export function useModuleRecord(module: Ref<FreightModule | undefined>) {
     create,
     update,
     remove,
+    changeStatus,
   }
 }

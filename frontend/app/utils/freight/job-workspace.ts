@@ -132,12 +132,6 @@ export function jobFieldsFromPlaces(places: Array<Record<string, unknown>>) {
   return patch
 }
 
-export function displayText(value: unknown) {
-  if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean).join(', ') || '—'
-  const text = String(value ?? '').trim()
-  return text || '—'
-}
-
 export function isMoneyKey(key: string) {
   return /amount|total|vat|received|outstanding|paid|revenue|profit|cost|price|buying|selling|fee|subtotal/i.test(key)
     && !/date|status|type|note|method|side/i.test(key)

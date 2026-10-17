@@ -4,10 +4,13 @@
 
 @theme static {
   --font-sans:
-    "Inter", "Noto Sans Khmer", ui-sans-serif, system-ui, -apple-system,
-    "Segoe UI", Arial, sans-serif;
+    "Inter", "Noto Sans Khmer", "Noto Sans SC", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", Arial, sans-serif;
   --font-khmer:
     "Noto Sans Khmer", "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Arial, sans-serif;
+  --font-zh:
+    "Noto Sans SC", "Inter", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Arial, sans-serif;
 
   /* Logo coral-red primary palette — must be @theme static for Nuxt UI */
@@ -73,6 +76,21 @@
   [lang="km"] .tracking-tighter,
   [lang="km"].tracking-tighter {
     letter-spacing: normal !important;
+  }
+
+  /* Simplified Chinese locale (Nuxt UI reports html[lang="zh-CN"]) */
+  html[lang="zh-CN"],
+  html[lang="zh-CN"] body,
+  html[lang="zh-CN"] #__nuxt,
+  html[lang="zh"] {
+    font-family: var(--font-zh) !important;
+  }
+
+  /* Chinese Font Readability Enhancements */
+  :lang(zh) {
+    line-height: 1.6;
+    letter-spacing: normal;
+    font-family: var(--font-zh) !important;
   }
 }
 

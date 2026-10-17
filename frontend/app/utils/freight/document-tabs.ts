@@ -13,10 +13,17 @@ import type {
   FreightModule,
   FreightTable,
 } from '~/config/freight-modules'
+import { ALLOCATION_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 
 export const RELATED_FIELD_KEY = '__related'
 
+/**
+ * Tab id carrying two tables instead of a field grid: a posting rule's changes
+ * and the journals it posted. `DocumentView` appends it and renders its content
+ * through the document page's `tab-extra` slot, so no other module can
+ * accidentally inherit an empty tab.
+ */
 export const freightDocumentLineActionKey: InjectionKey<
   (action: 'view', row: Record<string, unknown>) => void
 > = Symbol('freightDocumentLineAction')
@@ -74,17 +81,23 @@ const QUOTATION_OVERVIEW_KEYS = [
 const FINANCE_OVERVIEW_KEYS = [
   'debitNoteNo',
   'documentType',
-  'customer',
+  'partyId',
   'jobNo',
   'date',
   'postingDate',
   'dueDate',
   'currency',
   'exchangeRate',
+  'rateDirection',
+  'baseCurrency',
+  'baseTotalAmount',
+  'total',
   'referenceNo',
   'paymentMethod',
-  'financialAccount',
+  'financialAccountId',
+  'valueDate',
   'status',
+  'remark',
 ] as const
 
 export type ModuleDocumentTabsOptions = {
@@ -94,6 +107,20 @@ export type ModuleDocumentTabsOptions = {
   chargeLinkedToJob?: boolean
   chargeManualNumber?: boolean
   readOnlyKeys?: string[]
+  /**
+   * Document type of the record being edited (`financial_documents.document_type`).
+   * When given, tabs and fields scoped to other types are dropped; omitting it
+   * leaves every declared tab and field in place.
+   */
+  documentType?: string
+  /** Record status, used to hide a tab that has nothing to show yet (e.g. an unposted journal). */
+  status?: string
+  /**
+   * The record being edited. Only read to evaluate a field's `visibleWhen` rule
+   * (e.g. the exchange rate while the document currency is not the base
+   * currency); omitting it leaves every conditioned field visible.
+   */
+  record?: FreightRecord | null
 }
 
 export function freightSelectOptions(
@@ -130,6 +157,8 @@ export function freightFieldToDocumentField(
     label: field.label,
     required: field.required,
     colSpan: field.colSpan,
+    documentTypes: field.documentTypes,
+    visibleWhen: field.visibleWhen,
     help: field.help,
     helpKey: field.helpKey,
     rows: type === 'textarea' ? 4 : undefined,
@@ -152,7 +181,12 @@ function visibleTables(module: FreightModule, isCreate?: boolean): FreightTable[
   return module.tables
 }
 
-const VIEW_ONLY_TABLES = new Set(['revisionHistory', 'sourceRelationships'])
+/**
+ * Tables the form never edits. A journal is produced by posting and an allocation
+ * by `allocate_payment`, so both are shown as the server recorded them; nothing
+ * typed into them would be saved.
+ */
+const VIEW_ONLY_TABLES = new Set(['revisionHistory', 'sourceRelationships', 'journalEntries', 'allocations'])
 
 function withChargeColumns(table: FreightTable, _chargeLinkedToJob?: boolean): FreightTable {
   if (table.key !== 'feeLines') return table
@@ -180,7 +214,7 @@ export function lineTableField(
   const resolved = withChargeColumns(table, options.chargeLinkedToJob)
   return {
     key: table.key,
-    labelKey: `freight.tables.${table.key}`,
+    labelKey: table.titleKey || `freight.tables.${table.key}`,
     label: table.title,
     type: 'line-table',
     colSpan: 2,
@@ -190,7 +224,10 @@ export function lineTableField(
       compact: options.compact,
       viewOnly: VIEW_ONLY_TABLES.has(table.key),
       showPricingTotals: Boolean(table.pricing),
-      includeTax: Boolean(table.pricing),
+      // A table whose prices are already the customer price has no discount or
+      // tax step, so neither line is shown.
+      showDiscountTotals: Boolean(table.pricing) && !table.hideDiscountTax,
+      includeTax: Boolean(table.pricing) && !table.hideDiscountTax,
     },
   }
 }
@@ -380,11 +417,17 @@ function financeTabs(module: FreightModule, options: ModuleDocumentTabsOptions):
     {
       id: 'allocation',
       labelKey: 'freight.documentTabs.allocation',
+      // Only an invoice or bill can be allocated against, and only a receipt or
+      // payment allocates; every other type has no allocation to show.
+      documentTypes: ALLOCATION_DOCUMENT_TYPES,
       sections: [{ id: 'allocation', fields: [lineTableField(tableOrThrow(module, 'allocations'), options)] }],
     },
     {
       id: 'journal',
       labelKey: 'freight.documentTabs.journal',
+      // The journal exists once the document is posted (and stays visible after a
+      // reversal, which posts a second one).
+      statuses: ['POSTED', 'REVERSED'],
       sections: [{ id: 'journal', fields: [lineTableField(tableOrThrow(module, 'journalEntries'), options)] }],
     },
     {
@@ -493,6 +536,55 @@ function withRuntimeLineTables(
   }))
 }
 
+/**
+ * Whether a tab or field applies to the record being edited. A constraint that is
+ * absent or empty matches everything, and so does an unknown document type or
+ * status (a record mid-creation must not lose its fields before a type is chosen).
+ */
+function appliesTo(
+  constraint: { documentTypes?: readonly string[], statuses?: readonly string[] },
+  options: ModuleDocumentTabsOptions,
+): boolean {
+  const within = (values: readonly string[] | undefined, actual: string | undefined) => {
+    if (!values?.length || !actual) return true
+    const wanted = String(actual).trim().toUpperCase()
+    return values.some(value => String(value).trim().toUpperCase() === wanted)
+  }
+  return within(constraint.documentTypes, options.documentType)
+    && within(constraint.statuses, options.status)
+}
+
+/**
+ * Whether a field's `visibleWhen` rule holds for the record being edited. A rule
+ * that cannot be evaluated (no record, missing values) keeps the field visible:
+ * hiding a field the operator may need is worse than showing one they do not.
+ */
+function conditionHolds(
+  field: DocumentFieldSchema,
+  record: FreightRecord | null | undefined,
+): boolean {
+  const rule = field.visibleWhen
+  if (!rule?.differs?.length || !record) return true
+  const [left, right] = rule.differs
+  const leftValue = String(record[left] ?? '').trim().toUpperCase()
+  const rightValue = String(record[right] ?? '').trim().toUpperCase()
+  if (!leftValue || !rightValue) return true
+  return leftValue !== rightValue
+}
+
+/** Drop the tabs and fields that do not apply to this document type / status / record. */
+function scopedTabs(tabs: DocumentTabSchema[], options: ModuleDocumentTabsOptions): DocumentTabSchema[] {
+  return tabs
+    .filter(tab => appliesTo(tab, options))
+    .map(tab => ({
+      ...tab,
+      sections: tab.sections.map(section => ({
+        ...section,
+        fields: section.fields.filter(field => appliesTo(field, options) && conditionHolds(field, options.record)),
+      })),
+    }))
+}
+
 /** Compile module fields/tables into AppDocumentForm tabs (tab → section → field). */
 export function moduleDocumentTabs(
   module: FreightModule,
@@ -509,5 +601,24 @@ export function moduleDocumentTabs(
   if (options.includeRelated && module.related?.length && !tabs.some(tab => tab.id === 'related')) {
     tabs = [...tabs, relatedTab()]
   }
-  return tabs
+  return withoutStatusFields(scopedTabs(tabs, options))
+}
+
+/**
+ * Status is never an editable form field.
+ *
+ * Every collection changes status from the row's "..." menu, where the backend
+ * validates the transition, checks the permission and the accounting rules, and
+ * audits the result. Leaving the field on the form would let a create/edit save
+ * write any status directly — a posted journal could be relabelled, a reference
+ * record reactivated, a closed period reopened — bypassing all of that.
+ */
+function withoutStatusFields(tabs: DocumentTabSchema[]): DocumentTabSchema[] {
+  return tabs.map(tab => ({
+    ...tab,
+    sections: tab.sections.map(section => ({
+      ...section,
+      fields: section.fields.filter(field => field.key !== 'status'),
+    })),
+  }))
 }

@@ -50,7 +50,7 @@ export function useComponentTabs(
       const map: Record<string, FlatRow[]> = {}
       for (const tab of tabs.value) {
         for (const group of tab.groups) {
-          map[group.id] = (group.rows || []).map(componentRowToFlatRow)
+          map[group.id] = mergeRows(group.id, (group.rows || []).map(componentRowToFlatRow))
         }
       }
       rowsByGroup.value = map
@@ -65,6 +65,30 @@ export function useComponentTabs(
   }
 
   watch(cacheKey, () => { void load() }, { immediate: true })
+
+  /**
+   * Reloading (for example after the Trade Direction changes) must never wipe
+   * values the user already typed in a tab that exists in both configurations.
+   * Server rows still win for cells the user left blank, so a fresh load can
+   * still pick up values another user saved in the meantime.
+   */
+  function mergeRows(groupId: string, serverRows: FlatRow[]): FlatRow[] {
+    const existing = rowsByGroup.value[groupId]
+    if (!existing?.length) return serverRows
+    if (serverRows.length !== existing.length) return serverRows
+    return serverRows.map((row, index) => {
+      const local = existing[index] || {}
+      const merged: FlatRow = { ...row }
+      for (const [key, value] of Object.entries(local)) {
+        if (key.startsWith('_') || key === 'id') continue
+        const blank = value === undefined || value === null
+          || (typeof value === 'string' && value.trim() === '')
+          || (Array.isArray(value) && value.length === 0)
+        if (!blank && row[key] === undefined) merged[key] = value
+      }
+      return merged
+    })
+  }
 
   function tabByCode(code: string): ComponentTabRuntime | null {
     return tabs.value.find(tab => tab.code === code) || null

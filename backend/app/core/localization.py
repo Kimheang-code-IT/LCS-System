@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.exceptions import ValidationFailed
 
-SUPPORTED_LANGUAGES = ("en", "km")
+SUPPORTED_LANGUAGES = ("en", "km", "zh")
 SUPPORTED_TIMEZONES = (
     "Asia/Phnom_Penh",
     "Asia/Bangkok",
@@ -37,7 +35,7 @@ DEFAULT_CURRENCY = "USD"
 
 DEFAULT_LOCALIZATION: dict[str, Any] = {
     "defaultLanguage": "en",
-    "availableLanguages": ["en", "km"],
+    "availableLanguages": ["en", "km", "zh"],
     "timezone": "Asia/Phnom_Penh",
     "dateFormat": "DD/MM/YYYY",
     "timeFormat": "HH:mm",
@@ -52,7 +50,7 @@ _LEGACY_NUMBER_FORMATS = {
     "1.234,56": "#.##0,00",
     "1 234,56": "# ##0,00",
 }
-_LANGUAGE_LOCALES = {"en": "en-US", "km": "km-KH"}
+_LANGUAGE_LOCALES = {"en": "en-US", "km": "km-KH", "zh": "zh-CN"}
 
 
 def normalize_localization(value: Any) -> dict[str, Any]:
@@ -91,6 +89,11 @@ def normalize_localization(value: Any) -> dict[str, Any]:
     return result
 
 
+def normalize_message_language(value: Any) -> str:
+    """Keep the Telegram/notification message language on a supported UI language."""
+    return value if value in SUPPORTED_LANGUAGES else DEFAULT_LOCALIZATION["defaultLanguage"]
+
+
 def validate_localization_patch(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValidationFailed("Localization settings must be an object.", {"localization": "Expected an object."})
@@ -126,48 +129,3 @@ def validate_localization_patch(value: Any) -> dict[str, Any]:
     if errors:
         raise ValidationFailed("Invalid localization settings.", errors)
     return normalize_localization({**DEFAULT_LOCALIZATION, **value})
-
-
-def _as_datetime(value: date | datetime) -> datetime:
-    if isinstance(value, datetime):
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
-    return datetime(value.year, value.month, value.day, tzinfo=UTC)
-
-
-def format_date(value: date | datetime, config: dict[str, Any]) -> str:
-    local = value if isinstance(value, date) and not isinstance(value, datetime) else _as_datetime(value).astimezone(ZoneInfo(config["timezone"]))
-    pattern = config["dateFormat"]
-    if pattern == "DD/MM/YYYY":
-        return local.strftime("%d/%m/%Y")
-    if pattern == "MM/DD/YYYY":
-        return local.strftime("%m/%d/%Y")
-    if pattern == "DD-MM-YYYY":
-        return local.strftime("%d-%m-%Y")
-    if pattern == "D MMM YYYY":
-        return f"{local.day} {local.strftime('%b')} {local.year}"
-    return local.strftime("%Y-%m-%d")
-
-
-def format_time(value: datetime, config: dict[str, Any]) -> str:
-    local = _as_datetime(value).astimezone(ZoneInfo(config["timezone"]))
-    patterns = {"HH:mm": "%H:%M", "HH:mm:ss": "%H:%M:%S", "h:mm A": "%I:%M %p", "h:mm:ss A": "%I:%M:%S %p"}
-    rendered = local.strftime(patterns[config["timeFormat"]])
-    return rendered[1:] if config["timeFormat"].startswith("h") and rendered.startswith("0") else rendered
-
-
-def format_number(value: Any, config: dict[str, Any]) -> str:
-    try:
-        number = Decimal(str(value)).quantize(Decimal("0.01"))
-    except (InvalidOperation, ValueError):
-        return str(value if value is not None else "")
-    standard = f"{number:,.2f}"
-    if config["numberFormat"] == "#.##0,00":
-        return standard.replace(",", "_").replace(".", ",").replace("_", ".")
-    if config["numberFormat"] == "# ##0,00":
-        return standard.replace(",", " ").replace(".", ",")
-    return standard
-
-
-def format_currency(value: Any, config: dict[str, Any], currency: str | None = None) -> str:
-    code = currency or config["currency"]
-    return f"{code} {format_number(value, config)}"

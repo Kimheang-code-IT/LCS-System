@@ -112,16 +112,39 @@ browser can open files at `http://localhost:9000/...`. Set
 
 ```text
 backend/app/modules/
-├── auth/          users, roles, permissions, sessions, org/branch context
-├── master_data/   business parties, places, types, component/tab configuration
-├── quotations/    quotations, immutable revisions, conversion
-├── operations/    service orders, containers, dynamic tabs, charges, files
-├── finance/       financial documents, posting, allocation, journals, accounts
-├── reports/       server-side dashboard, operational and accounting reports
-├── settings/      branding, localization, global search, reset-all-data
-├── setup/         first-run organization/admin/finance provisioning
-└── audit/         immutable audit trail
+├── auth/          users, roles, permissions, sessions, single-role RBAC
+├── master_data/   business parties, places, types, currencies/FX, component/tab configuration, configuration versions
+├── quotations/    quotations, immutable revisions, comparison, conversion
+├── operations/    service orders, containers, movements, milestones, dynamic tabs, charges, files
+├── finance/       financial documents, posting, allocation, journals, accounts, periods
+├── reports/       server-side dashboard, operational, accounting and financial-statement reports
+├── settings/      branding, localization, app config, global search, reset-all-data
+├── setup/         first-run admin/finance provisioning
+├── backup/        Google Sheets replication and its scheduler
+├── archive/       soft-delete tombstones, restore, guarded hard delete
+└── audit/         append-only audit trail
 ```
+
+## Documentation map
+
+| Document | Read it for |
+|---|---|
+| `AGENTS.md` | Commands, conventions, financial-integrity rules, Definition of Done |
+| `docs/05_solution_architecture.md` | Architecture, layering, module boundaries |
+| `docs/06_database_design.sql`, `docs/06b_database_design_annotated.sql` | Generated schema (raw DDL, and the same DDL with a description for every table and column) |
+| `docs/11_permissions_matrix.md` | Permission catalog, page mapping, role composition |
+| `docs/12_deployment_runbook.md` | Deploy, back up, restore, roll back |
+| `docs/14_47_table_migration_analysis.md` | How the schema maps to the 47-table reference proposal and what was deliberately not adopted |
+| `docs/15_migration_and_rollback_guide.md` | Applying, verifying and rolling back a migration, plus the backup/restore drill |
+| `docs/16_upgrade_summary_and_risks.md` | What each migration change was and the risks that remain |
+| `docs/17_repository_analysis.md` | **Verified** implementation status, the hardcoded-configuration register, and the security/financial risk lists |
+| `docs/18_implementation_checklist.md` | Per-feature status, remaining work, and the verification log |
+
+Reusable agent workflows live in `.opencode/skills/` (`lcs-development` is the
+umbrella; `database-migration`, `fastapi-backend`, `nuxt-frontend`,
+`dynamic-ui-configuration`, `quotation-management`, `finance-accounting`,
+`security-rbac`, `testing-qa`, `deployment-devops`, `project-analysis` are the
+focused ones).
 
 ## Backend package manager — uv
 

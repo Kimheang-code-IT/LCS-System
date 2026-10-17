@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.locks import advisory_lock
+from app.core.sequences import DEFAULT_PREFIXES
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
@@ -36,16 +37,9 @@ async def test_reset_preserves_protected_admin_and_clears_business_data(client):
     # the current year and the default app config record.
     sequences = await client.get("/api/v1/document-sequences", headers=preserved_headers)
     assert sequences.status_code == 200, sequences.text
-    assert {row["documentType"] for row in sequences.json()["data"]["items"]} == {
-        "QUOTATION",
-        "SERVICE_ORDER",
-        "SERVICE_CHARGE",
-        "CUSTOMER_INVOICE",
-        "SUPPLIER_BILL",
-        "CUSTOMER_RECEIPT",
-        "SUPPLIER_PAYMENT",
-        "JOURNAL",
-    }
+    # Asserted against the registry rather than a literal, so adding a document
+    # type (credit notes) does not require editing this test as well.
+    assert {row["documentType"] for row in sequences.json()["data"]["items"]} == set(DEFAULT_PREFIXES)
 
     app_config = await client.get("/api/v1/settings/app-config", headers=preserved_headers)
     assert app_config.status_code == 200, app_config.text

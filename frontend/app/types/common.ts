@@ -79,6 +79,7 @@ export type FieldType =
   | 'csv-list'
   | 'telegram-destinations'
   | 'notification-rules'
+  | 'language-toggles'
   | 'connection-status'
   | 'alert'
   | 'icon'
@@ -117,6 +118,17 @@ export interface DocumentFieldSchema {
   type: FieldType
   required?: boolean
   readOnly?: boolean
+  /**
+   * Financial document types this field applies to (from `FreightField.documentTypes`).
+   * Empty/absent means every type; the form drops the field for the other types.
+   */
+  documentTypes?: readonly string[]
+  /**
+   * Show the field only while two record fields differ, e.g. the exchange rate
+   * while the document currency is not the company's base currency. Absent means
+   * always shown, and the rule is not evaluated when no record is in hand.
+   */
+  visibleWhen?: { differs: readonly [string, string] }
   colSpan?: 1 | 2
   options?: FieldOption[]
   /** Bounded API endpoint returning active `{ label, value }` options. */
@@ -154,6 +166,13 @@ export interface DocumentTabSchema {
   /** Literal tab label (used when text is not an i18n key). */
   label?: string
   sections: DocumentSectionSchema[]
+  /**
+   * Financial document types this tab applies to (`FreightTab`/recipe metadata).
+   * Empty/absent means every type, so a tab only disappears when it declares one.
+   */
+  documentTypes?: readonly string[]
+  /** Record statuses this tab applies to, matched case-insensitively. */
+  statuses?: readonly string[]
 }
 
 export type EntityStatus = 'draft' | 'active' | 'archived' | 'deleted' | 'disabled' | 'pending' | 'completed' | 'failed'

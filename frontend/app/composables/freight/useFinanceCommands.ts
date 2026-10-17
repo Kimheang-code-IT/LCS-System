@@ -12,11 +12,16 @@ export function useFinanceCommands(options: {
   store: ReturnType<typeof useFreightStore>
   toast: ReturnType<typeof useToast>['add']
   t: (key: string, ...args: unknown[]) => string
-  currentUserName: Ref<string>
   periodClosed: Ref<boolean>
   recalculate: () => void
   traceLink: (kind: TraceLinkKind) => TraceLink | null | undefined
   openReverse: () => void
+  /**
+   * Page-level refusal channel. Business-rule errors (closed period, unbalanced
+   * journal) are not validation errors and have no single input to own them, so
+   * they surface next to the form instead of in a toast.
+   */
+  onError: (message: string) => void
 }) {
   const {
     lcs,
@@ -24,11 +29,11 @@ export function useFinanceCommands(options: {
     store,
     toast,
     t,
-    currentUserName,
     periodClosed,
     recalculate,
     traceLink,
     openReverse,
+    onError,
   } = options
 
   async function issueCharge() {
@@ -62,7 +67,7 @@ export function useFinanceCommands(options: {
 
   async function postDocument() {
     if (periodClosed.value) {
-      toast({ title: t('lcs.finance.periodClosed'), color: 'error' })
+      onError(t('lcs.finance.periodClosed'))
       return
     }
     const saved = await lcs.runCommand('finance.post', String(model.value.id), keyValue =>
@@ -76,15 +81,17 @@ export function useFinanceCommands(options: {
     recalculate()
     const lines = Array.isArray(model.value.lines) ? model.value.lines : []
     if (!lines.length || asNumber(model.value.debitTotal) <= 0 || asNumber(model.value.balanceDifference) !== 0) {
-      toast({ title: t('freight.ui.journalUnbalanced'), color: 'error' })
+      onError(t('freight.ui.journalUnbalanced'))
       return
     }
-    model.value = store.save('journals', {
-      ...model.value,
-      status: 'POSTED',
-      postedBy: currentUserName.value,
-      postedAt: new Date().toISOString(),
-    })
+    // The posting engine owns this status: it checks the balance and the period,
+    // stamps posted_at / posted_by and writes the audit row. A local status
+    // write would show POSTED while the server still held a draft.
+    const saved = await lcs.runCommand('journal.post', String(model.value.id), keyValue =>
+      lcs.finance.postJournal(String(model.value.id), keyValue),
+    )
+    model.value = saved
+    store.reload()
     toast({ title: t('freight.ui.journalPosted'), color: 'success' })
   }
 

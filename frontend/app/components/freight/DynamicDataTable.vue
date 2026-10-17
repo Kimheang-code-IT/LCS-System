@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import type { FreightTable } from '~/config/freight-modules'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   table: FreightTable | null
   modelValue: Array<Record<string, unknown>>
   disabled?: boolean
   saving?: boolean
-}>()
+  /** Cell errors keyed `<errorKey>.<rowIndex>.<column>`. */
+  fieldErrors?: Record<string, string>
+  errorKey?: string
+  onCellEdit?: (cellKey: string) => void
+}>(), {
+  fieldErrors: undefined,
+  errorKey: undefined,
+  onCellEdit: undefined,
+})
 
 const emit = defineEmits<{
   'update:modelValue': [Array<Record<string, unknown>>]
@@ -33,6 +41,9 @@ const headerActions = computed(() => props.disabled
       :model-value="modelValue"
       :disabled="disabled"
       :header-actions="headerActions"
+      :field-errors="fieldErrors"
+      :error-key="errorKey"
+      :on-cell-edit="onCellEdit"
       @update:model-value="emit('update:modelValue', $event)" />
     <FreightJobEmptyState
       v-else

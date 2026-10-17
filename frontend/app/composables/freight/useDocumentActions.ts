@@ -20,7 +20,6 @@ export function useDocumentActions(options: {
   toast: ReturnType<typeof useToast>['add']
   t: (key: string, ...args: unknown[]) => string
   canMutateRecord: Ref<boolean>
-  deactivationOnly: Ref<boolean>
   printOpen: Ref<boolean>
 }) {
   const {
@@ -33,7 +32,6 @@ export function useDocumentActions(options: {
     toast,
     t,
     canMutateRecord,
-    deactivationOnly,
     printOpen,
   } = options
 
@@ -88,17 +86,9 @@ export function useDocumentActions(options: {
 
   async function deleteRecord() {
     if (!module.value || !canMutateRecord.value) return
-    const status = String(model.value.status || '').trim().toUpperCase()
-    const statusBased = status === 'ACTIVE' || status === 'INACTIVE'
-    // Active records (and modules without an active/inactive status) are deactivated, not deleted.
-    if (deactivationOnly.value && (!statusBased || status === 'ACTIVE')) {
-      model.value = store.save(module.value.collection, {
-        ...model.value,
-        status: module.value.collection === 'documentSequences' ? 'INACTIVE' : 'Inactive',
-      })
-      toast({ title: t('freight.ui.recordDeactivated'), color: 'success' })
-      return
-    }
+    // Deleting is offered only for an inactive record (the status menu owns the
+    // deactivation, so nothing here writes a status any more), and the module
+    // decides whether the delete is a tombstone or a hard delete.
     const ok = await confirm({ kind: 'delete', count: 1 })
     if (!ok) return
     store.remove(module.value.collection, [String(model.value.id)])

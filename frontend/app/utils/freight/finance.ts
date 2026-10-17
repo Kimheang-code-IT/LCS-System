@@ -1,13 +1,4 @@
 import type { FreightRecord } from '~/types/record'
-import { financeDomainStatus } from '~/utils/freight/states'
-
-/** Sum of posted customer-invoice totals. Posted documents only — never drafts or other doc types. */
-export function postedDocumentTotal(rows: FreightRecord[]) {
-  return rows
-    .filter(row => String(row.documentType || 'CUSTOMER_INVOICE') === 'CUSTOMER_INVOICE')
-    .filter(row => financeDomainStatus(row.status) === 'POSTED')
-    .reduce((sum, row) => sum + Number(row.total || row.amount || 0), 0)
-}
 
 /** Outstanding amount of one document: total − allocated, floored at 0. */
 export function outstandingOf(row: FreightRecord) {

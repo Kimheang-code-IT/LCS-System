@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import delete
 
+from app.core.localization import normalize_localization
 from app.modules.master_data.models import ModuleRecord
 from app.modules.settings.service import APP_CONFIG_COLLECTION, DEFAULT_APP_CONFIG
 from tests.conftest import login
@@ -17,7 +18,82 @@ async def test_localization_defaults_when_config_record_is_missing(client, sessi
 
     response = await client.get("/api/v1/settings/app-config", headers=await login(client))
     assert response.status_code == 200
-    assert response.json()["data"]["localization"] == DEFAULT_APP_CONFIG["localization"]
+    localization = response.json()["data"]["localization"]
+    assert localization == DEFAULT_APP_CONFIG["localization"]
+    assert localization["availableLanguages"] == ["en", "km", "zh"]
+
+
+async def test_chinese_is_a_supported_ui_language(client):
+    headers = await login(client)
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"localization": {"defaultLanguage": "zh"}},
+    )
+    assert response.status_code == 200, response.text
+    saved = response.json()["data"]["localization"]
+    assert saved["defaultLanguage"] == "zh"
+    assert saved["locale"] == "zh-CN"
+
+    reloaded = await client.get("/api/v1/settings/app-config", headers=headers)
+    assert reloaded.json()["data"]["localization"]["defaultLanguage"] == "zh"
+
+
+async def test_available_languages_can_enable_or_disable_chinese(client):
+    headers = await login(client)
+
+    enabled = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"localization": {"availableLanguages": ["km", "zh"]}},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["data"]["localization"]["availableLanguages"] == ["km", "zh"]
+
+    disabled = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"localization": {"availableLanguages": ["en"]}},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["data"]["localization"]["availableLanguages"] == ["en"]
+
+
+@pytest.mark.parametrize("languages", [[], ["en", "zz"], "en"])
+async def test_invalid_available_languages_is_rejected(client, languages):
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=await login(client),
+        json={"localization": {"availableLanguages": languages}},
+    )
+    assert response.status_code == 422, response.text
+    assert "localization.availableLanguages" in response.json()["field_errors"]
+
+
+async def test_telegram_message_language_is_clamped_to_a_supported_language(client):
+    headers = await login(client)
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"telegram": {"messageLanguage": "zh"}},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["telegram"]["messageLanguage"] == "zh"
+
+    rejected = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"telegram": {"messageLanguage": "klingon"}},
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["data"]["telegram"]["messageLanguage"] == "en"
+
+
+async def test_stored_language_lists_are_clamped_to_supported_languages():
+    assert normalize_localization({"defaultLanguage": "zh"})["locale"] == "zh-CN"
+    assert normalize_localization({"availableLanguages": ["en", "zz", "zh"]})["availableLanguages"] == ["en", "zh"]
+    # An unknown stored language falls back to the default rather than persisting.
+    assert normalize_localization({"defaultLanguage": "zz"})["defaultLanguage"] == "en"
 
 
 async def test_localization_roundtrip_and_legacy_number_format_normalization(client):

@@ -10,7 +10,7 @@ import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref,
 import { fileTypeIcon } from '~/utils/file-icon'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
-import { isMoneyColumnKey, lineTableColumnCellClass, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
+import { isMoneyColumnKey, isRowControlColumn, lineTableColumnCellClass, lineTableColumnMetrics, lineTableNumericColumnKeys, sharedRowControls } from '~/utils/table/line-table-columns'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = withDefaults(defineProps<{
@@ -56,6 +56,15 @@ const props = withDefaults(defineProps<{
    * list in its new order, so the parent can persist display order.
    */
   onReorder?: (rows: Array<Record<string, unknown>>) => void
+  /**
+   * Cell-level validation errors keyed `<table>.<rowIndex>.<column>`. Rendered
+   * inside the offending cell so a bad row is identifiable without counting.
+   */
+  fieldErrors?: Record<string, string>
+  /** Overrides the table key used to build cell error keys. */
+  errorKey?: string
+  /** Fired after a cell edit so the host can clear that cell's error. */
+  onCellEdit?: (cellKey: string) => void
 }>(), {
   compact: false,
   rowDisabled: undefined,
@@ -64,6 +73,9 @@ const props = withDefaults(defineProps<{
   rowInlineActions: undefined,
   rowActions: undefined,
   onReorder: undefined,
+  fieldErrors: undefined,
+  errorKey: undefined,
+  onCellEdit: undefined,
 })
 
 const emit = defineEmits<{
@@ -73,7 +85,7 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 const { fieldLabel, tableTitle } = useFreightLabel()
-const { inputRef, openPicker, rowsFromInput } = useFileAttachments()
+const { inputRef, openPicker, rowsFromInput, rejected } = useFileAttachments()
 
 const TableButton = UButton as Component
 const TableCheckbox = UCheckbox as Component
@@ -84,8 +96,34 @@ const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
 const TableReferenceSelect = CommonAppReferenceSelect as Component
 
+/**
+ * Row note being edited, if any. A note is edited in a dialog rather than a cell
+ * so the prose is readable and the column can stay icon-sized.
+ */
+const noteDialog = ref<{ open: boolean, index: number, key: string }>({ open: false, index: -1, key: '' })
+
+function openNoteDialog(index: number, key: string) {
+  noteDialog.value = { open: true, index, key }
+}
+
+function saveNote(value: string) {
+  updateCell(noteDialog.value.index, noteDialog.value.key, value)
+}
+
 const isFileTable = computed(() => props.table.kind === 'files')
 const hasDeleteColumn = computed(() => props.table.columns.some(column => column.type === 'delete'))
+
+/** Row controls: the note and delete icons, whether or not they share a cell. */
+const rowControlColumns = computed(() => props.table.columns.filter(isRowControlColumn))
+
+/** Note and delete share one cell; `folded` holds the keys that render inside it. */
+const sharedRowControlState = computed(() => sharedRowControls(props.table.columns))
+
+/** The icons one cell renders: the whole group on the host column, itself otherwise. */
+function rowIconGroup(column: FreightLineColumn) {
+  return column.key === sharedRowControlState.value.host ? rowControlColumns.value : [column]
+}
+
 const cellSize = 'sm' as const
 const cellInputUi = { base: 'text-sm' }
 const cellNumberInputUi = { base: 'text-sm text-right tabular-nums' }
@@ -110,6 +148,32 @@ function columnCellClass(column: FreightLineColumn) {
   return lineTableColumnCellClass(column)
 }
 
+/**
+ * Padding and borders a line-table cell spends on itself, per theme. A column
+ * declared as N pixels of field therefore gets N + this much, and the field
+ * inside fills exactly the rest.
+ */
+const cellChromePx = computed(() => props.compact ? 18 : 26)
+
+/** Icon-only columns stay as narrow as their button whatever the table width is. */
+const iconOnlyColumnMeta = {
+  class: { th: 'w-px', td: 'w-px' },
+  style: { th: { width: '1px' } },
+}
+
+/**
+ * Column geometry for `UTable`: the field width from the shared resolver plus the
+ * cell chrome, so every column has a deliberate width and the field fits it.
+ */
+function columnMeta(column: FreightLineColumn) {
+  const { width, iconOnly } = lineTableColumnMetrics(column)
+  if (iconOnly) return iconOnlyColumnMeta
+  return {
+    class: { th: '', td: '' },
+    style: { th: { width: `${width + cellChromePx.value}px` } },
+  }
+}
+
 function displayValue(column: FreightLineColumn, value: unknown, row?: Record<string, unknown>) {
   if (isFileTable.value && row) {
     if (column.key === 'fileName') return fileTableRowName(row) || '—'
@@ -125,7 +189,6 @@ function displayValue(column: FreightLineColumn, value: unknown, row?: Record<st
     if (!Number.isFinite(number)) return String(value)
     if (isMoneyColumnKey(column.key)) {
       const currency = row?.currency ? String(row.currency) : undefined
-      if (column.key === 'total' && currency) return formatMoney(number, currency)
       return formatMoney(number, currency)
     }
     return formatNumber(number, { maximumFractionDigits: 2, minimumFractionDigits: 0 })
@@ -144,7 +207,12 @@ function lineDateGranularity(column: FreightLineColumn): DatePickerGranularity |
 }
 
 function columnHeader(column: FreightLineColumn) {
-  return h('div', { class: numericKeys.has(column.key) ? 'text-right' : '' }, [
+  return h('div', {
+    class: numericKeys.has(column.key) ? 'text-right' : '',
+    // A derived column explains itself in a tooltip rather than a visible hint, so
+    // the header row stays one line high.
+    title: column.helpKey ? t(column.helpKey) : undefined,
+  }, [
     h('span', fieldLabel(column)),
     column.required
       ? h('span', { class: 'ms-0.5 text-error', 'aria-hidden': 'true' }, '*')
@@ -229,6 +297,46 @@ const rows = computed({
   set: value => emit('update:modelValue', value),
 })
 
+/** Stable prefix for cell error keys so a row error lands on its own cell. */
+const errorPrefix = computed(() => props.errorKey || props.table.key)
+
+function cellErrorKey(index: number, columnKey: string) {
+  return `${errorPrefix.value}.${index}.${columnKey}`
+}
+
+/**
+ * Build a cell control and hang its inline error underneath.
+ *
+ * The wrapper carries `data-field-key`, which is what first-invalid-field
+ * navigation scrolls to and focuses. The message is a plain text node referenced
+ * with `aria-describedby`, so it is announced with the control's value instead
+ * of sitting next to it unattached.
+ */
+function cellWithError(
+  index: number,
+  columnKey: string,
+  build: (extra: Record<string, unknown>) => ReturnType<typeof h>,
+) {
+  const key = cellErrorKey(index, columnKey)
+  const error = props.fieldErrors?.[key]
+  const control = build(error
+    ? { 'aria-invalid': true, 'aria-describedby': `${key}-error` }
+    : {})
+  if (!error) return control
+  return h('div', { 'data-field-key': key, 'class': 'min-w-0' }, [
+    control,
+    h('p', {
+      'data-slot': 'cell-error',
+      'id': `${key}-error`,
+      'class': 'mt-1 text-[11px] leading-tight text-error',
+    }, error),
+  ])
+}
+
+function tagCell(control: ReturnType<typeof h>, index: number, columnKey: string) {
+  return h('div', { 'data-field-key': cellErrorKey(index, columnKey), 'class': 'min-w-0' }, [control])
+}
+
 function rowLocked(row: Record<string, unknown>) {
   return props.disabled || Boolean(props.rowDisabled?.(row))
 }
@@ -236,6 +344,8 @@ function rowLocked(row: Record<string, unknown>) {
 const tableRows = computed(() => rows.value.map((row, index) => ({ ...row, _rowIndex: index })))
 
 function updateCell(index: number, key: string, value: unknown) {
+  // Clear this cell's error as soon as the user starts correcting it.
+  props.onCellEdit?.(cellErrorKey(index, key))
   const edited = rows.value.map((row, i) => i === index ? { ...row, [key]: value } : row)
   const target = edited[index]
   if (!target) return
@@ -338,6 +448,36 @@ function reorderCell(column: FreightLineColumn, row: Record<string, unknown>, in
   ])
 }
 
+/** The note icon: filled when the row has prose, opening the shared note dialog. */
+function noteCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
+  const hasNote = String(row[column.key] ?? '').trim().length > 0
+  return cellWithError(index, column.key, (extra: Record<string, unknown>) => h(TableButton, {
+    'icon': hasNote ? 'i-lucide-sticky-note' : 'i-lucide-sticky-note-plus',
+    'color': hasNote ? 'primary' : 'neutral',
+    'variant': 'ghost',
+    'size': 'xs',
+    'square': true,
+    'disabled': disabled || column.computed,
+    'aria-label': fieldLabel(column),
+    'title': hasNote ? String(row[column.key]) : fieldLabel(column),
+    'onClick': () => openNoteDialog(index, column.key),
+    ...extra,
+  }))
+}
+
+function deleteCellButton(index: number, disabled: boolean) {
+  return h(TableButton, {
+    icon: 'i-lucide-trash-2',
+    color: 'error',
+    variant: 'ghost',
+    size: 'xs',
+    square: true,
+    disabled,
+    'aria-label': t('actions.delete'),
+    onClick: () => removeRow(index),
+  })
+}
+
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   const cols: TableColumn<Record<string, unknown>>[] = [
     {
@@ -345,26 +485,29 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       header: '#',
       cell: ({ row }) => h('span', { class: props.compact ? 'text-[11px] tabular-nums text-muted' : 'text-xs tabular-nums text-muted' }, Number(row.original._rowIndex || 0) + 1),
       enableSorting: false,
+      meta: iconOnlyColumnMeta,
     },
-    ...props.table.columns.map(column => ({
+    ...props.table.columns.filter(column => !sharedRowControlState.value.folded.has(column.key)).map(column => ({
       accessorKey: column.key,
       header: () => columnHeader(column),
       enableSorting: false,
+      meta: columnMeta(column),
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
         const disabled = rowLocked(row.original)
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
-        if (column.type === 'delete') {
-          return h(TableButton, {
-            icon: 'i-lucide-trash-2',
-            color: 'error',
-            variant: 'ghost',
-            size: 'xs',
-            square: true,
-            disabled,
-            'aria-label': t('actions.delete'),
-            onClick: () => removeRow(index),
-          })
+        if (column.type === 'delete' || column.type === 'note') {
+          const group = rowIconGroup(column)
+          if (group.length === 1) {
+            return group[0]!.type === 'note'
+              ? noteCell(column, row.original, index, disabled)
+              : deleteCellButton(index, disabled)
+          }
+          // Note and delete share one column: both are one-icon row controls, and
+          // two 50px columns per row is more chrome than the icons deserve.
+          return h('div', { class: 'flex items-center justify-end gap-0.5' }, group.map(item => item.type === 'note'
+            ? noteCell(item, row.original, index, disabled)
+            : deleteCellButton(index, disabled)))
         }
         if (column.type === 'reorder') {
           return reorderCell(column, row.original, index, disabled)
@@ -384,13 +527,13 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           })
         }
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
-          return inlineNumberFieldsCell(column, row.original, index, disabled)
+          return tagCell(inlineNumberFieldsCell(column, row.original, index, disabled), index, column.key)
         }
         if (disabled || column.computed || isFileTable.value) {
-          return inlineMoneyCell(column, row.original, index, disabled)
+          return tagCell(inlineMoneyCell(column, row.original, index, disabled), index, column.key)
         }
         if (column.type === 'checkbox') {
-          return h(TableCheckbox, {
+          return cellWithError(index, column.key, extra => h(TableCheckbox, {
             'modelValue': row.original[column.key],
             'trueValue': String(column.options?.[0] ?? 'Yes'),
             'falseValue': String(column.options?.[1] ?? 'No'),
@@ -398,7 +541,8 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'size': cellSize,
             'aria-label': fieldLabel(column),
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
-          })
+            ...extra,
+          }))
         }
         if (column.type === 'select') {
           const referenceItems = referenceColumnItems.value[column.key]
@@ -407,7 +551,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             : referenceItems
               ? referenceItems
               : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
-          return h(TableReferenceSelect, {
+          return cellWithError(index, column.key, extra => h(TableReferenceSelect, {
             'modelValue': String(row.original[column.key] || '') || undefined,
             'items': items,
             'referenceKey': column.key,
@@ -418,10 +562,11 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'class': ['w-full', columnCellClass(column)],
             'ui': cellInputUi,
             'onUpdate:modelValue': (value: unknown) => updateCell(index, column.key, value),
-          })
+            ...extra,
+          }))
         }
         if (column.type === 'number') {
-          return h(TableInputNumber, {
+          return cellWithError(index, column.key, extra => h(TableInputNumber, {
             'modelValue': Number(row.original[column.key] || 0),
             'disabled': disabled || column.computed,
             'increment': false,
@@ -430,27 +575,30 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'class': ['w-full', columnCellClass(column)],
             'ui': cellNumberInputUi,
             'onUpdate:modelValue': (value: number | null) => updateCell(index, column.key, value ?? 0),
-          })
+            ...extra,
+          }))
         }
         const dateGranularity = lineDateGranularity(column)
         if (dateGranularity) {
-          return h(TableDate, {
+          return cellWithError(index, column.key, extra => h(TableDate, {
             'modelValue': String(row.original[column.key] ?? ''),
             'granularity': dateGranularity,
             'disabled': disabled || column.computed,
             'size': cellSize,
             'class': `w-full ${columnCellClass(column)}`,
             'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
-          })
+            ...extra,
+          }))
         }
-        return h(TableInput, {
+        return cellWithError(index, column.key, extra => h(TableInput, {
           'modelValue': String(row.original[column.key] ?? ''),
           'disabled': disabled || column.computed,
           'size': cellSize,
           'class': `w-full ${columnCellClass(column)}`,
           'ui': cellInputUi,
           'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
-        })
+          ...extra,
+        }))
       },
     })),
   ]
@@ -459,6 +607,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
       enableSorting: false,
+      meta: iconOnlyColumnMeta,
       cell: ({ row }) => {
         const index = Number(row.original._rowIndex || 0)
         const inlineButtons = (props.rowInlineActions?.(row.original) || []).map(item =>
@@ -522,6 +671,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       id: 'actions',
       header: () => h('span', { class: 'sr-only' }, t('common.actions')),
       enableSorting: false,
+      meta: iconOnlyColumnMeta,
       cell: ({ row }) => h(TableButton, {
         label: 'View',
         color: 'neutral',
@@ -570,13 +720,24 @@ type="file"
 multiple
 class="hidden"
 @change="onFilesChosen">
+    <CommonAppFormErrorSummary
+      v-if="rejected.length"
+      :items="[]"
+      :form-errors="rejected"
+      :title="t('freight.ui.fileRejectedTitle')"
+    />
     <div class="overflow-x-auto">
       <UTable
 :data="tableRows"
 :columns="columns"
         :get-row-id="(row: Record<string, unknown>) => String(row._rowIndex ?? '')"
-        :class="['freight-table min-w-max', compact ? 'freight-table-compact' : '']"
+        :class="['freight-table w-full min-w-max', compact ? 'freight-table-compact' : '']"
 :ui="tableUi" />
     </div>
+    <TableAppRowNoteDialog
+      v-model:open="noteDialog.open"
+      :model-value="String(rows[noteDialog.index]?.[noteDialog.key] ?? '')"
+      :disabled="disabled"
+      @save="saveNote" />
   </section>
 </template>

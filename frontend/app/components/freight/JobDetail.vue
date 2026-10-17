@@ -8,6 +8,7 @@ import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordCh
 import { useJobRelated } from '~/composables/freight/useJobRelated'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useLcs } from '~/composables/freight/useLcs'
+import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import {
   emptyFreightRecord,
   groupedFields,
@@ -25,6 +26,9 @@ import {
   JOB_TRAILING_WORKSPACE_SECTIONS,
 } from '~/utils/freight/job-component-tabs'
 import { useComponentTabs } from '~/composables/freight/useComponentTabs'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateDocumentFields } from '~/utils/validation/record-validation'
+import { validateComponentRows } from '~/utils/validation/component-rules'
 import { jobDomainStatus } from '~/utils/freight/states'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
@@ -33,7 +37,7 @@ const store = useFreightStore()
 const toast = useToast()
 const router = useRouter()
 const { t, te } = useI18n()
-const { moduleTitle } = useFreightLabel()
+const { moduleTitle, fieldLabel } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
 const { confirm } = useConfirm()
 const lcs = useLcs()
@@ -47,6 +51,22 @@ const canEdit = computed(() =>
   !isCreate.value && lcs.can('service_order.update'))
 const canEditPayments = computed(() =>
   !isCreate.value && lcs.can('service_order.update'))
+
+/**
+ * Status changes (activate / deactivate / finish / reopen) run through the
+ * shared status manager, so the job page and the list offer the same legal
+ * transitions and every change is validated and audited.
+ */
+const { menuItem: statusMenuItem } = useRecordStatus(module, {
+  onError: (message) => {
+    validation.reset()
+    validation.addFormError(message)
+  },
+  onChanged: async () => {
+    const refreshed = await lcs.jobs.get(String(model.value.id))
+    model.value = { ...model.value, ...refreshed }
+  },
+})
 
 const {
   listTo,
@@ -97,21 +117,103 @@ const workspaceSections = computed(() => [
   ...componentSections.value,
   ...JOB_TRAILING_WORKSPACE_SECTIONS,
 ])
+
+/**
+ * Dynamic tabs are addressed by the same stable keys validation uses, so an
+ * error deep inside a collapsed tab group can reveal itself.
+ */
+function componentCellLabel(key: string) {
+  const [groupId, , code] = key.split('.')
+  return componentGroupLabel(groupId || '', code || key)
+}
+
+function componentTabForGroup(groupId: string) {
+  return componentTabsState.tabs.value.find(tab => tab.groups.some(group => group.id === groupId))
+}
+
+function componentGroupLabel(groupId: string, code: string) {
+  for (const tab of componentTabsState.tabs.value) {
+    const group = tab.groups.find(item => item.id === groupId)
+    const attribute = group?.attributes.find(item => item.code === code)
+    if (group && attribute) return `${tab.name} › ${group.name} › ${attribute.label}`
+  }
+  // Unknown key: return an empty label so the shared message uses its
+  // label-free wording instead of leaking a composite model key to the user.
+  return ''
+}
+
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  label: componentCellLabel,
+  order: () => workspaceSections.value.flatMap(section =>
+    componentTabsState.tabs.value
+      .filter(tab => tab.code === section)
+      .flatMap(tab => tab.groups.flatMap(group =>
+        group.attributes.map(attribute => `${group.id}.0.${attribute.code}`),
+      )),
+  ),
+  groupLabel: componentCellLabel,
+  reveal: (key) => {
+    const groupId = key.split('.')[0]!
+    const tab = componentTabForGroup(groupId)
+    if (!tab) return false
+    if (activeTab.value !== tab.code) activeTab.value = tab.code
+    return true
+  },
+})
 const isComponentTab = computed(() =>
   Boolean(activeTab.value) && componentTabsState.tabs.value.some(tab => tab.code === activeTab.value),
 )
 const activeComponentTab = computed(() => componentTabsState.tabByCode(activeTab.value))
 
 function setComponentRows(groupId: string, rows: Array<Record<string, unknown>>) {
+  // Row-indexed errors belong to the previous row set; recompute on next save.
+  validation.clearTableErrors(groupId)
   componentTabsState.setGroupRows(groupId, rows)
 }
 
+/** Validate the job header plus every visible dynamic tab group. */
+function validateOrder() {
+  const failures = validateDocumentFields({
+    fields: module.value?.fields || [],
+    model: model.value as Record<string, unknown>,
+    isCreate: isCreate.value,
+    label: key => fieldLabel({ key, label: key }),
+  })
+  for (const tab of componentTabsState.tabs.value) {
+    for (const group of tab.groups) {
+      failures.push(...validateComponentRows({
+        group,
+        rows: componentTabsState.rowsForGroup(group.id),
+        label: attribute => String(attribute.label || attribute.code),
+        skipBlankRows: true,
+      }))
+    }
+  }
+  return failures
+}
+
 async function saveComponentGroup(groupId: string) {
+  const failures = validateComponentRows({
+    group: componentTabsState.tabs.value.flatMap(tab => tab.groups).find(group => group.id === groupId)
+      || { id: groupId, attributes: [] },
+    rows: componentTabsState.rowsForGroup(groupId),
+    label: attribute => String(attribute.label || attribute.code),
+    skipBlankRows: true,
+  })
+  if (failures.length) {
+    validation.applyFailures(failures)
+    await validation.focusFirstInvalid()
+    return
+  }
+  validation.clearTableErrors(groupId)
   try {
     await componentTabsState.saveGroup(groupId)
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    validation.reset()
+    validation.applyServerError(error)
+    await validation.focusFirstInvalid()
   }
 }
 
@@ -227,8 +329,17 @@ function setFieldValue(key: string, value: unknown) {
 
 async function save() {
   if (!module.value) return
+  if (saving.value) return
   saving.value = true
+  validation.submitting.value = true
+  validation.reset()
   try {
+    const failures = validateOrder()
+    if (failures.length) {
+      validation.applyFailures(failures)
+      await validation.focusFirstInvalid()
+      return
+    }
     const payload = { ...model.value }
     if (isCreate.value || !payload.id) await moduleRecord.create(payload)
     else await moduleRecord.update(String(payload.id), payload)
@@ -236,15 +347,14 @@ async function save() {
     // Return to the service-order list after saving.
     await navigateTo(module.value.path)
   }
+  catch (error) {
+    validation.applyServerError(error)
+    await validation.focusFirstInvalid()
+  }
   finally {
     saving.value = false
+    validation.submitting.value = false
   }
-}
-
-async function setJobStatus(next: 'ACTIVE' | 'INACTIVE') {
-  if (!model.value.id) return
-  model.value = store.save('jobs', { ...model.value, status: next === 'ACTIVE' ? 'Active' : 'Inactive' })
-  toast.add({ title: t(next === 'ACTIVE' ? 'lcs.common.activated' : 'lcs.common.deactivated'), color: 'success' })
 }
 
 async function deleteJob() {
@@ -282,7 +392,8 @@ async function finishJob() {
     toast.add({ title: t('freight.ui.finished'), color: 'success' })
   }
   catch (error) {
-    lcs.reportError(error)
+    validation.reset()
+    validation.applyServerError(error)
   }
   finally {
     finishing.value = false
@@ -295,22 +406,18 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   if (String(model.value.quotationNo || '').trim()) {
     items.push({ label: t('freight.ui.viewSourceQuotation'), icon: 'i-lucide-file-search', onSelect: openQuotation })
   }
-  if (lcs.can('service_order.update')) {
-    const active = domainStatus.value === 'ACTIVE'
+  // Change Status (activate / deactivate / finish / reopen) comes from the
+  // shared policy, so the same legal transitions are offered here as in the list.
+  const statusItem = statusMenuItem(model.value)
+  if (statusItem) items.push(statusItem)
+  if (lcs.can('service_order.update') && domainStatus.value === 'INACTIVE') {
+    // Only an inactive order can be deleted.
     items.push({
-      label: t(active ? 'freight.ui.deactivate' : 'freight.ui.activate'),
-      icon: active ? 'i-lucide-circle-off' : 'i-lucide-circle-check',
-      color: active ? 'warning' : 'success',
-      onSelect: () => { void setJobStatus(active ? 'INACTIVE' : 'ACTIVE') },
+      label: t('freight.ui.delete'),
+      icon: 'i-lucide-trash-2',
+      color: 'error',
+      onSelect: () => { void deleteJob() },
     })
-    if (!active) {
-      items.push({
-        label: t('freight.ui.delete'),
-        icon: 'i-lucide-trash-2',
-        color: 'error',
-        onSelect: () => { void deleteJob() },
-      })
-    }
   }
   return [items]
 })
@@ -330,6 +437,10 @@ function onTabChange(value: string) {
     :saving="saving"
     :not-found="notFound"
     :save-label="jobSaveLabel"
+    :field-errors="validation.fieldErrors.value"
+    :summary-items="validation.summaryItems.value"
+    :form-errors="validation.formErrors.value"
+    :on-field-edit="validation.clearFieldError"
     :confirm-save="false"
     :show-save="canEdit || isCreate"
     :show-cancel="false"
@@ -353,6 +464,7 @@ function onTabChange(value: string) {
     @update:attachments="setChromeField('attachments', $event)"
     @save="save"
     @refresh="load"
+    @select-error="validation.focusFieldKey($event)"
     @update:comment-body="commentBody = $event"
     @submit-comment="submitComment"
     @update-comment="updateComment"
@@ -405,6 +517,8 @@ function onTabChange(value: string) {
             :rows-by-group="componentTabsState.rowsByGroup.value"
             :editable="canEdit"
             :saving="componentTabsState.saving.value"
+            :field-errors="validation.fieldErrors.value"
+            :on-field-edit="validation.clearFieldError"
             @update:rows="setComponentRows"
             @save-group="saveComponentGroup"
           />

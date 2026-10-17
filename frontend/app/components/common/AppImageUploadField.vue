@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { fieldErrorMessage } from '~/utils/validation/form-field-error'
+
 const model = defineModel<string | undefined>({ default: undefined })
 
 const props = withDefaults(defineProps<{
@@ -20,9 +22,13 @@ const props = withDefaults(defineProps<{
 })
 
 const { t, te } = useI18n()
-const toast = useToast()
 const inputRef = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
+/**
+ * Rejected uploads are input validation, so the message belongs under the
+ * control — never in a toast.
+ */
+const fileError = ref('')
 const previewSource = computed(() => safeImageSource(model.value))
 
 const labelText = computed(() => {
@@ -43,18 +49,20 @@ function openPicker() {
 }
 
 function clear() {
+  fileError.value = ''
   model.value = undefined
 }
 
 async function readFile(file: File) {
   if (!SAFE_RASTER_IMAGE_TYPES.includes(file.type as (typeof SAFE_RASTER_IMAGE_TYPES)[number])) {
-    toast.add({ title: t('lcs.common.imageInvalidType'), color: 'error' })
+    fileError.value = t('lcs.common.imageInvalidType')
     return
   }
   if (!isSafeRasterImage(file, props.maxSizeMb)) {
-    toast.add({ title: t('lcs.common.imageTooLarge', { size: props.maxSizeMb }), color: 'error' })
+    fileError.value = t('lcs.common.imageTooLarge', { size: props.maxSizeMb })
     return
   }
+  fileError.value = ''
   const reader = new FileReader()
   const dataUrl = await new Promise<string>((resolve, reject) => {
     reader.onload = () => resolve(String(reader.result || ''))
@@ -80,7 +88,12 @@ function onDrop(event: DragEvent) {
 </script>
 
 <template>
-  <UFormField :label="labelText" :help="helpText">
+  <UFormField
+    :label="labelText"
+    :help="helpText"
+    :error="fieldErrorMessage(fileError)"
+    :data-field-key="labelKey || 'image'"
+  >
     <div
       class="relative flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-default bg-elevated/40 p-4 transition"
       :class="[

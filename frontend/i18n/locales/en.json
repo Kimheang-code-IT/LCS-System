@@ -10,6 +10,8 @@
       "operations": "Operations",
       "finance": "Finance",
       "reports": "Reports",
+      "operationsReports": "Operations Reports",
+      "financialReports": "Financial Reports",
       "master": "Master Data",
       "configuration": "Configuration",
       "administration": "Administration",
@@ -63,6 +65,7 @@
       "componentTabs": "Component Tabs",
       "tradeDirectionComponents": "Trade Direction Components",
       "postingRules": "Posting Rules",
+      "postingRuleHistory": "Posting Rule History",
       "serviceOrderTabs": "Service Order Tabs",
       "organizations": "Organizations",
       "branches": "Branches",
@@ -79,7 +82,8 @@
       "roles": "Roles & Permissions",
       "settings": "Settings",
       "auditLogs": "Audit Logs",
-      "archive": "Archive"
+      "archive": "Archive",
+      "configurationVersions": "Configuration Versions"
     },
     "fields": {
       "accept": "Accepted At",
@@ -453,7 +457,21 @@
       "widthMeters": "Width",
       "workflowStatus": "Workflow Status",
       "year": "Year",
-      "zone": "Zone"
+      "zone": "Zone",
+      "targetDocumentNo": "Document",
+      "isRequired": "Required",
+      "helpText": "Help text",
+      "renderMode": "Render",
+      "grandTotal": "Grand Total",
+      "businessParty": "Customer / Supplier (Business Party)",
+      "baseCurrency": "Base Currency",
+      "baseTotalAmount": "Total in Base Currency",
+      "rateDirection": "Conversion",
+      "decimalPlaces": "Decimal Places",
+      "fromCurrencyCode": "From Currency",
+      "toCurrencyCode": "To Currency",
+      "rate": "Rate",
+      "source": "Source"
     },
     "sections": {
       "access": "Access",
@@ -767,7 +785,8 @@
       "revisionHistory": "Revision History",
       "roleAssignments": "Role Assignments",
       "sessions": "Sessions",
-      "sourceRelationships": "Source Relationships"
+      "sourceRelationships": "Source Relationships",
+      "financialLines": "Financial Lines"
     },
     "moduleActions": {
       "accept": "Accept",
@@ -789,7 +808,9 @@
       "saveQuotationChanges": "Save changes",
       "submitQuotation": "Submit",
       "send": "Send",
-      "requote": "Re-quote"
+      "requote": "Re-quote",
+      "submit": "Submit",
+      "addCharge": "Add charge"
     },
     "quotationTabs": {
       "overview": "Overview",
@@ -1033,7 +1054,6 @@
       "yesNo": "Yes / No",
       "calculatedHelp": "Calculated automatically.",
       "enterFieldHelp": "Enter the {field} used on this record.",
-      "enterFieldHelpKm": "Enter {field} for this record.",
       "missingRequired": "Complete the required fields before saving.",
       "allocationExceeds": "Allocation cannot exceed the available payment or target outstanding balance.",
       "quotationSent": "Quotation sent",
@@ -1115,7 +1135,7 @@
       "party": "Party",
       "job": "Job",
       "overview": "Overview",
-      "saveJobFirst": "Save the job first",
+      "saveJobFirst": "Save the service order before filling this tab.",
       "saveJobFirstHint": "Register transport after the job is saved.",
       "noBooking": "No booking yet",
       "noBookingHint": "Register vehicle, container and transport provider.",
@@ -1147,8 +1167,8 @@
       "jobFinance": "Job Finance",
       "jobFinanceHint": "Invoices, receipts and payments for this job.",
       "chargesCosts": "Charges & Costs",
-      "customerCharges": "Customer service charges",
-      "noCustomerCharges": "No customer charges",
+      "customerCharges": "Customer Charges",
+      "noCustomerCharges": "No customer charges yet",
       "noSupplierCosts": "No supplier costs",
       "commercialTotal": "Commercial total",
       "supplierCost": "Supplier Cost",
@@ -1213,7 +1233,6 @@
       "taskSaved": "Saved",
       "taskCompleted": "Completed",
       "addDocument": "Add",
-      "record": "Record",
       "componentRecordCount": "{count} records",
       "addComponentRecord": "Add {name}",
       "noComponentRecords": "No {name} records",
@@ -1226,13 +1245,10 @@
       "componentDeleted": "Component record deleted",
       "invalidInstanceLimits": "Maximum instances must be empty or greater than or equal to the minimum.",
       "cardinalityVersionRequired": "Create a new template version before changing instance mode for a template already used by service orders.",
-      "saveJobFirst": "Save the service order before filling this tab.",
       "fileNameCol": "File name",
       "uploadedByCol": "Uploaded By",
       "byCol": "By",
       "addNew": "Add new",
-      "customerCharges": "Customer Charges",
-      "noCustomerCharges": "No customer charges yet",
       "supplierExpenses": "Supplier Expenses",
       "addExpense": "Add expense",
       "financeLines": "Finance Lines",
@@ -1344,7 +1360,19 @@
         "sourceQuotationLabel": "Source Quotation",
         "debitNoteNo": "Debit Note No.",
         "createdBy": "Created By"
-      }
+      },
+      "targetInvoiceBill": "Target Invoice / Bill",
+      "containerNoInUse": "This container number is already used by another service order.",
+      "fileRejectedTitle": "Some files were not added",
+      "noteDialogHint": "Notes are saved with the row.",
+      "notePlaceholder": "Add a note for this row…",
+      "requote": "Re-quote",
+      "statusChangeTitle": "Change status to {status}?",
+      "statusChangeDescription": "The change is validated against the workflow rules and recorded in the audit log.",
+      "statusChanged": "Status changed to {status}",
+      "statusReasonTitle": "Reversal reason",
+      "statusReasonDescription": "Reversing posts a mirrored journal; the reason is recorded with it.",
+      "statusReasonPlaceholder": "Why is this document being reversed?"
     },
     "jobSections": {
       "overview": "Overview",
@@ -1375,18 +1403,54 @@
         "profitability": "Profitability"
       },
       "reports": {
-        "service-orders": { "title": "Service Order Register", "description": "Complete register of freight service orders." },
-        "service-order-status": { "title": "Service Order Status", "description": "See job progress, aging, and pending operational work." },
-        "containers": { "title": "Containers", "description": "Track actual containers attached to service orders." },
-        "profitability": { "title": "Profitability", "description": "Compare operational values with posted accounting results." },
-        "revenue-expense": { "title": "Revenue & Expense", "description": "Posted revenue and expense activity for the selected period." },
-        "accounts-receivable": { "title": "Accounts Receivable", "description": "Posted customer balances and aging." },
-        "accounts-payable": { "title": "Accounts Payable", "description": "Posted supplier balances and aging." },
-        "general-ledger": { "title": "General Ledger", "description": "Posted accounting movement by ledger account." },
-        "trial-balance": { "title": "Trial Balance", "description": "Verify debit and credit balances from posted journals." },
-        "profit-loss": { "title": "Profit & Loss", "description": "Operating result from posted revenue and expense accounts." },
-        "balance-sheet": { "title": "Balance Sheet", "description": "Financial position from posted asset, liability, and equity accounts." },
-        "cash-flow": { "title": "Cash Flow", "description": "Posted cash and bank activity without unsupported classifications." }
+        "service-orders": {
+          "title": "Service Order Register",
+          "description": "Complete register of freight service orders."
+        },
+        "service-order-status": {
+          "title": "Service Order Status",
+          "description": "See job progress, aging, and pending operational work."
+        },
+        "containers": {
+          "title": "Containers",
+          "description": "Track actual containers attached to service orders."
+        },
+        "profitability": {
+          "title": "Profitability",
+          "description": "Compare operational values with posted accounting results."
+        },
+        "revenue-expense": {
+          "title": "Revenue & Expense",
+          "description": "Posted revenue and expense activity for the selected period."
+        },
+        "accounts-receivable": {
+          "title": "Accounts Receivable",
+          "description": "Posted customer balances and aging."
+        },
+        "accounts-payable": {
+          "title": "Accounts Payable",
+          "description": "Posted supplier balances and aging."
+        },
+        "general-ledger": {
+          "title": "General Ledger",
+          "description": "Posted accounting movement by ledger account."
+        },
+        "trial-balance": {
+          "title": "Trial Balance",
+          "description": "Verify debit and credit balances from posted journals."
+        },
+        "profit-loss": {
+          "title": "Profit & Loss",
+          "description": "Operating result from posted revenue and expense accounts."
+        },
+        "balance-sheet": {
+          "title": "Balance Sheet",
+          "description": "Financial position from posted asset, liability, and equity accounts."
+        },
+        "cash-flow": {
+          "title": "Cash Flow",
+          "description": "Posted cash and bank activity without unsupported classifications."
+        }
       },
       "netProfit": "Net Profit",
       "difference": "Difference",
@@ -1715,7 +1779,7 @@
       "unallocatedAmount": "Payment amount not yet allocated to documents.",
       "allocatedAmount": "Amount allocated to the selected document.",
       "targetOutstanding": "Outstanding balance on the target document.",
-      "exchangeRate": "Rate used to convert this amount to base currency.",
+      "exchangeRate": "Rate used to convert this amount to the base currency: base amount = amount x rate. Left empty, it is taken from the newest approved rate in Master Data - Currency Rates; an amount already in the base currency always converts at 1.",
       "debit": "Debit amount in the journal currency.",
       "credit": "Credit amount in the journal currency.",
       "debitTotal": "Sum of debit lines. Must equal credit total to post.",
@@ -1787,7 +1851,45 @@
       "defaultBranch": "Branch selected by default for this user.",
       "lastLogin": "Last successful sign-in time.",
       "route": "Pickup, border, and delivery summary. Calculated from route places.",
-      "currency": "Currency for amounts on this record."
+      "currency": "Currency for amounts on this record.",
+      "accountCodeResolved": "Set by the posting rule for this document type and fee type. Change the rule to change the account."
+    },
+    "configVersions": {
+      "title": "Service Order configuration",
+      "description": "Publishing freezes the current tabs, groups and fields so existing Service Orders keep rendering the way they were filled in.",
+      "current": "Live version v{no}",
+      "none": "Not published yet",
+      "tabs": "Active tabs",
+      "state": "State",
+      "upToDate": "Published",
+      "pendingChanges": "Unpublished changes",
+      "publishedAt": "Published at",
+      "changeNote": "Change note",
+      "changeNotePlaceholder": "What changed in this configuration?",
+      "publish": "Publish configuration",
+      "refresh": "Refresh",
+      "history": "Version history",
+      "retire": "Retire",
+      "published": "Configuration published",
+      "emptyTitle": "Nothing to publish",
+      "emptyDescription": "Create at least one active tab before publishing.",
+      "unchangedDescription": "The live configuration matches the published version, so there is nothing to publish."
+    },
+    "statusActions": {
+      "activate": "Activate",
+      "deactivate": "Deactivate",
+      "mark": "Mark as {status}",
+      "finish": "Finish",
+      "issue": "Issue",
+      "post": "Post",
+      "reverse": "Reverse",
+      "close": "Close period",
+      "reopen": "Reopen period",
+      "send": "Send",
+      "accept": "Accept",
+      "reject": "Reject",
+      "convert": "Convert to Service Order",
+      "cancel": "Cancel"
     }
   },
   "lcs": {
@@ -1808,8 +1910,6 @@
       "periodClosed": "The accounting period is closed. Posting is disabled.",
       "postedReadOnly": "Posted financial documents are read-only. Use reversal to correct them.",
       "reverseReason": "Enter a reversal reason",
-      "postingConfirmation": "Posting confirmation",
-      "postingConfirmationHint": "Review the resolved accounting effect before posting.",
       "documentTotal": "Document total",
       "branchDimension": "Branch dimension",
       "activeBranch": "Active branch",
@@ -2183,7 +2283,8 @@
       "duplicated": "Duplicated",
       "activated": "Activated",
       "deactivated": "Deactivated",
-      "resetDone": "Reset to defaults"
+      "resetDone": "Reset to defaults",
+      "reason": "Reason"
     },
     "confirm": {
       "deleteTitle": "Delete items?",
@@ -2514,7 +2615,8 @@
       "storageTabs": {
         "amazonS3": "S3",
         "googleDrive": "Google Drive"
-      }
+      },
+      "availableLanguagesHint": "Users can switch between the enabled languages from the profile menu. At least one language must stay enabled."
     },
     "views": {
       "table": "Table",
@@ -2949,7 +3051,10 @@
       "duplicate": "Duplicate",
       "print": "Print",
       "comingSoon": "Coming soon",
-      "scrollToTop": "Scroll to top"
+      "scrollToTop": "Scroll to top",
+      "sequenceChangeTitle": "Change the last sequence value?",
+      "sequenceChangeDescription": "Changing the last value can create duplicate or skipped document numbers. Continue only after verifying the numbering history.",
+      "sequenceChangeConfirm": "Change last value"
     },
     "meta": {
       "assign": "Assign",
@@ -3184,6 +3289,26 @@
       "passwordMismatch": "Passwords do not match",
       "submit": "Create administrator",
       "failed": "Setup failed. Please try again."
+    },
+    "postingRuleHistory": "Posting Rule History",
+    "changePassword": {
+      "title": "Choose a new password",
+      "description": "Your account password was set by an administrator, so it has to be replaced before you can continue.",
+      "notice": "Nothing else is available until you change it. Your other signed-in devices will be signed out.",
+      "submit": "Save and sign in again",
+      "signOut": "Sign out instead",
+      "success": "Password changed",
+      "successDescription": "Sign in again with your new password.",
+      "failed": "Could not change the password. Check the current password and try again.",
+      "currentPassword": "Current password",
+      "currentPasswordPlaceholder": "The password you were given",
+      "currentRequired": "Enter the password you were given.",
+      "newPassword": "New password",
+      "newPasswordPlaceholder": "At least {min} characters",
+      "confirmPassword": "Confirm new password",
+      "confirmPasswordPlaceholder": "Repeat the new password",
+      "passwordMin": "Use at least {min} characters.",
+      "passwordMismatch": "The two passwords do not match."
     }
   },
   "settings": {
@@ -3205,5 +3330,96 @@
   "app": {
     "description": "Freight forwarding management for jobs, customs, documents, finance, and operations.",
     "keywords": "freight forwarding, customs, jobs, debit notes, LCS"
-  }
+  },
+  "validation": {
+    "summaryTitle": "Please correct the highlighted fields",
+    "summaryCount": "{count} issue(s) to fix",
+    "formError": "Please correct the highlighted fields.",
+    "required": "{field} is required.",
+    "requiredGeneric": "This field is required.",
+    "email": "Please enter a valid {field}.",
+    "emailGeneric": "Please enter a valid email address.",
+    "url": "Please enter a valid {field}.",
+    "urlGeneric": "Please enter a valid web address.",
+    "number": "{field} must be a number.",
+    "numberGeneric": "Enter a number.",
+    "integer": "{field} must be a whole number.",
+    "integerGeneric": "Enter a whole number.",
+    "boolean": "{field} must be Yes or No.",
+    "booleanGeneric": "Choose Yes or No.",
+    "date": "Enter a valid date for {field}.",
+    "dateGeneric": "Enter a valid date.",
+    "min": "{field} must be greater than or equal to {min}.",
+    "minGeneric": "Enter a value of at least {min}.",
+    "max": "{field} must be less than or equal to {max}.",
+    "maxGeneric": "Enter a value of at most {max}.",
+    "minLength": "{field} must be at least {min} characters.",
+    "minLengthGeneric": "Enter at least {min} characters.",
+    "maxLength": "{field} must be at most {max} characters.",
+    "maxLengthGeneric": "Enter at most {max} characters.",
+    "pattern": "Enter {field} in the expected format.",
+    "patternGeneric": "This value is not in the expected format.",
+    "allowed": "Choose one of the available options for {field}.",
+    "allowedGeneric": "Choose one of the available options.",
+    "balanced": "Debit and credit totals must match before posting.",
+    "minRows": "Add at least {min} row(s) before saving.",
+    "rowCell": "Row {row}, {field}",
+    "duplicateSequence": "A document sequence already exists for {type} / {year}.",
+    "passwordMismatch": "The two passwords do not match.",
+    "commonPassword": "That password is too easy to guess. Choose another.",
+    "commonPasswordGeneric": "That password is too easy to guess. Choose another."
+  },
+  "fields": {
+    "feeTypeId": "Fee Type",
+    "priority": "Priority",
+    "documentTypeLabel": "Document Type",
+    "eventType": "Event",
+    "entityType": "Entity"
+  },
+  "postingRules": {
+    "history": {
+      "tab": "History",
+      "changesTitle": "Change history",
+      "changesDescription": "Every recorded change to this rule, newest first. Nothing here can be edited: it is the audit trail, not a form.",
+      "noChanges": "This rule has not been changed since it was created.",
+      "recorded": "{action}",
+      "usageTitle": "Journals posted through this rule",
+      "usageDescription": "Entries this rule resolved the accounts for. A rule change never rewrites these; a correction is a reversal, so a posting and its reversal both appear.",
+      "noUsage": "No journal has used this rule yet.",
+      "posting": "Posting",
+      "reversal": "Reversal",
+      "columns": {
+        "when": "When",
+        "action": "Action",
+        "what": "What changed",
+        "who": "By",
+        "document": "Document",
+        "kind": "Kind"
+      },
+      "actions": {
+        "create": "Created",
+        "update": "Updated",
+        "delete": "Deleted"
+      }
+    }
+  },
+  "users": {
+    "password": {
+      "title": "Set a new password",
+      "description": "Choose a new password for {user}. The old one stops working immediately and every signed-in device is signed out.",
+      "fieldHelp": "You cannot read this back later: only a one-way hash is stored. An administrator can set a new one at any time.",
+      "handoverTitle": "Password created",
+      "handoverDescription": "Give this password to {user}.",
+      "handoverWarning": "This is the only time it can be shown. Only a one-way hash is stored, so it cannot be looked up later — an administrator would have to set a new one.",
+      "newPassword": "New password",
+      "confirmPassword": "Confirm password",
+      "requirements": "At least 8 characters. Avoid a password you use elsewhere.",
+      "generate": "Generate a strong password",
+      "requireChange": "Require a change at next sign-in",
+      "requireChangeHelp": "Strongly recommended: the user picks their own password before anything else becomes available.",
+      "submit": "Set password",
+      "copy": "Copy password"
+    }
+  },
+  "containerPaymentTaxRate": "Tax rate"
 }

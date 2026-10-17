@@ -2,6 +2,9 @@
 import type { ComponentTab, ComponentTabGroupLink } from '~/types/component-config'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateDraftFields } from '~/utils/validation/record-validation'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 
 definePageMeta({
   titleKey: 'freight.pages.componentTabs',
@@ -10,11 +13,23 @@ definePageMeta({
 
 type TabDraft = { id?: string, name: string, description: string, directionId: string }
 
+/** Required inputs of the create/rename dialog, shared with the validator. */
+const TAB_DRAFT_FIELDS = [
+  { key: 'name', label: 'Name', required: true },
+] as const
+
 const { t } = useI18n()
 const toast = useToast()
 const { confirm } = useConfirm()
 const config = useComponentConfig()
 const store = useFreightStore()
+
+const validation = useFormValidation({
+  t: (key, params) => t(key, params as Record<string, unknown>),
+  label: key => TAB_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  order: () => TAB_DRAFT_FIELDS.map(field => field.key),
+})
+const pageErrors = ref<string[]>([])
 
 const selectedTabId = ref('')
 const addGroupId = ref<string | undefined>(undefined)
@@ -49,6 +64,7 @@ function slugify(value: string) {
 
 function startAdd() {
   draft.value = { name: '', description: '', directionId: '' }
+  validation.reset()
   dialogOpen.value = true
 }
 
@@ -64,7 +80,17 @@ function startRename(tab: ComponentTab) {
 
 async function saveDraft() {
   const current = draft.value
-  if (!current.name.trim()) return
+  const failures = validateDraftFields(
+    current as unknown as Record<string, unknown>,
+    TAB_DRAFT_FIELDS.map(field => ({ key: field.key, required: field.required })),
+    key => TAB_DRAFT_FIELDS.find(field => field.key === key)?.label || key,
+  )
+  if (failures.length) {
+    validation.applyFailures(failures)
+    void validation.focusFirstInvalid()
+    return
+  }
+  validation.reset()
   try {
     if (current.id) {
       await config.updateTab(current.id, {
@@ -86,8 +112,9 @@ async function saveDraft() {
     dialogOpen.value = false
     toast.add({ title: t('freight.ui.save'), color: 'success' })
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    validation.applyServerError(error)
+    void validation.focusFirstInvalid()
   }
 }
 
@@ -111,8 +138,8 @@ async function addGroup(groupId: string | undefined) {
     addGroupId.value = undefined
     toast.add({ title: t('freight.ui.save'), color: 'success' })
   }
-  catch {
-    toast.add({ title: t('freight.ui.saveFailed'), color: 'error' })
+  catch (error) {
+    pageErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
   }
 }
 
@@ -235,19 +262,28 @@ async function removeMembership(link: ComponentTabGroupLink) {
       </section>
     </div>
 
+    <CommonAppFormErrorSummary class="mb-2" :form-errors="pageErrors" />
+
     <CommonAppEntityDialog
       v-model:open="dialogOpen"
       :title="draft.id ? 'Rename tab' : 'Add tab'"
       :saving="config.saving.value"
       :confirm-label="draft.id ? 'Save' : 'Create'"
+      :form-errors="validation.formErrors.value"
       @confirm="saveDraft"
     >
       <div class="space-y-4">
-        <UFormField label="Name" required>
+        <UFormField
+          label="Name"
+          required
+          :error="validation.fieldErrors.value.name"
+          data-field-key="name"
+        >
           <UInput
             v-model="draft.name"
             placeholder="Tab name"
             class="w-full"
+            @update:model-value="validation.clearFieldError('name')"
             @keyup.enter="saveDraft"
           />
         </UFormField>

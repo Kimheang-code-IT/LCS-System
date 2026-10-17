@@ -14,7 +14,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import Base
@@ -123,19 +123,29 @@ async def requires_setup(session: AsyncSession) -> bool:
 
 
 async def provision_baseline(session: AsyncSession) -> None:
-    """Seed default configuration: document sequences and app info/config.
+    """Seed default configuration.
 
     Idempotent — existing rows are left untouched. Business/finance data
-    (accounts, periods, parties, documents) is never seeded.
+    (accounts, periods, parties, documents) is never seeded. What is seeded is
+    configuration the application cannot invent at runtime:
+
+    * document-number sequences for the current year;
+    * the currency master (so every configured currency resolves to a row);
+    * the default app info/config, both in ``app_settings`` (the system of
+      record) and mirrored into the legacy ``module_records`` payload.
     """
     from copy import deepcopy
 
+    from app.core.localization import SUPPORTED_CURRENCIES
     from app.core.sequences import DEFAULT_PREFIXES
     from app.modules.finance.models import DocumentSequence
-    from app.modules.master_data.models import ModuleRecord
+    from app.modules.master_data.models import Currency, ModuleRecord
+    from app.modules.settings.models import AppSetting
     from app.modules.settings.service import (
         APP_CONFIG_COLLECTION,
         APP_INFO_COLLECTION,
+        APP_INFO_GROUP,
+        APP_INFO_KEY,
         DEFAULT_APP_CONFIG,
         DEFAULT_APP_INFO,
         SETTINGS_RECORD_NO,
@@ -165,6 +175,36 @@ async def provision_baseline(session: AsyncSession) -> None:
                 )
             )
 
+    existing_currencies = set(
+        (await session.execute(select(Currency.code).where(Currency.deleted_at.is_(None)))).scalars().all()
+    )
+    for code in SUPPORTED_CURRENCIES:
+        if code not in existing_currencies:
+            session.add(Currency(code=code, name=code, symbol=None, status="ACTIVE"))
+
+    existing_settings = set((await session.execute(select(AppSetting.setting_key))).scalars().all())
+    if APP_INFO_KEY not in existing_settings:
+        session.add(
+            AppSetting(
+                setting_key=APP_INFO_KEY,
+                setting_group=APP_INFO_GROUP,
+                setting_value=deepcopy(DEFAULT_APP_INFO),
+                description="Application identity, branding and support contacts.",
+            )
+        )
+    for group, defaults in DEFAULT_APP_CONFIG.items():
+        if group not in existing_settings:
+            session.add(
+                AppSetting(
+                    setting_key=group,
+                    setting_group=group,
+                    setting_value=deepcopy(defaults),
+                    description=f"Application settings group '{group}'.",
+                )
+            )
+
+    # Transitional mirror so an application rollback still reads the settings an
+    # administrator last saved. Safe to drop once the mirror is no longer needed.
     for collection, defaults in (
         (APP_INFO_COLLECTION, DEFAULT_APP_INFO),
         (APP_CONFIG_COLLECTION, DEFAULT_APP_CONFIG),
@@ -273,6 +313,7 @@ async def reset_all_data(session: AsyncSession) -> None:
     import app.modules.master_data.models  # noqa: F401
     import app.modules.operations.models  # noqa: F401
     import app.modules.quotations.models  # noqa: F401
+    import app.modules.settings.models  # noqa: F401
 
     preserved_tables = {
         "users",
@@ -284,6 +325,12 @@ async def reset_all_data(session: AsyncSession) -> None:
         "user_role_assignments",
         "audit_events",
     }
+    # PostgreSQL guards make posted journals and their lines immutable and audit
+    # events append-only. An administrative reset is the one operation allowed to
+    # clear them, so it opens the transaction-scoped escape hatch that the guard
+    # functions check. SET LOCAL cannot leak past this transaction.
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        await session.execute(text("SET LOCAL lcs.allow_financial_purge = 'on'"))
     for table in reversed(Base.metadata.sorted_tables):
         if table.name in preserved_tables:
             continue

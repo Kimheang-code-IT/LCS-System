@@ -21,16 +21,59 @@ export { codeTitle, labeledStatusOptions, shortDay }
 
 export const i18nSlug = slugify
 
+/** Deduplicates dev warnings so a label in a long table only reports once. */
+const warnedLabels = new Set<string>()
+
+/**
+ * Surfaces labels that ship without an i18n key. Without this a missing key is
+ * invisible in English and only shows up as stray English in Khmer or Chinese.
+ */
+function warnMissingLabel(key: string, fallback: string) {
+  if (!import.meta.dev || warnedLabels.has(key)) return
+  warnedLabels.add(key)
+  console.warn(
+    `[i18n] Missing translation key "${key}" for label "${fallback}". `
+    + 'Add it to en.json, km.json and zh.json (or give the field a labelKey).',
+  )
+}
+
+/**
+ * Admin-maintained translations that ship with a *record* rather than with the
+ * app: component attributes and dynamic-table columns are defined by users in
+ * Component Configuration and store their own `labelKm` column in the database.
+ * Those are looked up per active locale instead of through the message bundles.
+ * Adding a stored `labelZh` later only requires extending `STORED_LABEL_FIELDS`.
+ */
+const STORED_LABEL_FIELDS: Record<string, keyof FreightField> = {
+  km: 'labelKm',
+}
+
+/** Returns an admin-supplied label for the active locale, if one exists. */
+function storedLabel(field: FreightField, locale: string): string | undefined {
+  const stored = field.labelTranslations as Record<string, string> | undefined
+  const fromMap = stored?.[locale]?.trim()
+  if (fromMap) return fromMap
+  const fieldName = STORED_LABEL_FIELDS[locale]
+  const value = fieldName ? (field[fieldName] as string | undefined) : undefined
+  return value?.trim() || undefined
+}
+
 export function useFreightLabel() {
   const { t, te, locale } = useI18n()
   const route = useRoute()
-  const km = computed(() => locale.value === 'km')
 
   function tx(key: string, fallback = '') {
     return te(key) ? String(t(key)) : fallback
   }
 
-  function fieldLabel(field: Pick<FreightField, 'key' | 'label' | 'labelKm' | 'labelKey'>) {
+  /**
+   * Resolution order: explicit `labelKey` -> module-scoped key -> generic field
+   * key -> an admin-stored translation for the active locale -> the hardcoded
+   * English label. Every label shipped in code now has an i18n key in all
+   * locales, so a miss means the label was added without one; that warns in dev
+   * and renders English instead of leaving a gap in Khmer or Chinese.
+   */
+  function fieldLabel(field: Pick<FreightField, 'key' | 'label' | 'labelKm' | 'labelKey' | 'labelTranslations'>) {
     if (field.labelKey && te(field.labelKey)) return String(t(field.labelKey))
     const collection = getFreightModule(route.path)?.collection
     if (collection) {
@@ -39,7 +82,10 @@ export function useFreightLabel() {
     }
     const generic = `freight.fields.${field.key}`
     if (te(generic)) return String(t(generic))
-    return km.value && field.labelKm ? field.labelKm : field.label
+    const stored = storedLabel(field as FreightField, locale.value)
+    if (stored) return stored
+    warnMissingLabel(generic, field.label)
+    return field.label
   }
 
   function moduleTitle(module: FreightModule) {
@@ -73,7 +119,6 @@ export function useFreightLabel() {
   }
 
   return {
-    km,
     tx,
     fieldLabel,
     moduleTitle,
@@ -128,8 +173,12 @@ export function emptyFreightRecord(module: FreightModule) {
   for (const table of module.tables || []) {
     record[table.key] = table.presets ? table.presets.map(row => ({ ...row })) : []
   }
-  if (module.fields.some(field => field.key === 'currency') && !String(record.currency || '').trim()) {
-    record.currency = getFormatConfig().currency
+  if (module.fields.some(field => field.key === 'currency')) {
+    if (!String(record.currency || '').trim()) record.currency = getFormatConfig().currency
+    // A new document converts into the company's base currency. A saved document
+    // carries its own stored base currency from the payload, so this only seeds
+    // the form; the backend remains the authority on what is stored.
+    if (!String(record.baseCurrency || '').trim()) record.baseCurrency = getFormatConfig().currency
   }
   if (module.collection === 'roles') {
     record.permissionRows = []

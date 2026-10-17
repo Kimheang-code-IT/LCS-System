@@ -1,5 +1,6 @@
 import type { FreightRecord } from '~/types/record'
 import type { LcsPaged } from '~/types/domain'
+import type { RecordStatusPolicy } from '~/types/status'
 
 export interface ModuleListQuery {
   q?: string
@@ -20,4 +21,8 @@ export interface ModuleRepository<T = FreightRecord> {
   create: (input: Record<string, unknown>) => Promise<T>
   update: (id: string, input: Record<string, unknown>) => Promise<T>
   remove: (ids: string[]) => Promise<void>
+  /** Legal status transitions for this collection, already permission-filtered. */
+  statusPolicy: () => Promise<RecordStatusPolicy>
+  /** Apply one plain status transition (activate / deactivate / mark / reopen). */
+  changeStatus: (id: string, status: string, reason?: string) => Promise<T>
 }

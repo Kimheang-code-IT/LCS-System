@@ -19,33 +19,128 @@ export function isMoneyColumnKey(key: string) {
   return moneyKeys.has(key)
 }
 
-/** Shared cell width classes for AppLineTable / job workspace line tables. */
-export function lineTableColumnCellClass(column: FreightLineColumn) {
-  if (column.width) return column.width
+/**
+ * How wide a line-table field is and how its value is aligned.
+ *
+ * `width` is the width of the *field* in CSS pixels. `AppLineTable` adds the
+ * cell padding and borders on top of it and puts the total on the column, so the
+ * field always fills the column it belongs to instead of floating inside it.
+ * One resolver for the whole grid keeps the cell width, the field and the header
+ * from disagreeing.
+ */
+export type LineTableColumnMetrics = {
+  /** Field width in CSS pixels. */
+  width: number
+  /** Money/quantity values are right-aligned in the field and the header. */
+  numeric: boolean
+  /** Icon-only cells (delete, note, row actions) are as narrow as the icon. */
+  iconOnly: boolean
+}
 
-  if (column.type === 'delete' || column.type === 'action' || column.type === 'note') return 'w-12'
-  if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return 'w-36 min-w-28'
-  if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') return 'w-20 min-w-20 text-right tabular-nums'
-  if (column.key === 'unit') return 'w-24 min-w-24'
-  if (column.key === 'discountPercent' || column.key === 'taxPercent' || column.key === 'taxRate') return 'w-24 min-w-24 text-right tabular-nums'
+/** Text, places and textareas: the historical `min-w-40` field. */
+const TEXT_FIELD_WIDTH = 160
+/** Wide enough for the icon button, no more. */
+const ICON_FIELD_WIDTH = 32
+
+function metrics(width: number, numeric = false, iconOnly = false): LineTableColumnMetrics {
+  return { width, numeric, iconOnly }
+}
+
+/** Resolve a column's field width and alignment from its key, then its type. */
+export function lineTableColumnMetrics(column: FreightLineColumn): LineTableColumnMetrics {
+  // An explicit pixel width wins; a class string (admin-supplied) is applied to
+  // the field by `lineTableColumnCellClass` and leaves this default in place.
+  if (typeof column.width === 'number' && column.width > 0) {
+    return metrics(column.width, numericColumn(column))
+  }
+
+  if (column.type === 'delete' || column.type === 'action' || column.type === 'note' || column.type === 'reorder') {
+    return metrics(ICON_FIELD_WIDTH, false, true)
+  }
+  if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return metrics(144)
+  if (column.key === 'quantity' || column.key === 'actualQuantity' || column.key === 'remaining') return metrics(80, true)
+  if (column.key === 'unit') return metrics(96)
+  if (column.key === 'discountPercent' || column.key === 'taxPercent' || column.key === 'taxRate') return metrics(96, true)
   if (column.key === 'netWeightKg' || column.key === 'grossWeightKg' || column.key === 'weightKg') {
-    return column.inlineFields?.length ? 'w-36 min-w-32 text-right tabular-nums' : 'w-28 min-w-24 text-right tabular-nums'
+    return metrics(column.inlineFields?.length ? 144 : 112, true)
   }
   if (moneyKeys.has(column.key)) {
-    return column.inlineFields?.length ? 'w-44 min-w-40 text-right tabular-nums' : 'w-32 min-w-28 text-right tabular-nums'
+    return metrics(column.inlineFields?.length ? 176 : 128, true)
   }
-  if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') return 'w-36 min-w-28'
-  if (column.key === 'sealNo' || column.key === 'status' || column.key === '_status') return 'w-28 min-w-24'
-  if (column.key === 'placeRole') return 'w-44 min-w-40'
-  if (column.key === 'place' || column.key === 'notes') return 'min-w-40'
+  if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') return metrics(144)
+  if (column.key === 'sealNo' || column.key === 'status' || column.key === '_status') return metrics(112)
+  if (column.key === 'placeRole') return metrics(176)
+  if (column.key === 'place' || column.key === 'notes') return metrics(TEXT_FIELD_WIDTH)
 
-  if (column.type === 'date' || column.type === 'datetime') return 'w-40 min-w-36'
-  if (column.type === 'number') return 'w-28 min-w-24 text-right tabular-nums'
-  if (column.type === 'select') return 'w-36 min-w-28'
-  if (column.type === 'textarea') return 'min-w-40'
-  if (column.computed) return 'w-28 min-w-24'
+  if (column.type === 'date' || column.type === 'datetime') return metrics(TEXT_FIELD_WIDTH)
+  if (column.type === 'number') return metrics(112, true)
+  if (column.type === 'select') return metrics(144)
+  if (column.type === 'checkbox') return metrics(64)
+  if (column.type === 'textarea') return metrics(TEXT_FIELD_WIDTH)
+  if (column.computed) return metrics(112)
 
-  return 'min-w-40'
+  return metrics(TEXT_FIELD_WIDTH)
+}
+
+function numericColumn(column: FreightLineColumn) {
+  return moneyKeys.has(column.key)
+    || column.key === 'quantity'
+    || column.key === 'actualQuantity'
+    || column.key === 'remaining'
+    || column.key === 'netWeightKg'
+    || column.key === 'grossWeightKg'
+    || column.key === 'weightKg'
+    || column.key === 'discountPercent'
+    || column.key === 'taxPercent'
+    || column.key === 'taxRate'
+    || column.type === 'number'
+}
+
+/** Field width in CSS pixels — what the table turns into a column width. */
+export function lineTableColumnWidth(column: FreightLineColumn) {
+  return lineTableColumnMetrics(column).width
+}
+
+/**
+ * Classes for the field itself: alignment, plus a class-shaped width override an
+ * admin may have stored on a configurable column. The column width comes from
+ * `lineTableColumnWidth`, so nothing here sets a width of its own.
+ */
+export function lineTableColumnCellClass(column: FreightLineColumn) {
+  const align = lineTableColumnMetrics(column).numeric ? 'text-right tabular-nums' : ''
+  if (typeof column.width === 'string' && column.width) return [column.width, align].filter(Boolean).join(' ')
+  return align
+}
+
+/**
+ * Single-icon row controls: they render a button per row instead of a value.
+ * Distinct from `FREIGHT_LINE_UTILITY_COLUMN_TYPES`, which also covers reorder
+ * and row actions, and from a note *field*, which is prose.
+ */
+export function isRowControlColumn(column: FreightLineColumn) {
+  return column.type === 'note' || column.type === 'delete'
+}
+
+export type SharedRowControls = {
+  /** Key of the column whose cell renders the group, or null when nothing is shared. */
+  host: string | null
+  /** Keys of the row controls that render inside the host cell. */
+  folded: Set<string>
+}
+
+/**
+ * Note and delete are both one-icon row controls, so a table that declares both
+ * shows them side by side in a single cell rather than spending two narrow
+ * columns on every row. The first one in declaration order hosts the group and
+ * the rest fold into it; a table that declares only one keeps it where it is.
+ */
+export function sharedRowControls(columns: FreightLineColumn[]): SharedRowControls {
+  const controls = columns.filter(isRowControlColumn)
+  if (controls.length < 2) return { host: null, folded: new Set() }
+  return {
+    host: controls[0]!.key,
+    folded: new Set(controls.slice(1).map(column => column.key)),
+  }
 }
 
 export function lineTableNumericColumnKeys(extra: string[] = []) {

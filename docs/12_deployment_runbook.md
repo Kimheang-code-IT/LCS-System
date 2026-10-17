@@ -106,6 +106,20 @@ Before applying a migration:
 
 Never run destructive migration operations without an approved backup and migration plan.
 
+The post-`a2b3c4d5e6f7` revisions are additive apart from one deliberately
+destructive revision (`c1d2e3f4a5b7`, which dropped the unused `currency_rates`
+table again); the current head, the revision inventory and what each revision
+adds are kept in one place, `docs/15_migration_and_rollback_guide.md` §1. Apply
+that guide's procedure, reconciliation queries and rollback boundary. The older
+`a2b3c4d5e6f7` work is described below.
+
+RBAC migration `a2b3c4d5e6f7` is data-preserving. It expires duplicate legacy
+assignments, normalizes the retained current assignment, and maps active users
+without a role to `MIGRATED_NO_ACCESS` (zero permissions). After deployment,
+review that role's assigned-user list in Administration → Roles & Permissions
+and explicitly reassign each account. Do not grant permissions to the migration
+role as a shortcut.
+
 ## 9. Smoke Tests
 
 - `GET /health` returns success.
@@ -260,12 +274,9 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres
   < "$HOME/lcs-backups/freight-<timestamp>.dump"
 ```
 
-Do not seed data manually: migrations leave the database empty and the first-run
-`/setup` page (or `create_admin`) provisions the initial records — the
-administrator, the built-in Platform Administrator role, default document
-sequences for the current year, and the default app info/config. No finance or
-business data is seeded, and every other role is entered manually from
-Roles & Permissions.
+Do not seed data manually: migrations leave the database empty. What first-run
+provisioning creates — and the headless `create_admin` alternative — is described
+in `docs/03_business_process_and_sop.md` §3.
 
 ## 16. Incident Evidence
 
@@ -392,8 +403,10 @@ The merge is manual; nothing auto-merges `dev` into `main`.
 ### Secrets and variables (production environment)
 
 Secrets: `AWS_SSH_KEY`, `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`,
-`MINIO_ROOT_PASSWORD`. `GHCR_TOKEN` is **not needed** — the GHCR images are
-public and EC2 does no registry login.
+`CSRF_SECRET_KEY`, `FIELD_ENCRYPTION_KEY`, `MINIO_ROOT_PASSWORD`,
+`S3_SECRET_KEY`. `GHCR_TOKEN` is **not needed** — the GHCR images are public and
+EC2 does no registry login. This list is the single source for it; the security
+runbook points here instead of repeating it.
 
 Variables: `AWS_HOST`, `AWS_USER`, optional `AWS_PORT`; `MINIO_ROOT_USER`, and
 optional `S3_PUBLIC_ENDPOINT_URL` (defaults to `https://lcslog.minidev.in`),

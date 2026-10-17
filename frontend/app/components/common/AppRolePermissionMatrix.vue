@@ -15,11 +15,26 @@ const props = withDefaults(defineProps<{ disabled?: boolean }>(), {
 
 const { t, te } = useI18n()
 
-const displayRows = computed(() => normalizePermissionRows(rows.value))
-const grantedCount = computed(() => displayRows.value.reduce((sum, row) => sum + row.actions.length, 0))
+const search = ref('')
+const actionFilter = ref('all')
+const dirty = ref(false)
+const normalizedRows = computed(() => normalizePermissionRows(rows.value))
+const displayRows = computed(() => {
+  const query = search.value.trim().toLocaleLowerCase()
+  return normalizedRows.value.filter((row) => {
+    const matchesAction = actionFilter.value === 'all' || row.actions.includes(actionFilter.value)
+    const searchable = `${documentTypeLabel(row.documentType)} ${moduleLabel(row.documentType)} ${row.actions.join(' ')}`.toLocaleLowerCase()
+    return matchesAction && (!query || searchable.includes(query))
+  })
+})
+const grantedCount = computed(() => normalizedRows.value.reduce((sum, row) => sum + row.actions.length, 0))
 const totalCount = ROLE_DOCUMENT_TYPES.reduce((sum, definition) => sum + definition.actions.length, 0)
 const allGranted = computed(() => grantedCount.value === totalCount)
 const someGranted = computed(() => grantedCount.value > 0 && !allGranted.value)
+const actionFilterItems = computed(() => [
+  { label: 'All actions', value: 'all' },
+  ...ROLE_PERMISSION_ACTIONS.map(action => ({ label: actionLabel(action), value: action })),
+])
 
 const actionColumns = computed(() => {
   const cols: string[][] = [[], [], []]
@@ -28,6 +43,7 @@ const actionColumns = computed(() => {
 })
 
 function commit(next: AppRolePermissionRow[]) {
+  dirty.value = true
   rows.value = normalizePermissionRows(next)
 }
 
@@ -50,6 +66,12 @@ function actionLabel(action: string) {
   return te(key) ? t(key) : action
 }
 
+function moduleLabel(documentType: string) {
+  const definition = ROLE_DOCUMENT_TYPES.find(item => item.value === documentType)
+  const moduleName = definition?.permissionPrefix.split('.')[0] || 'system'
+  return moduleName.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
 function hasAction(row: AppRolePermissionRow, action: string) {
   return row.actions.includes(action)
 }
@@ -64,7 +86,7 @@ function actionAllowed(documentType: string, action: string) {
 
 function toggleAction(documentType: string, action: string, checked: boolean | 'indeterminate') {
   if (props.disabled) return
-  commit(displayRows.value.map(row =>
+  commit(normalizedRows.value.map(row =>
     row.documentType === documentType
       ? setPermissionAction(row, action, checked === true)
       : row,
@@ -73,7 +95,7 @@ function toggleAction(documentType: string, action: string, checked: boolean | '
 
 function toggleRow(documentType: string, checked: boolean | 'indeterminate') {
   if (props.disabled) return
-  commit(displayRows.value.map(row => row.documentType === documentType
+  commit(normalizedRows.value.map(row => row.documentType === documentType
     ? {
         ...row,
         actions: checked === true ? [...allowedActions(documentType)] : [],
@@ -84,11 +106,14 @@ function toggleRow(documentType: string, checked: boolean | 'indeterminate') {
 
 function toggleAll(checked: boolean) {
   if (props.disabled) return
-  commit(displayRows.value.map(row => ({
-    ...row,
-    actions: checked ? [...allowedActions(row.documentType)] : [],
-    onlyIfCreator: checked ? row.onlyIfCreator : false,
-  })))
+  const visible = new Set(displayRows.value.map(row => row.documentType))
+  commit(normalizedRows.value.map(row => visible.has(row.documentType)
+    ? {
+        ...row,
+        actions: checked ? [...allowedActions(row.documentType)] : [],
+        onlyIfCreator: checked ? row.onlyIfCreator : false,
+      }
+    : row))
 }
 
 </script>
@@ -97,7 +122,10 @@ function toggleAll(checked: boolean) {
   <div class="overflow-hidden rounded-lg border border-default">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-default bg-elevated/70 px-3 py-2.5">
       <div>
-        <p class="text-sm font-semibold text-highlighted">{{ $t('lcs.rolePermissions.matrixTitle') }}</p>
+        <div class="flex items-center gap-2">
+          <p class="text-sm font-semibold text-highlighted">{{ $t('lcs.rolePermissions.matrixTitle') }}</p>
+          <UBadge v-if="dirty" color="warning" variant="subtle">{{ $t('lcs.document.unsaved') }}</UBadge>
+        </div>
         <p class="text-xs text-muted">
           {{ $t('lcs.rolePermissions.grantedCount', { granted: grantedCount, total: totalCount }) }}
         </p>
@@ -124,6 +152,16 @@ function toggleAll(checked: boolean) {
           {{ $t('lcs.rolePermissions.grantAll') }}
         </UButton>
       </div>
+    </div>
+
+    <div class="grid gap-2 border-b border-default p-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+      <UInput
+        v-model="search"
+        icon="i-lucide-search"
+        placeholder="Search modules and permissions"
+        :disabled="disabled"
+      />
+      <USelect v-model="actionFilter" :items="actionFilterItems" :disabled="disabled" />
     </div>
 
     <div class="overflow-x-auto">
@@ -155,7 +193,10 @@ function toggleAll(checked: boolean) {
               />
             </td>
             <td class="px-3 py-3 font-medium text-highlighted">
-              {{ documentTypeLabel(row.documentType) }}
+              <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-muted">
+                {{ moduleLabel(row.documentType) }}
+              </span>
+              <span>{{ documentTypeLabel(row.documentType) }}</span>
             </td>
             <td class="px-3 py-3">
               <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
@@ -176,6 +217,9 @@ function toggleAll(checked: boolean) {
                 </div>
               </div>
             </td>
+          </tr>
+          <tr v-if="displayRows.length === 0">
+            <td colspan="3" class="px-3 py-8 text-center text-sm text-muted">No matching permissions.</td>
           </tr>
         </tbody>
       </table>

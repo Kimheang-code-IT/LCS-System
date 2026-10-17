@@ -9,6 +9,8 @@ import type {
   ComponentTabGroupLink,
   ComponentTabInput,
   ComponentTabsBootstrap,
+  ConfigurationVersion,
+  ConfigurationVersionPreview,
 } from '~/types/component-config'
 
 export interface ComponentGroupAttributeInput {
@@ -49,4 +51,9 @@ export interface ComponentConfigRepository {
 
   bootstrap: (serviceOrderId: string, directionId?: string) => Promise<ComponentTabsBootstrap>
   saveGroupRows: (serviceOrderId: string, groupId: string, rows: Array<{ id?: string, values: Record<string, unknown> }>) => Promise<ComponentGroupRow[]>
+
+  listConfigurationVersions: () => Promise<ConfigurationVersion[]>
+  previewConfigurationVersion: () => Promise<ConfigurationVersionPreview>
+  publishConfigurationVersion: (changeNote?: string) => Promise<ConfigurationVersion>
+  retireConfigurationVersion: (id: string) => Promise<ConfigurationVersion>
 }

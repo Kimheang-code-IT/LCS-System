@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { en, km } from '@nuxt/ui/locale'
+import { en, km, zh_cn } from '@nuxt/ui/locale'
 import { useSettingsRepositories } from '~/repositories'
 import { useAppBranding } from '~/composables/settings/useAppBranding'
 import { useSeoAbsoluteUrl } from '~/composables/freight/useSeoAbsoluteUrl'
@@ -11,7 +11,7 @@ const { applyFromAppInfo } = useAppBranding()
 const preferences = usePreferencesStore()
 const auth = useAuthStore()
 
-const uiLocales: Record<string, typeof en> = { en, km }
+const uiLocales: Record<string, typeof en> = { en, km, zh: zh_cn }
 
 const color = computed(() => colorMode.value === 'dark' ? '#1b1718' : 'white')
 const currentLocale = computed(() => uiLocales[locale.value] || en)
@@ -98,5 +98,6 @@ useSeoMeta({
     />
     <NuxtLayout />
     <CommonAppConfirmHost />
+    <CommonAppPromptHost />
   </UApp>
 </template>

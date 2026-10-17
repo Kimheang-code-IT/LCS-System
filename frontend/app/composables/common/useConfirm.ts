@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 
-export type ConfirmKind = 'delete' | 'save' | 'submit' | 'update' | 'unsaved' | 'generic'
+export type ConfirmKind = 'delete' | 'save' | 'submit' | 'update' | 'generic'
 
 export type ConfirmColor = 'error' | 'primary' | 'neutral' | 'warning'
 
@@ -60,13 +60,6 @@ const PRESETS: Record<ConfirmKind, Partial<ConfirmOptions> & { confirmColor: Con
     descriptionKey: 'lcs.confirm.updateDescription',
     confirmLabelKey: 'lcs.confirm.update',
     confirmColor: 'primary',
-  },
-  unsaved: {
-    titleKey: 'lcs.common.unsavedTitle',
-    descriptionKey: 'lcs.common.unsavedDescription',
-    confirmLabelKey: 'lcs.common.discardChanges',
-    cancelLabelKey: 'lcs.common.keepEditing',
-    confirmColor: 'warning',
   },
   generic: {
     titleKey: 'lcs.common.confirmTitle',

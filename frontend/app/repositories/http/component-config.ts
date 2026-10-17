@@ -8,6 +8,8 @@ import type {
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabsBootstrap,
+  ConfigurationVersion,
+  ConfigurationVersionPreview,
 } from '~/types/component-config'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
@@ -81,5 +83,25 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
       )
       return result?.items ?? []
     },
+
+    listConfigurationVersions: async () =>
+      asArray(unwrapApiData(await api.get<ApiResponse<ConfigurationVersion[]>>(
+        ApiV1Endpoints.CONFIGURATION_VERSIONS,
+        { query: { page_size: 200 } },
+      ))),
+    previewConfigurationVersion: async () =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersionPreview>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_PREVIEW,
+      )),
+    publishConfigurationVersion: async changeNote =>
+      unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSIONS,
+        { changeNote },
+      )),
+    retireConfigurationVersion: async id =>
+      unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_RETIRE(id),
+        {},
+      )),
   }
 }

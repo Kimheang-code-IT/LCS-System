@@ -9,11 +9,14 @@ const props = withDefaults(defineProps<{
   setFieldValue: (key: string, value: unknown) => void
   readOnly?: boolean
   fieldErrors?: Record<string, string>
+  /** Fired when the user edits a cell so the host can drop that cell's error. */
+  onFieldEdit?: (key: string) => void
   /** Force wider shell even without dense field types. */
   wide?: boolean
 }>(), {
   readOnly: false,
   fieldErrors: () => ({}),
+  onFieldEdit: undefined,
   wide: false,
 })
 
@@ -22,6 +25,15 @@ const { t, te } = useI18n()
 provide(freightDocumentRecordKey, {
   get: (key: string) => props.fieldValue(key),
 })
+
+/**
+ * Editing a field always clears its stale error before the new value is
+ * stored, so a corrected input stops being marked invalid immediately.
+ */
+function onFieldUpdate(key: string, value: unknown) {
+  props.onFieldEdit?.(key)
+  props.setFieldValue(key, value)
+}
 
 function sectionHeading(section: DocumentTabSchema['sections'][0]) {
   if (section.titleKey && te(section.titleKey)) return t(section.titleKey)
@@ -94,13 +106,15 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
                 :key="field.key"
                 class="min-w-0 max-w-full"
                 :class="isFullWidthField(field) ? 'sm:col-span-2' : ''"
+                :data-field-key="field.key"
               >
                 <DocumentAppDynamicFieldRenderer
                   :field="field"
                   :model-value="fieldValue(field.key)"
                   :disabled="readOnly || Boolean(field.readOnly)"
                   :field-errors="fieldErrors"
-                  @update:model-value="(v) => setFieldValue(field.key, v)"
+                  :on-field-edit="onFieldEdit"
+                  @update:model-value="value => onFieldUpdate(field.key, value)"
                 />
               </div>
             </div>

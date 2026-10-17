@@ -56,6 +56,56 @@ async def quotation_performance(
     return {"data": await service.quotation_performance(session, context)}
 
 
+@router.get("/reports/profit-loss")
+async def profit_loss_report(
+    context: RequestContext = Depends(report_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Revenue, expense and net result from POSTED journals."""
+    return {"data": await service.profit_loss(session, context)}
+
+
+@router.get("/reports/balance-sheet")
+async def balance_sheet_report(
+    context: RequestContext = Depends(report_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Assets, liabilities and equity, with the accounting identity as a control."""
+    return {"data": await service.balance_sheet(session, context)}
+
+
+@router.get("/reports/cash-flow")
+async def cash_flow_report(
+    context: RequestContext = Depends(report_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Cash and bank movements, using the same account mapping as the dashboard."""
+    return {"data": await service.cash_flow(session, context)}
+
+
+@router.get("/reports/container-register")
+async def container_register_report(
+    context: RequestContext = Depends(report_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Container register with a status breakdown."""
+    return {"data": await service.container_register(session, context)}
+
+
+@router.get("/reports/trial-balance")
+async def trial_balance(
+    context: RequestContext = Depends(report_access),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Posted debit/credit totals per account, with a balance check.
+
+    Server-side rather than derived in the browser: the trial balance is the
+    control that proves the ledger balances, and a control computed from a
+    paginated client-side row set is not a control.
+    """
+    return {"data": await service.trial_balance(session, context)}
+
+
 @router.get("/reports/receivables")
 async def receivables(
     context: RequestContext = Depends(report_access),

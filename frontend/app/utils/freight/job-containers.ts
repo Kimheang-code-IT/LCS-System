@@ -275,36 +275,34 @@ export function jobContainerPaymentRows(
   return []
 }
 
+/**
+ * Totals for the container payment sheet.
+ *
+ * The sheet carries **one** discount and one tax rate for the whole sheet, so both
+ * arrive as arguments and are applied to the summed line amounts. Rows contribute
+ * only their own amount; a per-row discount would let the same allowance be
+ * entered twice and would not match how the resulting invoice is composed.
+ *
+ * Tax is charged on the discounted amount, not the gross, which is what the tax
+ * authority expects and what the totals block shows.
+ */
 export function jobContainerPaymentTotals(
   rows: Array<Record<string, unknown>>,
   vatRate: unknown,
+  discount: unknown = 0,
 ) {
   const normalized = rows.map(row => normalizeContainerPayment(row))
-  const hasPricedLines = normalized.some(row =>
-    Boolean(text(row.feeType)) || asNumber(row.taxRate) > 0 || asNumber(row.taxAmount) > 0 || asNumber(row.discountAmount) > 0)
-  if (hasPricedLines) {
-    const subtotal = normalized.reduce((sum, row) => sum + asNumber(row.lineSubtotal), 0)
-    const discount = normalized.reduce((sum, row) => sum + asNumber(row.discountAmount), 0)
-    const vat = normalized.reduce((sum, row) => sum + asNumber(row.taxAmount), 0)
-    const total = normalized.reduce((sum, row) => sum + asNumber(row.lineTotal), 0)
-    return {
-      vatRate: 0,
-      subtotal: Number(subtotal.toFixed(2)),
-      discount: Number(discount.toFixed(2)),
-      vat: Number(vat.toFixed(2)),
-      total: Number(total.toFixed(2)),
-    }
-  }
-  const subtotal = normalized.reduce((sum, row) => sum + asNumber(row.amount), 0)
+  const subtotal = normalized.reduce((sum, row) => sum + asNumber(row.lineSubtotal ?? row.amount), 0)
+  const discountAmount = Math.max(0, asNumber(discount))
+  const taxable = Math.max(0, subtotal - discountAmount)
   const rate = asNumber(vatRate)
-  const vat = subtotal * rate / 100
-  const total = subtotal + vat
+  const vat = taxable * rate / 100
   return {
     vatRate: rate,
     subtotal: Number(subtotal.toFixed(2)),
-    discount: 0,
+    discount: Number(discountAmount.toFixed(2)),
     vat: Number(vat.toFixed(2)),
-    total: Number(total.toFixed(2)),
+    total: Number((taxable + vat).toFixed(2)),
   }
 }
 
@@ -355,11 +353,51 @@ export function duplicateContainerNumber(
   return ''
 }
 
-export function missingContainerNumber(rows: Array<Record<string, unknown>>) {
-  return rows.some((row) => {
+/** One cell-level problem in the actual-container grid. */
+export type ContainerRowIssue = {
+  index: number
+  column: 'containerNo' | 'grossWeightKg'
+  code: 'missingContainerNo' | 'grossLessThanNet' | 'duplicateContainerNo' | 'containerNoInUse'
+}
+
+/**
+ * Row-scoped form of the aggregate checks above.
+ *
+ * The aggregate helpers answer "is anything wrong?"; this one answers "which
+ * cell is wrong?", which is what inline validation and first-invalid-field
+ * navigation need. `others` are containers belonging to other service orders —
+ * a clash there is reported as a reference conflict, not a duplicate row.
+ */
+export function containerRowIssues(
+  rows: Array<Record<string, unknown>>,
+  others: Array<Record<string, unknown>> = [],
+): ContainerRowIssue[] {
+  const issues: ContainerRowIssue[] = []
+  const taken = new Set(
+    others.map(row => text(row.containerNo || row.container_number).toUpperCase()).filter(Boolean),
+  )
+  const seen = new Set<string>()
+
+  rows.forEach((row, index) => {
+    const no = text(row.containerNo)
+    if (no) {
+      const key = no.toUpperCase()
+      if (seen.has(key)) issues.push({ index, column: 'containerNo', code: 'duplicateContainerNo' })
+      else if (taken.has(key)) issues.push({ index, column: 'containerNo', code: 'containerNoInUse' })
+      seen.add(key)
+    }
     const started = Boolean(text(row.sealNo) || asNumber(row.netWeightKg) || asNumber(row.grossWeightKg))
-    return started && !text(row.containerNo)
+    if (started && !no) {
+      issues.push({ index, column: 'containerNo', code: 'missingContainerNo' })
+    }
+    const net = asNumber(row.netWeightKg)
+    const gross = asNumber(row.grossWeightKg)
+    if (gross > 0 && net > 0 && gross < net) {
+      issues.push({ index, column: 'grossWeightKg', code: 'grossLessThanNet' })
+    }
   })
+
+  return issues
 }
 
 export function firstOpenRequirement(requirements: Array<Record<string, unknown>>) {

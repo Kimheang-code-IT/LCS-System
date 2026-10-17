@@ -186,6 +186,34 @@ export interface ComponentTabsBootstrap {
   tradeDirectionId?: string | null
   tabs: ComponentTabRuntime[]
   references: Record<string, Record<string, string>>
+  /** Published configuration the order was captured under, when one exists. */
+  configVersionId?: string | null
+  configVersion?: ConfigurationVersion | null
+}
+
+/**
+ * A published snapshot of the Service Order configuration. Editing a tab no
+ * longer changes how an existing order reads, because the order stays pinned to
+ * the version it was created under.
+ */
+export interface ConfigurationVersion {
+  id: string
+  versionNo: number
+  status: 'DRAFT' | 'PUBLISHED' | 'RETIRED'
+  changeNote?: string | null
+  publishedAt?: string | null
+  publishedByUserId?: string | null
+  tabCount: number
+  createdAt?: string | null
+  updatedAt?: string | null
+  configSnapshot?: { tabs?: ComponentTabRuntime[] } | null
+}
+
+export interface ConfigurationVersionPreview {
+  preview: { tabs?: ComponentTabRuntime[] }
+  tabCount: number
+  currentVersionNo: number | null
+  unchanged: boolean
 }
 
 export const COMPONENT_DATA_TYPES: ComponentDataType[] = [

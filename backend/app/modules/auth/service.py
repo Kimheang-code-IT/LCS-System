@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import AccessDenied, AuthRequired, Conflict, NotFound, ValidationFailed
 from app.core.locks import advisory_lock
-from app.core.pagination import PageParams
+from app.core.pagination import PageParams, paged
 from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, ROLE_DEFINITIONS, SOURCE_PERMISSIONS
 from app.core.redis import safe_delete, safe_get, safe_set
 from app.core.security import (
@@ -78,6 +78,13 @@ PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
     "accounting_period.read": ("finance.accounting.view",),
     "accounting_period.close": ("finance.accounting.edit",),
     "chart_of_accounts.manage": ("finance.accounting.edit",),
+    "posting_rule.read": ("finance.posting_rules.view",),
+    "posting_rule.manage": (
+        "finance.posting_rules.view",
+        "finance.posting_rules.create",
+        "finance.posting_rules.edit",
+        "finance.posting_rules.delete",
+    ),
     "audit_log.read": ("admin.audit_logs.view",),
     "archive.view": ("archive.view", "admin.archive.view"),
     "archive.restore": ("admin.archive.edit",),
@@ -118,6 +125,10 @@ PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
         "finance.supplier_payments.view",
     ),
     "master.reference.manage": ("master.reference.create", "master.reference.edit", "master.reference.delete"),
+    # Publishing a configuration version changes the live Service Order form for
+    # every user, so the Roles screen grants it through the same page key as the
+    # rest of the configuration screens.
+    "service_order_config.publish": ("configuration.edit",),
     "configuration.manage": (
         "configuration.view",
         "configuration.create",
@@ -146,10 +157,46 @@ PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
 
 SOURCE_PERMISSION_CODES = {code for code, _, _ in SOURCE_PERMISSIONS}
 
-# Account lockout policy for privileged/credentialed access.
+# Account lockout policy for privileged/credentialed access. These are the
+# defaults; the effective values come from app_settings(`security`) so an
+# administrator can tighten them without a deploy. They are clamped to a safe
+# range because a policy of "never lock" or "lock after 1" would either remove a
+# control or lock everyone out.
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+_LOCKOUT_ATTEMPTS_RANGE = (3, 100)
+_LOCKOUT_MINUTES_RANGE = (1, 1440)
 PLATFORM_ADMIN_ROLE = "PLATFORM_ADMIN"
+
+
+def _clamped_int(value: Any, default: int, bounds: tuple[int, int]) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    low, high = bounds
+    return max(low, min(high, parsed))
+
+
+async def lockout_policy(session: AsyncSession) -> tuple[int, int]:
+    """Effective ``(max_failed_attempts, lockout_minutes)``.
+
+    Reads the stored security settings and falls back to the module defaults when
+    they are missing or unusable, so a bad configuration can never silently disable
+    the lockout control.
+    """
+    from app.modules.settings.service import get_app_config
+
+    try:
+        config = await get_app_config(session)
+    except Exception:  # noqa: BLE001 - a broken settings document must not block login
+        return MAX_FAILED_ATTEMPTS, LOCKOUT_MINUTES
+    security = config.get("security") if isinstance(config, dict) else None
+    security = security if isinstance(security, dict) else {}
+    return (
+        _clamped_int(security.get("maxLoginAttempts"), MAX_FAILED_ATTEMPTS, _LOCKOUT_ATTEMPTS_RANGE),
+        _clamped_int(security.get("accountLockMinutes"), LOCKOUT_MINUTES, _LOCKOUT_MINUTES_RANGE),
+    )
 
 
 def _is_protected_system_admin(user: User) -> bool:
@@ -186,6 +233,38 @@ def _assert_can_manage_platform_admin(context: RequestContext | None, role_code:
         raise AccessDenied("Only a platform administrator can modify the Platform Administrator role.")
 
 
+def _assert_can_grant_permissions(context: RequestContext, codes: list[str]) -> None:
+    """Prevent delegated role managers from granting capabilities they lack."""
+    if context.is_platform_admin:
+        return
+    required: set[str] = set()
+    for code in codes:
+        if code in PAGE_PERMISSION_SOURCE_CODES:
+            required.update(PAGE_PERMISSION_SOURCE_CODES[code])
+        else:
+            required.add(code)
+    missing = sorted(code for code in required if not context.has_permission(code))
+    if missing:
+        raise AccessDenied(
+            "You cannot grant permissions that you do not hold: " + ", ".join(missing)
+        )
+
+
+async def _assert_can_assign_role(session: AsyncSession, context: RequestContext, role: Role) -> None:
+    if context.is_platform_admin:
+        return
+    codes = list(
+        (
+            await session.execute(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == role.id)
+            )
+        ).scalars().all()
+    )
+    _assert_can_grant_permissions(context, codes)
+
+
 async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
     """Invalidate every refresh session and bump the token version so existing
     access tokens stop working immediately."""
@@ -195,6 +274,12 @@ async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
         record.revoked_at = now
     user.token_version = int(user.token_version or 0) + 1
     await safe_delete(f"revoked:{user.id}")
+
+
+async def must_change_password(session: AsyncSession, user_id: int) -> bool:
+    """Whether the current password was chosen by somebody other than its owner."""
+    credential = await AuthRepository(session).credential_for_user(user_id)
+    return bool(credential and credential.must_change_password)
 
 
 def expand_source_permissions(permissions: set[str]) -> set[str]:
@@ -230,9 +315,10 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
         raise AuthRequired("Account is temporarily locked. Try again later.")
     if credential is None or not verify_password(password, credential.password_hash):
         if credential is not None:
+            max_attempts, lockout_minutes = await lockout_policy(session)
             credential.failed_attempt_count = (credential.failed_attempt_count or 0) + 1
-            if credential.failed_attempt_count >= MAX_FAILED_ATTEMPTS:
-                credential.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+            if credential.failed_attempt_count >= max_attempts:
+                credential.locked_until = now + timedelta(minutes=lockout_minutes)
                 credential.failed_attempt_count = 0
             await session.commit()
         raise AuthRequired("Invalid username or password.")
@@ -343,7 +429,7 @@ async def resolve_identity(session: AsyncSession, user: User) -> tuple[set[str],
     return permissions, role_codes, avatar
 
 
-def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
+def build_auth_user(ctx: RequestContext, role_label: str, *, must_change_password: bool = False) -> dict:
     source_permissions, page_access = resolve_page_keys(ctx.permissions, ctx.is_platform_admin)
     return {
         "id": ctx.user_id,
@@ -354,6 +440,9 @@ def build_auth_user(ctx: RequestContext, role_label: str) -> dict:
         "permissions": page_access,
         "pageAccess": page_access,
         "sourcePermissions": list(source_permissions),
+        # Tells the SPA to send this session to the change-password screen before
+        # anything else. The API enforces the same rule server-side.
+        "mustChangePassword": must_change_password,
     }
 
 
@@ -378,7 +467,11 @@ async def create_session(
     )
     session.add(record)
     await session.flush()
-    access = create_access_token(user.id, int(user.token_version or 0))
+    access = create_access_token(
+        user.id,
+        int(user.token_version or 0),
+        must_change_password=await must_change_password(session, user.id),
+    )
     user.last_login_at = now
     await session.commit()
     return access, refresh
@@ -426,7 +519,13 @@ async def rotate_refresh_token(
         )
     )
     await session.commit()
-    access = create_access_token(user.id, int(user.token_version or 0))
+    # Carries the "must change" claim too: refreshing must not be a way to
+    # escape the forced change.
+    access = create_access_token(
+        user.id,
+        int(user.token_version or 0),
+        must_change_password=await must_change_password(session, user.id),
+    )
     return user, access, new_refresh, remember_me
 
 
@@ -520,9 +619,56 @@ async def change_password(session: AsyncSession, user: User, current_password: s
         raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
     credential.password_hash = hash_password(new_password)
     credential.password_changed_at = datetime.now(UTC)
+    # The user chose this password, so it is no longer temporary. Clearing the
+    # flag and revoking sessions together means the next token has no "must
+    # change" claim and every other device has to sign in again.
+    credential.must_change_password = False
     # Changing the password signs out every device, including the current one.
     await _revoke_all_sessions(session, user)
     await session.commit()
+
+
+async def set_user_password(
+    session: AsyncSession,
+    context: RequestContext,
+    user_id: int,
+    password: str,
+    *,
+    must_change: bool = True,
+) -> User:
+    """Administrator-set password for another account.
+
+    Creating a user already means choosing that user's password, so this grants
+    no capability an administrator did not already hold and needs no permission
+    of its own beyond ``user.manage``. What it does add is a recovery path for a
+    user who cannot receive the self-service reset email.
+
+    The password is never returned: it is hashed here and the caller is told only
+    that the account changed. Existing sessions are revoked, because a credential
+    change that left other devices signed in would not be a reset.
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFound("User not found.")
+    _assert_can_manage_platform_admin(context, await _active_role_code(session, user.id))
+    errors = validate_password_strength(password)
+    if errors:
+        raise ValidationFailed(errors[0], {"password": errors[0]})
+    credential = await AuthRepository(session).credential_for_user(user.id)
+    if credential is None:
+        credential = UserCredential(user_id=user.id, password_hash=hash_password(password))
+        session.add(credential)
+    else:
+        credential.password_hash = hash_password(password)
+    credential.password_changed_at = datetime.now(UTC)
+    credential.must_change_password = must_change
+    # A reset that leaves the account locked out would be useless, and a stale
+    # failure count would lock it again on the next typo.
+    credential.failed_attempt_count = 0
+    credential.locked_until = None
+    await _revoke_all_sessions(session, user)
+    await session.commit()
+    return user
 
 
 async def force_logout_user(session: AsyncSession, user_id: int) -> None:
@@ -594,6 +740,9 @@ async def _sync_user_role(
     preserved and the partial unique index still allows exactly one active row.
     ``role_code`` must reference an existing active role.
     """
+    # Serialize role replacement per user. PostgreSQL enforces the partial
+    # unique index as the final backstop; SQLite safely ignores FOR UPDATE.
+    await session.execute(select(User.id).where(User.id == user_id).with_for_update())
     role = (
         await session.execute(select(Role).where(Role.code == role_code))
     ).scalars().first()
@@ -629,6 +778,11 @@ async def _assert_platform_admin_remains(session: AsyncSession, user_id: int, ne
     """Block removing the last remaining Platform Administrator assignment."""
     if new_role_code == PLATFORM_ADMIN_ROLE:
         return
+    # Serialize all changes that could remove a platform administrator so two
+    # concurrent requests cannot each observe the other administrator.
+    await session.execute(
+        select(Role.id).where(Role.code == PLATFORM_ADMIN_ROLE).with_for_update()
+    )
     assignment = (
         await session.execute(
             select(UserRoleAssignment.id)
@@ -728,11 +882,17 @@ async def update_user(session: AsyncSession, user_id: int, data: dict, context: 
     if role_code is not None:
         if not role_code:
             raise ValidationFailed("A user must have exactly one role.", {"role": "Required"})
-        if context.user_id == user_id and not context.is_platform_admin:
-            raise AccessDenied("You cannot change your own roles.")
         current_role_code = await _active_role_code(session, user_id)
         if role_code != current_role_code:
+            if context.user_id == user_id:
+                raise AccessDenied("You cannot change your own role.")
             _assert_can_manage_platform_admin(context, role_code)
+            target_role = (
+                await session.execute(select(Role).where(Role.code == role_code))
+            ).scalars().first()
+            if target_role is None:
+                raise ValidationFailed(f"Unknown role: {role_code}.", {"role": "Unknown role"})
+            await _assert_can_assign_role(session, context, target_role)
             await _assert_platform_admin_remains(session, user_id, role_code)
             await _sync_user_role(session, user_id, role_code, context)
 
@@ -803,10 +963,11 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
     if _is_protected_system_admin(user) and role.code != PLATFORM_ADMIN_ROLE:
         raise AccessDenied("The built-in System Administrator role cannot be changed.")
     _assert_can_manage_platform_admin(context, role.code)
-    if context.user_id == user_id and not context.is_platform_admin:
-        raise AccessDenied("You cannot change your own roles.")
     current_role_code = await _active_role_code(session, user_id)
     if role.code != current_role_code:
+        if context.user_id == user_id:
+            raise AccessDenied("You cannot change your own role.")
+        await _assert_can_assign_role(session, context, role)
         await _assert_platform_admin_remains(session, user_id, role.code)
         # Single-Role RBAC: assigning a role replaces the previous active role.
         await _sync_user_role(session, user_id, role.code, context)
@@ -825,10 +986,21 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
 
 async def list_roles(
     session: AsyncSession, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
-) -> list[dict]:
-    roles = await AuthRepository(session).roles_with_permissions(page, q=q, status=status)
+) -> dict:
+    roles, total = await AuthRepository(session).roles_with_permissions(page, q=q, status=status)
     output = []
     for role, perms in roles:
+        user_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(UserRoleAssignment)
+                .where(
+                    UserRoleAssignment.role_id == role.id,
+                    UserRoleAssignment.expires_at.is_(None),
+                )
+            )
+            or 0
+        )
         output.append(
             {
                 "id": role.id,
@@ -839,9 +1011,11 @@ async def list_roles(
                 "status": role.status,
                 "permissions": list(perms),
                 "permissionCount": len(perms),
+                "userCount": user_count,
             }
         )
-    return output
+    effective_page = page or PageParams(page=1, page_size=max(total, 1))
+    return paged(output, effective_page, total)
 
 
 def _derive_role_code(name: str, existing: set[str]) -> str:
@@ -884,6 +1058,7 @@ async def create_role(session: AsyncSession, data: dict, context: RequestContext
         raise Conflict("DUPLICATE_ROLE", "A role with this code already exists.", {"code": "Already in use"})
     permissions = [str(value) for value in data.get("permissions") or []]
     await _validate_permission_codes(session, permissions)
+    _assert_can_grant_permissions(context, permissions)
     role = Role(code=code, name=name, description=data.get("description"), status="ACTIVE")
     session.add(role)
     await session.flush()
@@ -893,7 +1068,9 @@ async def create_role(session: AsyncSession, data: dict, context: RequestContext
 
 
 async def update_role(session: AsyncSession, role_id: int, data: dict, context: RequestContext) -> Role:
-    role = await session.get(Role, role_id)
+    role = (
+        await session.execute(select(Role).where(Role.id == role_id).with_for_update())
+    ).scalars().first()
     if role is None:
         raise NotFound("Role not found.")
     _assert_can_manage_platform_admin(context, role.code)
@@ -905,11 +1082,32 @@ async def update_role(session: AsyncSession, role_id: int, data: dict, context: 
             requested = {str(value) for value in data["permissions"]}
             if not required.issubset(requested):
                 raise AccessDenied("Critical permissions cannot be removed from the built-in administrator role.")
+    if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
+        active_users = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(UserRoleAssignment)
+                .join(User, User.id == UserRoleAssignment.user_id)
+                .where(
+                    UserRoleAssignment.role_id == role.id,
+                    UserRoleAssignment.expires_at.is_(None),
+                    User.status == "ACTIVE",
+                )
+            )
+            or 0
+        )
+        if active_users:
+            raise Conflict(
+                "ROLE_IN_USE",
+                "Reassign active users before deactivating this role.",
+            )
     for key in ("name", "description", "status"):
         if data.get(key) is not None:
-            setattr(role, key, data[key])
+            setattr(role, key, str(data[key]).upper() if key == "status" else data[key])
     if data.get("permissions") is not None:
-        await sync_role_permissions(session, role.id, [str(value) for value in data["permissions"]])
+        permissions = [str(value) for value in data["permissions"]]
+        _assert_can_grant_permissions(context, permissions)
+        await sync_role_permissions(session, role.id, permissions)
     await session.commit()
     await cache.bump("auth")
     return role
@@ -949,6 +1147,21 @@ async def role_payload(session: AsyncSession, role: Role) -> dict:
             .where(RolePermission.role_id == role.id)
         )
     ).scalars().all()
+    assigned_users = (
+        await session.execute(
+            select(User.id, User.username, User.display_name, User.email, User.status)
+            .join(UserRoleAssignment, UserRoleAssignment.user_id == User.id)
+            .where(
+                UserRoleAssignment.role_id == role.id,
+                UserRoleAssignment.expires_at.is_(None),
+            )
+            .order_by(User.display_name, User.id)
+        )
+    ).all()
+    users = [
+        {"id": row.id, "username": row.username, "displayName": row.display_name, "email": row.email, "status": row.status}
+        for row in assigned_users
+    ]
     return {
         "id": role.id,
         "code": role.code,
@@ -958,7 +1171,40 @@ async def role_payload(session: AsyncSession, role: Role) -> dict:
         "status": role.status,
         "permissions": list(perms),
         "permissionCount": len(perms),
+        "userCount": len(users),
+        "assignedUsers": users,
+        "assignedUsersSummary": ", ".join(user["displayName"] for user in users),
     }
+
+
+async def duplicate_role(
+    session: AsyncSession, role_id: int, data: dict, context: RequestContext
+) -> Role:
+    source = await session.get(Role, role_id)
+    if source is None:
+        raise NotFound("Role not found.")
+    permissions = list(
+        (
+            await session.execute(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == source.id)
+            )
+        ).scalars().all()
+    )
+    _assert_can_grant_permissions(context, permissions)
+    name = str(data.get("name") or f"{source.name} Copy").strip()
+    requested_code = str(data.get("code") or "").strip()
+    return await create_role(
+        session,
+        {
+            "name": name,
+            "code": requested_code or None,
+            "description": source.description,
+            "permissions": permissions,
+        },
+        context,
+    )
 
 
 async def get_role(session: AsyncSession, role_id: int) -> dict:

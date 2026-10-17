@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -9,12 +11,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.exceptions import ValidationFailed
-from app.core.localization import DEFAULT_LOCALIZATION, normalize_localization, validate_localization_patch
+from app.core.localization import (
+    DEFAULT_LOCALIZATION,
+    normalize_localization,
+    normalize_message_language,
+    validate_localization_patch,
+)
 from app.modules.master_data.models import BusinessParty, ModuleRecord
+from app.modules.settings.models import AppSetting
 
 APP_INFO_COLLECTION = "__app_info__"
 APP_CONFIG_COLLECTION = "__app_config__"
 SETTINGS_RECORD_NO = "default"
+
+# Keys and groups in ``app_settings``. App info is addressed by its own key and
+# grouped apart so the configuration read can load every settings group without
+# picking it up.
+APP_INFO_KEY = "app_info"
+APP_INFO_GROUP = "app"
 
 DEFAULT_APP_INFO: dict[str, Any] = {
     "applicationName": "LCS Freight Forwarding",
@@ -123,6 +137,12 @@ def deep_merge(base: Any, override: Any) -> Any:
 
 
 async def _load_record(session: AsyncSession, collection: str) -> ModuleRecord | None:
+    """Legacy settings source, read only when ``app_settings`` has no row.
+
+    Kept as a read fallback so a database that has not been provisioned yet (or
+    that was rolled back to the pre-``app_settings`` revision) still returns the
+    stored configuration instead of silently falling back to code defaults.
+    """
     return (
         await session.execute(
             select(ModuleRecord).where(
@@ -133,51 +153,120 @@ async def _load_record(session: AsyncSession, collection: str) -> ModuleRecord |
     ).scalars().first()
 
 
-def _with_timestamp(data: dict[str, Any], record: ModuleRecord | None) -> dict[str, Any]:
+async def _load_settings(session: AsyncSession, keys: Iterable[str] | None = None) -> dict[str, AppSetting]:
+    stmt = select(AppSetting)
+    if keys is None:
+        stmt = stmt.where(AppSetting.setting_group != APP_INFO_GROUP)
+    else:
+        stmt = stmt.where(AppSetting.setting_key.in_(tuple(keys)))
+    rows = (await session.execute(stmt)).scalars().all()
+    return {row.setting_key: row for row in rows}
+
+
+def _latest_updated_at(records: Iterable[Any]) -> datetime | None:
+    stamps = [record.updated_at for record in records if getattr(record, "updated_at", None) is not None]
+    return max(stamps) if stamps else None
+
+
+def _with_timestamp(data: dict[str, Any], updated_at: datetime | None) -> dict[str, Any]:
     payload = dict(data)
-    payload["updatedAt"] = (
-        record.updated_at.isoformat() if record is not None and record.updated_at else payload.get("updatedAt") or ""
-    )
+    payload["updatedAt"] = updated_at.isoformat() if updated_at is not None else payload.get("updatedAt") or ""
     return payload
 
 
+async def _mirror_legacy_settings(session: AsyncSession, collection: str, data: dict[str, Any]) -> None:
+    """Keep the pre-``app_settings`` module record in step with every write.
+
+    ``app_settings`` is the system of record; this mirror is transitional and
+    exists so rolling the application back to a build that predates this table
+    still reads the configuration an administrator last saved, rather than a
+    frozen pre-migration snapshot. It is safe to delete once the mirror is no
+    longer needed.
+    """
+    record = await _load_record(session, collection)
+    if record is None:
+        session.add(ModuleRecord(collection=collection, record_no=SETTINGS_RECORD_NO, data=deepcopy(data)))
+    else:
+        record.data = deepcopy(data)
+
+
+async def _upsert_setting(
+    session: AsyncSession,
+    key: str,
+    group: str,
+    value: dict[str, Any],
+    context: RequestContext | None,
+    description: str,
+) -> AppSetting:
+    row = (await session.execute(select(AppSetting).where(AppSetting.setting_key == key))).scalars().first()
+    if row is None:
+        row = AppSetting(setting_key=key, setting_group=group, setting_value=value, description=description)
+        session.add(row)
+    else:
+        row.setting_group = group
+        row.setting_value = value
+        row.description = description
+    if context is not None and context.user_id is not None:
+        row.updated_by_user_id = context.user_id
+    return row
+
+
 async def get_app_info(session: AsyncSession, context: RequestContext | None = None) -> dict:
-    record = await _load_record(session, APP_INFO_COLLECTION)
-    merged = deep_merge(DEFAULT_APP_INFO, record.data if record else {})
-    return _with_timestamp(merged, record)
+    row = (await session.execute(select(AppSetting).where(AppSetting.setting_key == APP_INFO_KEY))).scalars().first()
+    if row is None:
+        legacy = await _load_record(session, APP_INFO_COLLECTION)
+        merged = deep_merge(DEFAULT_APP_INFO, legacy.data if legacy else {})
+        return _with_timestamp(merged, legacy.updated_at if legacy else None)
+    return _with_timestamp(deep_merge(DEFAULT_APP_INFO, row.setting_value or {}), row.updated_at)
 
 
 async def update_app_info(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
-    record = await _load_record(session, APP_INFO_COLLECTION)
-    current = record.data if record else {}
-    data = deep_merge(current, patch or {})
-    if record is None:
-        record = ModuleRecord(
-            collection=APP_INFO_COLLECTION,
-            record_no=SETTINGS_RECORD_NO,
-            data=data,
-        )
-        session.add(record)
-    else:
-        record.data = data
+    row = (await session.execute(select(AppSetting).where(AppSetting.setting_key == APP_INFO_KEY))).scalars().first()
+    current = row.setting_value if row is not None and isinstance(row.setting_value, dict) else None
+    if current is None:
+        legacy = await _load_record(session, APP_INFO_COLLECTION)
+        current = legacy.data if legacy is not None and isinstance(legacy.data, dict) else {}
+    row = await _upsert_setting(
+        session,
+        APP_INFO_KEY,
+        APP_INFO_GROUP,
+        deep_merge(current, patch or {}),
+        context,
+        "Application identity, branding and support contacts.",
+    )
+    await _mirror_legacy_settings(session, APP_INFO_COLLECTION, row.setting_value or {})
     await session.commit()
-    await session.refresh(record)
-    return _with_timestamp(deep_merge(DEFAULT_APP_INFO, record.data), record)
+    await session.refresh(row)
+    return _with_timestamp(deep_merge(DEFAULT_APP_INFO, row.setting_value or {}), row.updated_at)
 
 
 async def reset_app_info(session: AsyncSession, context: RequestContext) -> dict:
-    record = await _load_record(session, APP_INFO_COLLECTION)
-    if record is not None:
-        await session.delete(record)
-        await session.commit()
+    row = (await session.execute(select(AppSetting).where(AppSetting.setting_key == APP_INFO_KEY))).scalars().first()
+    if row is not None:
+        await session.delete(row)
+    legacy = await _load_record(session, APP_INFO_COLLECTION)
+    if legacy is not None:
+        await session.delete(legacy)
+    await session.commit()
     return _with_timestamp(dict(DEFAULT_APP_INFO), None)
 
 
+async def _current_app_config(session: AsyncSession) -> tuple[dict[str, Any], datetime | None]:
+    """Return the stored config payload plus its most recent write timestamp."""
+    rows = await _load_settings(session)
+    if rows:
+        return {key: (row.setting_value or {}) for key, row in rows.items()}, _latest_updated_at(rows.values())
+    legacy = await _load_record(session, APP_CONFIG_COLLECTION)
+    if legacy is not None and isinstance(legacy.data, dict):
+        return dict(legacy.data), legacy.updated_at
+    return {}, None
+
+
 async def get_app_config(session: AsyncSession, context: RequestContext | None = None) -> dict:
-    record = await _load_record(session, APP_CONFIG_COLLECTION)
-    merged = deep_merge(DEFAULT_APP_CONFIG, record.data if record else {})
+    stored, updated_at = await _current_app_config(session)
+    merged = deep_merge(DEFAULT_APP_CONFIG, stored)
     merged["localization"] = normalize_localization(merged.get("localization"))
-    return _with_timestamp(merged, record)
+    return _with_timestamp(merged, updated_at)
 
 
 def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -264,8 +353,7 @@ def _validate_backup_config(config: dict[str, Any]) -> None:
 
 async def update_app_config(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
     patch = dict(patch or {})
-    record = await _load_record(session, APP_CONFIG_COLLECTION)
-    current = record.data if record else {}
+    current, _updated_at = await _current_app_config(session)
     if "localization" in patch:
         localization_patch = patch["localization"]
         if not isinstance(localization_patch, dict):
@@ -273,22 +361,33 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
         current_localization = normalize_localization(current.get("localization"))
         patch["localization"] = validate_localization_patch(deep_merge(current_localization, localization_patch))
     data = deep_merge(current, _without_blank_secrets(patch))
+    telegram = data.get("telegram")
+    if isinstance(telegram, dict) and "messageLanguage" in telegram:
+        # Rebind rather than mutate: deep_merge may hand back a reference into
+        # the currently stored JSON payload.
+        data["telegram"] = {**telegram, "messageLanguage": normalize_message_language(telegram["messageLanguage"])}
     if "backup" in patch:
         _validate_backup_config(deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}))
-    if record is None:
-        record = ModuleRecord(
-            collection=APP_CONFIG_COLLECTION,
-            record_no=SETTINGS_RECORD_NO,
-            data=data,
+
+    # One row per setting group: a write touches only the groups it changes, so
+    # two administrators editing different sections cannot overwrite each other.
+    rows = await _load_settings(session)
+    for group in sorted(key for key, value in data.items() if isinstance(value, dict)):
+        row = await _upsert_setting(
+            session,
+            group,
+            group,
+            data[group],
+            context,
+            f"Application settings group '{group}'.",
         )
-        session.add(record)
-    else:
-        record.data = data
+        rows[group] = row
+    await _mirror_legacy_settings(session, APP_CONFIG_COLLECTION, data)
     await session.commit()
-    await session.refresh(record)
-    merged = deep_merge(DEFAULT_APP_CONFIG, record.data)
+    stored, updated_at = await _current_app_config(session)
+    merged = deep_merge(DEFAULT_APP_CONFIG, stored)
     merged["localization"] = normalize_localization(merged.get("localization"))
-    return _with_timestamp(merged, record)
+    return _with_timestamp(merged, updated_at)
 
 
 async def get_localization(session: AsyncSession) -> dict[str, Any]:

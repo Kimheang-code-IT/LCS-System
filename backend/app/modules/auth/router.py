@@ -21,7 +21,9 @@ from app.modules.auth.schemas import (
     ResetPasswordRequest,
     RoleAssignmentCreate,
     RoleCreate,
+    RoleDuplicate,
     RoleUpdate,
+    SetPasswordRequest,
     UserCreate,
     UserUpdate,
     VerifyCodeRequest,
@@ -148,7 +150,11 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
         user_agent=context.user_agent,
         remember_me=payload.remember_me,
     )
-    auth_user = service.build_auth_user(context, service.role_label(role_codes))
+    auth_user = service.build_auth_user(
+        context,
+        service.role_label(role_codes),
+        must_change_password=await service.must_change_password(session, user.id),
+    )
     await write_audit(
         session,
         context,
@@ -209,7 +215,11 @@ async def refresh(
     _set_auth_cookies(response, access, refresh_token, remember_me=remember_me)
     return {
         "data": {
-            "user": service.build_auth_user(context, service.role_label(role_codes)),
+            "user": service.build_auth_user(
+                context,
+                service.role_label(role_codes),
+                must_change_password=await service.must_change_password(session, user.id),
+            ),
             **_auth_tokens(access, refresh_token),
             "expires_in": settings.access_token_expire_minutes * 60,
         }
@@ -217,15 +227,22 @@ async def refresh(
 
 
 @router.get("/auth/me")
-async def me(context: RequestContext = Depends(get_current_context)) -> dict:
+async def me(
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    page_permissions, page_access = service.resolve_page_keys(context.permissions, context.is_platform_admin)
     return {
         "data": {
             "id": context.user_id,
             "name": context.display_name,
             "email": context.email,
             "avatar": context.avatar,
-            "permissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[1],
-            "sourcePermissions": service.resolve_page_keys(context.permissions, context.is_platform_admin)[0],
+            "permissions": page_access,
+            "sourcePermissions": page_permissions,
+            # Reported so a reload recovers the forced-change state from the
+            # server rather than trusting a cookie that may be stale.
+            "mustChangePassword": await service.must_change_password(session, context.user_id),
         }
     }
 
@@ -347,6 +364,39 @@ async def get_user(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     user = await service.get_user(session, user_id)
+    return {"data": await service.user_payload(session, user)}
+
+
+@router.post("/users/{user_id}/password")
+async def set_user_password(
+    user_id: int,
+    payload: SetPasswordRequest,
+    context: RequestContext = Depends(require_permission("user.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Set a password on another account.
+
+    Gated on ``user.manage`` rather than a new permission: creating a user already
+    means choosing that user's password, so this is a recovery path, not a wider
+    capability. The password is hashed and never returned.
+    """
+    user = await service.set_user_password(
+        session,
+        context,
+        user_id,
+        payload.password,
+        must_change=payload.must_change_password,
+    )
+    await write_audit(
+        session,
+        context,
+        event_type="USER_PASSWORD_SET_BY_ADMIN",
+        entity_type="user",
+        entity_id=user.id,
+        action="reset_password",
+        after={"username": user.username, "mustChangePassword": payload.must_change_password},
+    )
+    await session.commit()
     return {"data": await service.user_payload(session, user)}
 
 
@@ -499,6 +549,27 @@ async def update_role(
     return {"data": await service.role_payload(session, role)}
 
 
+@router.post("/roles/{role_id}/duplicate", status_code=status.HTTP_201_CREATED)
+async def duplicate_role(
+    role_id: int,
+    payload: RoleDuplicate,
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    role = await service.duplicate_role(session, role_id, payload.model_dump(exclude_none=True), context)
+    await write_audit(
+        session,
+        context,
+        event_type="ROLE_DUPLICATED",
+        entity_type="role",
+        entity_id=role.id,
+        action="duplicate",
+        after={"sourceRoleId": role_id, "code": role.code},
+    )
+    await session.commit()
+    return {"data": await service.role_payload(session, role)}
+
+
 @router.get("/roles/{role_id}")
 async def get_role(
     role_id: int,
@@ -535,12 +606,11 @@ async def delete_roles(
 async def list_permissions(
     context: RequestContext = Depends(require_permission("role.read")),
 ) -> dict:
-    from app.core.permissions import PERMISSION_CATALOG
+    from app.core.permissions import PERMISSION_CATALOG, permission_name
 
     return {
         "data": [
-            {"code": code, "resource": resource, "action": action, "name": permission_name}
+            {"code": code, "resource": resource, "action": action, "name": permission_name(code)}
             for code, resource, action in PERMISSION_CATALOG
-            for permission_name in [code.replace(".", " ").replace("_", " ").title()]
         ]
     }

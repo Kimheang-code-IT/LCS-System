@@ -1,21 +1,86 @@
 import { describe, expect, it } from 'vitest'
-import { lineTableColumnCellClass } from '../app/utils/table/line-table-columns'
+import { isRowControlColumn, lineTableColumnCellClass, lineTableColumnMetrics, lineTableColumnWidth, sharedRowControls } from '../app/utils/table/line-table-columns'
 
 describe('line table column sizing', () => {
   it('sizes dynamic attribute columns by field type', () => {
-    expect(lineTableColumnCellClass({ key: 'invoice_no', label: 'Invoice No.', type: 'text' })).toBe('min-w-40')
-    expect(lineTableColumnCellClass({ key: 'invoice_date', label: 'Invoice Date', type: 'date' })).toBe('w-40 min-w-36')
-    expect(lineTableColumnCellClass({ key: 'invoice_amount', label: 'Amount', type: 'number' })).toContain('text-right')
-    expect(lineTableColumnCellClass({ key: '_status', label: 'Status', type: 'text', computed: true })).toBe('w-28 min-w-24')
+    expect(lineTableColumnWidth({ key: 'invoice_no', label: 'Invoice No.', type: 'text' })).toBe(160)
+    expect(lineTableColumnWidth({ key: 'invoice_date', label: 'Invoice Date', type: 'date' })).toBe(160)
+    expect(lineTableColumnWidth({ key: 'invoice_amount', label: 'Amount', type: 'number' })).toBe(128)
+    expect(lineTableColumnWidth({ key: '_status', label: 'Status', type: 'text', computed: true })).toBe(112)
   })
 
   it('keeps route column sizing', () => {
-    expect(lineTableColumnCellClass({ key: 'placeRole', label: 'Role', type: 'select' })).toBe('w-44 min-w-40')
-    expect(lineTableColumnCellClass({ key: 'place', label: 'Place', type: 'text' })).toBe('min-w-40')
-    expect(lineTableColumnCellClass({ key: 'plannedActual', label: 'Date', type: 'date' })).toBe('w-40 min-w-36')
+    expect(lineTableColumnWidth({ key: 'placeRole', label: 'Role', type: 'select' })).toBe(176)
+    expect(lineTableColumnWidth({ key: 'place', label: 'Place', type: 'text' })).toBe(160)
+    expect(lineTableColumnWidth({ key: 'plannedActual', label: 'Date', type: 'date' })).toBe(160)
   })
 
-  it('honours explicit column width from schema', () => {
+  it('gives a money column that carries inline discount/tax a wider field', () => {
+    expect(lineTableColumnWidth({ key: 'lineTotal', label: 'Line Total', type: 'number' })).toBe(128)
+    expect(lineTableColumnWidth({
+      key: 'lineTotal',
+      label: 'Line Total',
+      type: 'number',
+      inlineFields: [{ key: 'taxAmount', label: 'Tax' }],
+    })).toBe(176)
+  })
+
+  it('aligns only numeric fields to the right', () => {
+    expect(lineTableColumnCellClass({ key: 'invoice_amount', label: 'Amount', type: 'number' })).toBe('text-right tabular-nums')
+    expect(lineTableColumnCellClass({ key: 'quantity', label: 'Qty', type: 'number' })).toBe('text-right tabular-nums')
+    expect(lineTableColumnCellClass({ key: 'place', label: 'Place', type: 'text' })).toBe('')
+    expect(lineTableColumnCellClass({ key: 'containerType', label: 'Type', type: 'select' })).toBe('')
+  })
+
+  it('marks icon columns so they stay as narrow as their button', () => {
+    expect(lineTableColumnMetrics({ key: '_delete', label: '', type: 'delete' }).iconOnly).toBe(true)
+    expect(lineTableColumnMetrics({ key: 'remark', label: 'Note', type: 'note' }).iconOnly).toBe(true)
+    expect(lineTableColumnMetrics({ key: 'place', label: 'Place', type: 'text' }).iconOnly).toBe(false)
+  })
+
+  it('honours an explicit pixel width from the schema', () => {
+    expect(lineTableColumnWidth({ key: 'custom', label: 'Custom', type: 'text', width: 320 })).toBe(320)
+    // An explicit width still keeps the type's alignment.
+    expect(lineTableColumnCellClass({ key: 'invoice_amount', label: 'Amount', type: 'number', width: 320 }))
+      .toBe('text-right tabular-nums')
+  })
+
+  it('honours a class-shaped width from an admin column config', () => {
     expect(lineTableColumnCellClass({ key: 'custom', label: 'Custom', type: 'text', width: 'w-52 min-w-48' })).toBe('w-52 min-w-48')
+    // The class is applied to the field, so the column keeps its type default.
+    expect(lineTableColumnWidth({ key: 'custom', label: 'Custom', type: 'text', width: 'w-52 min-w-48' })).toBe(160)
+  })
+})
+
+describe('note and delete share one column', () => {
+  const note = { key: 'note', label: 'Note', type: 'note' } as const
+  const remove = { key: '_delete', label: '', type: 'delete' } as const
+
+  it('recognises the row control types', () => {
+    expect(isRowControlColumn(note)).toBe(true)
+    expect(isRowControlColumn(remove)).toBe(true)
+    expect(isRowControlColumn({ key: 'total', label: 'Total', type: 'number' })).toBe(false)
+    expect(isRowControlColumn({ key: '_reorder', label: '', type: 'reorder' })).toBe(false)
+  })
+
+  it('folds the delete icon into the note column, in declaration order', () => {
+    const shared = sharedRowControls([{ key: 'containerNo', label: 'Container No.', type: 'text' }, note, remove])
+
+    expect(shared.host).toBe('note')
+    expect([...shared.folded]).toEqual(['_delete'])
+  })
+
+  it('leaves a table with only one row control alone', () => {
+    expect(sharedRowControls([{ key: 'feeType', label: 'Fee', type: 'select' }, remove]))
+      .toEqual({ host: null, folded: new Set() })
+    expect(sharedRowControls([note]))
+      .toEqual({ host: null, folded: new Set() })
+  })
+
+  it('folds every extra icon into the first one', () => {
+    const shared = sharedRowControls([note, remove, { key: '_delete2', label: '', type: 'delete' }])
+
+    expect(shared.host).toBe('note')
+    expect([...shared.folded]).toEqual(['_delete', '_delete2'])
   })
 })

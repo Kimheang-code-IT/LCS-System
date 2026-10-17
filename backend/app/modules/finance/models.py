@@ -10,12 +10,14 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -88,6 +90,11 @@ class FinancialDocument(PKMixin, TimestampMixin, Base):
     service_order_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_orders.id"))
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     exchange_rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False, default=1)
+    #: The base currency this document was booked against. NULL on rows written
+    #: before multi-currency existed: the base currency was a setting at the time
+    #: and may since have changed, so the payload reports the current base for
+    #: those rows rather than inventing one here.
+    base_currency_code: Mapped[str | None] = mapped_column(String(3))
     description: Mapped[str | None] = mapped_column(Text)
     reference_number: Mapped[str | None] = mapped_column(String(128))
     due_date: Mapped[date | None] = mapped_column(Date)
@@ -98,6 +105,14 @@ class FinancialDocument(PKMixin, TimestampMixin, Base):
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     tax_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
+    #: The same four amounts converted into ``base_currency_code`` at
+    #: ``exchange_rate``, rounded with the document currency's own precision.
+    #: Derived, never typed: ``save_document`` writes them and ``post_document``
+    #: re-derives them, so they always agree with the journal the document posts.
+    base_subtotal_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
+    base_discount_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
+    base_tax_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
+    base_total_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     posted_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
@@ -151,7 +166,38 @@ class FinancialDocumentAllocation(PKMixin, Base):
 
 
 class PostingRule(PKMixin, TimestampMixin, Base):
+    """Maps a document type (optionally narrowed to one fee type) to its accounts.
+
+    ``priority`` orders several rules that match the same scope; the resolver
+    takes the highest. The partial unique index is keyed on the scope *and*
+    ``priority``, so several rules may target one scope but two of them can never
+    share a priority - which is what makes the database, rather than a
+    read-then-write in the service, the final arbiter under concurrency.
+    """
+
     __tablename__ = "posting_rules"
+    __table_args__ = (
+        Index(
+            "ix_posting_rules_resolution",
+            "document_type",
+            "status",
+            "priority",
+        ),
+        # COALESCE folds the NULL "document default" rule into the same key space
+        # as a fee-specific one, and the WHERE clause leaves inactive rules
+        # unrestricted so a replacement can sit beside the rule it replaces.
+        # Expressions are rendered per dialect because a parenthesised row value
+        # is rejected by SQLite's CREATE INDEX.
+        Index(
+            "uq_posting_rules_active_priority",
+            text("document_type"),
+            func.coalesce(text("fee_type_id"), 0),
+            "priority",
+            unique=True,
+            sqlite_where=text("status = 'ACTIVE'"),
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+    )
 
     document_type: Mapped[str] = mapped_column(String(32), nullable=False)
     fee_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("fee_types.id"))
@@ -159,6 +205,8 @@ class PostingRule(PKMixin, TimestampMixin, Base):
     credit_account_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("chart_of_accounts.id"), nullable=False)
     tax_account_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("chart_of_accounts.id"))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    description: Mapped[str | None] = mapped_column(Text)
 
 
 class JournalEntry(PKMixin, TimestampMixin, Base):
@@ -173,6 +221,14 @@ class JournalEntry(PKMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
     description: Mapped[str | None] = mapped_column(Text)
     source_document_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("financial_documents.id"))
+    #: The posting rule that resolved this entry's accounts, snapshotted at post
+    #: time. No ``ON DELETE``: a rule that posted something may be deactivated but
+    #: never deleted, or the attribution would be lost. The reference scan in
+    #: ``app/core/deletion.py`` picks this up from the metadata, so the guard
+    #: needs no separate entry.
+    posting_rule_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("posting_rules.id"), index=True
+    )
     reversal_of_journal_entry_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("journal_entries.id"))
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     posted_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))

@@ -1,4 +1,13 @@
-export const CURRENCIES = ['USD', 'KHR', 'VND'] as const
+/**
+ * The lifecycle of a configured exchange rate. Only an APPROVED row is ever
+ * applied to a document; the values are stored verbatim, so the labels are
+ * declared beside them rather than derived from the text.
+ */
+export const CURRENCY_RATE_STATUSES = [
+  { label: 'Pending', value: 'PENDING' },
+  { label: 'Approved', value: 'APPROVED' },
+  { label: 'Inactive', value: 'INACTIVE' },
+] as const
 export const CONTAINER_STATUSES = ['Expected', 'Planned', 'Loaded', 'In Transit', 'Delivered', 'Returned'] as const
 export const TRUCK_TYPES = ['1.5T', '2T', '3.5T', '5T', '8T'] as const
 export const TRANSPORT_MODES = ['Road', 'Sea', 'Air', 'Rail'] as const
@@ -97,3 +106,55 @@ export const ACCOUNT_TYPES = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expens
 export const PERIOD_STATUS = ['OPEN', 'CLOSED'] as const
 export const COMPONENT_INSTANCE_MODES = ['SINGLE', 'REPEATABLE'] as const
 export const COMPONENT_INSTANCE_MODE_OVERRIDES = ['INHERIT', 'SINGLE', 'REPEATABLE'] as const
+
+/**
+ * Financial document types, mirroring `DOCUMENT_TYPE_LABELS` in
+ * `backend/app/modules/finance/service.py`. The codes are stored verbatim on
+ * `financial_documents.document_type` and matched against
+ * `posting_rules.document_type`, so both sides must stay in step; the backend
+ * rejects anything outside this set when a posting rule is configured.
+ *
+ * A credit note mirrors the journal of the document it corrects, which is why it
+ * appears here alongside its counterpart rather than as a discount field.
+ */
+export const FINANCIAL_DOCUMENT_TYPES = [
+  'CUSTOMER_INVOICE',
+  'CREDIT_NOTE',
+  'SUPPLIER_BILL',
+  'SUPPLIER_CREDIT_NOTE',
+  'CUSTOMER_RECEIPT',
+  'SUPPLIER_PAYMENT',
+  'OTHER_INCOME',
+  'OTHER_EXPENSE',
+  'TRANSFER',
+  'ADJUSTMENT',
+] as const
+
+export const FINANCIAL_DOCUMENT_STATUSES = ['ACTIVE', 'INACTIVE'] as const
+
+/**
+ * Document types whose money actually moves through a bank/cash account, mirroring
+ * `PAYMENT_TYPES` in `backend/app/modules/finance/service.py`. Payment method,
+ * financial account and value date describe a settlement, so they are only shown
+ * for these types.
+ */
+export const PAYMENT_DOCUMENT_TYPES = ['CUSTOMER_RECEIPT', 'SUPPLIER_PAYMENT'] as const
+
+/**
+ * Document types that can be allocated against, mirroring `ALLOCATABLE_TYPES` in
+ * `backend/app/modules/finance/posting.py`. Only an invoice or a bill carries an
+ * outstanding balance for a receipt or payment to settle.
+ */
+export const ALLOCATABLE_DOCUMENT_TYPES = ['CUSTOMER_INVOICE', 'SUPPLIER_BILL'] as const
+
+/**
+ * Document types that can appear on an allocation: the invoice or bill being
+ * settled, and the receipt or payment settling it.
+ */
+export const ALLOCATION_DOCUMENT_TYPES = [
+  ...ALLOCATABLE_DOCUMENT_TYPES,
+  ...PAYMENT_DOCUMENT_TYPES,
+] as const
+
+/** Document types that carry a due date, i.e. the ones settled on credit terms. */
+export const CREDIT_TERM_DOCUMENT_TYPES = [...ALLOCATABLE_DOCUMENT_TYPES] as const

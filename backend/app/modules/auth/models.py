@@ -40,6 +40,11 @@ class UserCredential(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     password_algorithm: Mapped[str] = mapped_column(String(32), nullable=False, default="argon2id")
     password_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    #: Set when somebody other than the user chose the current password. While
+    #: true the access token carries a ``pwd`` claim and every route except
+    #: changing the password is refused, so a temporary password cannot be kept
+    #: in use indefinitely.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     failed_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -6,6 +6,7 @@ import type {
   QuotationRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
+  UserAdminRepository,
 } from '~/repositories/contracts/lcs'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
@@ -35,6 +36,10 @@ export function createHttpQuotationRepository(): QuotationRepository {
     saveDraft: async record => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATIONS, record)),
     send: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_SEND(revisionId), {}, withIdempotency(key))),
     accept: async (revisionId, key) => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_ACCEPT(revisionId), {}, withIdempotency(key))),
+    reject: async (revisionId, reason, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_REJECT(revisionId), { reason }, withIdempotency(key))),
+    cancel: async (revisionId, reason, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_CANCEL(revisionId), { reason }, withIdempotency(key))),
     createRevision: async quotationId => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId), {})),
     listRevisions: async (quotationId) => {
       const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId)))
@@ -106,6 +111,8 @@ export function createHttpFinanceRepository(): FinanceRepository {
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.JOURNALS, stripOfficialNumberFields(input, 'journals'))),
     saveJournal: async record =>
       unwrapApiData(await api.put<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.JOURNALS}/${record.id}`, record)),
+    postJournal: async (journalId, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.JOURNAL_POST(journalId), {}, withIdempotency(key))),
     listPeriods: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>('/api/v1/accounting-periods')),
     closePeriod: async (periodId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.PERIOD_CLOSE(periodId), {}, withIdempotency(key))),
@@ -116,6 +123,19 @@ export function createHttpAuditRepository(): AuditRepository {
   const api = useApi()
   return {
     list: async query => asPaged(unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.AUDIT_EVENTS, { query }))),
+  }
+}
+
+export function createHttpUserAdminRepository(): UserAdminRepository {
+  const api = useApi()
+  return {
+    setPassword: async (userId, password, options = {}) =>
+      unwrapApiData(
+        await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.USER_SET_PASSWORD(userId), {
+          password,
+          mustChangePassword: options.mustChangePassword ?? true,
+        }),
+      ),
   }
 }
 
