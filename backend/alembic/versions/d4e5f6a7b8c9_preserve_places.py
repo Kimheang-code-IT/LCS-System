@@ -4,8 +4,9 @@
 foreign-key columns on route stops and movements. It is now non-destructive, but
 a database that already ran the old form is already missing the data. This
 revision does not fabricate empty master data: it checks the structures and
-aborts with restore instructions. A verified pre-deployment dump is the only
-safe recovery for such a database.
+aborts with restore instructions. A verified dump taken before the destructive
+form was applied is the only safe recovery for such a database; a later dump is
+already missing the Places rows.
 
 Revision ID: d4e5f6a7b8c9
 Revises: c3d4e5f6a7b8
@@ -73,9 +74,10 @@ def upgrade() -> None:
             "Places data structures are missing: "
             f"{joined}. This database already applied the destructive form of "
             "c3d4e5f6a7b8. Automatic repair cannot recover the deleted Places "
-            "rows or their role links. Restore the pre-deployment dump to a "
-            "separate database, verify places, place_role_places and the route "
-            "references, then restore production only after accepting the loss "
+            "rows or their role links. Restore a verified dump taken before the "
+            "destructive form was applied to a separate database, verify places, "
+            "place_role_places and the route references, then restore production "
+            "only after accepting the loss "
             "of writes made since that dump. Do not continue this migration "
             "against a database whose Places data is missing."
         )

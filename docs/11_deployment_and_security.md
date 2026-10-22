@@ -130,8 +130,10 @@ Never run destructive migration operations without an approved backup and migrat
 - `d4e5f6a7b8c9` is a read-only guard. If a database already applied the older
   destructive form of `c3d4e5f6a7b8`, the tables or columns are missing; the
   guard aborts with restore instructions rather than recreating empty Places
-  master data. Restore the pre-deployment dump to an isolated database, verify
-  `places`, `place_role_places` and route references, then restore production
+  master data. Restore a verified dump taken before the destructive
+  `c3d4e5f6a7b8` was applied (the latest pre-deployment dump may already be
+  lossy) to an isolated database, verify `places`, `place_role_places` and route
+  references, then restore production
   only after accepting the loss of writes made since that dump.
 - The backend image starts Uvicorn only; it does **not** run Alembic on startup.
   The production workflow runs migrations explicitly with the new image while the
@@ -147,7 +149,8 @@ Never run destructive migration operations without an approved backup and migrat
 - A full `alembic downgrade base` is **not** supported: the legacy revision
   `6e862ce04e46` fails while dropping an index that an earlier revision already
   removed. The supported automated rollback boundary is the previous release
-  revision. Deeper recovery uses the pre-deployment dump (section 11) or a forward fix.
+  revision. Deeper recovery uses a verified dump taken before the change being
+  undone (section 11) or a forward fix.
 - RBAC migration `a2b3c4d5e6f7` is data-preserving: it expires duplicate legacy
   assignments, normalizes the retained current assignment, and maps active users
   without a role to `MIGRATED_NO_ACCESS` (zero permissions). After deployment,
@@ -603,7 +606,7 @@ each exception as soon as its upstream dependency publishes a fixed release.
 | No monitoring or alerting | Failed postings, lockouts, backup failures, and 5xx spikes produce no signal | Open |
 | PostgreSQL guard triggers are not run in CI | A trigger regression can pass the SQLite suite | Open; the Places migration test is PostgreSQL-only and env-gated; run `tests/sql/integrity_guards.sql` before release |
 | Full `alembic downgrade base` fails at `6e862ce04e46` | Recovery below the previous release needs a restore, not downgrade | Known limitation; supported boundary is the previous release |
-| A database that already applied destructive `c3d4e5f6a7b8` has lost Places rows | The guard aborts; deleted data cannot be reconstructed from the schema | Known limitation; restore the pre-deployment dump and verify it before production |
+| A database that already applied destructive `c3d4e5f6a7b8` has lost Places rows | The guard aborts; deleted data cannot be reconstructed from the schema | Known limitation; restore a verified dump taken before that destructive revision was applied and verify it before production |
 | Image rollback is only schema-compatible | Rolling back after a destructive or incompatible migration can leave the old image unable to serve | Known limitation; use a database restore for destructive changes |
 | A database owner can disable guards with `SET LOCAL lcs.allow_financial_purge` | The guards defend against mistakes, not a hostile DBA | Accepted; least-privilege DB roles are required |
 | Cross-currency allocation is not implemented | Payment and invoice must share a currency | Accepted; a reviewed FX design is required |
