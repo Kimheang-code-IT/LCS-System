@@ -30,6 +30,11 @@ contract test, and a Docker build; it never deploys.
 - Because SQLite has no PostgreSQL triggers, the default suite verifies service
   rules, API shape, authorization and state transitions, not trigger behaviour.
   The PostgreSQL guard script is a separate manual gate.
+- `test_postgres_places_migration.py` is the PostgreSQL data-preservation
+  rehearsal. It is skipped unless `LCS_TEST_POSTGRES_URL` points at a disposable
+  server; it creates and drops randomly named databases, migrates to the head,
+  asserts Places rows/links/foreign keys survive, and proves the guard aborts on
+  a database that already lost Places.
 - Tests are organised by risk, not by file count: each module has a test file for
   its workflow, plus cross-cutting files for permissions, validation, migrations,
   schema drift, deletion policy, archive, attachments, reports, and the frontend
@@ -42,11 +47,12 @@ Important cross-cutting suites:
 | `test_frontend_api_contract.py` | Statically reads frontend API constants and asserts every referenced `/api/v1/...` path and collection verb exists on the FastAPI app |
 | `test_schema_docs.py` | Asserts one SQL file exists, the generated file is current, every table/column has a comment, and the schema matches the models |
 | `test_schema_integrity.py` | Checks model metadata, naming conventions, and generated DDL expectations |
-| `test_migration_chain.py` | Asserts the Alembic revision chain is linear and the head matches the documented head |
+| `test_migration_chain.py` | Asserts the Alembic revision chain is linear, the head matches the documented head, and the Places revisions never drop the legacy table/columns |
+| `test_postgres_places_migration.py` | PostgreSQL-only rehearsal: Places rows, role links, foreign keys and financial totals survive upgrade; the destructive-c3d4 guard aborts; downgrade is non-destructive |
 | `test_role_permissions.py` | Covers permission catalog, page-to-source mapping, single active role, protected administrator and delegation rules |
 | `test_record_status.py` | Covers the shared status policy, permissions, audit, workflow-command refusal and frontend runner parity |
 | `test_party_roles.py` | Covers Party Roles CRUD, duplicate code/name, multi-role assignment, inactive roles, rename propagation and delete blocking |
-| `test_place_roles.py` | Covers Place Roles and route-stop validation after the Places removal |
+| `test_place_roles.py` | Covers Place Roles and the route-stop validation/lifecycle; legacy column preservation is covered by the PostgreSQL test |
 | `test_financial_documents_module.py`, `test_finance_automation.py` | Document types, posting, allocation, reversal, and one create-read-post-balance run per document type |
 | `test_posting_rules.py` | Rule selection by type/fee/priority, ambiguity, fallback, posting, reversal, concurrency and protected deletes |
 | `test_multi_currency.py`, `test_reporting_values.py` | FX snapshotting, allocation exchange differences, and reconciled financial statements |
@@ -109,6 +115,12 @@ stack before a production release:
 # From a machine with psql access to the target database
 psql "$DATABASE_URL" -f backend/tests/sql/integrity_guards.sql
 psql "$DATABASE_URL" -f backend/tests/sql/pre_migration_counts.sql
+
+# Disposable PostgreSQL rehearsal for the Places migration (creates/drops a
+# randomly named database; never touches the database named in the URL)
+cd backend
+LCS_TEST_POSTGRES_URL=postgresql://user:password@host:5432/postgres \
+  uv run pytest tests/test_postgres_places_migration.py -q
 ```
 
 - `integrity_guards.sql` exercises the immutability, balance, period, posting and
@@ -117,7 +129,42 @@ psql "$DATABASE_URL" -f backend/tests/sql/pre_migration_counts.sql
   can verify that no data was lost.
 - A live smoke test posts, reverses, re-balances and checks the trial balance
   against the running container.
-- Restore drills use a real `pg_dump`/base backup, not the Google Sheets mirror.
+- Restore drills use a real `pg_dump`/base backup and the isolated
+  `/opt/lcs/restore-db.sh` helper, not the Google Sheets mirror.
+
+### Verified on 2026-10-22 (local disposable databases only)
+
+- `uv run pytest -q`: **486 passed, 2 skipped** in 13m33s. The two skips are
+  the PostgreSQL rehearsal below when `LCS_TEST_POSTGRES_URL` is unset.
+- `uv run ruff check .`: **passed**.
+- `uv run python scripts/generate_schema_docs.py --check --strict`: **passed**
+  (67 tables documented, SQL up to date).
+- `uv run pytest tests/test_migration_chain.py tests/test_schema_docs.py -q`:
+  **27 passed**.
+- `LCS_TEST_POSTGRES_URL=<disposable local PostgreSQL> uv run pytest
+  tests/test_postgres_places_migration.py -q`: **2 passed**. This migrated a
+  fresh database to the base revision, inserted two representative Places rows
+  (one linked to a Place Role, one unreferenced), route stops and movements with
+  one blank and one manual snapshot, and a balanced draft journal (debit and
+  credit both 100), upgraded to `d4e5f6a7b8c9`, and verified the rows, role link,
+  four legacy columns, five foreign keys, business row counts, financial totals,
+  and a non-destructive downgrade. It also verified that `c3d4e5f6a7b8` fills
+  blank route-stop/movement snapshots from Places without overwriting manual
+  text. The second test simulated a database that had already lost Places and
+  confirmed the guard raises instead of continuing.
+- Backend image build (`docker build -t lcs-pr35-backend:test backend`)
+  succeeded; `docker run --rm lcs-pr35-backend:test alembic heads` reports
+  `d4e5f6a7b8c9 (head)`, and the image CMD is Uvicorn only (no startup
+  migration).
+- Restore drill: `deploy/restore-db.sh` restored a custom-format dump into a new
+  isolated database; `SELECT count(*) ...` returned `2` and both codes were
+  present. The helper refused an existing target (exit 2) and refused the
+  production-named database (exit 2). The disposable source/target databases were
+  then dropped.
+- Frontend gates were not rerun because no frontend file changed in this
+  release-safety change.
+- No production database or AWS host was available, so an actual production
+  restore and the workflow's host-side rollback were **not** executed.
 
 ## 7. Coverage Gaps and Open Risks
 
@@ -133,7 +180,8 @@ psql "$DATABASE_URL" -f backend/tests/sql/pre_migration_counts.sql
 | `vw_general_ledger` is not exposed as an endpoint | The view exists; `ledger-lines` covers the same rows | Queued, low value |
 | User deletion fails for audited accounts | `audit_events.actor_user_id` has `NO ACTION`; deactivate until an additive `ON DELETE SET NULL` migration lands | Open |
 | No monitoring or alerting | A failed posting, lockout or backup produces no signal | Open |
-| Off-host PostgreSQL backup/WAL archiving is documented, not automated | Google Sheets is not a database backup | Partial |
+| Off-host PostgreSQL backup/WAL archiving is only partially automated | Pre-deployment dumps can be uploaded with SSE-KMS, but no WAL/PITR and no scheduled off-host job; Google Sheets is not a database backup | Partial |
+| Places migration is verified on disposable PostgreSQL only | No production-size copy or live host rehearsal was available | Manual gate; run the env-gated test and a restore drill before release |
 | Reconciliation queries are manual | F6 remains open | Open |
 | A private key sits in `docs/lcssystem.pem` | Untracked and gitignored, but inside the working tree; owner decision required | Open (**S1**) |
 
@@ -143,7 +191,8 @@ Verified against the current code and focused tests:
 
 | Area | Status |
 |---|---|
-| Master data, Party Roles, Place Roles, route stops, currencies | Implemented and tested |
+| Master data, Party Roles, Place Roles, legacy Places retention, route stops, currencies | Implemented and tested |
+| Places migration preservation and destructive-revision guard | Implemented; PostgreSQL rehearsal passed on disposable databases |
 | Quotations, revisions, accept/convert, service orders, dynamic tabs, Transport Type pricing lines | Implemented and tested |
 | Service charges, finance invoice draft, financial documents, posting rules | Implemented and tested |
 | Double-entry posting, reversals, periods, allocation, multi-currency | Implemented and tested |
@@ -151,7 +200,7 @@ Verified against the current code and focused tests:
 | Archive, attachments, record status, validation, success-only toasts | Implemented and tested |
 | Financial and operational reports (server-side) | Implemented and tested |
 | Google Sheets backup scheduler | Implemented and tested |
-| Off-host PostgreSQL backup/WAL | Partial (documented, not automated) |
+| Off-host PostgreSQL backup/WAL | Partial (optional pre-deployment S3 SSE-KMS upload; no WAL/PITR) |
 | Monitoring/alerting | Missing |
 | Movements/milestones UI, quotation comparison UI | Missing |
 | Browser E2E and CI PostgreSQL guard run | Missing |

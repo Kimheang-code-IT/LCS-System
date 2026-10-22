@@ -87,8 +87,9 @@ docker compose -f infrastructure/docker-compose.yml up -d --build   # from repo 
 ```
 
 Host ports: frontend 80, backend 8000, Postgres 5432, Redis 6379, MinIO 9000/9001 (all
-env-driven in `infrastructure/.env`). The backend container runs `alembic upgrade head` on
-start. The DB ships empty; first login is `/auth/setup`
+env-driven in `infrastructure/.env`). The local dev compose backend runs
+`alembic upgrade head` on start; production images start Uvicorn only and the
+production workflow runs migrations explicitly. The DB ships empty; first login is `/auth/setup`
 (`POST /api/v1/auth/setup/initialize`, gated on no users existing), which provisions the
 admin, default document sequences (current year) and default app info/config — no finance
 or business data.

@@ -55,6 +55,9 @@ class ServiceOrderPlace(PKMixin, Base):
     # See QuotationRevisionPlace: the id is the reference, the text is the
     # printable snapshot that survives deactivation of the role.
     place_role_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("place_roles.id", ondelete="SET NULL"))
+    # Legacy Places reference retained for historical rows. New writes use the
+    # role and free-text snapshot; this column is not exposed by the form.
+    place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     place_role: Mapped[str] = mapped_column(String(32), nullable=False)
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -156,6 +159,9 @@ class ServiceOrderMovement(PKMixin, TimestampMixin, Base):
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     transport_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_types.id"))
     transport_asset_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_assets.id"))
+    # Legacy Places references retained for historical movement rows.
+    origin_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
+    destination_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     planned_departure: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     actual_departure: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     planned_arrival: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

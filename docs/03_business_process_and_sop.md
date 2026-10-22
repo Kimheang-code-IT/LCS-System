@@ -183,7 +183,8 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 1. Operations officer reviews the converted order.
 2. User confirms customer, direction, and operational route stops. Each stop uses
    a configured Place Role (for example port, warehouse, or checkpoint) and a
-   free-text location; the separate Places master no longer exists.
+   free-text location; the separate Places collection is no longer editable, but
+   legacy rows are retained for historical route references.
 3. User confirms container requirements.
 4. User adds actual containers when numbers are available.
 5. User adds repeatable components such as cargo, transport, documents, and milestones.

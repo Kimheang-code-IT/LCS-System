@@ -455,7 +455,7 @@ The following curated ER diagram mirrors the SQLAlchemy models. The generated
 ```mermaid
 %% Entity Relationship Diagram (generated from the SQLAlchemy models)
 %% Source of truth: backend/app/modules/*/models.py
-%% Table count and columns: docs/06_database_design.sql (generated; currently 65 tables).
+%% Table count and columns: docs/06_database_design.sql (generated; currently 67 tables).
 %% This diagram is a curated relationship view, not an exhaustive list; organizations
 %% and branches were removed and access is user/role/permission based.
 erDiagram

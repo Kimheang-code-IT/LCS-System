@@ -60,6 +60,12 @@ services:
     container_name: ff-api
     build:
       context: ../backend
+    # Local dev keeps the convenience auto-migration on startup. Production
+    # (deploy/compose.yml) runs migrations explicitly before switching images.
+    command:
+      - "sh"
+      - "-c"
+      - "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-freight}:${POSTGRES_PASSWORD:-freight_dev_password}@postgres:5432/${POSTGRES_DB:-freight}
       REDIS_URL: redis://redis:6379/0

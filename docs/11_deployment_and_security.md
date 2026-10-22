@@ -70,8 +70,11 @@ Secrets must not be committed to Git, included in Docker images, stored in seed 
 - [ ] Integration tests passed.
 - [ ] Authorization and permission tests passed.
 - [ ] Financial posting tests passed.
-- [ ] Migration reviewed.
-- [ ] Database backup completed and verified.
+- [ ] Migration reviewed and additive for this release.
+- [ ] Places preservation guard reviewed (`c3d4e5f6a7b8` + `d4e5f6a7b8c9`).
+- [ ] Database backup completed, non-empty, and verified with `pg_restore --list`.
+- [ ] Previous backend/frontend image IDs captured for local rollback tags.
+- [ ] Restore path and an isolated target database name agreed.
 - [ ] Rollback image available.
 - [ ] Stakeholders notified.
 
@@ -84,14 +87,21 @@ equivalent procedure and are used for exceptional/controlled deployments.
 
 1. Announce deployment start.
 2. Verify service and database health.
-3. Drain or limit write traffic that may conflict with the migration.
-4. Take a fresh database backup.
-5. Deploy the API image in a rolling or controlled update. Its entrypoint runs
-   `alembic upgrade head` before serving; if a separate migration job is used,
-   run it once and do not let the entrypoint migrate concurrently.
-6. Verify migration completion.
-7. Deploy the frontend (nginx) image.
-8. Resume normal traffic.
+3. Pre-pull both new images and verify they exist locally. The healthy stack is
+   still running; a registry, network or disk failure here changes nothing.
+4. Capture the exact image IDs of the running backend and frontend containers and
+   tag them as local `rollback-*` images. Do not rely on a mutable registry tag.
+5. Take a fresh database backup, verify it is non-empty, and verify its table of
+   contents with `pg_restore --list`. Optionally upload the encrypted copy
+   off-host (section 11).
+6. Run `alembic upgrade head` explicitly with the **new** backend image while the
+   old application is still serving, then verify `alembic current` equals the
+   image's `alembic heads`. Do not let the application container migrate on
+   startup.
+7. Recreate the stack with the new images (`docker compose up -d`; the compose
+   file sets `pull_policy: never`).
+8. Verify the HTTPS readiness endpoint; on failure, roll back the application
+   images only (section 13). Never automatically restore the database.
 9. Run smoke tests.
 10. Monitor errors and latency.
 11. Announce deployment completion.
@@ -111,16 +121,29 @@ Never run destructive migration operations without an approved backup and migrat
 
 ### Current chain and rollback boundary
 
-- Current Alembic head: `c3d4e5f6a7b8` (Places removal). The schema has 65
-  tables.
-- The backend container runs `alembic upgrade head` on start. In a controlled
-  deployment, run it as a separate migration step before switching traffic.
-- Every new revision must be additive and must have a working `downgrade()`.
-  The migration is reviewed against a production-size copy; locks, duration,
-  foreign keys, indexes, and journal constraints are checked before apply.
-- Do not roll back schema and application independently. A code rollback keeps
-  the database at its current revision unless a tested down migration is part of
-  the release plan.
+- Current Alembic head: `d4e5f6a7b8c9` (Places preservation guard). The schema
+  has 67 tables.
+- `c3d4e5f6a7b8` is deliberately **non-destructive**. It only fills route-stop
+  `free_text` and movement JSON snapshots from `places`. It keeps `places`,
+  `place_role_places` and the four legacy `place_id` columns. Its `downgrade()`
+  is a no-op because there is no schema or data change to undo.
+- `d4e5f6a7b8c9` is a read-only guard. If a database already applied the older
+  destructive form of `c3d4e5f6a7b8`, the tables or columns are missing; the
+  guard aborts with restore instructions rather than recreating empty Places
+  master data. Restore the pre-deployment dump to an isolated database, verify
+  `places`, `place_role_places` and route references, then restore production
+  only after accepting the loss of writes made since that dump.
+- The backend image starts Uvicorn only; it does **not** run Alembic on startup.
+  The production workflow runs migrations explicitly with the new image while the
+  old application is still serving. Local development compose keeps its
+  convenience startup migration.
+- Every new revision in this release is additive and must have a working
+  `downgrade()` (a no-op is correct for the data backfill/guard revisions).
+  This release drops no table and no column.
+- Application image rollback is safe only while the schema remains
+  backward-compatible (additive revisions such as this release). A destructive or
+  incompatible schema change requires a tested database restore, not an image
+  rollback alone. Database restores are never automatic.
 - A full `alembic downgrade base` is **not** supported: the legacy revision
   `6e862ce04e46` fails while dropping an index that an earlier revision already
   removed. The supported automated rollback boundary is the previous release
@@ -142,6 +165,10 @@ Never run destructive migration operations without an approved backup and migrat
 - An empty database shows the first-run `/auth/setup` page; after setup a user can log in.
 - A user only sees pages and actions their roles permit.
 - A quotation draft can be created.
+- A historical quotation/service order route stop still shows its free-text
+  location and Place Role; `places` and `place_role_places` row counts match the
+  pre-deployment backup.
+- A service-order movement still shows its origin/destination text snapshot.
 - An accepted test quotation can convert once.
 - A service charge can issue without creating a journal.
 - A financial draft can be created.
@@ -176,18 +203,31 @@ tables for reporting and is **not** a PostgreSQL backup. Do not use it for
 disaster recovery.
 
 The deploy workflow takes a pre-deployment `pg_dump` (custom format) on the EC2
-host before the stack is recreated. Backups are written outside the repository
-and outside container filesystems, to `$HOME/lcs-backups/freight-<timestamp>.dump`
-on the deploy user's home directory. The deployment aborts if the dump command
-fails or produces an empty file. Nothing prints database credentials; the dump
-reads `POSTGRES_USER`/`POSTGRES_DB` from the database container's own
-environment.
+host **before** any migration or stack replacement. Backups are written outside
+the repository and outside container filesystems, to
+`$HOME/lcs-backups/freight-<timestamp>.dump` on the deploy user's home directory.
+The deployment aborts if the dump command fails, the file is empty, or
+`pg_restore --list` cannot read it. A SHA-256 checksum is written next to the
+dump, local files are created with mode 0600, and local dumps older than 30 days
+are removed. Nothing prints database credentials; the dump reads
+`POSTGRES_USER`/`POSTGRES_DB` from the database container's own environment.
 
-- Schedule daily full backups.
-- Enable point-in-time recovery where supported.
-- Encrypt backups.
+Off-host upload is optional and disabled unless `BACKUP_S3_BUCKET` is set as a
+production environment variable. If it is set, the workflow requires the AWS CLI
+on the host and uploads the dump and checksum with SSE-KMS
+(`--sse aws:kms`), optionally using `BACKUP_S3_KMS_KEY_ID`. An upload failure
+aborts the deployment instead of claiming an off-host backup exists. Use an EC2
+instance role limited to the backup bucket, not long-lived keys.
+
+- Schedule daily full backups in addition to the pre-deployment dump.
+- Enable point-in-time recovery where supported (RDS automated backups are
+  stronger than host-level dumps).
+- Keep bucket versioning, Object Lock/retention, least-privilege access, and
+  block public access enabled.
 - Store backups separately from the primary database (copy off-host).
-- Retain backups according to policy.
+- Retain backups according to policy; 30 days is only the local convenience
+  window.
+- A dump stored only on the EC2 host is **not** disaster recovery.
 
 ### Object storage
 
@@ -198,15 +238,44 @@ environment.
 
 ## 12. Restore Drill
 
-1. Provision an isolated recovery environment.
-2. Restore the latest database backup.
-3. Restore object-storage data or versioned objects.
-4. Deploy the matching application version.
-5. Run integrity checks.
-6. Verify role/permission isolation.
-7. Verify financial totals and journal balance.
-8. Verify representative attachments.
-9. Record recovery time and issues.
+The workflow ships `/opt/lcs/restore-db.sh` with the runtime bundle. It restores
+a custom-format dump into a **new isolated database** in the running PostgreSQL
+container. It verifies the dump with `pg_restore --list` before creating
+anything, refuses to overwrite an existing database, and refuses to target the
+production database. It never stops the production container or points the
+application at the restored copy.
+
+```bash
+cd /opt/lcs
+./restore-db.sh "$HOME/lcs-backups/freight-YYYYmmdd-HHMMSS.dump" lcs_restore_YYYYmmdd
+```
+
+Drill steps:
+
+1. Choose a dump and a new target name that is not `POSTGRES_DB`.
+2. Run the helper. Confirm it reports the dump verification, database creation,
+   and restore completion.
+3. Verify schema and data. At minimum:
+   ```sql
+   SELECT count(*) FROM places;
+   SELECT count(*) FROM place_role_places;
+   SELECT COALESCE(SUM(debit_amount), 0), COALESCE(SUM(credit_amount), 0)
+   FROM journal_entry_lines;
+   ```
+   Debit and credit must agree, and Places/role-link counts must match the
+   pre-migration counts.
+4. Optionally start a disposable application instance against the isolated
+   database and run the smoke tests. Do not point the production `.env` at it.
+5. Verify representative attachments and permissions.
+6. Record recovery time, row counts, and any issues.
+7. Drop the target database only after verification.
+
+A restore was rehearsed on 2026-10-22 against a disposable local PostgreSQL
+database: two representative Places rows were restored intact, and the helper
+refused both an existing target and the production database name. The role-link
+lookup is covered separately by the PostgreSQL migration test; it was not part of
+this dump. See `docs/10_testing_and_quality.md` for the exact commands and
+results. This is not a production restore test.
 
 ## 13. Rollback
 
@@ -225,18 +294,39 @@ Use rollback when the release causes critical errors and a forward fix is not sa
 
 ### Rolling back the application (automated)
 
-Images are immutable and tagged `sha-<short-commit>`. To redeploy an earlier
-known-good image without rebuilding it, dispatch the deploy workflow with the
-target tag:
+Images are immutable and tagged `sha-<short-commit>`. Before replacing the
+stack, the workflow captures the running containers' image IDs and tags them as
+local `rollback-backend:<timestamp>` / `rollback-frontend:<timestamp>` images.
+The timestamp tag points at the captured previous image ID, not at a mutable
+registry tag, so it remains available even if GHCR is unreachable or the old tag
+is later overwritten.
 
-```bash
-gh workflow run "Production" --ref main -f image_tag=sha-<short-commit>
-```
+If the new stack fails to start or does not pass the HTTPS readiness check, the
+workflow writes a rollback `.env` pointing at those local tags, recreates the
+stack with `pull_policy: never`, and verifies readiness again. It does **not**
+restore the database automatically. The deployed `compose.yml` always supplies
+the Uvicorn command, so an older rollback image cannot run its former
+startup-migration command.
 
-The deploy job resolves that tag, backs up the database, pulls the exact image,
-recreates the stack, and runs the HTTPS readiness check. It does not rebuild
-images and does not roll back database migrations. `latest` is a convenience tag
-only and must never be used for production rollback.
+This automated image rollback is safe only when the release's migrations are
+additive and the old image remains schema-compatible (as in this release). A
+database restore is required instead when:
+
+- a migration was destructive or incompatible with the old image;
+- the Places guard aborts because the database already lost Places data;
+- data corruption is suspected;
+- or the previous image cannot serve the current schema.
+
+For a manual redeploy of an earlier image, dispatch the workflow with
+`image_tag=sha-<short-commit>`. Set `skip_migrations=true` only when that image's
+schema is already current; otherwise the old image may not understand the
+database. `latest` is a convenience tag only and must never be used for
+production rollback.
+
+If a database restore is required, first stop or limit writes, restore the
+pre-deployment dump into an isolated database, verify Places and financial
+totals, then restore production. Never automatically restore an older database
+over writes made after the dump.
 
 ## 14. Monitoring and Alerts
 
@@ -263,9 +353,10 @@ Alert on:
 
 push to `dev` → Dev CI → pull request `dev` → `main` → required `Dev CI` passes
 → manual review + manual merge → `production.yml` on `main` → production tests
-→ build immutable `sha-<short>` images → GHCR → database backup → transfer
-runtime files to `/opt/lcs` → Docker Compose recreate → Alembic migration/startup
-→ HTTPS readiness check.
+→ build immutable `sha-<short>` images → GHCR → transfer runtime files to
+`/opt/lcs` → pre-pull new images → verified database backup → explicit Alembic
+migration with the new image while the old app serves → recreate stack → HTTPS
+readiness check.
 
 Production never deploys from `dev`; the merge to `main` is manual.
 
@@ -280,9 +371,11 @@ Production never deploys from `dev`; the merge to `main` is manual.
   pushes images to GHCR.
 - `production.yml` (`Production`) — runs only on pushes to `main` or manual
   dispatch. Validates, builds `sha-<short>` images, pushes to GHCR, transfers the
-  runtime files to `/opt/lcs`, backs up PostgreSQL, deploys the exact tag,
-  recreates the stack (Alembic runs on backend start) and verifies HTTPS
-  readiness.
+  runtime bundle to `/opt/lcs`, pre-pulls both images, takes and verifies a
+  PostgreSQL backup, runs Alembic explicitly with the new backend image while the
+  old stack is still serving, recreates the stack, and verifies HTTPS readiness.
+  On readiness failure it rolls back to the captured local image IDs; it never
+  restores the database automatically.
 
 ### EC2 runtime-only architecture
 
@@ -293,15 +386,19 @@ deploy job transfers only this runtime bundle to `/opt/lcs`:
 ```text
 /opt/lcs/
   compose.yml              # from deploy/compose.yml
+  restore-db.sh            # from deploy/restore-db.sh (isolated restore drill)
   nginx/production.conf    # from infrastructure/nginx/production.conf
   .env                     # generated by the workflow, chmod 600, never committed
+  .env.previous            # temporary failure-recovery copy, removed on success
 ```
 
-`compose.yml` builds nothing; it pulls the prebuilt, **public** GHCR
-`sha-<short>` images (no GHCR login on the host). Only the frontend (nginx)
-publishes host ports (80/443); postgres, redis, minio and backend are reachable
-only on the internal Docker network via their service names. The workflow never
-runs `docker compose down -v`.
+`compose.yml` builds nothing; it uses the pre-pulled, **public** GHCR
+`sha-<short>` images (no GHCR login on the host). Both application services use
+`pull_policy: never` and the workflow pre-pulls explicitly, so recreating a
+healthy stack or a rollback never depends on the registry. Only the frontend
+(nginx) publishes host ports (80/443); postgres, redis, minio and backend are
+reachable only on the internal Docker network via their service names. The
+workflow never runs `docker compose down -v`.
 
 Persistent state lives in Docker named volumes and the deploy user's home:
 
@@ -310,7 +407,9 @@ Persistent state lives in Docker named volumes and the deploy user's home:
 - `freight_forwarding_freight_minio_data` — MinIO objects
 - `freight_forwarding_freight_uploads` — backend `/app/storage`
 - `freight_forwarding_certbot_etc` / `_certbot_www` — TLS certificates + ACME webroot
-- `$HOME/lcs-backups` — pre-deployment PostgreSQL dumps (outside the repo)
+- `$HOME/lcs-backups` — verified pre-deployment PostgreSQL dumps (outside the repo)
+- local `rollback-backend:<timestamp>` / `rollback-frontend:<timestamp>` images — previous release
+- optional S3 prefix `s3://$BACKUP_S3_BUCKET/lcs/postgres/` — encrypted off-host dumps
 
 `docker compose up -d` recreates containers but never removes volumes.
 
@@ -333,8 +432,9 @@ sudo docker run --rm -p 80:80 \
   --email you@example.com --agree-tos --no-eff-email
 ```
 
-Then run the Production workflow; it transfers `compose.yml` +
-`nginx/production.conf`, writes `.env`, and brings the stack up.
+Then run the Production workflow; it transfers `compose.yml`,
+`restore-db.sh`, and `nginx/production.conf`, writes `.env`, and brings the stack
+up.
 
 ### Browser-facing MinIO (presigned S3 URLs)
 
@@ -377,8 +477,9 @@ EC2 does no registry login. This list is the single source; the security section
 
 Variables: `AWS_HOST`, `AWS_USER`, optional `AWS_PORT`; `MINIO_ROOT_USER`, and
 optional `S3_PUBLIC_ENDPOINT_URL` (defaults to `https://lcslog.minidev.in`),
-`POSTGRES_DB`, `POSTGRES_USER`, `S3_BUCKET`, `S3_REGION`, `CORS_ORIGINS`.
-`NUXT_PUBLIC_SITE_URL` stays a **repository-level** build variable (the build
+`POSTGRES_DB`, `POSTGRES_USER`, `S3_BUCKET`, `S3_REGION`, `CORS_ORIGINS`;
+optional `BACKUP_S3_BUCKET` and `BACKUP_S3_KMS_KEY_ID` for encrypted off-host
+dumps. `NUXT_PUBLIC_SITE_URL` stays a **repository-level** build variable (the build
 job does not use the environment).
 
 Secrets are forwarded through the SSH action's `envs` mechanism and written to
@@ -425,9 +526,11 @@ claim the administrator account.
 
 ### 16.3 Deploy and verify
 
-The production workflow backs up the database, deploys immutable image tags,
-checks readiness, and restores the previous images if readiness fails. After a
-deployment, verify:
+The production workflow pre-pulls the new images, verifies a backup, runs
+migrations explicitly while the old application serves, deploys immutable image
+tags, checks readiness, and restores the previous local image IDs if readiness
+fails. Image rollback assumes the schema is backward-compatible; a destructive
+migration needs a database restore instead. After a deployment, verify:
 
 ```bash
 curl -fsS https://lcslog.minidev.in/health
@@ -441,15 +544,18 @@ and refresh tokens are HttpOnly cookies and do not appear in local storage.
 
 ### 16.4 Backups and recovery
 
-The deployment creates a checksummed database dump before release, but a dump
-stored only on the EC2 host is not a disaster-recovery backup. Send encrypted
-database backups to a separate AWS account or protected S3 bucket with
-versioning, retention, and object lock. For stronger recovery objectives, use
-RDS automated backups and point-in-time recovery.
+The deployment creates a checksummed, `pg_restore --list`-verified dump before
+release, and supports optional encrypted off-host upload with `BACKUP_S3_BUCKET`
+and `BACKUP_S3_KMS_KEY_ID` (SSE-KMS). A dump stored only on the EC2 host is not a
+disaster-recovery backup. Send encrypted database backups to a separate AWS
+account or protected S3 bucket with versioning, retention, and object lock. For
+stronger recovery objectives, use RDS automated backups and point-in-time
+recovery.
 
-Run a documented restore drill at least quarterly. A backup is not considered
-verified until it has been restored and the application health and core
-financial totals have been checked.
+Run the documented isolated restore drill (`/opt/lcs/restore-db.sh`, section 12)
+at least quarterly. A backup is not considered verified until it has been
+restored and the application health, Places counts, and core financial totals
+have been checked.
 
 ### 16.5 Remaining defence-in-depth work
 
@@ -495,13 +601,15 @@ each exception as soon as its upstream dependency publishes a fixed release.
 |---|---|---|
 | A private key sits in `docs/lcssystem.pem` | It is untracked and gitignored, but inside the working tree and readable by any process with filesystem access; a lost ignore rule could expose it | **Open (S1)** - owner decision required; recommend moving it outside the repository and rotating it if exposure is suspected |
 | No monitoring or alerting | Failed postings, lockouts, backup failures, and 5xx spikes produce no signal | Open |
-| PostgreSQL guard triggers are not run in CI | A trigger regression can pass the SQLite suite | Open; run `tests/sql/integrity_guards.sql` before release |
+| PostgreSQL guard triggers are not run in CI | A trigger regression can pass the SQLite suite | Open; the Places migration test is PostgreSQL-only and env-gated; run `tests/sql/integrity_guards.sql` before release |
 | Full `alembic downgrade base` fails at `6e862ce04e46` | Recovery below the previous release needs a restore, not downgrade | Known limitation; supported boundary is the previous release |
+| A database that already applied destructive `c3d4e5f6a7b8` has lost Places rows | The guard aborts; deleted data cannot be reconstructed from the schema | Known limitation; restore the pre-deployment dump and verify it before production |
+| Image rollback is only schema-compatible | Rolling back after a destructive or incompatible migration can leave the old image unable to serve | Known limitation; use a database restore for destructive changes |
 | A database owner can disable guards with `SET LOCAL lcs.allow_financial_purge` | The guards defend against mistakes, not a hostile DBA | Accepted; least-privilege DB roles are required |
 | Cross-currency allocation is not implemented | Payment and invoice must share a currency | Accepted; a reviewed FX design is required |
 | No MFA for privileged users | A stolen password is sufficient for login | Open |
 | No malware scanning on uploads | File type/size/signature are checked, but content is not scanned | Open; add a scanner if untrusted uploads are accepted |
-| Off-host PostgreSQL backups are not automated | A host-level dump is not disaster recovery | Partial; send encrypted dumps to a separate account/bucket |
+| Off-host PostgreSQL backups are optional | Without `BACKUP_S3_BUCKET`, a host-level dump is not disaster recovery | Partial; encrypted S3 SSE-KMS upload is implemented but the bucket/lifecycle must be provisioned and verified |
 | No browser E2E | Focus, tab reveal, and responsive layout are checked manually | Open; see `docs/10_testing_and_quality.md` |
 
 ## 19. Operational Commands
@@ -509,14 +617,14 @@ each exception as soon as its upstream dependency publishes a fixed release.
 From the repository root:
 
 ```bash
-# build and start the local stack
+# build and start the local stack (dev compose runs Alembic on backend start)
 docker compose -f infrastructure/docker-compose.yml up -d --build
 
 # status and logs
 docker compose -f infrastructure/docker-compose.yml ps
 docker compose -f infrastructure/docker-compose.yml logs -f backend
 
-# migrations inside the backend container
+# migrations inside the local backend container
 docker compose -f infrastructure/docker-compose.yml exec backend alembic upgrade head
 
 # health through nginx (frontend port 80)
@@ -525,11 +633,24 @@ curl http://localhost/health/ready
 # quality gates
 cd backend && uv run pytest -q && uv run ruff check .
 cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm generate
+
+# PostgreSQL Places migration rehearsal (creates/drops a disposable database)
+cd backend
+LCS_TEST_POSTGRES_URL=postgresql://user:password@host:5432/postgres \
+  uv run pytest tests/test_postgres_places_migration.py -q
+
+# production migration (on the host, while the old app is still serving)
+cd /opt/lcs
+docker compose run -T --rm --no-deps backend alembic upgrade head
+docker compose run -T --rm --no-deps backend alembic current
+
+# isolated restore drill (refuses existing/production targets)
+./restore-db.sh "$HOME/lcs-backups/freight-YYYYmmdd-HHMMSS.dump" lcs_restore_YYYYmmdd
 ```
 
-Production deploy, rollback, and restore commands are in section 15 and section 13.
-The production workflow is manual-dispatch for rollback and automatic on `main` for
-deployment.
+Production deploy, rollback, and restore procedures are in sections 7, 13 and
+12. The production workflow is automatic on `main` and manual-dispatch for a
+rollback/redeploy.
 
 ## 20. Incident Evidence
 
