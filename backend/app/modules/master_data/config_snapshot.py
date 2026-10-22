@@ -74,6 +74,9 @@ def attribute_entry(attribute: Mapping[str, Any], membership: Mapping[str, Any] 
     required = _bool(attribute.get("is_required"))
     if membership is not None and membership.get("is_required") is not None:
         required = _bool(membership.get("is_required"))
+    visible = True
+    if membership is not None and membership.get("is_visible") is not None:
+        visible = _bool(membership.get("is_visible"), True)
     display_order = membership.get("display_order") if membership else None
     return {
         "id": _text(attribute.get("id")),
@@ -84,6 +87,7 @@ def attribute_entry(attribute: Mapping[str, Any], membership: Mapping[str, Any] 
         "inputType": attribute.get("input_type"),
         "referenceType": attribute.get("reference_type"),
         "isRequired": required,
+        "isVisible": visible,
         "defaultValue": attribute.get("default_value"),
         "placeholder": attribute.get("placeholder"),
         "options": _json_list(attribute.get("options")),
@@ -92,10 +96,45 @@ def attribute_entry(attribute: Mapping[str, Any], membership: Mapping[str, Any] 
     }
 
 
+def layout_entry(group: Mapping[str, Any], layout: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Effective per-assignment layout, defaulting to the legacy render mode.
+
+    The fallback is what makes a snapshot written before per-tab layouts
+    existed compare equal to the live configuration after the upgrade.
+    """
+    legacy_form = (_text(group.get("render_mode")) or "table").strip().lower() == "form"
+    resolved: dict[str, Any] = {
+        "displayMode": "form_only" if legacy_form else "table_only",
+        "dataCardinality": "single" if legacy_form else "multiple",
+        "formColumns": 3,
+        "showGroupTitle": True,
+        "editable": True,
+        "collapsible": False,
+        "defaultExpanded": True,
+    }
+    if layout:
+        for key in (
+            "displayMode",
+            "dataCardinality",
+            "formColumns",
+            "showGroupTitle",
+            "editable",
+            "collapsible",
+            "defaultExpanded",
+        ):
+            if layout.get(key) is not None:
+                resolved[key] = layout[key]
+    resolved["formColumns"] = int(resolved["formColumns"])
+    for key in ("showGroupTitle", "editable", "collapsible", "defaultExpanded"):
+        resolved[key] = _bool(resolved[key], key in {"showGroupTitle", "editable", "defaultExpanded"})
+    return resolved
+
+
 def group_entry(
     group: Mapping[str, Any],
     attributes: Iterable[dict[str, Any]],
     display_order: int | None = None,
+    layout: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     order = display_order if display_order is not None else group.get("display_order")
     return {
@@ -103,9 +142,12 @@ def group_entry(
         "code": _text(group.get("code")),
         "name": _text(group.get("name")),
         "nameKm": group.get("name_km"),
+        # ``renderMode`` is kept for snapshots and clients written before the
+        # per-assignment layout existed; the layout fields are authoritative.
         "renderMode": _text(group.get("render_mode")) or "table",
         "displayOrder": int(order or 0),
         "attributes": sorted(attributes, key=lambda item: (item["displayOrder"], item["code"] or "")),
+        **layout_entry(group, layout),
     }
 
 

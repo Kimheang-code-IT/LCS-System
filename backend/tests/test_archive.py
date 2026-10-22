@@ -235,6 +235,34 @@ async def test_generic_archive_masks_sensitive_snapshot_data(client):
     assert details.json()["data"]["data"]["data"]["apiToken"] == "********"
 
 
+async def test_active_generic_record_must_be_deactivated_before_delete(client):
+    headers = await login(client)
+    company = await _create_reference(
+        client,
+        headers,
+        "companies",
+        {"code": "ACTIVE-DELETE", "name": "Active Company", "status": "Active"},
+    )
+
+    blocked = await client.request(
+        "DELETE", "/api/v1/companies", json={"ids": [company["id"]]}, headers=headers
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "RECORD_ACTIVE"
+
+    deactivated = await client.put(
+        f"/api/v1/companies/{company['id']}",
+        json={"status": "Inactive"},
+        headers=headers,
+    )
+    assert deactivated.status_code == 200, deactivated.text
+
+    deleted = await client.request(
+        "DELETE", "/api/v1/companies", json={"ids": [company["id"]]}, headers=headers
+    )
+    assert deleted.status_code == 200, deleted.text
+
+
 async def test_unique_code_is_reusable_after_archive(client):
     headers = await login(client)
     original = await _create_reference(

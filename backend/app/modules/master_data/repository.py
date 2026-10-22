@@ -22,6 +22,7 @@ class MasterDataRepository:
         search_columns: tuple[str, ...],
         status_field: str,
         page: PageParams,
+        order_by: tuple[str, ...] = (),
     ) -> tuple[list[Any], int]:
         stmt = select(model).where(model.deleted_at.is_(None))
         if page.q:
@@ -32,8 +33,9 @@ class MasterDataRepository:
         if page.status:
             stmt = stmt.where(getattr(model, status_field) == page.status)
         total = await count_query(self.session, stmt)
+        default_order = [getattr(model, column) for column in order_by] or [model.id.desc()]
         result = await self.session.execute(
-            stmt.order_by(*list_sort_orders(model, page, model.id.desc()))
+            stmt.order_by(*list_sort_orders(model, page, *default_order))
             .limit(page.page_size)
             .offset(page.offset)
         )

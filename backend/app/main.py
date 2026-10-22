@@ -127,10 +127,12 @@ async def csrf_middleware(request: Request, call_next):
         response = JSONResponse(
             status_code=403,
             content={
+                "success": False,
                 "code": "CSRF_VALIDATION_FAILED",
                 "message": "The CSRF token is missing or invalid.",
                 "request_id": request_id,
                 "field_errors": {},
+                "errors": [],
             },
         )
         response.headers["X-Request-Id"] = request_id
@@ -140,36 +142,136 @@ async def csrf_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+#: Pydantic error type -> stable API code. Anything unknown is an invalid format,
+#: which is the truthful, non-leaking answer for a value that did not parse.
+_PYDANTIC_CODES = {
+    "missing": "REQUIRED",
+    "string_too_short": "TOO_SHORT",
+    "string_too_long": "TOO_LONG",
+    "greater_than": "OUT_OF_RANGE",
+    "greater_than_equal": "OUT_OF_RANGE",
+    "less_than": "OUT_OF_RANGE",
+    "less_than_equal": "OUT_OF_RANGE",
+    "decimal_parsing": "INVALID_TYPE",
+    "decimal_max_digits": "INVALID_PRECISION",
+    "decimal_max_places": "INVALID_PRECISION",
+    "int_parsing": "INVALID_TYPE",
+    "int_type": "INVALID_TYPE",
+    "float_parsing": "INVALID_TYPE",
+    "float_type": "INVALID_TYPE",
+    "bool_parsing": "INVALID_TYPE",
+    "bool_type": "INVALID_TYPE",
+    "date_from_datetime_parsing": "INVALID_FORMAT",
+    "date_parsing": "INVALID_FORMAT",
+    "datetime_parsing": "INVALID_FORMAT",
+    "enum": "INVALID_CHOICE",
+    "literal_error": "INVALID_CHOICE",
+    "value_error": "INVALID_FORMAT",
+    "string_pattern_mismatch": "INVALID_FORMAT",
+    "string_type": "INVALID_TYPE",
+    "list_type": "INVALID_TYPE",
+    "dict_type": "INVALID_TYPE",
+    "extra_forbidden": "UNKNOWN_FIELD",
+}
+
+
+def _infer_error_code(message: str) -> str:
+    """Best-effort code for a field error raised without an explicit one."""
+    text = str(message or "").casefold()
+    if "required" in text or "left empty" in text:
+        return "REQUIRED"
+    if "already" in text or "duplicate" in text:
+        return "DUPLICATE"
+    if "unknown" in text or "not found" in text or "does not match" in text:
+        return "REFERENCE_NOT_FOUND"
+    if "decimal place" in text or "precision" in text:
+        return "INVALID_PRECISION"
+    if "at most" in text or "too long" in text:
+        return "TOO_LONG"
+    if "at least" in text or "too short" in text:
+        return "TOO_SHORT"
+    if any(word in text for word in ("greater", "less", "positive", "negative", "between", "range")):
+        return "OUT_OF_RANGE"
+    if "valid date" in text:
+        return "INVALID_FORMAT"
+    if "choose" in text or "select " in text:
+        return "INVALID_CHOICE"
+    return "INVALID_FORMAT"
+
+
+def _error_items(
+    field_errors: dict[str, str] | None,
+    errors: list[dict] | None,
+) -> list[dict[str, str]]:
+    """Ordered, coded list derived from whichever representation is present."""
+    if errors:
+        return [
+            {
+                "field": str(item.get("field", "")),
+                "code": str(item.get("code") or _infer_error_code(str(item.get("message", "")))),
+                "message": str(item.get("message", "")),
+            }
+            for item in errors
+        ]
+    return [
+        {"field": field, "code": _infer_error_code(message), "message": message}
+        for field, message in (field_errors or {}).items()
+    ]
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     request_id = getattr(request.state, "request_id", None)
     detail = exc.detail
     if isinstance(detail, dict):
+        field_errors = detail.get("field_errors") or {}
+        items = _error_items(field_errors, detail.get("errors"))
         payload = {
+            "success": False,
             "code": detail.get("code", "ERROR"),
             "message": detail.get("message", "Request failed."),
             "request_id": request_id or "",
-            "field_errors": detail.get("field_errors") or {},
+            "field_errors": field_errors,
+            "errors": items,
         }
     else:
-        payload = {"code": "ERROR", "message": str(detail), "request_id": request_id or "", "field_errors": {}}
+        payload = {
+            "success": False,
+            "code": "ERROR",
+            "message": str(detail),
+            "request_id": request_id or "",
+            "field_errors": {},
+            "errors": [],
+        }
     return JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     request_id = getattr(request.state, "request_id", None)
-    field_errors = {
-        ".".join(str(part) for part in error.get("loc", []) if part != "body"): error.get("msg", "Invalid")
-        for error in exc.errors()
-    }
+    field_errors: dict[str, str] = {}
+    items: list[dict[str, str]] = []
+    for error in exc.errors():
+        location = [str(part) for part in error.get("loc", [])]
+        # Strip the request-part envelope (`body`, `query`, ...) but keep array
+        # indices so `lines.1.amount` still addresses the right row cell.
+        if location and location[0] in {"body", "query", "path", "header", "cookie"}:
+            location = location[1:]
+        field = ".".join(location)
+        message = str(error.get("msg", "Invalid value."))
+        code = _PYDANTIC_CODES.get(str(error.get("type", "")), "INVALID_FORMAT")
+        if field and field not in field_errors:
+            field_errors[field] = message
+        items.append({"field": field, "code": code, "message": message})
     return JSONResponse(
         status_code=422,
         content={
+            "success": False,
             "code": "VALIDATION_ERROR",
             "message": "The submitted data is invalid.",
             "request_id": request_id or "",
             "field_errors": field_errors,
+            "errors": items,
         },
     )
 

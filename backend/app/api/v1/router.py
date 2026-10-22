@@ -8,11 +8,11 @@ from app.modules.auth.router import router as auth_router
 from app.modules.backup.router import router as backup_router
 from app.modules.finance.router import router as finance_router
 from app.modules.master_data.router import router as master_data_router
+from app.modules.master_data.status_router import router as status_router
 from app.modules.operations.router import router as operations_router
 from app.modules.quotations.router import router as quotations_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settings.router import router as settings_router
-from app.modules.status.router import router as status_router
 
 api_router = APIRouter()
 # Registered first so `GET /{collection}/status-policy` is matched before the

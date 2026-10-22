@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:field': [key: string, value: unknown]
+  'blur-field': [key: string]
 }>()
 
 const { t } = useI18n()
@@ -37,6 +38,7 @@ const overviewFields = computed(() =>
           :fields="section.fields"
           :model="model"
           @update="(key, value) => emit('update:field', key, value)"
+          @blur="key => emit('blur-field', key)"
         />
       </section>
     </div>

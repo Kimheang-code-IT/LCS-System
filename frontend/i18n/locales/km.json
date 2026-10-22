@@ -53,7 +53,9 @@
       "chargeTypes": "ប្រភេទថ្លៃ",
       "currencies": "រូបិយប័ណ្ណ",
       "businessParties": "ដៃគូអាជីវកម្ម",
+      "partyRoles": "តួនាទីដៃគូអាជីវកម្ម",
       "places": "ទីកន្លែង",
+      "placeRoles": "តួនាទីទីកន្លែង",
       "tradeDirections": "ទិសដៅពាណិជ្ជកម្ម",
       "containerTypes": "ប្រភេទកុងតឺន័រ",
       "transportTypes": "ប្រភេទដឹកជញ្ជូន",
@@ -178,7 +180,7 @@
       "currency40": "រូបិយប័ណ្ណ 40GP / 40HC",
       "currency45": "រូបិយប័ណ្ណ 45GP / 45HC",
       "customer": "ក្រុមហ៊ុន",
-      "customerPartyId": "ក្រុមហ៊ុន",
+      "customerPartyId": "ដៃគូអាជីវកម្ម",
       "customerAddress": "អាសយដ្ឋានអតិថិជន",
       "customsAccount": "គណនីគយ",
       "customsCost": "ថ្លៃគយ",
@@ -1282,7 +1284,7 @@
       "descriptionLabel": "បរិយាយ",
       "branchCol": "សាខា",
       "unitCol": "ឯកតា",
-      "routeRole": "តួនាទី",
+      "routeRole": "តួនាទីទីកន្លែង",
       "editRouteRow": "កែតំបន់ផ្លូវ",
       "routeUpdated": "ធ្វើបច្ចុប្បន្នភាពផ្លូវរួចរាល់",
       "summary": "សេចក្តីសង្ខេប",
@@ -1360,7 +1362,8 @@
         "sourceQuotationLabel": "សម្រង់តម្លៃ",
         "debitNoteNo": "លេខប័ណ្ណ",
         "createdBy": "បង្កើតដោយ"
-      },
+      ,
+  "location": "ទីកន្លែង"},
       "targetInvoiceBill": "វិក្កយបត្រគោលដៅ",
       "containerNoInUse": "លេខកុងតឺនថរនេះកំពុងត្រូវបានប្រើដោយការងារផ្សេងទៀតហើយ។",
       "fileRejectedTitle": "ឯកសារខ្លះមិនត្រូវបានបញ្ចូល",
@@ -1623,6 +1626,7 @@
       "audit": "ព្រឹត្តិការណ៍សវនកម្មថ្មី"
     },
     "fieldHelp": {
+      "allowedPlaceRoles": "ស្រេចចិត្ត។ កំណត់តួនាទីទីកន្លែងដែលអាចប្រើទីកន្លែងនេះបាន។ ទុកទទេដើម្បីផ្តល់ជូនគ្រប់តួនាទី។",
       "password": "ពាក្យសម្ងាត់ដំបូងសម្រាប់គណនីថ្មី។ ប្រើ 8 ដល់ 20 តួអក្សរ។",
       "quotationNo": "លេខសម្រង់តម្លៃផ្លូវការ។ មើលជាមុនតែប៉ុណ្ណោះ — ប្រព័ន្ធខាងក្រោយចេញលេខផ្លូវការ។",
       "jobNo": "លេខបញ្ជាសេវាកម្ម / ការងារសម្រាប់តាមដានការដឹកនេះ។",
@@ -1853,6 +1857,39 @@
       "lastLogin": "ពេលវេលានៃការចូលប្រព័ន្ធជោគលាស់ចុងក្រោយ។",
       "currency": "សង្វាក់រញ្ជសម្រាប់ចំនួននៅលើកំណត់ត្រានេះ។",
       "accountCodeResolved": "កំណត់ដោយច្បាប់ចុះបញ្ជីសម្រាប់ប្រភេទឯកសារ និងប្រភេទថ្លៃនេះ។ កែច្បាប់ដើម្បីប្តូរគណនី។"
+    },
+    "componentLayout": {
+      "editLayout": "ប្លង់ក្រុម",
+      "displayMode": "របៀបបង្ហាញ",
+      "dataCardinality": "ចំនួនទិន្នន័យ",
+      "formColumns": "ជួរឈរទម្រង់",
+      "showGroupTitle": "បង្ហាញចំណងជើងក្រុម",
+      "editable": "អាចកែបាន",
+      "collapsible": "ក្រុមអាចបង្រួម",
+      "defaultExpanded": "បើកលំនាំដើម",
+      "readOnly": "អានតែប៉ុណ្ណោះ",
+      "newRecord": "កំណត់ត្រាថ្មី",
+      "editRecord": "កែកំណត់ត្រា",
+      "updateRecord": "ធ្វើបច្ចុប្បន្នភាពកំណត់ត្រា",
+      "savedRecords": "កំណត់ត្រាដែលបានរក្សាទុក",
+      "noRecords": "មិនទាន់មានកំណត់ត្រា",
+      "noRecordsHint": "បំពេញទម្រង់ខាងលើ ហើយបន្ថែមកំណត់ត្រាដំបូង។",
+      "editExistingHint": "ក្រុមនេះមានកំណត់ត្រាមួយ។ ជ្រើសរើសវាខាងក្រោមដើម្បីកែ។",
+      "groupHint": "ប្លង់ {name} ក្នុងផ្ទាំង {tab}។",
+      "modes": {
+        "form_only": "ទម្រង់តែប៉ុណ្ណោះ",
+        "table_only": "តារាងតែប៉ុណ្ណោះ",
+        "form_and_table": "ទម្រង់ និងតារាង"
+      },
+      "cardinalities": {
+        "single": "កំណត់ត្រាមួយ",
+        "multiple": "កំណត់ត្រាច្រើន"
+      },
+      "modeHints": {
+        "form_only": "បង្ហាញតែវាលបញ្ចូល មួយកំណត់ត្រា។ មិនមានតារាងកំណត់ត្រាទេ។",
+        "table_only": "តារាងអាចកែបានដោយផ្ទាល់។ មិនមានទម្រង់បញ្ចូលដោយឡែកទេ។",
+        "form_and_table": "ទម្រង់បញ្ចូលនៅខាងលើ និងតារាងកំណត់ត្រានៅខាងក្រោម។"
+      }
     },
     "configVersions": {
       "title": "ការកំណត់រចនាសម្ព័ន្ធបញ្ជាសេវាកម្ម",
@@ -2976,10 +3013,34 @@
       "level": "កម្រិត",
       "creatorOnly": "សម្រាប់អ្នកបង្កើតប៉ុណ្ណោះ",
       "toggleRow": "បិទបើកសិទ្ធិទាំងអស់សម្រាប់ {entity}",
+      "toggleAction": "បិទបើក {action} សម្រាប់ទំព័រដែលឃើញ",
+      "applyAction": "អនុវត្តសកម្មភាពលើទំព័រដែលឃើញ",
+      "searchPlaceholder": "ស្វែងរកទំព័រ និងសិទ្ធិ",
+      "expandAll": "ពង្រីកទាំងអស់",
+      "collapseAll": "បង្រួមទាំងអស់",
+      "reset": "កំណត់ឡើងវិញ",
+      "noMatching": "គ្មានសិទ្ធិត្រូវគ្នា។",
+      "unsavedWarning": "អ្នកមានការផ្លាស់ប្តូរសិទ្ធិដែលមិនបានរក្សាទុក។ ចាកចេញដោយមិនរក្សាទុក?",
       "dependencyHint": "សិទ្ធិមើលត្រូវការសម្រាប់សកម្មភាពផ្សេងទៀត។ ការដកសិទ្ធិមើលនឹងដកសកម្មភាពដែលពាក់ព័ន្ធ។",
+      "groups": {
+        "dashboard": "ផ្ទាំងគ្រប់គ្រង",
+        "sales": "ការលក់",
+        "operations": "ប្រតិបត្តិការ",
+        "finance": "ហិរញ្ញវត្ថុ",
+        "reports": "របាយការណ៍",
+        "master": "ទិន្នន័យមេ",
+        "configuration": "កំណត់រចនាសម្ព័ន្ធ",
+        "admin": "អ្នកគ្រប់គ្រង",
+        "settings": "ការកំណត់"
+      },
       "actions": {
         "view": "មើល",
         "edit": "កែប្រែ",
+        "update": "ធ្វើបច្ចុប្បន្នភាព",
+        "submit": "ដាក់ស្នើ",
+        "summary": "សេចក្តីសង្ខេប",
+        "quotation": "ផ្ញើសម្រង់តម្លៃ",
+        "re_quotation": "ធ្វើសម្រង់តម្លៃឡើងវិញ",
         "archive": "ដាក់ក្នុងប័ណ្ណសារ",
         "restore": "ស្ដារឡើងវិញ",
         "assign": "ចាត់តាំង",
@@ -3332,8 +3393,8 @@
     "aboutCopyright": "© LCS Freight"
   },
   "validation": {
-    "summaryTitle": "Please correct the highlighted fields",
-    "summaryCount": "{count} issue(s) to fix",
+
+
     "formError": "Please correct the highlighted fields.",
     "required": "{field} is required.",
     "requiredGeneric": "This field is required.",
@@ -3353,6 +3414,11 @@
     "minGeneric": "Enter a value of at least {min}.",
     "max": "{field} must be less than or equal to {max}.",
     "maxGeneric": "Enter a value of at most {max}.",
+    "positive": "{field} must be greater than zero.",
+    "positiveGeneric": "Enter a value greater than zero.",
+    "decimalPlaces": "{field} must use at most {decimals} decimal places.",
+    "decimalPlacesGeneric": "Use at most {decimals} decimal places.",
+    "dateOrder": "{field} must be on or after {other}.",
     "minLength": "{field} must be at least {min} characters.",
     "minLengthGeneric": "Enter at least {min} characters.",
     "maxLength": "{field} must be at most {max} characters.",
@@ -3368,7 +3434,8 @@
     "passwordMismatch": "ពាក្យសម្ងាត់ទាំងពីរមិនត្រូវគ្នាទេ។",
     "commonPassword": "ពាក្យសម្ងាត់នេះងាយស្រួលទាយពេក។ សូមជ្រើសរើសផ្សេង។",
     "commonPasswordGeneric": "ពាក្យសម្ងាត់នេះងាយស្រួលទាយពេក។ សូមជ្រើសរើសផ្សេង។"
-  },
+  ,
+  "duplicateAssetCode": "លេខកូដទ្រព្យ {code} កំពុងបានប្រើរួចហើយ។"},
   "fields": {
     "feeTypeId": "ប្រភេទថ្លៃ",
     "priority": "អាទិភាព",

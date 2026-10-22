@@ -30,11 +30,11 @@ production and no mock data layer.
 | Document | Use it for |
 |---|---|
 | `AGENTS.md` §Frontend | Enforced conventions and the icon/i18n gotchas |
-| `docs/05_solution_architecture.md` | Intended page and data-flow design |
+| `docs/08_frontend_and_ui_design.md` | Intended page, component, and data-flow design |
 | `frontend/app/config/freight-modules.ts`, `lcs-reference-modules.ts` | The metadata-driven page definitions |
 | `frontend/app/utils/validation/` | The validation primitives |
 | `frontend/app/composables/common/useFormValidation.ts` | The shared form-error state machine |
-| `docs/17_repository_analysis.md` §Frontend | Current state and known gaps |
+| `docs/10_testing_and_quality.md` §7-§8 | Current state and known gaps |
 
 ## Architecture
 
@@ -84,8 +84,8 @@ confirmed successes only.
   `component-rules.ts` (dynamic component attributes, driven by each attribute's
   `validationRules` JSON).
 - State comes from `useFormValidation()`: `fieldErrors`, `formErrors`, `submitting`,
-  `summaryItems`, `applyFailures`, `applyServerError`, `clearFieldError`,
-  `clearTableErrors`, `focusFirstInvalid`, `focusFieldKey`.
+  `applyFailures`, `applyServerError`, `clearFieldError`, `clearTableErrors`,
+  `focusFirstInvalid`.
 - Display: pass `:error` to `UFormField` (directly or through
   `AppDynamicFieldRenderer`, `AppFieldGrid`, `AppComponentTabs`, `AppLineTable`),
   and put `data-field-key="<key>"` on the wrapper so focus and scroll can find it.
@@ -95,8 +95,12 @@ confirmed successes only.
   resolvable by `error-paths.ts` or it silently becomes page-level.**
 - Submit order: validate → if invalid, `applyFailures` + `focusFirstInvalid()` and
   return → else persist → on throw, `applyServerError` + `focusFirstInvalid()`.
-- `AppFormErrorSummary` renders `role="alert"` + `aria-live="assertive"` with a
-  button per item that focuses the offending field.
+- `AppFormErrorSummary` renders **only** the fieldless messages, as a slim
+  `role="alert"` + `aria-live="assertive"` line. It deliberately does **not**
+  repeat field errors: each one is already under its own control, and
+  `focusFirstInvalid()` navigates to it. Do not reintroduce a duplicate list.
+  A refusal with no field (`formErrors`) must never be dropped — if nothing
+  renders `formErrors`, the user gets no feedback at all.
 - Duplicate-submission protection is two layers: a `saving`/`submitting` guard at
   the top of the handler, and the button's `:loading` state.
 - `focus.ts` opens the owning tab before focusing, so an error on a hidden tab is

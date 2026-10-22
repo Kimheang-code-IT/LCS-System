@@ -12,6 +12,7 @@ from app.core.exceptions import AccessDenied, Conflict, ValidationFailed
 from app.core.pagination import PageParams, page_params, paged
 from app.modules.backup import service
 from app.modules.backup.repository import BackupRunRepository
+from app.modules.backup.schemas import RESTORE_BACKUP_SCHEMA
 from app.modules.backup.sheets import BackupConfigurationError, SheetsApiError
 
 router = APIRouter()
@@ -78,8 +79,9 @@ async def restore_backup(
 ) -> dict:
     if not context.has_permission("settings.manage") and not context.is_platform_admin:
         raise AccessDenied("Restoring backup data requires the settings.manage permission.")
-    confirm = str(payload.get("confirm") or "")
-    tables = payload.get("tables") or None
+    values = RESTORE_BACKUP_SCHEMA.validate(payload)
+    confirm = str(values.get("confirm") or "")
+    tables = values.get("tables") or None
     try:
         result = await service.restore_from_sheets(session, confirm=confirm, tables=tables)
     except BackupConfigurationError as exc:

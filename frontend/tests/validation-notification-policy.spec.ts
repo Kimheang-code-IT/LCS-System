@@ -94,6 +94,7 @@ describe('inline validation wiring', () => {
   const documentPage = readFileSync(join(APP_DIR, 'components', 'document', 'AppDocumentPage.vue'), 'utf8')
   const documentView = readFileSync(join(APP_DIR, 'components', 'freight', 'DocumentView.vue'), 'utf8')
   const fieldGrid = readFileSync(join(APP_DIR, 'components', 'document', 'AppFieldGrid.vue'), 'utf8')
+const errorSummary = readFileSync(join(APP_DIR, 'components', 'common', 'AppFormErrorSummary.vue'), 'utf8')
 
   it('tags every document field with its stable model path', () => {
     expect(documentForm).toContain(':data-field-key="field.key"')
@@ -110,10 +111,28 @@ describe('inline validation wiring', () => {
     expect(lineTable).toContain('data-slot')
   })
 
-  it('shows an accessible error summary above the document form', () => {
-    expect(documentPage).toContain('CommonAppFormErrorSummary')
-    expect(documentPage).toContain('summaryItems')
-    expect(documentPage).toContain('formErrors')
+  it('reports a field error on the field only, never twice', () => {
+    // The page must not carry a duplicated list of field errors: each one is
+    // already rendered under its own control, and the submit handler moves
+    // focus to the first invalid field.
+    expect(documentPage).not.toContain('summaryItems')
+    expect(documentPage).not.toContain('summary-items')
+    expect(documentPage).not.toContain('selectError')
+    expect(documentPage).not.toContain('select-error')
+    // The shared surface takes fieldless messages only: no `items` prop, no
+    // per-row select handler, and no red alert header above the form.
+    expect(errorSummary).not.toContain('items?:')
+    expect(errorSummary).not.toContain('@click')
+    expect(errorSummary).not.toContain('UAlert')
+  })
+
+  it('still surfaces a message that belongs to no field', () => {
+    // Business-rule refusals and transport failures map to no input, so they
+    // must keep a persistent home rather than disappear with the summary.
+    expect(documentPage).toContain(':form-errors="formErrors"')
+    expect(errorSummary).toContain('formErrors.length')
+    expect(errorSummary).toContain('role="alert"')
+    expect(errorSummary).toContain('aria-live="assertive"')
   })
 
   it('gates the save on client-side validation before calling the API', () => {

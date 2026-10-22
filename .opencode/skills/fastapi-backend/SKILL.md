@@ -26,9 +26,9 @@ permissions, or financial correctness.
 |---|---|
 | `AGENTS.md` §Backend | Layering, envelope, permission sync, ruff config |
 | `docs/05_solution_architecture.md` | Module boundaries and the layering contract |
-| `docs/11_permissions_matrix.md` | Permission codes and page mapping |
+| `docs/09_roles_and_permissions.md` | Permission codes and page mapping |
 | `backend/app/modules/<name>/` | The existing pattern to extend (router → service → models/repository) |
-| `docs/13_security_hardening_runbook.md` | Security controls that must stay in place |
+| `docs/11_deployment_and_security.md` | Security controls that must stay in place |
 
 ## Architecture
 

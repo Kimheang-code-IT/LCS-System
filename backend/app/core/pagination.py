@@ -32,16 +32,16 @@ class PageParams:
 def page_params(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    q: str | None = Query(None),
-    status: str | None = Query(None),
-    sort_by: str | None = Query(None),
-    sort_order: str = Query("desc"),
-    from_date: str | None = Query(None),
-    to_date: str | None = Query(None),
-    sortKey: str | None = Query(None),
-    sortDir: str | None = Query(None),
-    dateFrom: str | None = Query(None),
-    dateTo: str | None = Query(None),
+    q: str | None = Query(None, max_length=200),
+    status: str | None = Query(None, max_length=32),
+    sort_by: str | None = Query(None, max_length=64),
+    sort_order: str = Query("desc", max_length=8),
+    from_date: str | None = Query(None, max_length=32),
+    to_date: str | None = Query(None, max_length=32),
+    sortKey: str | None = Query(None, max_length=64),
+    sortDir: str | None = Query(None, max_length=8),
+    dateFrom: str | None = Query(None, max_length=32),
+    dateTo: str | None = Query(None, max_length=32),
 ) -> PageParams:
     effective_sort = sort_by or sortKey
     effective_dir = sort_order if sort_by else (sortDir or sort_order)

@@ -24,6 +24,9 @@ def disable_cache_by_default(monkeypatch):
     Redis client via the ``fake_redis`` fixture.
     """
     monkeypatch.setattr(settings, "cache_enabled", False)
+    # Do not probe a real Redis server from every test: a missing server costs
+    # two connect timeouts per write, which dominated the suite runtime.
+    monkeypatch.setattr(settings, "redis_enabled", False)
     return None
 
 

@@ -14,26 +14,27 @@ documentation disagree. The output is an implementation plan, not code.
 - Starting a new phase of work and needing to know the true starting point.
 - A requirement is claimed as done but has not been verified.
 - Deciding whether to extend or replace an existing implementation.
-- Producing `docs/17_repository_analysis.md` or refreshing it.
+- Refreshing the implementation-status and risk sections of
+  `docs/10_testing_and_quality.md`.
 
 ## Required inputs
 
 1. The requirement source: the task brief, `docs/01`–`docs/04`, or a specific request.
 2. The area to analyse. Never analyse "everything" in one pass — scope by module.
-3. Any prior analysis in `docs/14`–`docs/17` so findings are not duplicated.
+3. The latest recorded status in `docs/10_testing_and_quality.md` and the
+   hardcoded-configuration register in `docs/05_solution_architecture.md`
+   Appendix B, so findings are not duplicated.
 
 ## Project references
 
 | Document | Use it for |
 |---|---|
 | `AGENTS.md` | Commands, architecture rules, enforced conventions |
-| `docs/05_solution_architecture.md` | Intended architecture and layering |
-| `docs/06_database_design.sql`, `docs/06b_database_design_annotated.sql` | Actual schema (generated from models) |
-| `docs/11_permissions_matrix.md` | Permission catalog and page mapping |
-| `docs/14_47_table_migration_analysis.md` | Old→new table mapping and deliberate non-adoptions |
-| `docs/16_upgrade_summary_and_risks.md` | Known risks and outstanding work |
-| `docs/17_repository_analysis.md` | The most recent classification of every feature |
-| `docs/18_implementation_checklist.md` | Live per-feature status and missing work |
+| `docs/05_solution_architecture.md` | Intended architecture and layering; Appendix B is the hardcoded-configuration register |
+| `docs/06_database_design.sql` | Actual schema (generated from models) |
+| `docs/09_roles_and_permissions.md` | Permission catalog and page mapping |
+| `docs/10_testing_and_quality.md` | Current feature status, coverage gaps, and open risks |
+| `docs/11_deployment_and_security.md` | Production controls, migration boundary, and operational risks |
 
 ## Workflow
 
@@ -52,8 +53,8 @@ documentation disagree. The output is an implementation plan, not code.
 4. **Find the drift.** Compare each doc against the code. Report contradictions
    with file paths, not opinions.
 5. **Inventory hardcoded business configuration** and, for each item, state whether
-   a database row can override it at runtime. Use `docs/17` §"Hardcoded configuration"
-   as the register and extend it rather than starting over.
+   a database row can override it at runtime. Use `docs/05_solution_architecture.md`
+   Appendix B as the register and extend it rather than starting over.
 6. **Report risk** in two separate lists: security risk and financial-correctness
    risk. Rank by blast radius, not by ease of fixing.
 7. **Write the plan.** Order work so each step is independently verifiable, and
@@ -105,6 +106,7 @@ is an assumption and must be labelled as one.
 
 ## Expected outputs
 
-- `docs/17_repository_analysis.md` — inventory, classification, drift, risks.
-- An updated `docs/18_implementation_checklist.md` row per affected feature.
+- A refreshed status/risk entry in `docs/10_testing_and_quality.md` per affected feature.
+- An updated hardcoded-configuration register in `docs/05_solution_architecture.md`
+  Appendix B when the split changes.
 - A short plan: ordered steps, each with its verification command.

@@ -74,17 +74,19 @@ describe('freightFieldToDocumentField', () => {
 
 describe('moduleDocumentTabs', () => {
   it('compiles master data as one details tab with sections from field.section', () => {
-    const module = getFreightModule('/master-data/places')
+    const module = getFreightModule('/master-data/container-types')
     expect(module).toBeTruthy()
     const tabs = moduleDocumentTabs(module!)
     expect(tabs.map(tab => tab.id)).toEqual(['details'])
     // Status is managed from the row "..." menu, so it is not a form field.
     expect(tabs[0]?.sections.map(section => section.id)).toEqual([
       'general',
-      'location',
+      'dimensions',
+      'details',
     ])
     const fieldKeys = tabs[0]?.sections.flatMap(section => section.fields.map(field => field.key)) ?? []
     expect(fieldKeys).toContain('code')
+    expect(fieldKeys).toContain('isoCode')
     expect(fieldKeys).not.toContain('status')
   })
 
@@ -204,11 +206,11 @@ describe('moduleDocumentTabs', () => {
     expect(getFreightModule('/service-charges')?.documentForm).toBe('charges')
     expect(getFreightModule('/finance/documents')?.documentForm).toBe('finance')
     expect(getFreightModule('/administration/roles')?.documentForm).toBe('roles')
-    expect(getFreightModule('/master-data/places')?.documentForm).toBeUndefined()
+    expect(getFreightModule('/master-data/container-types')?.documentForm).toBeUndefined()
   })
 
   it('keeps required header fields on the compiled form so save can validate them', () => {
-    const paths = ['/master-data/places', '/quotations', '/service-charges', '/finance/documents', '/administration/roles']
+    const paths = ['/master-data/container-types', '/quotations', '/service-charges', '/finance/documents', '/administration/roles']
     for (const path of paths) {
       const module = getFreightModule(path)!
       const keys = new Set(
@@ -226,7 +228,7 @@ describe('moduleDocumentTabs', () => {
 
   it('lets a filled master-data, quotation, and role record pass required-field save checks', () => {
     const fills: Record<string, Record<string, unknown>> = {
-      '/master-data/places': { code: 'PPAP', name: 'Phnom Penh Autonomous Port' },
+      '/master-data/container-types': { code: '20GP', name: '20ft General Purpose' },
       '/quotations': {
         customerPartyId: '1',
         customer: 'Acme',
@@ -252,7 +254,7 @@ describe('moduleDocumentTabs', () => {
     const field = moduleDocumentTabs(getFreightModule('/quotations')!)
       .find(tab => tab.id === 'pricing')?.sections[0]?.fields[0]
     expect(field?.meta?.showPricingTotals).toBe(true)
-    const columns = (field?.meta?.table as { columns: Array<{ key: string, type?: string, inlineFields?: unknown[] }> }).columns
+    const columns = (field?.meta?.table as { columns: Array<{ key: string, type?: string, options?: unknown, inlineFields?: unknown[] }> }).columns
     expect(columns.map(column => column.key)).toEqual([
       'containerType',
       'transportBy',
@@ -263,6 +265,8 @@ describe('moduleDocumentTabs', () => {
     ])
     expect(columns.find(column => column.key === 'containerType')?.type).toBe('select')
     expect(columns.find(column => column.key === 'transportBy')?.type).toBe('select')
+    // The By options come from Master Data -> Transport Types, never a static list.
+    expect(columns.find(column => column.key === 'transportBy')?.options).toBeUndefined()
     // A quoted rate is the rate the customer pays: no discount or tax step, so the
     // line total carries no inline fields.
     expect(columns.find(column => column.key === 'lineTotal')?.inlineFields).toBeUndefined()

@@ -150,6 +150,17 @@ describe('useFormValidation — backend error mapping', () => {
     expect(v.formErrors.value).toEqual([])
   })
 
+  it('maps the coded errors array onto the same field map', () => {
+    const v = makeValidation()
+    v.applyServerError(fetchError(422, {
+      code: 'VALIDATION_ERROR',
+      field_errors: {},
+      errors: [{ field: 'customer', code: 'REQUIRED', message: 'This field is required.' }],
+    }))
+    expect(v.fieldErrors.value).toEqual({ customer: 'Customer is required.' })
+    expect(v.formErrors.value).toEqual([])
+  })
+
   it('maps a nested row error onto its own cell', () => {
     const v = makeValidation()
     v.applyServerError(fetchError(422, {
@@ -186,7 +197,7 @@ describe('useFormValidation — backend error mapping', () => {
     expect(v.formErrors.value).toEqual(['Service unavailable'])
   })
 
-  it('lists mapped fields and form errors together in the summary', () => {
+  it('maps a backend field error onto the field and leaves nothing page-level', () => {
     const v = makeValidation()
     v.applyServerError(fetchError(422, {
       code: 'VALIDATION_ERROR',
@@ -194,16 +205,23 @@ describe('useFormValidation — backend error mapping', () => {
       field_errors: { customer: 'Field required' },
     }))
 
-    expect(v.summaryItems.value.map(item => item.key)).toEqual(['customer'])
-    expect(v.summaryItems.value[0]?.message).toBe('Customer is required.')
+    // The message lives on the field only: there is no duplicated page-level
+    // copy, so the UI has nothing extra to render above the form.
+    expect(v.orderedErrorKeys.value).toEqual(['customer'])
+    expect(v.fieldErrors.value.customer).toBe('Customer is required.')
     // The envelope message is not repeated next to the field it duplicated.
     expect(v.formErrors.value).toEqual([])
   })
 
-  it('adds a group label so a hidden field can be located', () => {
-    const v = makeValidation({ groupLabel: () => 'Overview › Header' })
-    v.applyFailures([{ code: 'required', key: 'customer', label: 'Customer' }])
-    expect(v.summaryItems.value[0]?.groupLabel).toBe('Overview › Header')
+  it('keeps a fieldless backend error as the only form-level message', () => {
+    const v = makeValidation()
+    v.applyServerError(fetchError(409, {
+      code: 'BUSINESS_RULE',
+      message: 'The accounting period is closed.',
+    }))
+
+    expect(v.fieldErrors.value).toEqual({})
+    expect(v.formErrors.value).toEqual(['The accounting period is closed.'])
   })
 })
 

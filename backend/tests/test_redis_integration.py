@@ -72,12 +72,12 @@ async def test_cache_namespace_invalidation(fake_redis):
 
 @pytest.mark.asyncio
 async def test_cache_key_isolation(fake_redis):
-    await cache.set_json("master_data", "places", 1, value="a", ttl_seconds=60)
-    await cache.set_json("reports", "places", 1, value="b", ttl_seconds=60)
-    await cache.set_json("master_data", "places", 2, value="c", ttl_seconds=60)
-    assert await cache.get_json("master_data", "places", 1) == "a"
-    assert await cache.get_json("reports", "places", 1) == "b"
-    assert await cache.get_json("master_data", "places", 2) == "c"
+    await cache.set_json("master_data", "samples", 1, value="a", ttl_seconds=60)
+    await cache.set_json("reports", "samples", 1, value="b", ttl_seconds=60)
+    await cache.set_json("master_data", "samples", 2, value="c", ttl_seconds=60)
+    assert await cache.get_json("master_data", "samples", 1) == "a"
+    assert await cache.get_json("reports", "samples", 1) == "b"
+    assert await cache.get_json("master_data", "samples", 2) == "c"
 
 
 @pytest.mark.asyncio
@@ -147,25 +147,27 @@ async def test_master_data_list_cache_hit_and_invalidation(client, fake_redis, e
     headers = await login(client)
 
     with QueryCounter(engine) as first:
-        response = await client.get("/api/v1/places", headers=headers)
+        response = await client.get("/api/v1/placeRoles", headers=headers)
     assert response.status_code == 200, response.text
     assert first.count > 0
 
     with QueryCounter(engine) as second:
-        cached = await client.get("/api/v1/places", headers=headers)
+        cached = await client.get("/api/v1/placeRoles", headers=headers)
     assert cached.status_code == 200
     assert cached.json() == response.json()
     assert second.count <= 1, "cached list response must not query the database"
 
     created = await client.post(
-        "/api/v1/places", headers=headers, json={"code": "NEWP", "name": "New Place", "status": "ACTIVE"}
+        "/api/v1/placeRoles",
+        headers=headers,
+        json={"code": "NEWPR", "name": "New Place Role", "sortOrder": 99, "status": "ACTIVE"},
     )
     assert created.status_code == 201, created.text
 
-    refreshed = await client.get("/api/v1/places", headers=headers)
+    refreshed = await client.get("/api/v1/placeRoles", headers=headers)
     assert refreshed.status_code == 200
     names = [item.get("name") for item in refreshed.json()["data"]["items"]]
-    assert "New Place" in names
+    assert "New Place Role" in names
 
 
 @pytest.mark.asyncio

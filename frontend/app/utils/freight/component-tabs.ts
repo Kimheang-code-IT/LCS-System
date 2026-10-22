@@ -1,5 +1,6 @@
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
 import type { ComponentGroupRow, ComponentTabAttribute, ComponentTabGroup } from '~/types/component-config'
+import { visibleComponentAttributes } from '~/utils/freight/component-layout'
 
 export function componentAttributeCellType(attribute: ComponentTabAttribute): FreightLineColumn['type'] {
   switch (attribute.fieldType) {
@@ -45,24 +46,25 @@ function attributeOptionItems(attribute: ComponentTabAttribute, references: Reco
 export function componentGroupToFreightTable(
   group: ComponentTabGroup,
   references: Record<string, Record<string, string>> = {},
+  options: { hideTitle?: boolean, hideAddRow?: boolean } = {},
 ): FreightTable | null {
-  const columns: FreightLineColumn[] = [...group.attributes]
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map(attribute => ({
-      key: attribute.code,
-      label: attribute.label,
-      labelKm: attribute.labelKm || undefined,
-      type: componentAttributeCellType(attribute),
-      required: attribute.isRequired,
-      options: attributeOptions(attribute),
-      optionItems: attributeOptionItems(attribute, references),
-    }))
+  const columns: FreightLineColumn[] = visibleComponentAttributes(group).map(attribute => ({
+    key: attribute.code,
+    label: attribute.label,
+    labelKm: attribute.labelKm || undefined,
+    type: componentAttributeCellType(attribute),
+    required: attribute.isRequired,
+    options: attributeOptions(attribute),
+    optionItems: attributeOptionItems(attribute, references),
+  }))
   if (!columns.length) return null
   return {
     key: `component-${group.id}`,
     title: group.name,
     columns,
     addLabelKey: 'freight.ui.addRow',
+    hideTitle: options.hideTitle ?? false,
+    hideAddRow: options.hideAddRow ?? false,
   }
 }
 

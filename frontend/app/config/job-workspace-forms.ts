@@ -1,5 +1,5 @@
 import { FILE_ATTACHMENT_COLUMNS, type FreightField, type FreightFieldType, type FreightTable } from './freight-modules'
-import { PLACE_ROLES } from './freight-options'
+import { SERVICE_ORDER_ROUTE_TABLE } from './route-stop-table'
 import {
   actualContainerRowDefaults,
   computeContainerPaymentLine,
@@ -7,7 +7,6 @@ import {
   containerPaymentRowDefaults,
   containerRequirementRowDefaults,
   jobFinanceLineRowDefaults,
-  routePlaceRowDefaults,
 } from '~/utils/table/line-table-rules'
 
 function field(
@@ -116,21 +115,11 @@ export const JOB_FINANCE_LINES_TABLE: FreightTable = {
   rowDefaults: jobFinanceLineRowDefaults,
 }
 
-export const JOB_ROUTE_TABLE: FreightTable = {
-  key: 'places',
-  title: 'Route',
-  columns: [
-    { key: 'placeRole', label: 'Role', labelKey: 'freight.ui.routeRole', type: 'select', options: PLACE_ROLES, required: true },
-    { key: 'place', label: 'Place', labelKey: 'freight.ui.cols.place', type: 'text', required: true },
-    { key: 'planned', label: 'Planned', labelKm: 'ផែនកាល្បង', labelKey: 'freight.ui.plannedCol', type: 'date' },
-    { key: 'actual', label: 'Actual', labelKm: 'ជាក់ស្តែង', labelKey: 'freight.ui.actualCol', type: 'date' },
-    { key: 'notes', label: 'Note', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.note', type: 'note' },
-    { key: '_delete', label: '', type: 'delete' },
-  ],
-  addLabel: 'Add Route',
-  addLabelKey: 'freight.ui.addRoute',
-  rowDefaults: routePlaceRowDefaults,
-}
+/**
+ * The Service Order Route tab. The columns and selection rules are the shared
+ * route-stop definition used by quotations, with actual-time tracking added.
+ */
+export const JOB_ROUTE_TABLE: FreightTable = SERVICE_ORDER_ROUTE_TABLE
 
 export const JOB_FILE_TABLE: FreightTable = {
   key: 'attachments',

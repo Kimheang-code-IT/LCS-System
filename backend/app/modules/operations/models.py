@@ -47,11 +47,21 @@ class ServiceOrder(PKMixin, TimestampMixin, Base):
 
 class ServiceOrderPlace(PKMixin, Base):
     __tablename__ = "service_order_places"
+    __table_args__ = (
+        UniqueConstraint("service_order_id", "sequence_no", name="uq_service_order_places_sequence"),
+    )
 
     service_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    # See QuotationRevisionPlace: the id is the reference, the text is the
+    # printable snapshot that survives deactivation of the role.
+    place_role_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("place_roles.id", ondelete="SET NULL"))
+    # Legacy Places reference retained for historical rows. New writes use the
+    # role and free-text snapshot; this column is not exposed by the form.
     place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     place_role: Mapped[str] = mapped_column(String(32), nullable=False)
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    actual_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     free_text: Mapped[str | None] = mapped_column(Text)
     is_actual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     notes: Mapped[str | None] = mapped_column(Text)
@@ -149,6 +159,7 @@ class ServiceOrderMovement(PKMixin, TimestampMixin, Base):
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     transport_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_types.id"))
     transport_asset_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_assets.id"))
+    # Legacy Places references retained for historical movement rows.
     origin_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     destination_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     planned_departure: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

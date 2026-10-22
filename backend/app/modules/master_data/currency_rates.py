@@ -56,7 +56,14 @@ def normalize_rate_input(data: dict[str, Any]) -> dict[str, Any]:
     data["fromCurrencyCode"] = from_code
     data["toCurrencyCode"] = to_code
     if "rate" in data:
-        data["rate"] = fx.normalize_rate(data.get("rate"))
+        try:
+            data["rate"] = fx.normalize_rate(data.get("rate"))
+        except ValidationFailed as exc:
+            # `normalize_rate` is shared with document exchange rates, where the
+            # field is `exchangeRate`; in this collection it is `rate`, so the
+            # message has to be re-addressed or the form cannot place it.
+            message = (exc.field_errors or {}).get("exchangeRate") or exc.message
+            raise ValidationFailed(exc.message, {"rate": message}) from exc
     status = str(data.get("status") or APPROVED).strip().upper()
     if status not in RATE_STATUSES:
         raise ValidationFailed(

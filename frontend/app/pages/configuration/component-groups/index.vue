@@ -145,10 +145,35 @@ async function removeMembership(row: ComponentGroupAttribute) {
   if (!accepted) return
   await config.removeGroupAttribute(row.id)
 }
+
+async function setVisibility(row: ComponentGroupAttribute, visible: boolean) {
+  try {
+    await config.updateGroupAttribute(row.id, { isVisible: visible })
+  }
+  catch (error) {
+    validation.applyServerError(error)
+  }
+}
+
+/** Column order is configuration: persist the whole order after a move. */
+async function moveAttribute(index: number, direction: -1 | 1) {
+  if (!selectedGroupId.value) return
+  const rows = [...config.groupAttributes.value]
+  const target = index + direction
+  if (target < 0 || target >= rows.length) return
+  const [moved] = rows.splice(index, 1)
+  rows.splice(target, 0, moved!)
+  try {
+    await config.reorderGroupAttributes(selectedGroupId.value, rows.map(row => row.id))
+  }
+  catch (error) {
+    validation.applyServerError(error)
+  }
+}
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4">
+  <div class="mx-auto flex w-[95%] max-w-[1800px] flex-col gap-4 p-4">
     <LayoutAppHeaderPageActions
       can-create
       create-label="Add group"
@@ -212,29 +237,55 @@ async function removeMembership(row: ComponentGroupAttribute) {
             <thead class="bg-elevated text-left text-xs uppercase tracking-wide text-muted">
               <tr>
                 <th class="px-3 py-2 font-medium">Attribute</th>
-                <th class="w-10" />
+                <th class="px-3 py-2 font-medium">Visible</th>
+                <th class="w-24" />
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in config.groupAttributes.value"
+                v-for="(row, index) in config.groupAttributes.value"
                 :key="row.id"
                 class="border-t border-default"
               >
                 <td class="px-3 py-2 text-highlighted">{{ row.label }}</td>
+                <td class="px-3 py-2">
+                  <USwitch
+                    :model-value="row.isVisible !== false"
+                    @update:model-value="setVisibility(row, $event)" />
+                </td>
                 <td class="px-1 py-1 text-right">
-                  <UButton
-                    size="xs"
-                    color="error"
-                    variant="ghost"
-                    icon="i-lucide-trash-2"
-                    aria-label="Remove"
-                    @click="removeMembership(row)"
-                  />
+                  <div class="flex items-center justify-end">
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-arrow-up"
+                      :disabled="index === 0"
+                      :aria-label="t('actions.moveUp')"
+                      @click="moveAttribute(index, -1)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-arrow-down"
+                      :disabled="index === config.groupAttributes.value.length - 1"
+                      :aria-label="t('actions.moveDown')"
+                      @click="moveAttribute(index, 1)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="error"
+                      variant="ghost"
+                      icon="i-lucide-trash-2"
+                      aria-label="Remove"
+                      @click="removeMembership(row)"
+                    />
+                  </div>
                 </td>
               </tr>
               <tr class="border-t border-default">
-                <td colspan="2" class="px-3 py-2">
+                <td colspan="3" class="px-3 py-2">
                   <USelect
                     v-model="addAttributeId"
                     :items="availableAttributes"

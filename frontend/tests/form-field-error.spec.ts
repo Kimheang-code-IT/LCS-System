@@ -75,7 +75,7 @@ describe(':error bindings', () => {
     // These render a `fieldErrors` map keyed by model path; an empty value for
     // a clean field must not reach `UFormField.error`.
     expect(readAppFile('components', 'document', 'AppFieldGrid.vue')).toContain('formFieldError(props.fieldErrors')
-    expect(readAppFile('components', 'document', 'AppComponentTabs.vue')).toContain('formFieldError(props.fieldErrors')
+    expect(readAppFile('components', 'document', 'DynamicFormRenderer.vue')).toContain('formFieldError(props.errors')
     expect(readAppFile('components', 'document', 'AppDynamicFieldRenderer.vue')).toContain('formFieldError(props.fieldErrors')
 
     // These hold their message in a plain ref that starts as `''`.

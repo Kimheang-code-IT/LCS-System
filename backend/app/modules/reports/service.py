@@ -621,7 +621,7 @@ async def _service_order_status_counts(
         "awaitingClosure": counts.get("FINISHED", 0),
         # Charts are data-driven, so they report the real lifecycle. The frontend
         # KPI cards deep-link with the pre-simplification filter values and need
-        # the same mapping applied; tracked in docs/18_implementation_checklist.md.
+        # the same mapping applied; tracked in docs/10_testing_and_quality.md.
         "byStatus": [
             {"status": status, "count": counts.get(status, 0)}
             for status in SERVICE_ORDER_LIFECYCLE

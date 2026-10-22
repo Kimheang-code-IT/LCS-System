@@ -1,13 +1,14 @@
 import { useSetup } from '~/composables/auth/useSetup'
 import { normalizeRoutePath, safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
-import { requiredPagePermissionForPath } from '~/utils/freight/page-access'
+import { pagePermissionCandidatesForPath } from '~/utils/freight/page-access'
 
 const PERMITTED_LANDING_ROUTES = [
   ['/', 'dashboard.view'],
   ['/service-orders', 'operations.service_orders.view'],
   ['/quotations', 'sales.quotations.view'],
+  ['/service-charges', 'finance.service_charges.view'],
   ['/finance/documents', 'finance.financial_documents.view'],
-  ['/reports', 'operations.reports.view'],
+  ['/reports', 'reports.service_order_register.view'],
   ['/administration/users', 'admin.users.view'],
   ['/administration/system-settings', 'settings.app_config.view'],
 ] as const
@@ -80,11 +81,15 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
   // route guards converge without requiring the user to sign out.
   if (import.meta.client && auth.isLoggedIn) await auth.refreshSession()
 
-  const permission = typeof to.meta.permission === 'string' && to.meta.permission
-    ? to.meta.permission
-    : requiredPagePermissionForPath(routePath)
+  // The route map is authoritative; page meta is only a fallback for screens
+  // outside it. Legacy codes stay accepted while old sessions age out.
+  const pathPermissions = pagePermissionCandidatesForPath(routePath)
+  const metaPermission = typeof to.meta.permission === 'string' && to.meta.permission
+    ? [to.meta.permission]
+    : []
+  const permissions = pathPermissions.length ? pathPermissions : metaPermission
   const canEnforcePermissions = !import.meta.server || sessionHasPermissionData(auth.user)
-  if (canEnforcePermissions && auth.isLoggedIn && permission && !auth.canAccessPage(permission)) {
+  if (canEnforcePermissions && auth.isLoggedIn && permissions.length && !auth.canAccessAnyPage(permissions)) {
     // Keep the current authorized page when denial happens during navigation.
     if (from.matched.length && from.path !== to.path) return abortNavigation()
 

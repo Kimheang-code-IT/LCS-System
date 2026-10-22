@@ -53,7 +53,9 @@
       "chargeTypes": "Charge Types",
       "currencies": "Currencies",
       "businessParties": "Business Parties",
+      "partyRoles": "Party Roles",
       "places": "Places",
+      "placeRoles": "Place Roles",
       "tradeDirections": "Trade Directions",
       "containerTypes": "Container Types",
       "transportTypes": "Transport Types",
@@ -178,7 +180,7 @@
       "currency40": "40GP / 40HC Currency",
       "currency45": "45GP / 45HC Currency",
       "customer": "Company",
-      "customerPartyId": "Company",
+      "customerPartyId": "Business Party",
       "customerAddress": "Customer Address",
       "customsAccount": "Customs Account",
       "customsCost": "Customs Cost",
@@ -1282,7 +1284,7 @@
       "descriptionLabel": "Description",
       "branchCol": "Branch",
       "unitCol": "Unit",
-      "routeRole": "Role",
+      "routeRole": "Place Role",
       "editRouteRow": "Edit Route Stop",
       "routeUpdated": "Route updated",
       "summary": "Summary",
@@ -1360,7 +1362,8 @@
         "sourceQuotationLabel": "Source Quotation",
         "debitNoteNo": "Debit Note No.",
         "createdBy": "Created By"
-      },
+      ,
+  "location": "Location"},
       "targetInvoiceBill": "Target Invoice / Bill",
       "containerNoInUse": "This container number is already used by another service order.",
       "fileRejectedTitle": "Some files were not added",
@@ -1623,6 +1626,7 @@
       "audit": "Recent audit events"
     },
     "fieldHelp": {
+      "allowedPlaceRoles": "Optional. Restricts which Place Roles this location may be used with; leave empty to offer it for every role.",
       "password": "Initial password for the new account. Use 8 to 20 characters.",
       "quotationNo": "Official quotation number. Preview only — the backend allocates the legal number.",
       "jobNo": "Service order / job number used to track this shipment.",
@@ -1853,6 +1857,39 @@
       "route": "Pickup, border, and delivery summary. Calculated from route places.",
       "currency": "Currency for amounts on this record.",
       "accountCodeResolved": "Set by the posting rule for this document type and fee type. Change the rule to change the account."
+    },
+    "componentLayout": {
+      "editLayout": "Group layout",
+      "displayMode": "Display mode",
+      "dataCardinality": "Data cardinality",
+      "formColumns": "Form columns",
+      "showGroupTitle": "Show group title",
+      "editable": "Editable",
+      "collapsible": "Collapsible group",
+      "defaultExpanded": "Default expanded",
+      "readOnly": "Read only",
+      "newRecord": "New record",
+      "editRecord": "Edit record",
+      "updateRecord": "Update record",
+      "savedRecords": "Saved records",
+      "noRecords": "No records yet",
+      "noRecordsHint": "Fill in the form above and add the first record.",
+      "editExistingHint": "This group holds one record. Select it below to edit.",
+      "groupHint": "Layout of {name} in the {tab} tab.",
+      "modes": {
+        "form_only": "Form only",
+        "table_only": "Table only",
+        "form_and_table": "Form and table"
+      },
+      "cardinalities": {
+        "single": "Single record",
+        "multiple": "Multiple records"
+      },
+      "modeHints": {
+        "form_only": "Fields only, one record. No records table is shown.",
+        "table_only": "Editable table with inline cells. No separate input form.",
+        "form_and_table": "An entry form above a saved-records table."
+      }
     },
     "configVersions": {
       "title": "Service Order configuration",
@@ -2976,10 +3013,34 @@
       "level": "Level",
       "creatorOnly": "Creator only",
       "toggleRow": "Toggle all permissions for {entity}",
+      "toggleAction": "Toggle {action} for visible pages",
+      "applyAction": "Apply action to visible pages",
+      "searchPlaceholder": "Search pages and permissions",
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all",
+      "reset": "Reset",
+      "noMatching": "No matching permissions.",
+      "unsavedWarning": "You have unsaved permission changes. Leave without saving?",
       "dependencyHint": "View is required for every other action. Removing View clears dependent actions.",
+      "groups": {
+        "dashboard": "Dashboard",
+        "sales": "Sales",
+        "operations": "Operations",
+        "finance": "Finance",
+        "reports": "Reports",
+        "master": "Master data",
+        "configuration": "Configuration",
+        "admin": "Administration",
+        "settings": "Settings"
+      },
       "actions": {
         "view": "View",
         "edit": "Edit",
+        "update": "Update",
+        "submit": "Submit",
+        "summary": "Summary",
+        "quotation": "Send quotation",
+        "re_quotation": "Re-quote",
         "archive": "Archive",
         "restore": "Restore",
         "assign": "Assign",
@@ -3332,8 +3393,8 @@
     "keywords": "freight forwarding, customs, jobs, debit notes, LCS"
   },
   "validation": {
-    "summaryTitle": "Please correct the highlighted fields",
-    "summaryCount": "{count} issue(s) to fix",
+
+
     "formError": "Please correct the highlighted fields.",
     "required": "{field} is required.",
     "requiredGeneric": "This field is required.",
@@ -3353,6 +3414,11 @@
     "minGeneric": "Enter a value of at least {min}.",
     "max": "{field} must be less than or equal to {max}.",
     "maxGeneric": "Enter a value of at most {max}.",
+    "positive": "{field} must be greater than zero.",
+    "positiveGeneric": "Enter a value greater than zero.",
+    "decimalPlaces": "{field} must use at most {decimals} decimal places.",
+    "decimalPlacesGeneric": "Use at most {decimals} decimal places.",
+    "dateOrder": "{field} must be on or after {other}.",
     "minLength": "{field} must be at least {min} characters.",
     "minLengthGeneric": "Enter at least {min} characters.",
     "maxLength": "{field} must be at most {max} characters.",
@@ -3368,7 +3434,8 @@
     "passwordMismatch": "The two passwords do not match.",
     "commonPassword": "That password is too easy to guess. Choose another.",
     "commonPasswordGeneric": "That password is too easy to guess. Choose another."
-  },
+  ,
+  "duplicateAssetCode": "Asset code {code} is already in use."},
   "fields": {
     "feeTypeId": "Fee Type",
     "priority": "Priority",

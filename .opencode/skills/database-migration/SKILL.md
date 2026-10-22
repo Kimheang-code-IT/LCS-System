@@ -26,10 +26,10 @@ documents must survive every migration.
 
 | Document | Use it for |
 |---|---|
-| `docs/06b_database_design_annotated.sql` | Generated DDL plus a description of every table and column |
+| `docs/06_database_design.sql` | Generated DDL plus a description of every table and column |
 | `backend/scripts/schema_descriptions.py` | The prose behind that file; must be extended with every new table/column |
-| `docs/15_migration_and_rollback_guide.md` | Apply/verify/roll back procedure and the supported rollback boundary |
-| `docs/14_47_table_migration_analysis.md` | Why the schema is 63 tables and not the proposed 47 |
+| `docs/11_deployment_and_security.md` §8, §12 | Apply/verify/roll back procedure and the supported rollback boundary |
+| `docs/05_solution_architecture.md` §13 | Current table count, migration head and consistency rules |
 | `AGENTS.md` §Backend | `alembic/env.py` import list, `reset_all_data`, ruff settings |
 
 ## Non-negotiable rules
@@ -64,7 +64,7 @@ documents must survive every migration.
    control totals; run it before and after and diff the two outputs.
 2. **Back up first.** `pg_dump -Fc`, then restore the dump into a scratch database
    and confirm the revision and row counts. A backup you have never restored is
-   not a backup. See `docs/15` §5.
+   not a backup. See `docs/11_deployment_and_security.md` §11-§12.
 3. **Write the revision** in `backend/alembic/versions/`, chained from the current
    head (`uv run python -m alembic heads`), with a real `downgrade()`.
    - Use `IF EXISTS` in `downgrade()` (`DROP INDEX IF EXISTS`, `ALTER TABLE … DROP
@@ -76,14 +76,13 @@ documents must survive every migration.
 4. **Backfill idempotently.** Insert only what is missing; re-running must not
    duplicate. Never rewrite a value a user or a posting produced.
 5. **Register every new model module** in `backend/alembic/env.py`,
-   `backend/scripts/generate_schema_docs.py`, `backend/scripts/generate_schema_dump.py`,
-   and (if it holds resettable config) `reset_all_data` in `app/core/bootstrap.py`.
-6. **Regenerate both schema documents** and extend the description catalogue:
+   `backend/scripts/generate_schema_docs.py`, and (if it holds resettable config)
+   `reset_all_data` in `app/core/bootstrap.py`.
+6. **Regenerate the schema document** and extend the description catalogue:
 
    ```bash
    cd backend
-   uv run python scripts/generate_schema_docs.py   # docs/06b
-   uv run python scripts/generate_schema_dump.py   # docs/06
+   uv run python scripts/generate_schema_docs.py   # docs/06_database_design.sql
    uv run python scripts/generate_schema_docs.py --check --strict
    ```
 
@@ -138,14 +137,14 @@ documents must survive every migration.
 - Row counts and financial control totals are unchanged except for the tables the
   migration is meant to populate, and every difference is explained.
 - No unvalidated foreign keys; the ledger still nets to zero.
-- Both schema documents are regenerated and pass `--check --strict`.
+- `docs/06_database_design.sql` is regenerated and passes `--check --strict`.
 - The revision is additive, or the destructive part was explicitly approved.
-- `docs/15_migration_and_rollback_guide.md` is updated if the procedure changed.
+- `docs/11_deployment_and_security.md` is updated if the procedure changed.
 
 ## Expected outputs
 
 - One or more `backend/alembic/versions/<rev>_<slug>.py` revisions with `downgrade()`.
 - Updated models, the `env.py`/generator import lists, and `schema_descriptions.py`.
-- Regenerated `docs/06_database_design.sql` and `docs/06b_database_design_annotated.sql`.
-- An updated verification table in `docs/15`.
-- A migration or data-loss risk entry in `docs/17` when anything is irreversible.
+- Regenerated `docs/06_database_design.sql`.
+- An updated verification table in `docs/11_deployment_and_security.md` §8.
+- A migration or data-loss risk entry in `docs/11_deployment_and_security.md` §18 when anything is irreversible.

@@ -4,10 +4,14 @@ import type {
   ComponentGroup,
   ComponentGroupAttribute,
   ComponentGroupInput,
+  ComponentGroupLayoutInput,
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabInput,
   ConfigurationVersion,
+  ConfigurationVersionActivationEvent,
+  ConfigurationVersionComparison,
+  ConfigurationVersionListParams,
   ConfigurationVersionPreview,
 } from '~/types/component-config'
 import type { ComponentGroupAttributeInput } from '~/repositories/contracts/component-config'
@@ -175,10 +179,18 @@ export function useComponentConfig() {
     return run(async () => { tabGroups.value = await componentConfig.listTabGroups(tabId) })
   }
 
-  async function addTabGroup(tabId: string, groupId: string) {
+  async function addTabGroup(tabId: string, groupId: string, layout?: ComponentGroupLayoutInput) {
     return withSaving(async () => {
-      await componentConfig.addTabGroup(tabId, { groupId })
+      await componentConfig.addTabGroup(tabId, { groupId, ...layout })
       tabGroups.value = await componentConfig.listTabGroups(tabId)
+    })
+  }
+
+  async function updateTabGroup(tabGroupId: string, input: ComponentGroupLayoutInput) {
+    return withSaving(async () => {
+      const updated = await componentConfig.updateTabGroup(tabGroupId, input)
+      tabGroups.value = tabGroups.value.map(item => (item.tabGroupId === tabGroupId ? updated : item))
+      return updated
     })
   }
 
@@ -197,14 +209,63 @@ export function useComponentConfig() {
   // Editing a tab changes the live form; publishing freezes the result so the
   // orders already captured under the old layout keep rendering unchanged.
   const versions = ref<ConfigurationVersion[]>([])
+  const versionsMeta = ref({ page: 1, page_size: 20, total: 0 })
+  const activeVersion = ref<ConfigurationVersion | null>(null)
   const preview = ref<ConfigurationVersionPreview | null>(null)
 
-  async function loadConfigurationVersions() {
-    return run(async () => { versions.value = await componentConfig.listConfigurationVersions() })
+  async function loadConfigurationVersions(params: ConfigurationVersionListParams = {}) {
+    return run(async () => {
+      const page = await componentConfig.listConfigurationVersions(params)
+      versions.value = page.items
+      versionsMeta.value = page.meta
+      return page
+    })
+  }
+
+  async function fetchConfigurationVersionOptions() {
+    return run(async () => componentConfig.listConfigurationVersions({ page: 1, pageSize: 200 }))
+  }
+
+  async function loadActiveConfigurationVersion() {
+    return run(async () => { activeVersion.value = await componentConfig.activeConfigurationVersion() })
+  }
+
+  async function loadConfigurationVersion(id: string) {
+    return run(async () => componentConfig.getConfigurationVersion(id))
+  }
+
+  async function updateConfigurationVersion(id: string, changeNote: string) {
+    return withSaving(async () => {
+      const updated = await componentConfig.updateConfigurationVersion(id, { changeNote })
+      versions.value = versions.value.map(item => (item.id === id ? updated : item))
+      return updated
+    })
+  }
+
+  async function deleteConfigurationVersion(id: string) {
+    return withSaving(async () => {
+      const result = await componentConfig.deleteConfigurationVersion(id)
+      versions.value = versions.value.filter(item => item.id !== id)
+      return result
+    })
   }
 
   async function loadConfigurationPreview() {
     return run(async () => { preview.value = await componentConfig.previewConfigurationVersion() })
+  }
+
+  async function previewConfigurationVersion(id: string) {
+    return run(async () => componentConfig.previewConfigurationVersionById(id))
+  }
+
+  async function compareConfigurationVersions(id: string, otherId: string): Promise<ConfigurationVersionComparison> {
+    return run(async () => componentConfig.compareConfigurationVersions(id, otherId))
+  }
+
+  async function loadConfigurationActivationHistory(
+    params: ConfigurationVersionListParams & { versionId?: string } = {},
+  ): Promise<{ items: ConfigurationVersionActivationEvent[], meta: { page: number, page_size: number, total: number } }> {
+    return run(async () => componentConfig.configurationActivationHistory(params))
   }
 
   async function publishConfiguration(changeNote?: string) {
@@ -213,8 +274,31 @@ export function useComponentConfig() {
       versions.value = [published, ...versions.value.map(version => (
         version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
       ))]
-      await loadConfigurationPreview()
+      await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
       return published
+    })
+  }
+
+  async function activateConfiguration(id: string) {
+    return withSaving(async () => {
+      const activated = await componentConfig.activateConfigurationVersion(id)
+      versions.value = versions.value.map(version => {
+        if (version.id === id) return activated
+        return version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
+      })
+      await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
+      return activated
+    })
+  }
+
+  async function rollbackConfiguration(id: string, reason: string) {
+    return withSaving(async () => {
+      const rolled = await componentConfig.rollbackConfigurationVersion(id, reason)
+      versions.value = [rolled, ...versions.value.map(version => (
+        version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
+      ))]
+      await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
+      return rolled
     })
   }
 
@@ -233,6 +317,8 @@ export function useComponentConfig() {
     tabs,
     tabGroups,
     versions,
+    versionsMeta,
+    activeVersion,
     preview,
     loading,
     saving,
@@ -256,11 +342,22 @@ export function useComponentConfig() {
     deleteTab,
     loadTabGroups,
     addTabGroup,
+    updateTabGroup,
     removeTabGroup,
     reorderTabGroups,
     loadConfigurationVersions,
+    fetchConfigurationVersionOptions,
+    loadActiveConfigurationVersion,
+    loadConfigurationVersion,
+    updateConfigurationVersion,
+    deleteConfigurationVersion,
     loadConfigurationPreview,
+    previewConfigurationVersion,
+    compareConfigurationVersions,
+    loadConfigurationActivationHistory,
     publishConfiguration,
+    activateConfiguration,
+    rollbackConfiguration,
     retireConfiguration,
   }
 }

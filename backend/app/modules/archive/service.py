@@ -37,7 +37,8 @@ def _registry() -> dict[str, ArchiveAdapter]:
         ContainerType,
         Currency,
         FeeType,
-        Place,
+        PartyRole,
+        PlaceRole,
         TradeDirection,
         TransportAsset,
         TransportType,
@@ -45,7 +46,8 @@ def _registry() -> dict[str, ArchiveAdapter]:
 
     adapters = (
         ArchiveAdapter("businessParties", BusinessParty, "legal_name", "Business Party"),
-        ArchiveAdapter("places", Place, "name", "Place"),
+        ArchiveAdapter("placeRoles", PlaceRole, "name", "Place Role"),
+        ArchiveAdapter("partyRoles", PartyRole, "name", "Party Role"),
         ArchiveAdapter("tradeDirections", TradeDirection, "name", "Trade Direction"),
         ArchiveAdapter("containerTypes", ContainerType, "name", "Container Type"),
         ArchiveAdapter("transportTypes", TransportType, "name", "Transport Type"),

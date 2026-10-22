@@ -22,6 +22,8 @@ export type ValidationCode =
   | 'date'
   | 'min'
   | 'max'
+  | 'positive'
+  | 'decimalPlaces'
   | 'minLength'
   | 'maxLength'
   | 'pattern'
@@ -47,11 +49,19 @@ export type FieldRule = {
   pattern?: string
   email?: boolean
   url?: boolean
+  /** Phone / telephone format (digits, spaces and the usual separators). */
+  phone?: boolean
   /** Value must parse as a finite number (any number column). */
   number?: boolean
   integer?: boolean
   date?: boolean
   nonNegative?: boolean
+  /** Strictly greater than zero (quantities, exchange rates, allocations). */
+  positive?: boolean
+  /** Maximum digits after the decimal separator (money precision). */
+  decimalPlaces?: number
+  /** Apply the shared password policy (length + common-password refusal). */
+  password?: boolean
   /** Closed set of acceptable values (select columns, configured options). */
   allowed?: Array<string | number>
   /** Cross-field rules resolved by the caller (e.g. double-entry balance). */
@@ -70,6 +80,13 @@ export type ValidationFailure = ValidationIssue & {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 const URL_PATTERN = /^(https?:\/\/)[^\s.]+\.[^\s]{2,}$/i
+/**
+ * A telephone number is written by hand, so the separators a person naturally
+ * types are allowed; what is refused is anything with letters or stray symbols.
+ * At least 6 and at most 15 digits covers national, international (+855…) and
+ * extension forms alike.
+ */
+const PHONE_PATTERN = /^\+?[\d(][\d\s().-]{4,20}$/
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/
 
 /**
@@ -163,14 +180,36 @@ export function validateFieldValue(value: unknown, rule: FieldRule = {}): Valida
     return rule.required ? { code: 'required' } : null
   }
 
-  if (rule.nonNegative) {
+  if (rule.password && typeof value === 'string') {
+    const issue = validatePasswordStrength(value)
+    if (issue) return issue
+  }
+
+  if (rule.nonNegative || rule.positive) {
     const number = toFiniteNumber(value)
     if (number === null) return { code: 'number' }
-    if (number < 0) return { code: 'min', params: { min: 0 } }
+    if (rule.nonNegative && number < 0) return { code: 'min', params: { min: 0 } }
+    if (rule.positive && number <= 0) return { code: 'positive' }
+  }
+
+  if (rule.decimalPlaces !== undefined) {
+    const text = String(value).trim()
+    const fraction = text.includes('.') ? text.split('.')[1]!.replace(/0+$/, '') : ''
+    if (fraction.length > rule.decimalPlaces) {
+      return { code: 'decimalPlaces', params: { decimals: rule.decimalPlaces } }
+    }
   }
 
   if (rule.email && typeof value === 'string' && !EMAIL_PATTERN.test(value.trim())) {
     return { code: 'email' }
+  }
+
+  if (rule.phone && typeof value === 'string') {
+    const digits = value.replace(/\D/g, '')
+    // Letters, or too few / too many digits, are the two ways a number is wrong.
+    if (!PHONE_PATTERN.test(value.trim()) || digits.length < 6 || digits.length > 15) {
+      return { code: 'pattern' }
+    }
   }
 
   if (rule.url && typeof value === 'string' && !URL_PATTERN.test(value.trim())) {
@@ -229,7 +268,7 @@ function safeTest(pattern: string, text: string): boolean {
 export function issueFromBackendMessage(raw: string): ValidationIssue | null {
   const text = String(raw ?? '')
   if (!text) return null
-  if (/field required/i.test(text)) return { code: 'required' }
+  if (/field (?:is )?required/i.test(text)) return { code: 'required' }
   if (/valid email/i.test(text)) return { code: 'email' }
   if (/valid (?:url|uri)/i.test(text)) return { code: 'url' }
   if (/valid integer/i.test(text)) return { code: 'integer' }
@@ -245,8 +284,12 @@ export function issueFromBackendMessage(raw: string): ValidationIssue | null {
   const max = text.match(/less than or equal to (-?[\d.]+)/i)
   if (max) return { code: 'max', params: { max: Number(max[1]) } }
   if (/match(?:es)? (?:the )?pattern/i.test(text)) return { code: 'pattern' }
-  if (/valid (?:enumeration|choice)|not a valid enumeration member|input should be '/i.test(text)) {
+  if (/valid (?:enumeration|choice)|not a valid enumeration member|input should be '|choose one of the available options/i.test(text)) {
     return { code: 'allowed' }
   }
+  const decimals = text.match(/at most (\d+) decimal places?/i)
+  if (decimals) return { code: 'decimalPlaces', params: { decimals: Number(decimals[1]) } }
+  if (/greater than zero|must be positive/i.test(text)) return { code: 'positive' }
+  if (/valid phone|phone number/i.test(text)) return { code: 'pattern' }
   return null
 }

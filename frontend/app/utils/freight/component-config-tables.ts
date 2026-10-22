@@ -21,8 +21,13 @@ import { COMPONENT_DATA_TYPES } from '~/types/component-config'
 
 export type ComponentConfigRow = Record<string, unknown>
 
-/** Types not usable when creating an attribute (no options/reference editing). */
-const ATTRIBUTE_EXCLUDED_DATA_TYPES = new Set(['reference', 'select', 'multi_select', 'checkbox', 'boolean'])
+/**
+ * Types a lone attribute row cannot configure yet. `reference` needs a
+ * reference type (the grid has no column for it), so offering it would create
+ * an attribute the backend rejects. Every other backend type is rendered by
+ * the dynamic form and may be selected here.
+ */
+const ATTRIBUTE_EXCLUDED_DATA_TYPES = new Set(['reference'])
 const ATTRIBUTE_DATA_TYPES = COMPONENT_DATA_TYPES.filter(value => !ATTRIBUTE_EXCLUDED_DATA_TYPES.has(value))
 
 export function componentDataTypeItems() {
@@ -77,11 +82,31 @@ export function componentAttributePayload(row: ComponentConfigRow, fallbackCode:
 
 export function componentAttributeColumns(): FreightLineColumn[] {
   return [
-    { key: 'label', label: 'Label', labelKm: 'ស្លាកសញ្ញា', type: 'text', required: true },
-    { key: 'dataType', label: 'Type', labelKm: 'ប្រភេទ', type: 'select', options: ATTRIBUTE_DATA_TYPES.map(value => value.replace(/_/g, ' ')) },
+    {
+      key: 'label',
+      label: 'Label',
+      labelKm: 'ស្លាកសញ្ញា',
+      type: 'text',
+      required: true,
+      rule: { required: true, maxLength: 255 },
+    },
+    {
+      key: 'dataType',
+      label: 'Data Type',
+      labelKm: 'ប្រភេទ',
+      type: 'select',
+      required: true,
+      options: ATTRIBUTE_DATA_TYPES.map(value => value.replace(/_/g, ' ')),
+      rule: { required: true },
+    },
     { key: 'isRequired', label: 'Required', labelKm: 'ត្រូវសម្រាប់', type: 'checkbox' },
-    { key: 'helpText', label: 'Help text', labelKm: 'អត្ថបទជំនួយ', type: 'text' },
-    { key: '_delete', label: '', type: 'delete' },
+    {
+      key: 'helpText',
+      label: 'Help Text',
+      labelKm: 'អត្ថបទជំនួយ',
+      type: 'text',
+      rule: { maxLength: 255 },
+    },
   ]
 }
 

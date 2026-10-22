@@ -42,6 +42,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [unknown]
+  /** The user left the control; the host validates this field then. */
+  'blur': []
 }>()
 
 const { t, te } = useI18n()
@@ -861,6 +863,7 @@ function removeDestination(id: string) {
           size="md"
           class="w-full"
           :class="field.key === 'telegram.messageTemplate' ? 'font-mono text-sm' : ''"
+          @blur="emit('blur')"
         />
         <UInputNumber
           v-else-if="field.type === 'number'"
@@ -868,8 +871,10 @@ function removeDestination(id: string) {
           :disabled="disabled || field.readOnly"
           :increment="false"
           :decrement="false"
+          :step-snapping="false"
           size="md"
           class="w-full"
+          @blur="emit('blur')"
         />
         <CommonAppInputDate
           v-else-if="field.type === 'date'"
@@ -878,6 +883,7 @@ function removeDestination(id: string) {
           :required="field.required"
           size="md"
           class="w-full"
+          @blur="emit('blur')"
         />
         <CommonAppInputDate
           v-else-if="field.type === 'datetime'"
@@ -887,6 +893,7 @@ function removeDestination(id: string) {
           :required="field.required"
           size="md"
           class="w-full"
+          @blur="emit('blur')"
         />
         <UInputMenu
           v-else-if="field.type === 'select' && field.optionsEndpoint"
@@ -899,6 +906,7 @@ function removeDestination(id: string) {
           size="md"
           class="w-full"
           @update:search-term="searchRemoteOptions"
+          @blur="emit('blur')"
         />
         <CommonAppReferenceSelect
           v-else-if="field.type === 'select'"
@@ -910,6 +918,7 @@ function removeDestination(id: string) {
           size="md"
           class="w-full"
           @update:model-value="selectValue = String($event ?? '')"
+          @blur="emit('blur')"
         />
         <CommonAppMentionMultiInput
           v-else-if="field.type === 'multiselect'"
@@ -919,6 +928,7 @@ function removeDestination(id: string) {
           :disabled="disabled || field.readOnly"
           :loading="optionsPending"
           @search="searchRemoteOptions"
+          @blur="emit('blur')"
         />
         <UInput
           v-else-if="field.type === 'csv-list'"
@@ -927,6 +937,7 @@ function removeDestination(id: string) {
           :disabled="disabled || field.readOnly"
           size="md"
           class="w-full"
+          @blur="emit('blur')"
         />
         <UInput
           v-else-if="isFile"
@@ -935,6 +946,7 @@ function removeDestination(id: string) {
           size="md"
           class="w-full"
           @change="onFileChange"
+          @blur="emit('blur')"
         />
         <UInput
           v-else
@@ -944,6 +956,7 @@ function removeDestination(id: string) {
           :disabled="disabled || field.readOnly"
           size="md"
           class="w-full"
+          @blur="emit('blur')"
         />
       </div>
 

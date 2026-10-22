@@ -1,83 +1,101 @@
 import { describe, expect, it } from 'vitest'
-import { PLACE_ROLES } from '../app/config/freight-options'
+import { QUOTATION_ROUTE_TABLE } from '../app/config/route-stop-table'
 import { JOB_ROUTE_TABLE } from '../app/config/job-workspace-forms'
 import { jobFieldsFromPlaces, jobRoutePlaces } from '../app/utils/freight/job-workspace'
 import { referenceOptionSource } from '../app/utils/freight/reference-options'
 
 describe('job route places', () => {
-  it('starts a new order with no rows so the Route table is not pre-filled with blank stops', () => {
-    // `emptyFreightRecord` pre-fills every date field with today, so an
-    // unsaved order must not derive stops from them.
+  it('does not invent stops when the order has no saved route', () => {
+    // Route stops are now rows (service_order_places), not four hardcoded header
+    // keys. An order without rows must show an empty table.
     expect(jobRoutePlaces({ id: '', shipmentDate: '2026-10-01', etaPort: '2026-10-01' })).toEqual([])
+    expect(jobRoutePlaces({ id: 'job-001', pickup: 'Cat Lai' })).toEqual([])
   })
 
-  it('fills place and date from header fields when places are not stored', () => {
-    const rows = jobRoutePlaces({
+  it('normalises stored rows, keeping the role id and free-text location', () => {
+    expect(jobRoutePlaces({
       id: 'job-001',
-      pickup: 'Cat Lai',
-      port: 'Cat Lai',
-      border: 'Moc Bai / Bavet',
-      destination: 'Manhattan SEZ',
-      shipmentDate: '2026-08-19',
-      etaPort: '2026-08-20',
-      etaBorder: '2026-08-20',
-      deliveryDate: '2026-08-21',
-    })
-    expect(rows).toEqual([
-      { sequence: 1, placeRole: 'Pickup', place: 'Cat Lai', planned: '2026-08-19', actual: '', notes: '' },
-      { sequence: 2, placeRole: 'Port of Loading', place: 'Cat Lai', planned: '2026-08-20', actual: '', notes: '' },
-      { sequence: 3, placeRole: 'Transit / Border', place: 'Moc Bai / Bavet', planned: '2026-08-20', actual: '', notes: '' },
-      { sequence: 4, placeRole: 'Destination', place: 'Manhattan SEZ', planned: '2026-08-21', actual: '', notes: '' },
+      places: [{
+        id: '17',
+        sequence: 2,
+        placeRoleId: '4',
+        placeRole: 'Pickup',
+        place: 'Cai Mep',
+        planned: '2026-08-16T08:30',
+        actual: '2026-08-16T09:10',
+        notes: 'Gate 2',
+      }],
+    })).toEqual([
+      {
+        id: '17',
+        sequence: 2,
+        placeRoleId: '4',
+        placeRole: 'Pickup',
+        place: 'Cai Mep',
+        planned: '2026-08-16T08:30',
+        actual: '2026-08-16T09:10',
+        notes: 'Gate 2',
+      },
     ])
   })
 
-  it('keeps planned dates on orders saved before Planned and Actual were split', () => {
+  it('keeps the legacy single planned column readable', () => {
     expect(jobRoutePlaces({
       id: 'job-001',
       places: [{ placeRole: 'Pickup', place: 'Cai Mep', plannedActual: '2026-08-16', notes: 'Gate 2' }],
     })).toEqual([
-      { sequence: 1, placeRole: 'Pickup', place: 'Cai Mep', planned: '2026-08-16', actual: '', notes: 'Gate 2' },
+      {
+        id: '',
+        sequence: 1,
+        placeRoleId: '',
+        placeRole: 'Pickup',
+        place: 'Cai Mep',
+        planned: '2026-08-16',
+        actual: '',
+        notes: 'Gate 2',
+      },
     ])
   })
 
-  it('writes header pickup and dates back from the table', () => {
+  it('writes only the route collection back, without hardcoded header mirrors', () => {
     const patch = jobFieldsFromPlaces([
-      { placeRole: 'Pickup', place: 'Cai Mep', planned: '2026-08-16', actual: '2026-08-17', notes: 'Gate 2' },
-      { placeRole: 'Destination', place: 'PPSEZ', planned: '2026-08-18', actual: '', notes: '' },
+      { placeRoleId: '4', place: 'Cai Mep', planned: '2026-08-16', actual: '2026-08-17', notes: 'Gate 2' },
     ])
-    expect(patch.pickup).toBe('Cai Mep')
-    expect(patch.shipmentDate).toBe('2026-08-16')
-    expect(patch.destination).toBe('PPSEZ')
-    expect(patch.deliveryDate).toBe('2026-08-18')
-    expect((patch.places as Array<Record<string, unknown>>)[0].notes).toBe('Gate 2')
-    expect((patch.places as Array<Record<string, unknown>>)[0].actual).toBe('2026-08-17')
+    expect(Object.keys(patch)).toEqual(['places'])
+    const rows = patch.places as Array<Record<string, unknown>>
+    expect(rows[0]).toMatchObject({ placeRoleId: '4', place: 'Cai Mep', notes: 'Gate 2', actual: '2026-08-17' })
   })
 
-  it('splits the stop into Role / Place / Planned / Actual / Note plus a delete icon', () => {
+  it('uses the shared table definition with role, location, actual time, notes, reorder and delete', () => {
     expect(JOB_ROUTE_TABLE.columns.map(column => ({ key: column.key, type: column.type }))).toEqual([
-      { key: 'placeRole', type: 'select' },
+      { key: 'placeRoleId', type: 'select' },
       { key: 'place', type: 'text' },
-      { key: 'planned', type: 'date' },
-      { key: 'actual', type: 'date' },
-      // Icon-only cell: opens the shared row-note dialog with a textarea.
+      { key: 'planned', type: 'datetime' },
+      { key: 'actual', type: 'datetime' },
       { key: 'notes', type: 'note' },
-      { key: '_delete', type: 'delete' },
+      { key: '_order', type: 'reorder' },
+      { key: 'trust', type: 'delete' },
+    ])
+    // The quotation and the service order share exactly these selection rules;
+    // only the actual-time column differs.
+    expect(QUOTATION_ROUTE_TABLE.columns.map(column => column.key)).toEqual([
+      'placeRoleId',
+      'place',
+      'planned',
+      'notes',
+      '_order',
+      'trust',
     ])
   })
 
-  it('offers every stop role as a select option so the Role cell is never blank', () => {
-    const roleColumn = JOB_ROUTE_TABLE.columns.find(column => column.key === 'placeRole')
-    expect(roleColumn?.type).toBe('select')
-    expect([...(roleColumn?.options || [])]).toEqual([...PLACE_ROLES])
-
-    // A master-data source would override `options` and render place names (or
-    // nothing when Places is empty) instead of route roles.
+  it('populates the role cell from the live master', () => {
+    expect(referenceOptionSource('placeRoleId')).toMatchObject({
+      collection: 'placeRoles',
+      valueField: 'id',
+      labelField: 'name',
+      statuses: ['ACTIVE'],
+    })
+    expect(referenceOptionSource('placeId')).toBeUndefined()
     expect(referenceOptionSource('placeRole')).toBeUndefined()
-  })
-
-  it('keeps the role options aligned with the stops written back to the header', () => {
-    for (const role of PLACE_ROLES) {
-      expect(jobRoutePlaces({ id: 'job-001' })).toContainEqual(expect.objectContaining({ placeRole: role }))
-    }
   })
 })

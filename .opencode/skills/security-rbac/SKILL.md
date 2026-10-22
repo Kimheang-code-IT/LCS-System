@@ -27,8 +27,8 @@ protect anything.
 
 | Document | Use it for |
 |---|---|
-| `docs/11_permissions_matrix.md` | The catalog, page mapping, and role composition |
-| `docs/13_security_hardening_runbook.md` | Controls that must stay enforced |
+| `docs/09_roles_and_permissions.md` | The catalog, page mapping, role composition, and enforcement |
+| `docs/11_deployment_and_security.md` §16-§17 | Controls that must stay enforced |
 | `AGENTS.md` §Backend | Auth model, cookie/token transport |
 | `backend/app/core/permissions.py` | The code-owned catalog and role definitions |
 | `backend/app/modules/auth/service.py` | `PAGE_KEYS_BY_SOURCE`, lockout policy, admin guards |
@@ -63,7 +63,7 @@ protect anything.
      `auth/service.py::PAGE_KEYS_BY_SOURCE`, or
      `tests/test_role_permissions.py::test_every_source_permission_has_a_page_key_for_legacy_roles`
      fails;
-   - a row in `docs/11_permissions_matrix.md`.
+   - a row in `docs/09_roles_and_permissions.md`.
 2. **Protect the endpoint** with
    `Depends(require_permission("code"))`. That dependency writes an
    `AUTHORIZATION_DENIED` audit event before raising, which is what makes denials
@@ -134,6 +134,6 @@ authenticated request.
 ## Expected outputs
 
 - Changed `permissions.py`, `auth/service.py`, and/or the module router.
-- A row in `docs/11_permissions_matrix.md`.
+- A row in `docs/09_roles_and_permissions.md`.
 - Authorization tests including the denial path.
-- A security finding recorded in `docs/17` if a gap cannot be closed now.
+- A security finding recorded in `docs/11_deployment_and_security.md` §18 if a gap cannot be closed now.

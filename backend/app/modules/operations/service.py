@@ -22,6 +22,10 @@ from app.core.serialization import jsonable
 from app.core.storage import get_storage
 from app.modules.master_data import config_versions
 from app.modules.master_data.models import BusinessParty
+from app.modules.master_data.route_stops import (
+    route_stop_payloads,
+    save_route_stops,
+)
 from app.modules.operations.models import (
     Attachment,
     AttachmentLink,
@@ -37,11 +41,23 @@ from app.modules.operations.models import (
     ServiceOrderPricingLine,
 )
 from app.modules.operations.repository import OperationsRepository
+from app.modules.operations.schemas import (
+    CHARGE_DOCUMENT_TYPES,
+    CHARGE_LINE_SCHEMA,
+    CHARGE_WRITE_SCHEMA,
+    CONTAINER_WRITE_SCHEMA,
+    MILESTONE_STATUSES,
+    MILESTONE_WRITE_SCHEMA,
+    MOVEMENT_STATUSES,
+    MOVEMENT_WRITE_SCHEMA,
+    SERVICE_ORDER_WRITE_SCHEMA,
+)
 from app.modules.quotations.models import (
     Quotation,
     QuotationRevision,
     QuotationRevisionContainer,
     QuotationRevisionLine,
+    QuotationRevisionPlace,
 )
 from app.modules.settings.service import get_default_currency
 
@@ -122,18 +138,32 @@ async def list_service_orders(session: AsyncSession, context: RequestContext, pa
     return paged([order_record(row, row.data or {}) for row in rows], page, total)
 
 
+async def order_route_payloads(session: AsyncSession, order_id: int) -> list[dict[str, Any]]:
+    """The saved route stops of a service order, ordered by sequence."""
+    rows = list(
+        (
+            await session.execute(
+                select(ServiceOrderPlace)
+                .where(ServiceOrderPlace.service_order_id == order_id)
+                .order_by(ServiceOrderPlace.sequence_no, ServiceOrderPlace.id)
+            )
+        ).scalars().all()
+    )
+    return await route_stop_payloads(session, rows)
+
+
 async def get_service_order(session: AsyncSession, context: RequestContext, identifier: str) -> dict:
     order = await resolve_order(session, context, identifier)
     containers, requirements = await OperationsRepository(session).order_containers(order.id)
-    return order_record(
-        order,
-        order.data or {},
-        {
-            "containers": [_container_payload(c) for c in containers],
-            "containerRequirements": [_requirement_payload(r) for r in requirements],
-            "components": [],
-        },
-    )
+    route = await order_route_payloads(session, order.id)
+    extra: dict[str, Any] = {
+        "containers": [_container_payload(c) for c in containers],
+        "containerRequirements": [_requirement_payload(r) for r in requirements],
+        "components": [],
+    }
+    if route:
+        extra["places"] = route
+    return order_record(order, order.data or {}, extra)
 
 
 async def _resolve_party(session: AsyncSession, name: str | None, context: RequestContext) -> BusinessParty:
@@ -144,9 +174,34 @@ async def _resolve_party(session: AsyncSession, name: str | None, context: Reque
 
 async def save_service_order(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
     default_currency = await get_default_currency(session)
+    from app.modules.master_data.currency_rates import assert_currency_code
     from app.modules.quotations.service import resolve_direction
 
+    # A currency is a reference to an active master record, not free text: an
+    # archived or malformed code must be refused where the operator can see it.
+    if data.get("currency") not in (None, ""):
+        data["currency"] = await assert_currency_code(session, data["currency"], "currency")
+
+    date_errors = {
+        key: "Enter a valid date."
+        for key in ("date", "validUntil", "pickupDate", "deliveryDate")
+        if data.get(key) not in (None, "") and _date(data.get(key)) is None
+    }
+    if date_errors:
+        raise ValidationFailed("Please correct the service order dates.", date_errors)
+    starts_on = _date(data.get("date"))
+    valid_until = _date(data.get("validUntil"))
+    if starts_on and valid_until and valid_until < starts_on:
+        raise ValidationFailed(
+            "The valid-until date cannot precede the order date.",
+            {"validUntil": "Cannot be before the order date."},
+        )
+
     identifier = data.get("id") or data.get("serviceOrderId") or data.get("jobNo")
+    # Types, lengths and dates first; a partial save only checks the keys it was
+    # sent, so an untouched required field is never re-required. The dynamic
+    # fields of the Service Order form are intentionally preserved.
+    data = SERVICE_ORDER_WRITE_SCHEMA.validate(data, partial=bool(identifier))
     order: ServiceOrder | None = None
     if identifier:
         try:
@@ -182,6 +237,18 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
             order.trade_direction_id = (await resolve_direction(session, data.get("direction"))).id
         order.status = normalize_order_status(data.get("status"), order.status)
         order.currency_code = data.get("currency") or order.currency_code
+
+    if "places" in data:
+        # Route stops are their own collection, not arbitrary header JSON: this
+        # keeps them queryable and lets the quotation conversion copy them. Row
+        # ids are preserved, so an existing row keeps an inactive reference.
+        data["places"] = await save_route_stops(
+            session,
+            model=ServiceOrderPlace,
+            parent_field="service_order_id",
+            parent_id=order.id,
+            rows=data.get("places"),
+        )
 
     payload = {key: value for key, value in data.items() if key not in {"id", "createdAt", "updatedAt"}}
     # Merge so a partial update does not discard previously stored fields.
@@ -313,10 +380,52 @@ async def create_service_order_from_quotation(
     # so a later publish cannot re-interpret its dynamic component rows.
     await config_versions.stamp_service_order(session, order)
 
-    for role in ("pickup", "border", "delivery"):
-        value = data.get(role)
-        if value:
-            session.add(ServiceOrderPlace(service_order_id=order.id, place_role=role.upper(), free_text=str(value), sequence_no=1))
+    # Copy the quotation's route stops into the order's own rows. They are rows,
+    # not a shared pointer, so both documents remain independently editable after
+    # conversion.
+    quotation_stops = list(
+        (
+            await session.execute(
+                select(QuotationRevisionPlace)
+                .where(QuotationRevisionPlace.quotation_revision_id == revision.id)
+                .order_by(QuotationRevisionPlace.sequence_no, QuotationRevisionPlace.id)
+            )
+        ).scalars().all()
+    )
+    if quotation_stops:
+        created: list[ServiceOrderPlace] = []
+        for index, stop in enumerate(quotation_stops):
+            row = ServiceOrderPlace(
+                service_order_id=order.id,
+                place_role_id=stop.place_role_id,
+                place_role=stop.place_role,
+                sequence_no=index + 1,
+                planned_at=stop.planned_at,
+                free_text=stop.free_text,
+                notes=stop.notes,
+            )
+            session.add(row)
+            created.append(row)
+        await session.flush()
+        # Prefer the order's own rows (and their ids) over the quotation copy.
+        data["places"] = await route_stop_payloads(session, created)
+        order.data = jsonable(data)
+    else:
+        # Legacy quotations predate `quotation_revision_places`; their route was
+        # kept in the header keys. Preserve it as sequence-numbered stops.
+        sequence = 0
+        for role in ("pickup", "border", "delivery"):
+            value = data.get(role)
+            if value:
+                sequence += 1
+                session.add(
+                    ServiceOrderPlace(
+                        service_order_id=order.id,
+                        place_role=role.upper(),
+                        free_text=str(value),
+                        sequence_no=sequence,
+                    )
+                )
 
     requirements = (
         await session.execute(
@@ -418,9 +527,36 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot add containers to an inactive service order.")
+    from app.core.validation import parse_decimal
+
+    data = CONTAINER_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
+
+    errors: dict[str, str] = {}
     container_number = str(data.get("containerNumber") or data.get("container_number") or data.get("containerNo") or "").strip()
     if not container_number:
-        raise ValidationFailed("Container number is required.", {"containerNumber": "Required"})
+        errors["containerNumber"] = "This field is required."
+    elif len(container_number) > 32:
+        errors["containerNumber"] = "Use at most 32 characters."
+    elif not all(char.isalnum() or char in " -_" for char in container_number):
+        errors["containerNumber"] = "Use letters, digits, spaces, '-' or '_'."
+    net_weight = parse_decimal(data.get("netWeightKg"), "netWeightKg")
+    gross_weight = parse_decimal(data.get("grossWeightKg"), "grossWeightKg")
+    if net_weight < 0:
+        errors["netWeightKg"] = "Cannot be negative."
+    if gross_weight < 0:
+        errors["grossWeightKg"] = "Cannot be negative."
+    if net_weight and gross_weight and gross_weight < net_weight:
+        errors["grossWeightKg"] = "Cannot be less than the net weight."
+    pickup_date = _date(data.get("pickupDate") or data.get("pickup_date"))
+    return_date = _date(data.get("returnDate") or data.get("return_date"))
+    if data.get("pickupDate") not in (None, "") and pickup_date is None:
+        errors["pickupDate"] = "Enter a valid date."
+    if data.get("returnDate") not in (None, "") and return_date is None:
+        errors["returnDate"] = "Enter a valid date."
+    if pickup_date and return_date and return_date < pickup_date:
+        errors["returnDate"] = "Cannot be before the pickup date."
+    if errors:
+        raise ValidationFailed("Please correct the container details.", errors)
     if (
         await session.execute(select(ServiceOrderContainer).where(ServiceOrderContainer.container_number == container_number))
     ).scalars().first():
@@ -432,6 +568,16 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
         container_type_id = await resolve_or_create_container_type(session, data.get("containerType"))
     if not container_type_id:
         raise ValidationFailed("Container type is required.", {"containerType": "Required"})
+    from app.modules.master_data.models import ContainerType
+
+    container_type = await session.get(ContainerType, int(container_type_id))
+    if container_type is None:
+        raise ValidationFailed("Container type is required.", {"containerType": "Choose a container type."})
+    if str(container_type.status or "").upper() != "ACTIVE":
+        raise ValidationFailed(
+            "That container type is inactive.",
+            {"containerType": "Choose an active container type."},
+        )
     container = ServiceOrderContainer(
         service_order_id=order.id,
         container_requirement_id=_int_or_none(data.get("containerRequirementId") or data.get("container_requirement_id")),
@@ -439,10 +585,10 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
         container_number=container_number,
         seal_serial=data.get("sealSerial") or data.get("seal_serial"),
         status=str(data.get("status") or "EXPECTED"),
-        net_weight_kg=_decimal(data.get("netWeightKg")),
-        gross_weight_kg=_decimal(data.get("grossWeightKg")),
-        pickup_date=_date(data.get("pickupDate")),
-        return_date=_date(data.get("returnDate")),
+        net_weight_kg=net_weight,
+        gross_weight_kg=gross_weight,
+        pickup_date=pickup_date,
+        return_date=return_date,
         data=jsonable({k: v for k, v in data.items() if k not in {"id"}}),
     )
     session.add(container)
@@ -511,10 +657,17 @@ async def _charge_with_details(session: AsyncSession, charge: ServiceOrderCharge
             "description": line.description,
             "quantity": float(line.quantity or 0),
             "unit": line.unit_code,
+            # `unitPrice` is the API name; `unitAmount` is the form column. The
+            # row must round-trip through both consumers without losing its price.
             "unitPrice": float(line.unit_price or 0),
+            "unitAmount": float(line.unit_price or 0),
             "discount": float(line.discount_amount or 0),
+            "taxRate": float(line.tax_rate or 0),
+            # `tax` keeps its historical meaning here (the rate); `taxAmount` is
+            # the amount the form's inline cell edits and the printer sums.
             "tax": float(line.tax_rate or 0),
             "taxAmount": float(line.tax_amount or 0),
+            "amount": float(line.line_amount or 0),
             "total": float(line.line_amount or 0),
         }
         for line in lines
@@ -571,6 +724,22 @@ async def get_charge(session: AsyncSession, context: RequestContext, charge_id: 
 
 
 async def save_charge(session: AsyncSession, context: RequestContext, data: dict[str, Any], order_identifier: str | None = None) -> dict:
+    data = CHARGE_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
+    supplied_type = data.get("documentType")
+    if supplied_type not in (None, ""):
+        document_type = str(supplied_type).strip().upper()
+        if document_type not in CHARGE_DOCUMENT_TYPES:
+            raise ValidationFailed(
+                "Unsupported charge document type.",
+                {"documentType": "Choose one of the configured document types."},
+            )
+        data["documentType"] = document_type
+    if data.get("currency") not in (None, ""):
+        from app.modules.master_data.currency_rates import assert_currency_code
+
+        data["currency"] = await assert_currency_code(session, data["currency"], "currency")
+    if data.get("documentDate") not in (None, "") and _date(data.get("documentDate")) is None:
+        raise ValidationFailed("A valid document date is required.", {"documentDate": "Enter a valid date."})
     charge_id = data.get("id")
     charge: ServiceOrderCharge | None = None
     if charge_id and str(charge_id).isdigit():
@@ -601,42 +770,58 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         await session.flush()
     # Only rebuild priced lines when the caller supplied them; a partial update
     # (e.g. just a status change) must not wipe the existing lines and totals.
-    if "lines" in data or "chargeLines" in data:
+    # `feeLines` is the document form's column; the other two spellings keep
+    # older API clients working.
+    if any(key in data for key in ("lines", "chargeLines", "feeLines")):
+        from app.core.validation import validate_line_items
         from app.modules.master_data.service import resolve_reference_id
 
-        lines = data.get("lines") or data.get("chargeLines") or []
+        line_field = next(key for key in ("lines", "chargeLines", "feeLines") if key in data)
+        lines = validate_line_items(
+            data.get(line_field) or [],
+            CHARGE_LINE_SCHEMA,
+            field=line_field,
+        )
         subtotal = Decimal("0")
         discount_total = Decimal("0")
         tax_total = Decimal("0")
         await session.execute(delete(ServiceOrderChargeLine).where(ServiceOrderChargeLine.service_order_charge_id == charge.id))
+        from app.core.validation import parse_decimal, resolve_line_tax
+
         for index, line in enumerate(lines):
             if not isinstance(line, dict):
                 continue
-            quantity = _decimal(line.get("quantity"), Decimal("1")) or Decimal("1")
-            unit_price = _decimal(line.get("unitPrice"), Decimal("0")) or Decimal("0")
-            discount = _decimal(line.get("discount"), Decimal("0")) or Decimal("0")
-            # The charge line editor exposes `taxRate` and the serializer emits the
-            # rate under `tax`, so accept both. Reading only `tax` silently dropped
-            # the rate a user typed: the server stored zero tax while the form showed
-            # a taxed total, and the resulting invoice carried no tax.
-            tax_rate_field = "taxRate" if line.get("taxRate") not in (None, "") else "tax"
-            tax_rate = _decimal(line.get(tax_rate_field), Decimal("0")) or Decimal("0")
-            if quantity <= 0:
-                raise ValidationFailed("Charge quantity must be greater than zero.", {f"lines.{index}.quantity": "Must be positive"})
-            if unit_price < 0:
-                raise ValidationFailed("Charge unit price cannot be negative.", {f"lines.{index}.unitPrice": "Cannot be negative"})
+            # The form's column is `unitAmount`; accept `unitPrice` as the
+            # long-standing API spelling so neither client silently saves zero.
+            unit_value = line.get("unitPrice")
+            if unit_value in (None, ""):
+                unit_value = line.get("unitAmount")
+            quantity = parse_decimal(line.get("quantity"), f"{line_field}.{index}.quantity", Decimal("1"), places=3) or Decimal("1")
+            unit_price = parse_decimal(unit_value, f"{line_field}.{index}.unitPrice", Decimal("0"), places=4)
+            discount = parse_decimal(line.get("discount"), f"{line_field}.{index}.discount", Decimal("0"), places=4)
             base = quantity * unit_price
+            if quantity <= 0:
+                raise ValidationFailed("Charge quantity must be greater than zero.", {f"{line_field}.{index}.quantity": "Must be positive"})
+            if unit_price < 0:
+                raise ValidationFailed("Charge unit price cannot be negative.", {f"{line_field}.{index}.unitPrice": "Cannot be negative"})
             if discount < 0 or discount > base:
                 raise ValidationFailed(
                     "Charge discount must be between zero and the line subtotal.",
-                    {f"lines.{index}.discount": "Invalid discount"},
+                    {f"{line_field}.{index}.discount": "Invalid discount"},
+                )
+            # The editor exposes a tax rate; the document-style tax amount is
+            # accepted too, and an explicit rate wins when both are present.
+            tax_rate_field, tax_amount, tax_rate = resolve_line_tax(line, base - discount, f"{line_field}.{index}")
+            if tax_amount < 0:
+                raise ValidationFailed(
+                    "Charge tax cannot be negative.",
+                    {f"{line_field}.{index}.{tax_rate_field}": "Cannot be negative"},
                 )
             if tax_rate < 0 or tax_rate > 100:
                 raise ValidationFailed(
                     "Charge tax rate must be between 0 and 100.",
-                    {f"lines.{index}.{tax_rate_field}": "Invalid tax rate"},
+                    {f"{line_field}.{index}.{tax_rate_field}": "Invalid tax rate"},
                 )
-            tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
             line_total = base - discount + tax_amount
             container_id = _int_or_none(line.get("containerId") or line.get("serviceOrderContainerId"))
             if container_id is not None:
@@ -644,7 +829,7 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                 if container is None or container.service_order_id != order.id:
                     raise ValidationFailed(
                         "A charge line container must belong to the service order.",
-                        {f"lines.{index}.containerId": "Container does not belong to this service order"},
+                        {f"{line_field}.{index}.containerId": "Container does not belong to this service order"},
                     )
             subtotal += base
             discount_total += discount
@@ -678,7 +863,11 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         charge.remark = data.get("remark")
     charge.data = jsonable({
         **(charge.data or {}),
-        **{key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}},
+        **{
+            key: value
+            for key, value in data.items()
+            if key not in {"id", "lines", "chargeLines", "feeLines", "createdAt", "updatedAt"}
+        },
     })
     await session.commit()
     await cache.bump("reports")
@@ -956,8 +1145,7 @@ async def read_attachment(storage_key: str) -> tuple[bytes, str]:
 # capability was unreachable from the application.
 
 # Movement statuses are plain values rather than an enum so a new state does not
-# need a migration; the API normalises casing and rejects anything unknown.
-MOVEMENT_STATUSES = ("PLANNED", "IN_TRANSIT", "ARRIVED", "COMPLETED", "CANCELLED")
+# need a migration; the shared request schema declares the vocabulary.
 
 
 def _normalize_movement_status(value: Any, default: str = "PLANNED") -> str:
@@ -967,14 +1155,32 @@ def _normalize_movement_status(value: Any, default: str = "PLANNED") -> str:
     return candidate if candidate in MOVEMENT_STATUSES else default
 
 
-def _as_utc(value: Any) -> datetime | None:
+def _as_utc(value: Any, field: str = "date") -> datetime | None:
     if value in (None, ""):
         return None
     if isinstance(value, datetime):
         parsed = value
     else:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            raise ValidationFailed(
+                "Enter a valid date and time.",
+                {field: "Enter a valid date and time."},
+            ) from None
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def _positive_int(value: Any, field: str, default: int | None = None) -> int | None:
+    """Parse a whole number, reporting a malformed value on its own field."""
+    if value in (None, ""):
+        return default
+    from app.core.validation import parse_decimal
+
+    number = parse_decimal(value, field)
+    if number != number.to_integral_value():
+        raise ValidationFailed("Enter a whole number.", {field: "Enter a whole number."})
+    return int(number)
 
 
 def _movement_payload(row: ServiceOrderMovement, *, transport_type: str | None = None) -> dict[str, Any]:
@@ -985,8 +1191,6 @@ def _movement_payload(row: ServiceOrderMovement, *, transport_type: str | None =
         "transportTypeId": row.transport_type_id,
         "transportType": transport_type,
         "transportAssetId": row.transport_asset_id,
-        "originPlaceId": row.origin_place_id,
-        "destinationPlaceId": row.destination_place_id,
         "plannedDeparture": row.planned_departure.isoformat() if row.planned_departure else None,
         "actualDeparture": row.actual_departure.isoformat() if row.actual_departure else None,
         "plannedArrival": row.planned_arrival.isoformat() if row.planned_arrival else None,
@@ -1023,6 +1227,7 @@ async def save_movement(
     if order.status == "INACTIVE":
         raise InvalidState("Cannot change movements on an inactive service order.")
 
+    data = MOVEMENT_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     movement_id = _int_or_none(data.get("id"))
     movement: ServiceOrderMovement | None = None
     if movement_id is not None:
@@ -1032,7 +1237,7 @@ async def save_movement(
 
     if movement is None:
         if "sequenceNo" in data and data.get("sequenceNo") not in (None, ""):
-            sequence_no = int(data["sequenceNo"])
+            sequence_no = _positive_int(data["sequenceNo"], "sequenceNo", 0) or 0
         else:
             highest = (
                 await session.execute(
@@ -1061,7 +1266,7 @@ async def save_movement(
         movement = ServiceOrderMovement(service_order_id=order.id, sequence_no=sequence_no, data={})
         session.add(movement)
     elif "sequenceNo" in data and data.get("sequenceNo") not in (None, ""):
-        requested = int(data["sequenceNo"])
+        requested = _positive_int(data["sequenceNo"], "sequenceNo", 0) or 0
         if requested != movement.sequence_no:
             # (service_order_id, sequence_no) is unique, so a renumber that
             # collides must be reported as a conflict rather than surfacing as a
@@ -1083,13 +1288,6 @@ async def save_movement(
                 )
             movement.sequence_no = requested
 
-    origin = await _resolve_place_id(session, data, "originPlaceId", "originPlace", "origin")
-    destination = await _resolve_place_id(session, data, "destinationPlaceId", "destinationPlace", "destination")
-    if origin is not None:
-        movement.origin_place_id = origin
-    if destination is not None:
-        movement.destination_place_id = destination
-
     transport_type_id = _int_or_none(data.get("transportTypeId"))
     if transport_type_id is None and data.get("transportType"):
         from app.modules.master_data.service import resolve_reference_id
@@ -1107,12 +1305,7 @@ async def save_movement(
         ("actualArrival", "actual_arrival"),
     ):
         if camel in data:
-            try:
-                setattr(movement, attribute, _as_utc(data.get(camel)))
-            except ValueError as exc:
-                raise ValidationFailed(
-                    "Movement times must be valid timestamps.", {camel: "Use an ISO-8601 date/time."}
-                ) from exc
+            setattr(movement, attribute, _as_utc(data.get(camel), camel))
 
     movement.status = _normalize_movement_status(data.get("status"), movement.status or "PLANNED")
     stored = dict(movement.data or {})
@@ -1139,7 +1332,6 @@ async def delete_movements(session: AsyncSession, context: RequestContext, ident
 
 
 # --- Milestones --------------------------------------------------------------
-MILESTONE_STATUSES = ("PENDING", "IN_PROGRESS", "COMPLETED", "SKIPPED")
 
 
 def _normalize_milestone_status(value: Any, default: str = "PENDING") -> str:
@@ -1184,6 +1376,7 @@ async def save_milestone(
     if order.status == "INACTIVE":
         raise InvalidState("Cannot change milestones on an inactive service order.")
 
+    data = MILESTONE_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     milestone_id = _int_or_none(data.get("id"))
     milestone: ServiceOrderMilestone | None = None
     if milestone_id is not None:
@@ -1214,7 +1407,7 @@ async def save_milestone(
             service_order_id=order.id,
             milestone_code=code,
             milestone_name=name or code.replace("_", " ").title(),
-            sequence_no=int(data.get("sequenceNo") or 1),
+            sequence_no=_positive_int(data.get("sequenceNo"), "sequenceNo", 1) or 1,
             status=_normalize_milestone_status(data.get("status"), "PENDING"),
             notes=data.get("notes"),
         )
@@ -1229,19 +1422,14 @@ async def save_milestone(
         if name:
             milestone.milestone_name = name
         if data.get("sequenceNo") not in (None, ""):
-            milestone.sequence_no = int(data["sequenceNo"])
+            milestone.sequence_no = _positive_int(data["sequenceNo"], "sequenceNo", 1) or 1
         milestone.status = _normalize_milestone_status(data.get("status"), milestone.status)
         if "notes" in data:
             milestone.notes = data.get("notes")
 
     for camel, attribute in (("plannedAt", "planned_at"), ("actualAt", "actual_at")):
         if camel in data:
-            try:
-                setattr(milestone, attribute, _as_utc(data.get(camel)))
-            except ValueError as exc:
-                raise ValidationFailed(
-                    "Milestone times must be valid timestamps.", {camel: "Use an ISO-8601 date/time."}
-                ) from exc
+            setattr(milestone, attribute, _as_utc(data.get(camel), camel))
 
     await session.commit()
     return _milestone_payload(milestone)
@@ -1260,20 +1448,3 @@ async def delete_milestones(session: AsyncSession, context: RequestContext, iden
         await session.delete(row)
     await session.commit()
     return len(rows)
-
-
-async def _resolve_place_id(
-    session: AsyncSession, data: dict[str, Any], id_key: str, *name_keys: str
-) -> int | None:
-    """Accept an explicit place id or resolve a place by name/code."""
-    explicit = _int_or_none(data.get(id_key))
-    if explicit is not None:
-        return explicit
-    for key in name_keys:
-        value = data.get(key)
-        if value in (None, ""):
-            continue
-        from app.modules.master_data.service import resolve_reference_id
-
-        return await resolve_reference_id(session, "place", value=value)
-    return None

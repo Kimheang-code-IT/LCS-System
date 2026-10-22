@@ -377,6 +377,17 @@ async def test_protected_admin_profile_can_change_and_normal_user_can_be_deleted
         email="deletable.user@example.com",
         roles=["AUDITOR"],
     )
+    active_delete = await client.request(
+        "DELETE", "/api/v1/users", headers=actor_headers, json={"ids": [normal["id"]]}
+    )
+    assert active_delete.status_code == 409, active_delete.text
+    assert active_delete.json()["code"] == "RECORD_ACTIVE"
+
+    deactivated = await client.put(
+        f"/api/v1/users/{normal['id']}", headers=actor_headers, json={"status": "INACTIVE"}
+    )
+    assert deactivated.status_code == 200, deactivated.text
+
     deleted = await client.request(
         "DELETE", "/api/v1/users", headers=actor_headers, json={"ids": [normal["id"]]}
     )
@@ -472,6 +483,33 @@ async def test_assigned_role_cannot_be_deleted(client):
         json={"status": "INACTIVE"},
     )
     assert deactivated.status_code == 409, deactivated.text
+
+
+async def test_active_role_must_be_deactivated_before_delete(client):
+    headers = await login(client)
+    role = await client.post(
+        "/api/v1/roles",
+        headers=headers,
+        json={"code": "ACTIVE_DELETE_ROLE", "name": "Active Delete Role", "permissions": []},
+    )
+    assert role.status_code == 201, role.text
+    role_id = role.json()["data"]["id"]
+
+    blocked = await client.request(
+        "DELETE", "/api/v1/roles", headers=headers, json={"ids": [role_id]}
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "RECORD_ACTIVE"
+
+    deactivated = await client.put(
+        f"/api/v1/roles/{role_id}", headers=headers, json={"status": "INACTIVE"}
+    )
+    assert deactivated.status_code == 200, deactivated.text
+
+    deleted = await client.request(
+        "DELETE", "/api/v1/roles", headers=headers, json={"ids": [role_id]}
+    )
+    assert deleted.status_code == 200, deleted.text
 
 
 async def test_permission_and_role_changes_take_effect_without_relogin(client):

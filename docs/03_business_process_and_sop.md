@@ -41,34 +41,31 @@ template that an administrator creates from Roles & Permissions.
 ### First-run setup (empty database)
 
 1. On a freshly migrated database there are no users, so the app redirects to the
-   first-run setup page (`/setup`).
+   first-run setup page (`/auth/setup`).
 2. The installer enters the administrator credential (and optional name/username),
    then submits.
 3. System provisions the permission catalog, the built-in Platform Administrator
-   role, the administrator credential, the current-year document sequences and the
-   default app info/config. No finance or business data is seeded, and no other
-   roles are created.
+   role, the administrator credential, the default currency catalog, the default
+   Party Roles and Place Roles, the current-year document sequences and the
+   default app info/config. No finance or transactional data (accounts, periods,
+   parties, documents) is seeded, and no other user roles are created.
 4. System signs the administrator in. Setup is accepted only while no user exists
    (`GET /api/v1/auth/setup/status` / `POST /api/v1/auth/setup/initialize`).
 
-### Headless provisioning
-
-The same provisioning is available without the browser (idempotent — re-run to
-reset the password):
-
-```bash
-python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
-```
+Lost administrator access is recovered through the forgot-password flow
+(`/auth/forgot-password/...` email codes) or by an administrator setting the
+password per user (`POST /api/v1/auth/users/{user_id}/password`).
 
 Additional users, roles and role assignments are administered from the UI or API
-afterwards. Posting rules remain server-side; they are not exposed in the UI.
+afterwards. Posting rules are configured in the Posting Rules screen; the service
+layer falls back to `DEFAULT_ACCOUNTS` only when no rule matches.
 
 ### Control points
 
 - Setup can run only while no user exists.
 - User codes, usernames and emails are unique.
-- Role assignments support start and expiry dates; expired assignments grant no
-  permissions.
+- A user has exactly one active role. Replacing a role expires the previous
+  assignment; expired history grants no permissions.
 - The Platform Administrator role cannot be reduced below the bootstrap
   administrator.
 
@@ -79,13 +76,13 @@ afterwards. Posting rules remain server-side; they are not exposed in the UI.
 1. Administrator opens Users and creates the user (code, username, email, display
    name, locale, timezone).
 2. Administrator sets the initial password (stored as an Argon2id hash).
-3. Administrator assigns one or more roles.
+3. Administrator assigns exactly one active role.
 4. User logs in and can change their own password.
 
 ### Change access
 
 1. Administrator reviews the requested change.
-2. Administrator adds, changes, expires, or removes a role assignment.
+2. Administrator replaces the user's role; the system expires the previous assignment and keeps it as history.
 3. System records the actor and assignment metadata.
 4. Existing sessions can be revoked for security-sensitive changes.
 
@@ -95,7 +92,7 @@ afterwards. Posting rules remain server-side; they are not exposed in the UI.
 2. System refuses authentication and active access.
 3. Historical records and audit events remain unchanged.
 
-Role administration uses a streamlined form: a role records a name and the
+Role administration uses a dedicated form: a role records a name and the
 permission actions it grants; per-role scope/level and code/status columns are not
 used. Permissions are enforced by the API.
 
@@ -113,6 +110,20 @@ used. Permissions are enforced by the API.
 The same activate-before-delete rule applies to **service orders**, which use a
 simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 
+### Party Roles
+
+1. Authorized user opens **Master Data > Party Roles**.
+2. User creates a role with a unique code, a unique name, an optional description,
+   and the default active status.
+3. Active roles appear immediately in the Business Parties role selector; inactive
+   roles appear only when the list is filtered to inactive records.
+4. A business party can hold multiple roles; the same role cannot be assigned to
+   the same party twice.
+5. Renaming a role updates every party that references it because parties store
+   the role id, not a copied label.
+6. A role assigned to at least one party cannot be deleted. Deactivate it instead;
+   existing assignments remain readable.
+
 ## 6. Component Template Procedure
 
 1. Administrator creates a component group.
@@ -129,30 +140,35 @@ simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 ### Create or edit the draft
 
 1. Sales officer selects the customer and trade direction.
-2. User enters places, transport options, container requirements, and lines.
+2. User enters route stops, transport options, container requirements, and lines.
 3. User verifies all lines use the revision currency.
 4. System calculates subtotal, discount, tax, and total.
 5. User selects **Save** to create the draft. While the draft has unsaved changes
    the only action is **Save changes**.
 6. The saved draft stays editable and can be deleted from its row action menu.
 
-### Accept and auto-convert
+### Send and accept
 
-1. Once the draft has no unsaved changes, the primary action becomes **Accept**
-   (Save changes and Accept are never shown at the same time).
-2. User selects **Accept** and confirms.
-3. System sends the revision (`DRAFT → SENT`), records acceptance
-   (`SENT → ACCEPTED`) and converts it to a service order
-   (`ACCEPTED → CONVERTED`) in a single action.
-4. System locks the revision and copies the required commercial and operational
-   snapshots, creates the service order and its required components, and records
-   the conversion.
-5. System opens the created service order.
+1. Once the draft has no unsaved changes, the primary action becomes **Send**
+   (Save changes and Send are never shown at the same time).
+2. User sends the revision (`DRAFT → SENT`).
+3. After the customer decision, a user with `quotation.accept` selects **Accept**
+   (`SENT → ACCEPTED`).
+4. Acceptance locks the revision for editing.
 
-### API-level steps (advanced)
+### Convert to service order
 
-The streamlined Accept flow is a convenience wrapper around the revision state
-machine, which remains available through the API: `send` → `accept` → `convert`.
+1. A user with `quotation.convert` selects **Convert** on the accepted revision.
+2. System locks the revision, creates the service order and its required
+   components, copies the commercial and operational snapshots, and records the
+   conversion (`ACCEPTED → CONVERTED`).
+3. System opens the created service order.
+4. Repeating the conversion rejects with `DUPLICATE_CONVERSION` and opens the
+   existing service order.
+
+### API-level steps
+
+The UI calls the revision state machine directly: `send` → `accept` → `convert`.
 
 ### Exceptions
 
@@ -160,12 +176,15 @@ machine, which remains available through the API: `send` → `accept` → `conve
 - A duplicate conversion attempt is rejected with `DUPLICATE_CONVERSION`; the
   existing service order is opened instead.
 - A sent revision cannot be edited directly; create a new revision first.
-- A customer change after acceptance requires a new revision and approval policy.
+- A customer change after acceptance requires a new revision; the accepted revision remains immutable.
 
 ## 8. Service-Order Procedure
 
 1. Operations officer reviews the converted order.
-2. User confirms customer, direction, and operational places.
+2. User confirms customer, direction, and operational route stops. Each stop uses
+   a configured Place Role (for example port, warehouse, or checkpoint) and a
+   free-text location; the separate Places collection is no longer editable, but
+   legacy rows are retained for historical route references.
 3. User confirms container requirements.
 4. User adds actual containers when numbers are available.
 5. User adds repeatable components such as cargo, transport, documents, and milestones.
@@ -189,12 +208,12 @@ machine, which remains available through the API: `send` → `accept` → `conve
 6. System calculates totals.
 7. User issues the service charge.
 8. System generates the customer-facing note or service document.
-9. System creates one idempotent draft customer invoice from the issued charge.
-10. No journal is created until an authorized finance user posts the draft.
+9. Issuing the charge does not create a finance draft and does not post accounting.
+10. An authorized finance user may select `Create Finance Invoice` to create the draft.
 
 ### Convert to finance invoice
 
-1. The issue command normally creates the finance draft automatically; an authorized user may select `Create Finance Invoice` to recover or retrieve it.
+1. An authorized user selects `Create Finance Invoice` on an issued charge.
 2. System copies the charge into a draft financial document only when one does not already exist.
 3. System records the source relationship.
 4. Finance user reviews and may edit the draft.

@@ -34,7 +34,8 @@ order based on its trade direction and validates every submitted value.
 | `backend/app/modules/master_data/config_versions.py` | Preview, publish, retire, historical pinning |
 | `backend/app/modules/operations/component_tabs.py` | Runtime bootstrap, value coercion, validation |
 | `frontend/app/components/document/AppComponentTabs.vue`, `frontend/app/composables/freight/useComponentTabs.ts` | The renderer |
-| `docs/17_repository_analysis.md` §Dynamic configuration | Current status and known gaps |
+| `docs/10_testing_and_quality.md` §7-§8 | Current status and known gaps |
+| `docs/08_frontend_and_ui_design.md` §5 | Rendering and version-pinning behaviour |
 
 ## Model
 

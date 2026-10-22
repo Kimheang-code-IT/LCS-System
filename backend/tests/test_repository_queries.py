@@ -10,7 +10,7 @@ from app.modules.auth.models import Role, User, UserRoleAssignment
 from app.modules.auth.repository import AuthRepository
 from app.modules.finance.models import FinancialDocument, FinancialDocumentLine
 from app.modules.finance.repository import FinanceRepository
-from app.modules.master_data.models import BusinessParty, Place, TradeDirection
+from app.modules.master_data.models import BusinessParty, PlaceRole, TradeDirection
 from app.modules.master_data.repository import MasterDataRepository
 from app.modules.quotations.models import Quotation, QuotationRevision
 from app.modules.quotations.repository import QuotationRepository
@@ -143,9 +143,9 @@ async def test_finance_repository_batches_document_lines(session_factory, seeded
 async def test_repository_does_not_commit_independently(session_factory, seeded):
     async with session_factory() as session:
         repository = MasterDataRepository(session)
-        repository.add(Place(code="ROLLBACK", name="Rollback Test", status="ACTIVE"))
+        repository.add(PlaceRole(code="ROLLBACK", name="Rollback Test", status="ACTIVE"))
         await session.flush()
         await session.rollback()
-        count = await session.scalar(select(func.count()).select_from(Place).where(Place.code == "ROLLBACK"))
+        count = await session.scalar(select(func.count()).select_from(PlaceRole).where(PlaceRole.code == "ROLLBACK"))
 
     assert count == 0

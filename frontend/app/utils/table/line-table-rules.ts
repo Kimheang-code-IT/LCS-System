@@ -122,5 +122,14 @@ export function actualContainerRowDefaults() {
 }
 
 export function routePlaceRowDefaults({ rows }: { rows: Row[] }) {
-  return { place: '', planned: '', actual: '', notes: '', sequence: rows.length + 1 }
+  // The role stays empty: a new row must be a deliberate selection from the live
+  // master. The location is free text the operator fills in.
+  return {
+    placeRoleId: '',
+    place: '',
+    planned: '',
+    actual: '',
+    notes: '',
+    sequence: rows.length + 1,
+  }
 }

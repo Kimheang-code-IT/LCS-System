@@ -11,9 +11,11 @@ from app.core.exceptions import AccessDenied, AuthRequired, ValidationFailed
 from app.core.pagination import PageParams, page_params
 from app.core.rate_limit import client_ip, enforce_rate_limit, opaque_key
 from app.core.security import create_csrf_token
+from app.core.validation import validate_id_list
 from app.modules.audit.service import write_audit
 from app.modules.auth import service
 from app.modules.auth.schemas import (
+    AvatarUpdate,
     ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
@@ -24,6 +26,7 @@ from app.modules.auth.schemas import (
     RoleDuplicate,
     RoleUpdate,
     SetPasswordRequest,
+    SetupInitializeRequest,
     UserCreate,
     UserUpdate,
     VerifyCodeRequest,
@@ -120,11 +123,11 @@ async def setup_status(session: AsyncSession = Depends(get_session)) -> dict:
 @router.post("/auth/setup/initialize", status_code=status.HTTP_201_CREATED)
 async def setup_initialize(
     request: Request,
-    payload: dict = Body(default={}),
+    payload: SetupInitializeRequest,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await enforce_rate_limit(f"setup:ip:{opaque_key(client_ip(request))}", limit=10, window_seconds=3600)
-    return {"data": await service.setup_initialize(session, payload)}
+    return {"data": await service.setup_initialize(session, payload.model_dump(exclude_none=True))}
 
 
 @router.post("/auth/login")
@@ -314,11 +317,11 @@ async def change_password(
 
 @router.post("/auth/profile/avatar")
 async def update_profile_avatar(
-    payload: dict = Body(default={}),
+    payload: AvatarUpdate,
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    avatar = str(payload.get("avatar") or "").strip() or None
+    avatar = str(payload.avatar or "").strip() or None
     result = await service.set_user_avatar(session, context, avatar)
     return {"data": {"avatar": result}}
 
@@ -431,7 +434,7 @@ async def delete_users(
     context: RequestContext = Depends(require_permission("user.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     try:
         await service.delete_users(session, ids, context)
     except AccessDenied as exc:
@@ -585,7 +588,7 @@ async def delete_roles(
     context: RequestContext = Depends(require_permission("role.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     try:
         await service.delete_roles(session, ids)
     except AccessDenied as exc:

@@ -48,7 +48,7 @@ import type { PrintTemplateId } from '~/config/print-templates'
 import type { RecordStatusTransition } from '~/types/status'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { splitDocumentHeaderActions } from '~/utils/layout/document-header-actions'
-import type { FreightAction, FreightTable } from '~/config/freight-modules'
+import type { FreightAction, FreightField, FreightTable } from '~/config/freight-modules'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useDocumentActions } from '~/composables/freight/useDocumentActions'
 import { useRecordStatus } from '~/composables/freight/useRecordStatus'
@@ -68,7 +68,7 @@ import type { ApiResponse } from '~/types/common'
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const store = useFreightStore()
 const auth = useAuthStore()
-const { t, te } = useI18n()
+const { t } = useI18n()
 const toast = useToast()
 const { moduleTitle, moduleSingular, fieldLabel, actionLabel } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
@@ -103,6 +103,31 @@ function findFieldOwner(key: string) {
   return findField(key) ?? findField(key.split('.')[0]!)
 }
 
+/**
+ * Validate one field when the user leaves it.
+ *
+ * The submit pass remains authoritative (it also runs cross-field and table
+ * rules), but checking on blur reports a malformed email or an over-long code
+ * while the user is still on the input instead of only after a save attempt.
+ * The message is rendered by the same `fieldErrors` map the submit pass uses,
+ * so there is exactly one place an error can appear.
+ */
+function validateFieldOnBlur(key: string) {
+  const owner = findField(key)
+  if (!owner || ('computed' in owner.field && owner.field.computed)) return
+  const failures = validateDocumentFields({
+    // The tab schema is compiled from a FreightField; the renderer's wider
+    // field union also covers system-settings widgets that never reach here.
+    fields: [owner.field as unknown as FreightField],
+    model: model.value as Record<string, unknown>,
+    isCreate: isCreate.value || !model.value.id,
+    label: fieldKeyLabel,
+  })
+  validation.clearFieldError(key)
+  const failure = failures.find(item => item.key === key)
+  if (failure) validation.setFieldError(key, validation.message(failure, fieldKeyLabel(key)))
+}
+
 /** Locally translated label for a rendered document field, including a cell. */
 function fieldKeyLabel(key: string) {
   const row = parseRowKey(key)
@@ -132,15 +157,6 @@ const validation = useFormValidation({
   t: (key, params) => t(key, params as Record<string, unknown>),
   label: fieldKeyLabel,
   order: () => tabs.value.flatMap(tab => tab.sections.flatMap(section => section.fields.map(field => field.key))),
-  groupLabel: (key) => {
-    const owner = findFieldOwner(key)
-    if (!owner) return undefined
-    const tabLabel = owner.tab.labelKey && te(owner.tab.labelKey) ? t(owner.tab.labelKey) : owner.tab.label
-    const sectionLabel = owner.section.titleKey && te(owner.section.titleKey)
-      ? t(owner.section.titleKey)
-      : owner.section.title
-    return [tabLabel, sectionLabel].filter(Boolean).join(' › ')
-  },
   reveal: (key) => {
     const owner = findFieldOwner(key)
     if (!owner) return false
@@ -988,6 +1004,34 @@ function businessRuleFailures(isNew: boolean): Record<string, (record: Record<st
     }
   }
 
+  /**
+   * A period that ends before it starts is not a valid document period, whether
+   * the second date is an offer expiry or a credit due date. Both dates are
+   * ISO `YYYY-MM-DD`, so a lexical comparison is also a chronological one.
+   */
+  const dateOrderRule = (laterKey: string, earlierKey: string) => (): ValidationFailure | null => {
+    const later = String(model.value[laterKey] || '').slice(0, 10)
+    const earlier = String(model.value[earlierKey] || '').slice(0, 10)
+    if (!later || !earlier || later >= earlier) return null
+    return {
+      key: laterKey,
+      code: 'custom',
+      message: t('validation.dateOrder', {
+        field: fieldKeyLabel(laterKey),
+        other: fieldKeyLabel(earlierKey),
+      }),
+      label: fieldKeyLabel(laterKey),
+    }
+  }
+
+  if (current.collection === 'quotations') {
+    rules.validUntil = dateOrderRule('validUntil', 'date')
+  }
+  if (current.collection === 'debitNotes') {
+    rules.dueDate = dateOrderRule('dueDate', 'date')
+    rules.valueDate = dateOrderRule('valueDate', 'date')
+  }
+
   if (current.collection === 'componentTemplates' && !isNew && originalModel.value
     && String(model.value.instanceMode) !== String(originalModel.value.instanceMode || 'SINGLE')) {
     const used = store.list('serviceComponents').some(row =>
@@ -1084,6 +1128,21 @@ async function save(status?: string) {
           confirmColor: 'warning',
         })
         if (!ok) return
+      }
+    }
+
+    if (module.value.collection === 'transportAssets') {
+      // An asset code is unique across active rows. The backend refuses a
+      // duplicate with a field error, but catching it here keeps the message on
+      // the field without a round trip and covers a code another page owns.
+      const duplicate = store.list('transportAssets').find(row =>
+        String(row.id) !== String(payload.id || '')
+        && String(row.assetCode || '').trim().toLowerCase() === String(payload.assetCode || '').trim().toLowerCase(),
+      )
+      if (duplicate) {
+        validation.setFieldError('assetCode', t('validation.duplicateAssetCode', { code: String(payload.assetCode || '').trim() }))
+        await validation.focusFirstInvalid()
+        return
       }
     }
 
@@ -1283,7 +1342,7 @@ async function confirmReverse() {
 :read-only="readOnly"
 :field-errors="fieldErrors"
       :on-field-edit="clearFieldError"
-      :summary-items="validation.summaryItems.value"
+      :on-field-blur="validateFieldOnBlur"
       :form-errors="validation.formErrors.value"
       :can-save="!readOnly && module.collection !== 'quotations'"
       :save-label="documentSaveLabel"
@@ -1311,7 +1370,6 @@ content-wide
 @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
 @refresh="load"
-@select-error="validation.focusFieldKey($event)"
 @submit-comment="submitComment"
 @update-comment="updateComment"
       @delete-comment="deleteComment"
