@@ -315,7 +315,7 @@
       "descriptionLabel": "描述",
       "branchCol": "分支机构",
       "unitCol": "单位",
-      "routeRole": "角色",
+      "routeRole": "地点角色",
       "editRouteRow": "编辑路线节点",
       "routeUpdated": "路线已更新",
       "summary": "汇总",
@@ -393,7 +393,8 @@
         "sourceQuotationLabel": "来源报价单",
         "debitNoteNo": "借记单号",
         "createdBy": "创建人"
-      },
+      ,
+  "location": "地点"},
       "targetInvoiceBill": "目标发票 / 账单",
       "containerNoInUse": "该集装箱号已被其他服务单使用。",
       "fileRejectedTitle": "部分文件未添加",
@@ -500,7 +501,7 @@
       "currency40": "40GP / 40HC 币种",
       "currency45": "45GP / 45HC 币种",
       "customer": "公司",
-      "customerPartyId": "公司",
+      "customerPartyId": "业务往来单位",
       "customerAddress": "客户地址",
       "customsAccount": "海关账号",
       "customsCost": "海关成本",
@@ -796,6 +797,7 @@
       "source": "来源"
     },
     "fieldHelp": {
+      "allowedPlaceRoles": "可选。限定该地点可用于哪些地点角色；留空表示所有角色均可使用。",
       "password": "新账户的初始密码，长度为 8 至 20 个字符。",
       "quotationNo": "正式报价单号，仅供预览，正式编号由后端生成。",
       "jobNo": "用于跟踪本次装运的服务订单编号。",
@@ -1080,7 +1082,9 @@
       "chargeTypes": "费用类型",
       "currencies": "币种",
       "businessParties": "业务往来单位",
+      "partyRoles": "业务伙伴角色",
       "places": "地点",
+      "placeRoles": "地点角色",
       "tradeDirections": "贸易方向",
       "containerTypes": "集装箱类型",
       "transportTypes": "运输类型",
@@ -1239,7 +1243,7 @@
       "places": {
         "title": "地点",
         "singular": "地点",
-        "description": "港口、检查站、经济特区、仓库、工厂和目的地。"
+        "description": "港口、检查站、经济特区、仓库及目的地。"
       },
       "postingRules": {
         "title": "过账规则",
@@ -1852,6 +1856,39 @@
         "in_transit": "在途",
         "delivered": "已送达",
         "returned": "已退回"
+      }
+    },
+    "componentLayout": {
+      "editLayout": "分组布局",
+      "displayMode": "显示方式",
+      "dataCardinality": "数据数量",
+      "formColumns": "表单列数",
+      "showGroupTitle": "显示分组标题",
+      "editable": "可编辑",
+      "collapsible": "可折叠分组",
+      "defaultExpanded": "默认展开",
+      "readOnly": "只读",
+      "newRecord": "新记录",
+      "editRecord": "编辑记录",
+      "updateRecord": "更新记录",
+      "savedRecords": "已保存记录",
+      "noRecords": "暂无记录",
+      "noRecordsHint": "填写上方表单并添加第一条记录。",
+      "editExistingHint": "此分组只有一条记录。请在下方选择它进行编辑。",
+      "groupHint": "{name} 在 {tab} 标签页中的布局。",
+      "modes": {
+        "form_only": "仅表单",
+        "table_only": "仅表格",
+        "form_and_table": "表单和表格"
+      },
+      "cardinalities": {
+        "single": "单条记录",
+        "multiple": "多条记录"
+      },
+      "modeHints": {
+        "form_only": "只显示字段，仅一条记录，不显示记录表格。",
+        "table_only": "可直接在表格中编辑，没有单独的输入表单。",
+        "form_and_table": "上方为录入表单，下方为已保存记录表格。"
       }
     },
     "configVersions": {
@@ -2779,10 +2816,34 @@
       "level": "级别",
       "creatorOnly": "仅创建者",
       "toggleRow": "切换 {entity} 的所有权限",
+      "toggleAction": "切换可见页面的{action}",
+      "applyAction": "将操作应用于可见页面",
+      "searchPlaceholder": "搜索页面和权限",
+      "expandAll": "全部展开",
+      "collapseAll": "全部折叠",
+      "reset": "重置",
+      "noMatching": "没有匹配的权限。",
+      "unsavedWarning": "权限更改尚未保存。不保存就离开吗？",
       "dependencyHint": "查看是其他所有操作的前提。取消查看会同时清除其依赖的操作。",
+      "groups": {
+        "dashboard": "仪表板",
+        "sales": "销售",
+        "operations": "运营",
+        "finance": "财务",
+        "reports": "报表",
+        "master": "主数据",
+        "configuration": "配置",
+        "admin": "管理",
+        "settings": "设置"
+      },
       "actions": {
         "view": "查看",
         "edit": "编辑",
+        "update": "更新",
+        "submit": "提交",
+        "summary": "摘要",
+        "quotation": "发送报价",
+        "re_quotation": "重新报价",
         "archive": "归档",
         "restore": "恢复",
         "assign": "指派",
@@ -3332,8 +3393,8 @@
     "keywords": "货运代理,报关,服务订单,借记单,LCS"
   },
   "validation": {
-    "summaryTitle": "Please correct the highlighted fields",
-    "summaryCount": "{count} issue(s) to fix",
+
+
     "formError": "Please correct the highlighted fields.",
     "required": "Please enter {field}.",
     "requiredGeneric": "This field is required.",
@@ -3353,6 +3414,11 @@
     "minGeneric": "Enter a value of at least {min}.",
     "max": "{field} must be less than or equal to {max}.",
     "maxGeneric": "Enter a value of at most {max}.",
+    "positive": "{field} must be greater than zero.",
+    "positiveGeneric": "Enter a value greater than zero.",
+    "decimalPlaces": "{field} must use at most {decimals} decimal places.",
+    "decimalPlacesGeneric": "Use at most {decimals} decimal places.",
+    "dateOrder": "{field} must be on or after {other}.",
     "minLength": "{field} must be at least {min} characters.",
     "minLengthGeneric": "Enter at least {min} characters.",
     "maxLength": "{field} must be at most {max} characters.",
@@ -3368,7 +3434,8 @@
     "passwordMismatch": "两次输入的密码不一致。",
     "commonPassword": "该密码太容易被猜出，请另选一个。",
     "commonPasswordGeneric": "该密码太容易被猜出，请另选一个。"
-  },
+  ,
+  "duplicateAssetCode": "资产代码 {code} 已被使用。"},
   "fields": {
     "feeTypeId": "费用类型",
     "priority": "优先级",

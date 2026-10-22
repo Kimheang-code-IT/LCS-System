@@ -40,7 +40,7 @@ export type NormalizedApiError = {
 
 /** FastAPI/Pydantic sentences rewritten into copy a user can act on. */
 const MESSAGE_RULES: Array<{ pattern: RegExp, code: string, params?: (match: RegExpMatchArray) => Record<string, string | number> }> = [
-  { pattern: /^Field required$/i, code: 'required' },
+  { pattern: /^Field required$|field (?:is )?required/i, code: 'required' },
   { pattern: /^Input should be a valid email address/i, code: 'email' },
   { pattern: /^Input should be a valid url or url after scheme/i, code: 'url' },
   { pattern: /^Input should be a valid URL/i, code: 'url' },
@@ -63,6 +63,11 @@ const MESSAGE_RULES: Array<{ pattern: RegExp, code: string, params?: (match: Reg
   { pattern: /ensure this value is less than/i, code: 'max' },
   { pattern: /string should match pattern/i, code: 'pattern' },
   { pattern: /input should be a valid dictionary|input should be a valid list|input should be a valid set/i, code: 'generic' },
+  // Sentences emitted by the backend schema validator (`app/core/validation.py`).
+  { pattern: /Use at most (\d+) decimal places?/i, code: 'decimalPlaces', params: m => ({ decimals: Number(m[1]) }) },
+  { pattern: /Enter a value greater than zero|Must be greater than zero/i, code: 'positive' },
+  { pattern: /Choose one of the available options/i, code: 'allowed' },
+  { pattern: /Enter a valid phone number/i, code: 'pattern' },
 ]
 
 /** `customer_party_id` -> `customerPartyId` is done in `error-paths`. */
@@ -102,6 +107,7 @@ type RawErrorBody = {
   detail?: unknown
   request_id?: unknown
   field_errors?: unknown
+  errors?: unknown
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,6 +134,30 @@ function mapFieldErrors(
     if (!message) continue
     // First writer wins: a domain error is more specific than a generic one.
     if (!into.has(key)) into.set(key, { key, message })
+  }
+}
+
+/**
+ * The standard `errors: [{ field, code, message }]` array.
+ *
+ * This is the modern envelope; `field_errors` is kept beside it for older
+ * clients. Mapping both means a coded error keeps its code, while a legacy map
+ * still reaches the right input.
+ */
+function mapErrorItems(raw: unknown, into: Map<string, MappedFieldError>): void {
+  if (!Array.isArray(raw)) return
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue
+    const key = normalizeErrorKey(String(entry.field ?? ''))
+    const message = sanitizeMessage(entry.message)
+    if (!key || !message) continue
+    if (!into.has(key)) {
+      into.set(key, {
+        key,
+        message,
+        ...(entry.code ? { code: String(entry.code) } : {}),
+      })
+    }
   }
 }
 
@@ -182,12 +212,14 @@ export function normalizeApiError(
   const fallbackBody = envelope ?? (raw as RawErrorBody | null)
 
   if (envelope) {
+    mapErrorItems(envelope.errors, mapped)
     mapFieldErrors(envelope.field_errors, mapped)
     if (Array.isArray(envelope.detail)) mapDetailArray(envelope.detail, mapped)
   }
   else if (fallbackBody) {
     // A bare `{ detail: "..." }` / `{ detail: [...] }` body.
     if (Array.isArray(fallbackBody.detail)) mapDetailArray(fallbackBody.detail, mapped)
+    mapErrorItems((fallbackBody as RawErrorBody).errors, mapped)
     mapFieldErrors((fallbackBody as RawErrorBody).field_errors, mapped)
   }
 

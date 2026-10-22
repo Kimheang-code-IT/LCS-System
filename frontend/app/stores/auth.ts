@@ -171,14 +171,18 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (Array.isArray(currentUser.permissions)) {
       if (currentUser.permissions.includes('ALL_PAGES')) return true
-      if (currentUser.permissions.includes(pageId)) return true
-      if (pageId === 'configuration.manage' && currentUser.permissions.includes('configuration.configure')) return true
-      return false
+      return currentUser.permissions.includes(pageId)
     }
 
+    // A session without permission data must see nothing until refreshSession()
+    // loads it; default-allow would briefly expose every screen.
     const access = currentUser.pageAccess
-    if (!access?.length) return true
+    if (!access?.length) return false
     return access.includes(pageId)
+  }
+
+  function canAccessAnyPage(pageIds: readonly string[]): boolean {
+    return pageIds.some(pageId => canAccessPage(pageId))
   }
 
   function updateUser(partial: Partial<AuthUser>) {
@@ -203,5 +207,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     updateUser,
     canAccessPage,
+    canAccessAnyPage,
   }
 })

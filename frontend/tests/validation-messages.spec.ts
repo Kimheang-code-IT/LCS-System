@@ -26,8 +26,6 @@ function lookup(bundle: Record<string, unknown>, dotted: string): unknown {
 
 const usedKeys = [
   ...Object.values(ISSUE_KEYS).flatMap(key => [key, ...(key === 'validation.balanced' ? [] : [`${key}Generic`])]),
-  'validation.summaryTitle',
-  'validation.summaryCount',
   'validation.formError',
   'validation.minRows',
   'validation.duplicateSequence',

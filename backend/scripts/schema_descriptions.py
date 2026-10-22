@@ -2,7 +2,7 @@
 
 This module is the single source of truth for the prose that
 ``scripts/generate_schema_docs.py`` renders into
-``docs/06b_database_design_annotated.sql``. Keeping the text here — instead of
+``docs/06_database_design.sql``. Keeping the text here — instead of
 hand-editing the generated SQL — means the documentation can be regenerated
 after any model change with::
 
@@ -41,9 +41,22 @@ MODULE_TITLES: dict[str, str] = {
 
 TABLE_DESCRIPTIONS: dict[str, str] = {
     # -- master data ------------------------------------------------------
-    "places": (
-        "Named location (port, airport, warehouse, address) used by quotations and service\n"
-        "orders. Soft-deleted rather than removed so historic documents keep resolving."
+    "place_roles": (
+        "Administrator-managed vocabulary of roles a route stop can play (Pickup, Origin,\n"
+        "Customs Clearance, ...). Configuration data, not a physical location: the same\n"
+        "place can be a loading stop on one document and a destination on another. The\n"
+        "initial rows are seeded as data, and a role in use is deactivated rather than\n"
+        "deleted so historical routes keep their reference."
+    ),
+    "party_roles": (
+        "Administrator-managed vocabulary of roles a business party can hold (Customer,\n"
+        "Supplier, Company, or any role the organisation adds). Replaces the hardcoded\n"
+        "dropdown; a role still assigned to a party is deactivated instead of deleted."
+    ),
+    "business_party_roles": (
+        "Many-to-many assignment of party roles to business parties. The unique pair\n"
+        "prevents the same role being assigned twice, and the role FK is RESTRICT so an\n"
+        "assigned role cannot be hard-deleted."
     ),
     "currencies": (
         "Currency master data. Monetary columns keep their ISO code string for backward\n"
@@ -88,9 +101,9 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "as \"Container No.\" can be reused everywhere."
     ),
     "component_groups": (
-        "A group of attributes rendered together. render_mode decides the presentation:\n"
-        "'table' = a repeatable editable table (many rows), 'form' = a single row shown as a\n"
-        "form."
+        "A reusable group of attributes. render_mode is the legacy default; the effective\n"
+        "layout (form_only, table_only or form_and_table) is configured per tab assignment on\n"
+        "component_tab_groups, so the same group can render differently in different tabs."
     ),
     "component_group_attributes": (
         "Membership of a reusable attribute in a component group, with per-group overrides of\n"
@@ -113,7 +126,10 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "validated and written without rewriting the whole document, and lets each row carry\n"
         "its own description and last writer. Payload shape and validation stay in code."
     ),
-    "component_tab_groups": "Membership of a component group in a component tab.",
+    "component_tab_groups": (
+        "Membership of a component group in a component tab, including the display layout for\n"
+        "that assignment (mode, cardinality, form columns, title/read-only/collapse flags)."
+    ),
     "module_records": (
         "Generic record store backing metadata-driven frontend collections. Used for\n"
         "secondary/legacy collections that the frontend renders from its module schema (for\n"
@@ -493,15 +509,28 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "created_at": "Request timestamp for this reset code.",
     },
     # -- master data ------------------------------------------------------
-    "places": {
+    "place_roles": {
         "code": (
-            "Short location code (e.g. SGSIN). Unique among non-archived rows, so it can be\n"
-            "reused after a location is deleted."
+            "Stable role code (e.g. PICKUP). Unique among non-archived rows and stored on a\n"
+            "route stop as its printable snapshot."
         ),
-        "name": "Display name of the location.",
-        "description": "Free-text notes about the location.",
-        "address": "Detailed street address, used when the location is not a port or airport.",
-        "status": "Record status (ACTIVE, INACTIVE). An inactive place cannot be picked on new documents.",
+        "name": "Display name shown in the route-stop dropdown and on the document.",
+        "description": "Free-text explanation of when the role applies.",
+        "sort_order": (
+            "Administrator-controlled display order in the Place Roles page and in every\n"
+            "route-stop dropdown; ties break by name."
+        ),
+        "status": "Record status (ACTIVE, INACTIVE). A new route stop may only select an ACTIVE role.",
+    },
+    "party_roles": {
+        "code": "Stable role code (e.g. CUSTOMER). Unique among non-archived rows.",
+        "name": "Display name shown in the Business Parties form and in lists.",
+        "description": "Free-text explanation of when the role applies.",
+        "status": "Record status (ACTIVE, INACTIVE). Only an ACTIVE role is offered on a new assignment.",
+    },
+    "business_party_roles": {
+        "business_party_id": "Party holding the role. CASCADE when the party is purged.",
+        "party_role_id": "Assigned role. RESTRICT so an assigned role cannot be hard-deleted.",
     },
     "trade_directions": {
         "code": "Short direction code (e.g. EXPORT). Unique among non-archived rows.",
@@ -549,8 +578,8 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "email": "Primary contact email address.",
         "address": "Registered or operating address.",
         "roles": (
-            "JSON array of the roles this party plays (for example [\"CUSTOMER\", \"SUPPLIER\"]).\n"
-            "Drives which workflows the party is offered in."
+            "Legacy JSON snapshot of the party's role names. Assignments are read from\n"
+            "business_party_roles, so a role rename is reflected without rewriting this column."
         ),
         "status": "Record status (ACTIVE, INACTIVE).",
     },
@@ -558,7 +587,7 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "asset_code": "Fleet or internal asset number (e.g. VH-118).",
         "transport_type_id": "Transport mode this asset belongs to.",
         "identity": "Registration number, IMO number or tail number identifying the asset.",
-        "identity_type": "What identity represents: PLATE, IMO, TAIL or REGISTRATION.",
+        "identity_type": "What identity represents: License Plate, IMO Number, Flight Number or Other.",
         "owner_party_id": "Business party that owns the asset.",
         "operator_party_id": "Business party that operates the asset; may differ from the owner.",
         "description": "Free-text notes about the asset.",
@@ -600,8 +629,8 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "data_type": "Storage and logic type: text, number, date, boolean, select, reference.",
         "input_type": "UI widget override, used when it differs from the widget implied by data_type.",
         "reference_type": (
-            "Master-data collection a reference-type attribute points at, for example places\n"
-            "or container_types."
+            "Master-data collection a reference-type attribute points at, for example\n"
+            "business_parties or container_types."
         ),
         "is_required": "Default required flag. An individual component group may override it.",
         "default_value": "Value pre-filled when a new row is created.",
@@ -617,8 +646,8 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "name_km": "Admin-managed Khmer name.",
         "description": "Free-text explanation of what the group collects.",
         "render_mode": (
-            "How the group is rendered on a Service Order: 'table' for a repeatable editable\n"
-            "table of many rows, 'form' for a single row shown as a form."
+            "Legacy default only: 'table' or 'form'. The effective layout is\n"
+            "component_tab_groups.display_mode; NULL there inherits this value."
         ),
         "is_active": "TRUE when the group is enabled for new service orders.",
     },
@@ -627,6 +656,7 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "attribute_id": "Attribute catalog entry being included. CASCADE on attribute deletion.",
         "is_required": "Group-level override of the required flag. NULL inherits the attribute default.",
         "width": "Group-level width override. NULL inherits the attribute default.",
+        "is_visible": "FALSE hides the field in every tab that uses this group. Values already saved are kept.",
         "status": "Record status (ACTIVE, INACTIVE).",
     },
     "component_tabs": {
@@ -646,6 +676,19 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "component_tab_groups": {
         "tab_id": "Component tab the group belongs to. CASCADE on tab deletion.",
         "group_id": "Component group shown on the tab. CASCADE on group deletion.",
+        "display_mode": (
+            "How this group renders in this tab: form_only, table_only or\n"
+            "form_and_table. NULL inherits component_groups.render_mode."
+        ),
+        "data_cardinality": (
+            "Whether the group holds a single record or multiple records in this tab.\n"
+            "NULL inherits component_groups.render_mode."
+        ),
+        "form_columns": "Number of form columns (1-4) for form layouts. NULL inherits the default of 3.",
+        "show_group_title": "Whether the group heading is rendered. NULL defaults to TRUE.",
+        "editable": "FALSE renders the group read-only and makes the save endpoint refuse writes. NULL defaults to TRUE.",
+        "collapsible": "Whether the group can be collapsed by the user. NULL defaults to FALSE.",
+        "default_expanded": "Initial expanded state of a collapsible group. NULL defaults to TRUE.",
         "status": "Record status (ACTIVE, INACTIVE).",
     },
     "module_records": {
@@ -702,16 +745,20 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     "quotation_revision_places": {
         "quotation_revision_id": "Revision the routing stop belongs to. CASCADE on revision deletion.",
-        "place_id": (
-            "Master-data place. NULL when the stop is described only by free_text (an ad-hoc\n"
-            "address not worth adding to master data)."
+        "place_role_id": (
+            "Configured Place Role the stop plays. SET NULL only if the role row is purged;\n"
+            "the place_role text snapshot keeps the historical label."
         ),
         "place_role": (
-            "Role of the stop in the route: ORIGIN, DESTINATION, PICKUP, DELIVERY,\n"
-            "PORT_OF_LOADING or PORT_OF_DISCHARGE."
+            "Text snapshot of the role (the role name at save time). Preserved so a route\n"
+            "still prints after the role is renamed or deactivated."
         ),
-        "sequence_no": "Position of this stop within the route.",
-        "free_text": "Ad-hoc place description used when place_id is NULL.",
+        "sequence_no": (
+            "Position of this stop within the route. Unique per revision; the server\n"
+            "renumbers from the submitted row order."
+        ),
+        "planned_at": "Planned date/time for the stop.",
+        "free_text": "Free-text location typed for the stop, kept for printing and history.",
         "notes": "Free-text notes about this stop.",
     },
     "quotation_revision_containers": {
@@ -781,16 +828,24 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     "service_order_places": {
         "service_order_id": "Service order the stop belongs to. CASCADE on order deletion.",
-        "place_id": "Master-data place. NULL when the stop is described only by free_text.",
-        "place_role": (
-            "Role of the stop: ORIGIN, DESTINATION, PICKUP, DELIVERY, PORT_OF_LOADING or\n"
-            "PORT_OF_DISCHARGE."
+        "place_role_id": (
+            "Configured Place Role the stop plays. Copied from the quotation on conversion,\n"
+            "then independent; SET NULL only if the role row is purged."
         ),
-        "sequence_no": "Position of this stop within the route.",
-        "free_text": "Ad-hoc place description used when place_id is NULL.",
+        "place_role": (
+            "Text snapshot of the role at save time. Preserved so a route still prints after\n"
+            "the role is renamed or deactivated."
+        ),
+        "sequence_no": (
+            "Position of this stop within the route. Unique per order; the server renumbers\n"
+            "from the submitted row order."
+        ),
+        "planned_at": "Planned date/time for the stop.",
+        "actual_at": "Actual date/time the stop was served, when known.",
+        "free_text": "Free-text location typed for the stop, kept for printing and history.",
         "is_actual": (
-            "TRUE once the stop has actually been served, which is what distinguishes the plan\n"
-            "from what happened."
+            "TRUE when actual_at is set, i.e. the stop has actually been served. Kept for\n"
+            "reports written before actual_at existed."
         ),
         "notes": "Free-text notes about this stop.",
     },
@@ -869,8 +924,6 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "sequence_no": "Order of this leg along the shipment itinerary.",
         "transport_type_id": "Mode of transport used for this leg.",
         "transport_asset_id": "Specific vehicle, vessel or aircraft performing the leg.",
-        "origin_place_id": "Master-data place the leg departs from.",
-        "destination_place_id": "Master-data place the leg arrives at.",
         "planned_departure": "Scheduled departure (UTC, timezone-aware).",
         "actual_departure": "Recorded departure. NULL until the leg actually departs.",
         "planned_arrival": "Scheduled arrival (UTC, timezone-aware).",
@@ -1308,6 +1361,19 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     # -- configuration versions --------------------------------------------
     "configuration_versions": {
         "version_no": "Sequential version number across the installation, starting at 1.",
+        "scope": (
+            "Scope this version freezes. GLOBAL today; direction-specific publishing can use the\n"
+            "same column without a second version table."
+        ),
+        "origin": "PUBLISH for a new live configuration, ROLLBACK when the snapshot copies an older version.",
+        "snapshot_schema_version": (
+            "Shape version of config_snapshot, so a reader can detect a snapshot written by an\n"
+            "older builder."
+        ),
+        "content_hash": "Hash of the normalised snapshot, used to compare versions without trusting JSON key order.",
+        "source_version_id": "Version a ROLLBACK copied; NULL for an ordinary publish.",
+        "activated_at": "When this version was last made active. The published_* fields stay the original event.",
+        "activated_by_user_id": "User who last activated this version.",
         "status": (
             "DRAFT (never published), PUBLISHED (the live configuration) or RETIRED (superseded).\n"
             "A partial unique index allows only one PUBLISHED row."

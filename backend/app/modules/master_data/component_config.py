@@ -28,7 +28,6 @@ from app.modules.operations.models import ServiceOrderComponentRow
 
 REFERENCE_TYPES = (
     "business_party",
-    "place",
     "transport_asset",
     "transport_type",
     "container",
@@ -53,6 +52,20 @@ DATA_TYPES = (
 )
 RENDER_MODES = ("table", "form")
 
+# Per-tab-assignment layout. ``displayMode`` decides which renderers participate,
+# ``dataCardinality`` limits how many rows the group may hold.
+LAYOUT_DISPLAY_MODES = ("form_only", "table_only", "form_and_table")
+DATA_CARDINALITIES = ("single", "multiple")
+FORM_COLUMN_COUNTS = (1, 2, 3, 4)
+DEFAULT_FORM_COLUMNS = 3
+
+# Legacy groups only know ``render_mode``; these values are what that mode means
+# once layout moved onto the tab/group assignment.
+_LEGACY_LAYOUT_DEFAULTS = {
+    "table": {"displayMode": "table_only", "dataCardinality": "multiple"},
+    "form": {"displayMode": "form_only", "dataCardinality": "single"},
+}
+
 
 def _bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -71,6 +84,126 @@ def _validate_data_type(value: Any) -> str:
     if data_type not in DATA_TYPES:
         raise ValidationFailed(f"Unsupported attribute type: {data_type}", {"dataType": "Unsupported"})
     return data_type
+
+
+# --- Group layout ------------------------------------------------------------
+def _legacy_layout(group: ComponentGroup) -> dict[str, Any]:
+    """What a group rendered as before layouts were configurable per assignment."""
+    render_mode = str(group.render_mode or "table").strip().lower()
+    defaults = _LEGACY_LAYOUT_DEFAULTS.get(render_mode, _LEGACY_LAYOUT_DEFAULTS["table"])
+    return {
+        "displayMode": defaults["displayMode"],
+        "dataCardinality": defaults["dataCardinality"],
+        "formColumns": DEFAULT_FORM_COLUMNS,
+        "showGroupTitle": True,
+        "editable": True,
+        "collapsible": False,
+        "defaultExpanded": True,
+    }
+
+
+def resolve_layout(link: ComponentTabGroup | None, group: ComponentGroup) -> dict[str, Any]:
+    """Effective layout of one group assignment.
+
+    NULL columns inherit the legacy group default, so a configuration written
+    before per-tab layouts existed renders exactly as it did.
+    """
+    layout = _legacy_layout(group)
+    if link is not None:
+        if link.display_mode:
+            layout["displayMode"] = link.display_mode
+        if link.data_cardinality:
+            layout["dataCardinality"] = link.data_cardinality
+        if link.form_columns is not None:
+            layout["formColumns"] = int(link.form_columns)
+        if link.show_group_title is not None:
+            layout["showGroupTitle"] = bool(link.show_group_title)
+        if link.editable is not None:
+            layout["editable"] = bool(link.editable)
+        if link.collapsible is not None:
+            layout["collapsible"] = bool(link.collapsible)
+        if link.default_expanded is not None:
+            layout["defaultExpanded"] = bool(link.default_expanded)
+    return layout
+
+
+def _validate_layout_values(display_mode: str, cardinality: str, form_columns: int) -> None:
+    if display_mode not in LAYOUT_DISPLAY_MODES:
+        raise ValidationFailed("Unsupported display mode.", {"displayMode": "Unsupported"})
+    if cardinality not in DATA_CARDINALITIES:
+        raise ValidationFailed("Unsupported data cardinality.", {"dataCardinality": "Unsupported"})
+    if form_columns not in FORM_COLUMN_COUNTS:
+        raise ValidationFailed("Form columns must be 1, 2, 3 or 4.", {"formColumns": "Unsupported"})
+    # A form-only group has no records table, so a second row could never be
+    # reached. Refusing the combination is what keeps saved rows visible.
+    if display_mode == "form_only" and cardinality == "multiple":
+        raise ValidationFailed(
+            "A form-only group can hold a single record; use form and table for multiple records.",
+            {"dataCardinality": "Incompatible with form only"},
+        )
+
+
+def _layout_patch(data: dict[str, Any], layout: dict[str, Any]) -> dict[str, Any]:
+    """Apply only the layout keys present in a request onto an effective layout."""
+    patch = dict(layout)
+    if data.get("displayMode") is not None:
+        patch["displayMode"] = str(data["displayMode"]).strip().lower()
+    if data.get("dataCardinality") is not None:
+        patch["dataCardinality"] = str(data["dataCardinality"]).strip().lower()
+    if data.get("formColumns") is not None:
+        try:
+            patch["formColumns"] = int(data["formColumns"])
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed("Form columns must be 1, 2, 3 or 4.", {"formColumns": "Unsupported"}) from exc
+    if data.get("showGroupTitle") is not None:
+        patch["showGroupTitle"] = _bool(data["showGroupTitle"], True)
+    if data.get("editable") is not None:
+        patch["editable"] = _bool(data["editable"], True)
+    if data.get("collapsible") is not None:
+        patch["collapsible"] = _bool(data["collapsible"], False)
+    if data.get("defaultExpanded") is not None:
+        patch["defaultExpanded"] = _bool(data["defaultExpanded"], True)
+    return patch
+
+
+async def _orders_with_multiple_rows(session: AsyncSession, group_id: int) -> list[int]:
+    """Service Orders that currently store more than one row for this group."""
+    subquery = (
+        select(ServiceOrderComponentRow.service_order_id)
+        .where(
+            ServiceOrderComponentRow.group_id == group_id,
+            ServiceOrderComponentRow.is_archived.is_(False),
+        )
+        .group_by(ServiceOrderComponentRow.service_order_id)
+        .having(func.count(ServiceOrderComponentRow.id) > 1)
+    )
+    return list((await session.execute(subquery)).scalars().all())
+
+
+async def _guard_layout_change(
+    session: AsyncSession, group_id: int, current: dict[str, Any], target: dict[str, Any]
+) -> None:
+    """Refuse a layout that would make saved rows unreachable.
+
+    A single-record layout (or a form-only one, which has no table) can only show
+    one row. If an order already stores several, changing the layout would not
+    delete them but would hide them, so the change is rejected instead.
+    """
+    becomes_single = (
+        target["dataCardinality"] == "single" or target["displayMode"] == "form_only"
+    ) and (
+        current["dataCardinality"] != "single" or current["displayMode"] != "form_only"
+    )
+    if not becomes_single:
+        return
+    orders = await _orders_with_multiple_rows(session, group_id)
+    if orders:
+        raise Conflict(
+            "LAYOUT_CHANGE_WOULD_HIDE_ROWS",
+            "This group already has Service Orders with more than one saved record. "
+            "A single-record layout would hide them; keep multiple records or remove the extra rows first.",
+            {"dataCardinality": "Incompatible with saved records"},
+        )
 
 
 # --- Attributes --------------------------------------------------------------
@@ -119,10 +252,22 @@ async def _get_attribute(session: AsyncSession, attribute_id: int) -> ComponentA
     return attribute
 
 
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 async def create_attribute(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
-    code = _normalize_code(data.get("code") or data.get("label"))
+    label = str(data.get("label") or "").strip()
+    if not label:
+        raise ValidationFailed("Label is required.", {"label": "Required"})
+    code = _normalize_code(data.get("code") or label)
     if not code:
-        raise ValidationFailed("An attribute code or label is required.", {"code": "Required"})
+        raise ValidationFailed("An attribute code or label is required.", {"label": "Required"})
+    if len(code) > 64:
+        raise ValidationFailed("The attribute code is too long.", {"label": "At most 64 characters"})
     exists = (
         await session.execute(select(ComponentAttribute).where(ComponentAttribute.code == code))
     ).scalars().first()
@@ -134,14 +279,14 @@ async def create_attribute(session: AsyncSession, context: RequestContext, data:
         raise ValidationFailed("A valid reference type is required.", {"referenceType": "Required"})
     attribute = ComponentAttribute(
         code=code,
-        label=str(data.get("label") or code.replace("-", " ").title()),
+        label=label,
         label_km=data.get("labelKm"),
         data_type=data_type,
         input_type=data.get("inputType"),
         reference_type=reference_type if data_type == "reference" else None,
         is_required=_bool(data.get("isRequired"), False),
         default_value=data.get("defaultValue"),
-        placeholder=data.get("placeholder"),
+        placeholder=_optional_text(data.get("placeholder")),
         width=data.get("width"),
         options=jsonable(data.get("options") or []),
         validation_rules=jsonable(data.get("validationRules") or {}),
@@ -198,7 +343,10 @@ async def update_attribute(session: AsyncSession, context: RequestContext, attri
     if data.get("code") is not None:
         await _rename_attribute(session, attribute, data["code"])
     if data.get("label") is not None:
-        attribute.label = str(data["label"])
+        label = str(data["label"]).strip()
+        if not label:
+            raise ValidationFailed("Label is required.", {"label": "Required"})
+        attribute.label = label
     if data.get("labelKm") is not None:
         attribute.label_km = data.get("labelKm")
     if data.get("dataType") is not None:
@@ -214,7 +362,7 @@ async def update_attribute(session: AsyncSession, context: RequestContext, attri
     if data.get("defaultValue") is not None:
         attribute.default_value = data.get("defaultValue")
     if data.get("placeholder") is not None:
-        attribute.placeholder = data.get("placeholder")
+        attribute.placeholder = _optional_text(data["placeholder"])
     if data.get("width") is not None:
         attribute.width = data.get("width")
     if data.get("options") is not None:
@@ -229,10 +377,14 @@ async def update_attribute(session: AsyncSession, context: RequestContext, attri
 
 async def delete_attribute(session: AsyncSession, context: RequestContext, attribute_id: int) -> dict[str, Any]:
     attribute = await _get_attribute(session, attribute_id)
+    # Group membership is what links an attribute to a Component Group, and
+    # groups are what Component Tabs render. Saved Service Order values are
+    # keyed by the attribute code, so any of these references means the record
+    # must be archived (status INACTIVE) rather than deleted.
     in_use = await session.scalar(
         select(func.count()).select_from(ComponentGroupAttribute).where(ComponentGroupAttribute.attribute_id == attribute.id)
     )
-    if in_use:
+    if in_use or await _attribute_row_references(session, attribute.id):
         attribute.status = "INACTIVE"
         await session.commit()
         return {"archived": True, "id": str(attribute.id)}
@@ -378,6 +530,7 @@ def membership_payload(membership: ComponentGroupAttribute, attribute: Component
         "defaultValue": attribute.default_value,
         "placeholder": attribute.placeholder,
         "displayOrder": membership.display_order,
+        "isVisible": membership.is_visible,
         "status": membership.status,
     }
 
@@ -431,6 +584,7 @@ async def add_group_attribute(session: AsyncSession, context: RequestContext, gr
         is_required=(_bool(data["isRequired"]) if data.get("isRequired") is not None else None),
         width=data.get("width"),
         display_order=int(data.get("displayOrder") if data.get("displayOrder") is not None else (max_order or 0) + 10),
+        is_visible=_bool(data.get("isVisible"), True),
         status=str(data.get("status") or "ACTIVE"),
     )
     session.add(membership)
@@ -453,6 +607,8 @@ async def update_group_attribute(session: AsyncSession, context: RequestContext,
         membership.width = data.get("width")
     if data.get("displayOrder") is not None:
         membership.display_order = int(data["displayOrder"])
+    if data.get("isVisible") is not None:
+        membership.is_visible = _bool(data["isVisible"], membership.is_visible)
     if data.get("status") is not None:
         membership.status = str(data["status"])
     await session.commit()
@@ -490,6 +646,17 @@ def _direction_id(data: dict[str, Any]) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def tab_group_payload(membership: ComponentTabGroup, group: ComponentGroup) -> dict[str, Any]:
+    """A group as attached to one tab, with the layout of *that* assignment."""
+    return {
+        **group_payload(group),
+        "tabGroupId": str(membership.id),
+        "displayOrder": membership.display_order,
+        "status": membership.status,
+        **resolve_layout(membership, group),
+    }
 
 
 def tab_payload(tab: ComponentTab, group_count: int = 0) -> dict[str, Any]:
@@ -608,10 +775,7 @@ async def list_tab_groups(session: AsyncSession, context: RequestContext, tab_id
             .order_by(ComponentTabGroup.display_order, ComponentTabGroup.id)
         )
     ).all()
-    return [
-        {**group_payload(group), "tabGroupId": str(membership.id), "displayOrder": membership.display_order}
-        for membership, group in rows
-    ]
+    return [tab_group_payload(membership, group) for membership, group in rows]
 
 
 async def add_tab_group(session: AsyncSession, context: RequestContext, tab_id: int, data: dict[str, Any]) -> dict:
@@ -627,6 +791,15 @@ async def add_tab_group(session: AsyncSession, context: RequestContext, tab_id: 
     ).scalars().first()
     if exists is not None:
         raise Conflict("DUPLICATE_TAB_GROUP", "This group is already on the tab.", {"groupId": "Already in use"})
+    # Omitting layout keeps the pre-existing behaviour: the group's legacy
+    # ``render_mode`` decides. Supplying a display mode without a cardinality
+    # picks the compatible default for that mode.
+    layout = _layout_patch(data, _legacy_layout(group))
+    if data.get("displayMode") is not None and data.get("dataCardinality") is None:
+        layout["dataCardinality"] = "single" if layout["displayMode"] == "form_only" else "multiple"
+    _validate_layout_values(layout["displayMode"], layout["dataCardinality"], int(layout["formColumns"]))
+    await _guard_layout_change(session, group.id, _legacy_layout(group), layout)
+
     max_order = await session.scalar(
         select(func.max(ComponentTabGroup.display_order)).where(ComponentTabGroup.tab_id == tab.id)
     )
@@ -634,11 +807,57 @@ async def add_tab_group(session: AsyncSession, context: RequestContext, tab_id: 
         tab_id=tab.id,
         group_id=group.id,
         display_order=int(data.get("displayOrder") if data.get("displayOrder") is not None else (max_order or 0) + 10),
+        display_mode=layout["displayMode"],
+        data_cardinality=layout["dataCardinality"],
+        form_columns=layout["formColumns"],
+        show_group_title=layout["showGroupTitle"],
+        editable=layout["editable"],
+        collapsible=layout["collapsible"],
+        default_expanded=layout["defaultExpanded"],
         status=str(data.get("status") or "ACTIVE"),
     )
     session.add(membership)
     await session.commit()
     return await _tab_detail(session, context, tab.id)
+
+
+async def _get_tab_group(session: AsyncSession, tab_group_id: int) -> tuple[ComponentTabGroup, ComponentGroup]:
+    membership = await session.get(ComponentTabGroup, tab_group_id)
+    if membership is None:
+        raise NotFound("Tab group not found.")
+    group = await _get_group(session, membership.group_id)
+    return membership, group
+
+
+async def update_tab_group(
+    session: AsyncSession, context: RequestContext, tab_group_id: int, data: dict[str, Any]
+) -> dict:
+    """Update the layout of one group *within its tab*."""
+    membership, group = await _get_tab_group(session, tab_group_id)
+
+    current = resolve_layout(membership, group)
+    layout = _layout_patch(data, current)
+    # Supplying a display mode on its own also realigns the cardinality, so
+    # changing to form-only cannot silently keep "multiple" from the old layout.
+    if data.get("displayMode") is not None and data.get("dataCardinality") is None:
+        layout["dataCardinality"] = "single" if layout["displayMode"] == "form_only" else "multiple"
+    _validate_layout_values(layout["displayMode"], layout["dataCardinality"], int(layout["formColumns"]))
+    await _guard_layout_change(session, group.id, current, layout)
+
+    membership.display_mode = layout["displayMode"]
+    membership.data_cardinality = layout["dataCardinality"]
+    membership.form_columns = int(layout["formColumns"])
+    membership.show_group_title = layout["showGroupTitle"]
+    membership.editable = layout["editable"]
+    membership.collapsible = layout["collapsible"]
+    membership.default_expanded = layout["defaultExpanded"]
+    if data.get("displayOrder") is not None:
+        membership.display_order = int(data["displayOrder"])
+    if data.get("status") is not None:
+        membership.status = str(data["status"])
+    await session.commit()
+    membership, group = await _get_tab_group(session, tab_group_id)
+    return tab_group_payload(membership, group)
 
 
 async def remove_tab_group(session: AsyncSession, context: RequestContext, tab_group_id: int) -> dict[str, Any]:

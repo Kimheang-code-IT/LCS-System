@@ -23,8 +23,8 @@ async def get_archive_options(
 @router.get("/archive")
 async def list_archive(
     page: PageParams = Depends(page_params),
-    entity_type: str | None = Query(None),
-    deleted_by: int | None = Query(None),
+    entity_type: str | None = Query(None, max_length=64),
+    deleted_by: int | None = Query(None, ge=1),
     context: RequestContext = Depends(require_permission("archive.view")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:

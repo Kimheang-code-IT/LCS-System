@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -41,14 +42,22 @@ def active_unique_index(name: str, *columns: str) -> Index:
     )
 
 
-class Place(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
-    __tablename__ = "places"
-    __table_args__ = (active_unique_index("uq_places_code_active", "code"),)
+class PlaceRole(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A reusable role a route stop can play (Pickup, Origin, Customs …).
 
-    code: Mapped[str | None] = mapped_column(String(50))
+    A place role is *not* a location: the same port can be the loading stop on
+    one quotation and the destination on another. The vocabulary is configuration
+    data, so administrators add roles here instead of a code change, and a role is
+    deactivated (never deleted) once documents refer to it.
+    """
+
+    __tablename__ = "place_roles"
+    __table_args__ = (active_unique_index("uq_place_roles_code_active", "code"),)
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    address: Mapped[str | None] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
@@ -180,8 +189,45 @@ class BusinessParty(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     phone: Mapped[str | None] = mapped_column(String(64))
     email: Mapped[str | None] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(Text)
+    #: Legacy label snapshot. Assignments are read from ``business_party_roles``;
+    #: this column stays for pre-migration clients and a safe downgrade.
     roles: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class PartyRole(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """An administrator-managed role a business party can hold.
+
+    Customer / Supplier / Company were formerly hardcoded options. They are data
+    now so an organisation can add, rename or deactivate a role without a deploy.
+    """
+
+    __tablename__ = "party_roles"
+    __table_args__ = (
+        active_unique_index("uq_party_roles_code_active", "code"),
+        active_unique_index("uq_party_roles_name_active", "name"),
+    )
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class BusinessPartyRole(PKMixin, Base):
+    """A party holds several roles; the pair is unique and the role is protected."""
+
+    __tablename__ = "business_party_roles"
+    __table_args__ = (
+        UniqueConstraint("business_party_id", "party_role_id", name="uq_business_party_roles"),
+    )
+
+    business_party_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("business_parties.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    party_role_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("party_roles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
 
 
 class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -194,7 +240,7 @@ class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     asset_code: Mapped[str] = mapped_column(String(50), nullable=False)
     transport_type_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("transport_types.id"), nullable=False)
     identity: Mapped[str] = mapped_column(String(128), nullable=False)
-    identity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="PLATE")
+    identity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="License Plate")
     owner_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     operator_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     description: Mapped[str | None] = mapped_column(Text)
@@ -240,11 +286,25 @@ class ConfigurationVersion(PKMixin, TimestampMixin, Base):
     )
 
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The scope is reserved for direction-specific publishing; today all
+    # versions are GLOBAL because the admin publishes the whole form at once.
+    scope: Mapped[str] = mapped_column(String(32), nullable=False, default="GLOBAL", server_default="GLOBAL")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
+    # PUBLISH (a new live configuration) or ROLLBACK (a copy of an older one).
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="PUBLISH", server_default="PUBLISH")
     change_note: Mapped[str | None] = mapped_column(Text)
     config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    snapshot_schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    source_version_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("configuration_versions.id", ondelete="SET NULL"), index=True
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     published_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    # When this snapshot was last made active. ``published_*`` stays the original
+    # publication event even after a version is reactivated.
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
 
 
 class ComponentAttribute(PKMixin, TimestampMixin, Base):
@@ -273,11 +333,11 @@ class ComponentAttribute(PKMixin, TimestampMixin, Base):
 
 
 class ComponentGroup(PKMixin, TimestampMixin, Base):
-    """A group of attributes rendered together.
+    """A reusable group of attributes.
 
-    ``render_mode`` decides how the group appears on a Service Order:
-    ``table`` = a repeatable editable table (many rows), ``form`` = a single
-    row shown as a form.
+    ``render_mode`` is the legacy group-level default. How a group actually
+    renders is configured per tab assignment on :class:`ComponentTabGroup`, so
+    the same reusable group can be a form in one tab and a table in another.
     """
 
     __tablename__ = "component_groups"
@@ -308,6 +368,9 @@ class ComponentGroupAttribute(PKMixin, TimestampMixin, Base):
     is_required: Mapped[bool | None] = mapped_column(Boolean)
     width: Mapped[str | None] = mapped_column(String(16))
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Column visibility and order are configuration, not a per-tab override: the
+    # group is reusable, so the same field set renders wherever it is attached.
+    is_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
@@ -334,10 +397,31 @@ class ComponentTab(PKMixin, TimestampMixin, Base):
 
 
 class ComponentTabGroup(PKMixin, TimestampMixin, Base):
-    """Membership of a component group in a component tab."""
+    """Membership of a component group in a component tab, including its layout.
+
+    Layout lives on the *assignment* rather than on the reusable group: one
+    group can render as a form in one tab and as a table in another. NULL means
+    "inherit the legacy group default" (``ComponentGroup.render_mode``), which
+    keeps configurations created before per-tab layouts existed working without
+    a data rewrite.
+    """
 
     __tablename__ = "component_tab_groups"
-    __table_args__ = (UniqueConstraint("tab_id", "group_id", name="uq_component_tab_groups_tab_group"),)
+    __table_args__ = (
+        UniqueConstraint("tab_id", "group_id", name="uq_component_tab_groups_tab_group"),
+        CheckConstraint(
+            "display_mode IS NULL OR display_mode IN ('form_only', 'table_only', 'form_and_table')",
+            name="display_mode",
+        ),
+        CheckConstraint(
+            "data_cardinality IS NULL OR data_cardinality IN ('single', 'multiple')",
+            name="data_cardinality",
+        ),
+        CheckConstraint(
+            "form_columns IS NULL OR (form_columns BETWEEN 1 AND 4)",
+            name="form_columns",
+        ),
+    )
 
     tab_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("component_tabs.id", ondelete="CASCADE"), nullable=False, index=True
@@ -346,6 +430,13 @@ class ComponentTabGroup(PKMixin, TimestampMixin, Base):
         BigInteger, ForeignKey("component_groups.id", ondelete="CASCADE"), nullable=False, index=True
     )
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    display_mode: Mapped[str | None] = mapped_column(String(20))
+    data_cardinality: Mapped[str | None] = mapped_column(String(20))
+    form_columns: Mapped[int | None] = mapped_column(Integer)
+    show_group_title: Mapped[bool | None] = mapped_column(Boolean)
+    editable: Mapped[bool | None] = mapped_column(Boolean)
+    collapsible: Mapped[bool | None] = mapped_column(Boolean)
+    default_expanded: Mapped[bool | None] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 

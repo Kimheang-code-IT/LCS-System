@@ -11,7 +11,7 @@ import { fileTypeIcon } from '~/utils/file-icon'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, isRowControlColumn, lineTableColumnCellClass, lineTableColumnMetrics, lineTableNumericColumnKeys, sharedRowControls } from '~/utils/table/line-table-columns'
-import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { referenceItemForValue, referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = withDefaults(defineProps<{
   table: FreightTable
@@ -37,6 +37,8 @@ const props = withDefaults(defineProps<{
     label: string
     icon?: string
     color?: 'primary' | 'neutral' | 'error'
+    disabled?: boolean
+    loading?: boolean
     onSelect: () => void
   }>
   /**
@@ -64,7 +66,15 @@ const props = withDefaults(defineProps<{
   /** Overrides the table key used to build cell error keys. */
   errorKey?: string
   /** Fired after a cell edit so the host can clear that cell's error. */
-  onCellEdit?: (cellKey: string) => void
+  onCellEdit?: (
+    cellKey: string,
+    change?: { index: number, key: string, value: unknown },
+  ) => void
+  /**
+   * Fired when an editable text/number/date cell loses focus. Hosts that save
+   * per field use this rather than a per-keystroke callback.
+   */
+  onCellBlur?: (cellKey: string, change: { index: number, key: string }) => void
 }>(), {
   compact: false,
   rowDisabled: undefined,
@@ -76,6 +86,7 @@ const props = withDefaults(defineProps<{
   fieldErrors: undefined,
   errorKey: undefined,
   onCellEdit: undefined,
+  onCellBlur: undefined,
 })
 
 const emit = defineEmits<{
@@ -134,15 +145,23 @@ const numericKeys = lineTableNumericColumnKeys()
 const store = useFreightStore()
 
 // Master Data pages drive these line-table selects; static `column.options` are
-// ignored when a reference source matches the column key.
-const referenceColumnItems = computed<Record<string, Array<{ label: string, value: string }>>>(() => {
-  const map: Record<string, Array<{ label: string, value: string }>> = {}
-  for (const column of props.table.columns) {
-    const source = referenceOptionSource(column.key)
-    if (source) map[column.key] = referenceSelectItems(store.list(source.collection), source)
+// ignored when a reference source matches the column key. The filter is applied
+// per row so a location can be narrowed by the role chosen in that same row.
+function referenceItemsFor(column: FreightLineColumn, row?: Record<string, unknown>) {
+  const source = referenceOptionSource(column.key)
+  if (!source) return []
+  const records = store.list(source.collection) || []
+  const filtered = row && column.referenceFilter ? column.referenceFilter(row, records) : records
+  const items = referenceSelectItems(filtered, source)
+  // Keep an already-saved inactive value visible and selected while editing, so
+  // deactivating a role does not silently blank an existing route row.
+  const current = row ? String(row[column.key] ?? '') : ''
+  if (current && !items.some(item => item.value === current)) {
+    const fallback = referenceItemForValue(records, source, current)
+    if (fallback) items.push(fallback)
   }
-  return map
-})
+  return items
+}
 
 function columnCellClass(column: FreightLineColumn) {
   return lineTableColumnCellClass(column)
@@ -195,6 +214,13 @@ function displayValue(column: FreightLineColumn, value: unknown, row?: Record<st
   }
   if (column.type === 'date') return formatDate(value)
   if (column.type === 'datetime') return formatDateTime(value)
+  if (column.type === 'select') {
+    const items = column.optionItems?.length
+      ? column.optionItems
+      : referenceItemsFor(column, row)
+    const match = items.find(item => item.value === String(value))
+    if (match) return match.label
+  }
   return String(value)
 }
 
@@ -237,16 +263,18 @@ function inlineNumberFieldsCell(column: FreightLineColumn, row: Record<string, u
     inlineFields.map(field =>
       h('div', { class: 'flex items-center justify-end gap-1' }, [
         h('span', { class: 'text-[11px] leading-none text-muted' }, fieldLabel(field)),
-        h(TableInputNumber, {
+        cellWithError(index, field.key, extra => h(TableInputNumber, {
+          ...extra,
           'modelValue': Number(row[field.key] || 0),
           'increment': false,
           'decrement': false,
+          'stepSnapping': false,
           'size': cellSize,
           'class': 'w-20',
           'ui': cellNumberInputUi,
           'aria-label': fieldLabel(field),
           'onUpdate:modelValue': (value: number | null) => updateCell(index, field.key, value ?? 0),
-        }),
+        })),
       ]),
     ),
   ])
@@ -277,16 +305,18 @@ function inlineMoneyCell(column: FreightLineColumn, row: Record<string, unknown>
     h('div', { class: 'space-y-0.5' }, inlineFields.map(field =>
       h('div', { class: 'flex items-center justify-end gap-1' }, [
         h('span', { class: 'text-[11px] leading-none text-muted' }, fieldLabel(field)),
-        h(TableInputNumber, {
+        cellWithError(index, field.key, extra => h(TableInputNumber, {
+          ...extra,
           'modelValue': Number(row[field.key] || 0),
           'increment': false,
           'decrement': false,
+          'stepSnapping': false,
           'size': cellSize,
           'class': 'w-20',
           'ui': cellNumberInputUi,
           'aria-label': fieldLabel(field),
           'onUpdate:modelValue': (value: number | null) => updateCell(index, field.key, value ?? 0),
-        }),
+        })),
       ]),
     )),
   ])
@@ -319,11 +349,14 @@ function cellWithError(
 ) {
   const key = cellErrorKey(index, columnKey)
   const error = props.fieldErrors?.[key]
-  const control = build(error
-    ? { 'aria-invalid': true, 'aria-describedby': `${key}-error` }
-    : {})
+  const extras: Record<string, unknown> = { 'data-field-key': key }
+  if (error) {
+    extras['aria-invalid'] = true
+    extras['aria-describedby'] = `${key}-error`
+  }
+  const control = build(extras)
   if (!error) return control
-  return h('div', { 'data-field-key': key, 'class': 'min-w-0' }, [
+  return h('div', { 'data-field-key': key, 'class': 'min-w-0 rounded-md ring-1 ring-error/60' }, [
     control,
     h('p', {
       'data-slot': 'cell-error',
@@ -345,7 +378,7 @@ const tableRows = computed(() => rows.value.map((row, index) => ({ ...row, _rowI
 
 function updateCell(index: number, key: string, value: unknown) {
   // Clear this cell's error as soon as the user starts correcting it.
-  props.onCellEdit?.(cellErrorKey(index, key))
+  props.onCellEdit?.(cellErrorKey(index, key), { index, key, value })
   const edited = rows.value.map((row, i) => i === index ? { ...row, [key]: value } : row)
   const target = edited[index]
   if (!target) return
@@ -353,6 +386,19 @@ function updateCell(index: number, key: string, value: unknown) {
   // table-key branch here.
   const computed = props.table.computeRow?.({ row: target, rows: edited, index }) || {}
   rows.value = edited.map((row, i) => i === index ? { ...row, ...computed } : row)
+}
+
+/** Enter commits the cell like Tab, so inline grids stay keyboard-operable. */
+function cellKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter') return
+  event.preventDefault()
+  // Blurring commits through the regular `onBlur` path exactly once.
+  const target = event.target as HTMLElement | null
+  target?.blur()
+}
+
+function cellBlur(index: number, key: string) {
+  props.onCellBlur?.(cellErrorKey(index, key), { index, key })
 }
 
 function addRow() {
@@ -364,7 +410,7 @@ function addRow() {
     if (column.type === 'number') return [column.key, 0]
     if (column.type === 'checkbox') return [column.key, String(column.options?.[1] ?? 'No')]
     if (column.type === 'select') {
-      const referenceItems = referenceColumnItems.value[column.key]
+      const referenceItems = referenceItemsFor(column)
       return [column.key, column.optionItems?.[0]?.value || referenceItems?.[0]?.value || column.options?.[0] || '']
     }
     return [column.key, '']
@@ -533,10 +579,13 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           return tagCell(inlineMoneyCell(column, row.original, index, disabled), index, column.key)
         }
         if (column.type === 'checkbox') {
+          // A boolean model gets boolean checkbox values. Rows that store a
+          // Yes/No string keep the declared option pair, so this stays generic.
+          const booleanModel = typeof row.original[column.key] === 'boolean'
           return cellWithError(index, column.key, extra => h(TableCheckbox, {
-            'modelValue': row.original[column.key],
-            'trueValue': String(column.options?.[0] ?? 'Yes'),
-            'falseValue': String(column.options?.[1] ?? 'No'),
+            'modelValue': booleanModel ? Boolean(row.original[column.key]) : row.original[column.key],
+            'trueValue': booleanModel ? true : String(column.options?.[0] ?? 'Yes'),
+            'falseValue': booleanModel ? false : String(column.options?.[1] ?? 'No'),
             'disabled': disabled || column.computed,
             'size': cellSize,
             'aria-label': fieldLabel(column),
@@ -545,10 +594,10 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           }))
         }
         if (column.type === 'select') {
-          const referenceItems = referenceColumnItems.value[column.key]
+          const referenceItems = referenceItemsFor(column, row.original)
           const items = column.optionItems?.length
             ? column.optionItems
-            : referenceItems
+            : referenceItems.length
               ? referenceItems
               : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
           return cellWithError(index, column.key, extra => h(TableReferenceSelect, {
@@ -571,10 +620,13 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'disabled': disabled || column.computed,
             'increment': false,
             'decrement': false,
+            'stepSnapping': false,
             'size': cellSize,
             'class': ['w-full', columnCellClass(column)],
             'ui': cellNumberInputUi,
             'onUpdate:modelValue': (value: number | null) => updateCell(index, column.key, value ?? 0),
+            'onBlur': () => cellBlur(index, column.key),
+            'onKeydown': (event: KeyboardEvent) => cellKeydown(event),
             ...extra,
           }))
         }
@@ -587,6 +639,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             'size': cellSize,
             'class': `w-full ${columnCellClass(column)}`,
             'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
+            'onBlur': () => cellBlur(index, column.key),
             ...extra,
           }))
         }
@@ -597,6 +650,8 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           'class': `w-full ${columnCellClass(column)}`,
           'ui': cellInputUi,
           'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
+          'onBlur': () => cellBlur(index, column.key),
+          'onKeydown': (event: KeyboardEvent) => cellKeydown(event),
           ...extra,
         }))
       },
@@ -605,7 +660,11 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   if (!hasDeleteColumn.value && (!props.disabled || props.rowDisabled || props.extraRowMenuItems || props.rowInlineActions)) {
     cols.push({
       id: 'actions',
-      header: () => h('span', { class: 'sr-only' }, t('common.actions')),
+      header: () => h(
+        'span',
+        { class: props.rowInlineActions ? '' : 'sr-only' },
+        t('common.actions'),
+      ),
       enableSorting: false,
       meta: iconOnlyColumnMeta,
       cell: ({ row }) => {
@@ -618,6 +677,8 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             variant: 'soft',
             size: 'xs',
             class: 'whitespace-nowrap',
+            disabled: item.disabled,
+            loading: item.loading,
             onClick: item.onSelect,
           }),
         )
@@ -641,7 +702,9 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             },
           })
         }
-        if (!rowLocked(row.original)) {
+        // A host that supplies its own inline actions owns the row controls;
+        // adding the generic Delete again would duplicate them.
+        if (!inlineButtons.length && !rowLocked(row.original)) {
           actions.push({
             label: t('actions.delete'),
             icon: 'i-lucide-trash-2',
@@ -722,7 +785,6 @@ class="hidden"
 @change="onFilesChosen">
     <CommonAppFormErrorSummary
       v-if="rejected.length"
-      :items="[]"
       :form-errors="rejected"
       :title="t('freight.ui.fileRejectedTitle')"
     />

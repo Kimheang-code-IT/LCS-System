@@ -6,6 +6,7 @@ import {
   componentAttributePayload,
   componentAttributeRows,
   componentConfigTable,
+  componentDataTypeItems,
   componentGroupAttributeColumns,
   componentGroupAttributeRows,
   componentTabGroupColumns,
@@ -35,11 +36,21 @@ describe('component config grid tables', () => {
       'dataType',
       'isRequired',
       'helpText',
-      '_delete',
     ])
     const column = (key: string) => componentAttributeColumns().find(item => item.key === key)
     expect(column('isRequired')?.type).toBe('checkbox')
     expect(column('label')?.required).toBe(true)
+    expect(column('label')?.rule).toMatchObject({ required: true, maxLength: 255 })
+    expect(column('helpText')?.rule).toMatchObject({ maxLength: 255 })
+  })
+
+  it('offers every backend data type the dynamic form can render', () => {
+    const values = componentDataTypeItems().map(item => item.value)
+    for (const type of ['text', 'textarea', 'number', 'decimal', 'money', 'currency', 'date', 'datetime', 'select', 'multi_select', 'checkbox', 'boolean']) {
+      expect(values).toContain(type)
+    }
+    // `reference` needs a referenceType the grid cannot collect.
+    expect(values).not.toContain('reference')
   })
 
   it('orders membership grids by display order and offers reorder plus delete', () => {

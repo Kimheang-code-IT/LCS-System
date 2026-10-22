@@ -5,6 +5,13 @@
   // config, so this file never overrides a developer's model choice.
   "$schema": "https://opencode.ai/config.json",
 
+  // Ponytail (lazy-senior-dev ruleset) runs at `lite`: build what was asked and
+  // name the smaller option in one line. Pinned to an exact version so a plugin
+  // update cannot change agent behaviour mid-task. Level lives outside this file
+  // at %APPDATA%\ponytail\config.json (defaultMode) or ~/.config/opencode/.ponytail-active;
+  // change it with `/ponytail lite|full|ultra|off`.
+  "plugins": ["@dietrichgebert/ponytail@5.3.2"],
+
   // Ordered rules; the LAST matching rule wins. `/permissions` in the TUI shows
   // what is currently in force.
   "permissions": [
@@ -39,7 +46,16 @@
     { "action": "shell", "resource": "*alembic downgrade*", "effect": "ask" },
     { "action": "shell", "resource": "*DROP DATABASE*", "effect": "ask" },
     { "action": "shell", "resource": "*DROP TABLE*", "effect": "ask" },
+    { "action": "shell", "resource": "*DROP SCHEMA*", "effect": "ask" },
+    { "action": "shell", "resource": "*TRUNCATE*", "effect": "ask" },
     { "action": "shell", "resource": "*dropdb*", "effect": "ask" },
+
+    // Moving or discarding work is irreversible for the developer, and this repo
+    // routinely carries an uncommitted change set: an agent must never restore,
+    // stash or check out over it without asking.
+    { "action": "shell", "resource": "*git restore*", "effect": "ask" },
+    { "action": "shell", "resource": "*git checkout --*", "effect": "ask" },
+    { "action": "shell", "resource": "*git stash*", "effect": "ask" },
     { "action": "shell", "resource": "*down -v*", "effect": "ask" },
     { "action": "shell", "resource": "*volume rm*", "effect": "ask" },
     { "action": "shell", "resource": "*volume prune*", "effect": "ask" },

@@ -1,9 +1,9 @@
-"""Guards the generated schema documentation against model drift.
+"""Guards the single generated schema documentation against model drift.
 
-``docs/06b_database_design_annotated.sql`` is produced by
-``scripts/generate_schema_docs.py``. These tests make sure it cannot silently
-fall behind the SQLAlchemy models, that every table and column is documented,
-and that its DDL still agrees with the raw dump in ``docs/06_database_design.sql``.
+``docs/06_database_design.sql`` is produced by ``scripts/generate_schema_docs.py``.
+These tests make sure it cannot silently fall behind the SQLAlchemy models, that
+every table and column is documented, and that the project keeps exactly one SQL
+reference file.
 """
 
 from __future__ import annotations
@@ -17,86 +17,10 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
-ANNOTATED_SQL = REPO_ROOT / "docs" / "06b_database_design_annotated.sql"
-RAW_SQL = REPO_ROOT / "docs" / "06_database_design.sql"
+SCHEMA_SQL = REPO_ROOT / "docs" / "06_database_design.sql"
 GENERATOR = BACKEND_ROOT / "scripts" / "generate_schema_docs.py"
 
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
-
-
-def _split_top_level(body: str) -> list[str]:
-    """Split a CREATE TABLE body on commas that are not nested in parentheses."""
-    chunks: list[str] = []
-    depth = 0
-    current: list[str] = []
-    for char in body:
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        if char == "," and depth == 0:
-            chunks.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-    if current:
-        chunks.append("".join(current).strip())
-    return [chunk for chunk in chunks if chunk]
-
-
-def _schema_signature(sql: str) -> set[tuple]:
-    """Reduce DDL to an order-insensitive structural signature.
-
-    The two documents are produced by different tools, so the order of columns
-    and constraints inside a CREATE TABLE is not comparable — only the set of
-    them is. Comments and COMMENT ON statements carry no schema meaning and are
-    dropped; COMMENT ON is filtered line-by-line rather than after splitting on
-    ``;``, because descriptions themselves contain semicolons.
-    """
-    signature: set[tuple] = set()
-
-    keep: list[str] = []
-    for line in sql.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("--") or stripped.startswith("COMMENT ON "):
-            continue
-        keep.append(line)
-    body = "\n".join(keep)
-
-    for raw in body.split(";"):
-        statement = " ".join(raw.split())
-        if not statement:
-            continue
-
-        alter = re.fullmatch(
-            r"ALTER TABLE (\w+) ADD (CONSTRAINT .*)", statement, re.IGNORECASE
-        )
-        if alter:
-            signature.add(("constraint", alter.group(1).lower(), _norm(alter.group(2))))
-            continue
-
-        create = re.fullmatch(r"CREATE TABLE (\w+) \((.*)\)", statement, re.IGNORECASE | re.DOTALL)
-        if create:
-            table = create.group(1).lower()
-            for chunk in _split_top_level(create.group(2)):
-                if chunk.upper().startswith("CONSTRAINT "):
-                    signature.add(("constraint", table, _norm(chunk)))
-                else:
-                    column, _, definition = chunk.partition(" ")
-                    signature.add(("column", table, column.lower(), _norm(definition)))
-            continue
-
-        if statement.upper().startswith(("CREATE INDEX", "CREATE UNIQUE INDEX")):
-            signature.add(("index", _norm(statement)))
-            continue
-
-        signature.add(("statement", _norm(statement)))
-
-    return signature
-
-
-def _norm(text: str) -> str:
-    return " ".join(text.split()).upper()
 
 
 @pytest.fixture(scope="module")
@@ -110,10 +34,10 @@ def generator_module():
 def test_generator_output_is_committed(generator_module) -> None:
     """The checked-in file must match what the generator renders today."""
     rendered, _missing = generator_module.build_document()
-    assert ANNOTATED_SQL.exists(), f"{ANNOTATED_SQL} is missing; run scripts/generate_schema_docs.py"
-    committed = ANNOTATED_SQL.read_text(encoding="utf-8")
+    assert SCHEMA_SQL.exists(), f"{SCHEMA_SQL} is missing; run scripts/generate_schema_docs.py"
+    committed = SCHEMA_SQL.read_text(encoding="utf-8")
     assert committed == rendered, (
-        f"{ANNOTATED_SQL} is stale. Regenerate it with:\n"
+        f"{SCHEMA_SQL} is stale. Regenerate it with:\n"
         "    cd backend && uv run python scripts/generate_schema_docs.py"
     )
 
@@ -140,25 +64,15 @@ def test_description_catalogue_has_no_stale_entries(generator_module) -> None:
         assert not stale_columns, f"Descriptions for removed columns on {table_name}: {sorted(stale_columns)}"
 
 
-def test_annotated_ddl_matches_the_raw_dump(generator_module) -> None:
-    """The annotated file must describe the same schema as the plain dump."""
-    assert RAW_SQL.exists(), f"{RAW_SQL} is missing"
-    annotated = _schema_signature(ANNOTATED_SQL.read_text(encoding="utf-8"))
-    raw = _schema_signature(RAW_SQL.read_text(encoding="utf-8"))
-
-    only_annotated = sorted(annotated - raw)
-    only_raw = sorted(raw - annotated)
-    assert annotated == raw, (
-        "The annotated schema and docs/06_database_design.sql have drifted.\n"
-        f"Only in annotated ({len(only_annotated)}): {only_annotated[:10]}\n"
-        f"Only in raw dump ({len(only_raw)}): {only_raw[:10]}\n"
-        "Regenerate with: cd backend && uv run python scripts/generate_schema_docs.py"
-    )
+def test_docs_contains_exactly_one_sql_file() -> None:
+    """The documentation set keeps one schema reference, not parallel SQL files."""
+    sql_files = sorted((REPO_ROOT / "docs").glob("*.sql"))
+    assert sql_files == [SCHEMA_SQL], f"unexpected SQL files in docs: {sql_files}"
 
 
 def test_comment_statements_cover_every_table_and_column(generator_module) -> None:
     """Each table and column needs an executable COMMENT ON statement."""
-    sql = ANNOTATED_SQL.read_text(encoding="utf-8")
+    sql = SCHEMA_SQL.read_text(encoding="utf-8")
     tables = generator_module.Base.metadata.tables
 
     for table_name, table in tables.items():

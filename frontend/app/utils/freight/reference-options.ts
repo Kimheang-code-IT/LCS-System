@@ -7,8 +7,6 @@ export type ReferenceOptionSource = {
   valueField?: 'code' | 'name' | 'id' | 'legalName' | 'displayName' | 'accountCode' | 'accountName'
   /** Master-record field shown as the select label. */
   labelField?: 'code' | 'name' | 'legalName' | 'displayName' | 'accountCode' | 'accountName'
-  /** Only include records whose `roles` include one of these (case-insensitive). */
-  roles?: string[]
   /** Only include records whose `status` matches one of these (case-insensitive). */
   statuses?: string[]
   /** Only include records whose boolean field is true (e.g. `postable`). */
@@ -21,10 +19,37 @@ export type ReferenceOptionSource = {
  * line table picks these up automatically.
  */
 const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
-  customerPartyId: { collection: 'businessParties', valueField: 'id', labelField: 'legalName', roles: ['Customer'], statuses: ['ACTIVE'] },
-  customer: { collection: 'businessParties', valueField: 'legalName', labelField: 'legalName', roles: ['Customer'] },
+  // The party a quotation is issued to, and the one on the service order it
+  // becomes. Both forms label the field "Company"/"Business Party", and the
+  // Business Parties master records a company under whatever roles apply
+  // (Customer, Supplier, Company, or several at once). Restricting the picker to
+  // `Customer`/`Company` hid a supplier-only party that we may still quote for,
+  // so every role is offered and only `status` narrows the list — matching
+  // `partyId` on a financial document. `resolve_party_by_id` on the backend
+  // validates existence and ACTIVE status, never the role.
+  customerPartyId: { collection: 'businessParties', valueField: 'id', labelField: 'legalName', statuses: ['ACTIVE'] },
+  customer: { collection: 'businessParties', valueField: 'legalName', labelField: 'legalName' },
+  // A party's roles are master data now. The form binds `roleIds` (ids, so a
+  // rename never rewrites an assignment); the list and filter use the names the
+  // backend serializes into `roles`.
+  roleIds: { collection: 'partyRoles', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
+  roles: { collection: 'partyRoles', valueField: 'name', labelField: 'name' },
+  // The owner and the operator of a transport asset. Both are optional, and both
+  // are stored by legal name: `_asset_computed` reads them back out by that same
+  // name, so the select value and the stored column never drift apart. Every role
+  // is offered — the party that owns a truck may well be recorded as a Supplier.
+  ownerParty: { collection: 'businessParties', valueField: 'legalName', labelField: 'legalName', statuses: ['ACTIVE'] },
+  operatorParty: { collection: 'businessParties', valueField: 'legalName', labelField: 'legalName', statuses: ['ACTIVE'] },
+  // Route stops select their role from the administrator-managed Place Roles
+  // master. The location is free text, so no separate Places collection exists.
+  // Inactive roles are not offered for new selections; a saved id stays readable.
+  placeRoleId: { collection: 'placeRoles', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
   containerType: { collection: 'containerTypes', valueField: 'code', labelField: 'name' },
   transportType: { collection: 'transportTypes', valueField: 'name', labelField: 'name' },
+  // Quotation pricing stores the Transport Type id, so renaming a master record
+  // changes the label without rewriting history. Inactive types are hidden from
+  // new lines; `referenceItemForValue` keeps a saved one readable.
+  transportBy: { collection: 'transportTypes', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
   feeType: { collection: 'feeTypes', valueField: 'name', labelField: 'name' },
   direction: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
   tradeDirection: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
@@ -61,7 +86,6 @@ export function referenceSelectItems(
 ): Array<{ label: string, value: string }> {
   const valueField = source.valueField || 'code'
   const labelField = source.labelField || 'name'
-  const roleFilter = source.roles?.map(role => role.toLowerCase())
   const statusFilter = source.statuses?.map(status => status.toLowerCase())
   const items: Array<{ label: string, value: string }> = []
   const seen = new Set<string>()
@@ -71,10 +95,6 @@ export function referenceSelectItems(
       if (!statusFilter.includes(status)) continue
     }
     if (source.flag && row[source.flag] !== true) continue
-    if (roleFilter?.length) {
-      const roles = Array.isArray(row.roles) ? row.roles.map(role => String(role).toLowerCase()) : []
-      if (!roles.some(role => roleFilter.includes(role))) continue
-    }
     const value = String(row[valueField] ?? row.name ?? row.code ?? row.id ?? '').trim()
     if (!value || seen.has(value)) continue
     seen.add(value)
@@ -82,4 +102,30 @@ export function referenceSelectItems(
     items.push({ label, value })
   }
   return items
+}
+
+/**
+ * Label for a saved value that is no longer among the offered options — an
+ * inactive master record, or a legacy quotation that stored the transport name
+ * before the select was keyed by id. Returns null when no record matches, so
+ * the caller can fall back to the raw value.
+ */
+export function referenceItemForValue(
+  records: FreightRecord[] | undefined,
+  source: ReferenceOptionSource,
+  value: unknown,
+): { label: string, value: string } | null {
+  const current = String(value ?? '').trim()
+  if (!current) return null
+  const valueField = source.valueField || 'code'
+  const labelField = source.labelField || 'name'
+  const record = (records || []).find(item =>
+    [item[valueField], item.name, item.code]
+      .some(candidate => String(candidate ?? '').trim() === current),
+  )
+  if (!record) return null
+  return {
+    label: String(record[labelField] ?? record.name ?? record.code ?? current).trim() || current,
+    value: current,
+  }
 }

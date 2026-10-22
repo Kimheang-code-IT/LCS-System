@@ -131,8 +131,9 @@ describe('line table row defaults', () => {
       .toMatchObject({ quantity: 1, containerNo: '', feeType: 'Customs' })
   })
 
-  it('numbers a new route row after the rows already present', () => {
+  it('numbers a new route row and leaves the references for a deliberate choice', () => {
     expect(routePlaceRowDefaults({ rows: [{}, {}] })).toEqual({
+      placeRoleId: '',
       place: '',
       planned: '',
       actual: '',

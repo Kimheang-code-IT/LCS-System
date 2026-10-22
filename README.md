@@ -77,22 +77,6 @@ rules, financial accounts, sequences, current periods) so the system is usable
 immediately. Setup is accepted only while no user exists (guarded by
 `GET /api/v1/auth/setup/status` / `POST /api/v1/auth/setup/initialize`).
 
-The same provisioning is available headlessly (idempotent — re-run to reset the
-password):
-
-```bash
-# Local venv
-cd backend && uv run python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
-
-# Running Docker stack
-docker compose -f infrastructure/docker-compose.yml exec backend \
-  python -m app.create_admin --email admin@example.com --password 'Passw0rd!'
-```
-
-Options: `--username`, `--name`, `--org-code`, `--org-name`, `--branch-code`,
-`--role` (`PLATFORM_ADMIN` default, or `ORGANIZATION_ADMIN`, …), `--country`,
-`--currency`, `--timezone`.
-
 ### Reset business data
 
 An administrator (permission `settings.manage`) can clear business and
@@ -130,21 +114,27 @@ backend/app/modules/
 | Document | Read it for |
 |---|---|
 | `AGENTS.md` | Commands, conventions, financial-integrity rules, Definition of Done |
+| `docs/01_business_requirements.md` | Business goals, scope, actors, requirements |
+| `docs/02_software_requirements.md` | Functional and non-functional requirements |
+| `docs/03_business_process_and_sop.md` | Operational procedures and controls |
+| `docs/04_functional_design.md` | Use cases, posting rules, error catalogue, and Mermaid diagrams |
 | `docs/05_solution_architecture.md` | Architecture, layering, module boundaries |
-| `docs/06_database_design.sql`, `docs/06b_database_design_annotated.sql` | Generated schema (raw DDL, and the same DDL with a description for every table and column) |
-| `docs/11_permissions_matrix.md` | Permission catalog, page mapping, role composition |
-| `docs/12_deployment_runbook.md` | Deploy, back up, restore, roll back |
-| `docs/14_47_table_migration_analysis.md` | How the schema maps to the 47-table reference proposal and what was deliberately not adopted |
-| `docs/15_migration_and_rollback_guide.md` | Applying, verifying and rolling back a migration, plus the backup/restore drill |
-| `docs/16_upgrade_summary_and_risks.md` | What each migration change was and the risks that remain |
-| `docs/17_repository_analysis.md` | **Verified** implementation status, the hardcoded-configuration register, and the security/financial risk lists |
-| `docs/18_implementation_checklist.md` | Per-feature status, remaining work, and the verification log |
+| `docs/06_database_design.sql` | Generated schema: DDL with a description for every table and column |
+| `docs/07_api_documentation.md` | API conventions, endpoint catalogue, dynamic collections, errors |
+| `docs/08_frontend_and_ui_design.md` | Routes, metadata-driven pages, forms, validation, i18n |
+| `docs/09_roles_and_permissions.md` | Permission catalog, role templates, page mapping, enforcement |
+| `docs/10_testing_and_quality.md` | Test architecture, gates, coverage gaps, status, open risks |
+| `docs/11_deployment_and_security.md` | Deploy, CI/CD, migrations, backup/restore, rollback, hardening |
 
 Reusable agent workflows live in `.opencode/skills/` (`lcs-development` is the
 umbrella; `database-migration`, `fastapi-backend`, `nuxt-frontend`,
 `dynamic-ui-configuration`, `quotation-management`, `finance-accounting`,
 `security-rbac`, `testing-qa`, `deployment-devops`, `project-analysis` are the
-focused ones).
+focused ones). Reusable slash commands live in `.opencode/commands/` and the
+read-only review subagent in `.opencode/agents/reviewer.md`.
+
+`docs/lcssystem.pem` is an untracked private key. It must never be committed,
+copied into an image, or exposed; its relocation is an open owner decision.
 
 ## Backend package manager — uv
 

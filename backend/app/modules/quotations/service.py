@@ -14,7 +14,12 @@ from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFail
 from app.core.pagination import PageParams, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
-from app.modules.master_data.models import BusinessParty, TradeDirection
+from app.core.validation import validate_line_items
+from app.modules.master_data.models import BusinessParty, TradeDirection, TransportType
+from app.modules.master_data.route_stops import (
+    route_stop_payloads,
+    save_route_stops,
+)
 from app.modules.quotations.models import (
     Quotation,
     QuotationConversion,
@@ -24,6 +29,11 @@ from app.modules.quotations.models import (
     QuotationRevisionPlace,
 )
 from app.modules.quotations.repository import QuotationRepository
+from app.modules.quotations.schemas import (
+    CONTAINER_REQUIREMENT_SCHEMA,
+    PRICING_LINE_SCHEMA,
+    QUOTATION_WRITE_SCHEMA,
+)
 from app.modules.settings.service import get_default_currency
 
 IMMUTABLE_STATUSES = {"SENT", "ACCEPTED", "CONVERTED", "SUPERSEDED", "REJECTED", "EXPIRED", "CANCELLED"}
@@ -205,10 +215,53 @@ async def get_latest_revision(session: AsyncSession, quotation: Quotation) -> Qu
     return await QuotationRepository(session).latest_revision(quotation.id)
 
 
+async def revision_route_payloads(session: AsyncSession, revision_id: int) -> list[dict[str, Any]]:
+    """The saved route stops of a revision, ordered by sequence."""
+    rows = list(
+        (
+            await session.execute(
+                select(QuotationRevisionPlace)
+                .where(QuotationRevisionPlace.quotation_revision_id == revision_id)
+                .order_by(QuotationRevisionPlace.sequence_no, QuotationRevisionPlace.id)
+            )
+        ).scalars().all()
+    )
+    return await route_stop_payloads(session, rows)
+
+
+async def _resolve_transport_by(session: AsyncSession, value: Any) -> str | None:
+    """Resolve a pricing line's Transport Type to its id.
+
+    New lines submit the master-record id. Quotations saved before the select
+    was database-driven stored the name; resolve it when a record exists and
+    keep the legacy text otherwise so an old quotation stays editable.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        row = await session.get(TransportType, int(text))
+        return str(row.id) if row is not None else None
+    row = (
+        await session.execute(
+            select(TransportType).where(
+                or_(TransportType.code == text, TransportType.name == text),
+                TransportType.deleted_at.is_(None),
+            )
+        )
+    ).scalars().first()
+    return str(row.id) if row is not None else text
+
+
 async def _save_revision_children(session: AsyncSession, revision: QuotationRevision, data: dict[str, Any]) -> None:
     # Replace a child collection only when the caller supplied it, so a partial
     # save (e.g. editing notes) does not erase containers or priced lines.
     if "containerRequirements" in data:
+        data["containerRequirements"] = validate_line_items(
+            data.get("containerRequirements"),
+            CONTAINER_REQUIREMENT_SCHEMA,
+            field="containerRequirements",
+        )
         await session.execute(delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id))
         for _index, container in enumerate(data.get("containerRequirements") or []):
             if not isinstance(container, dict):
@@ -230,20 +283,63 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                 )
             )
     if "places" in data:
-        await session.execute(delete(QuotationRevisionPlace).where(QuotationRevisionPlace.quotation_revision_id == revision.id))
+        # The route editor keeps a trailing blank row for data entry; only rows
+        # the operator actually started are validated and persisted. Existing
+        # row ids are preserved, so a role deactivated after the fact stays
+        # acceptable on the row that already used it.
+        data["places"] = await save_route_stops(
+            session,
+            model=QuotationRevisionPlace,
+            parent_field="quotation_revision_id",
+            parent_id=revision.id,
+            rows=data.get("places"),
+        )
     if "pricingLines" in data or "lines" in data:
         from app.modules.master_data.service import resolve_reference_id
 
+        priced = data.get("pricingLines") if "pricingLines" in data else data.get("lines")
+        data["pricingLines"] = validate_line_items(priced, PRICING_LINE_SCHEMA, field="pricingLines")
         await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
-        for index, line in enumerate(data.get("pricingLines") or data.get("lines") or []):
-            if not isinstance(line, dict):
-                continue
-            quantity = _decimal(line.get("quantity"), Decimal("1"))
-            unit_price = _decimal(line.get("unitPrice"), Decimal("0"))
-            discount = _decimal(line.get("discount"), Decimal("0"))
-            tax = _decimal(line.get("tax"), Decimal("0"))
+        for index, line in enumerate(data.get("pricingLines") or []):
+            from app.core.validation import parse_decimal
+
+            unit_value = line.get("unitPrice")
+            if unit_value in (None, ""):
+                unit_value = line.get("unitAmount")
+            quantity = parse_decimal(line.get("quantity"), f"pricingLines.{index}.quantity", Decimal("1"), places=3)
+            unit_price = parse_decimal(unit_value, f"pricingLines.{index}.unitPrice", Decimal("0"), places=4)
+            discount = parse_decimal(
+                line.get("discountAmount") if line.get("discountAmount") is not None else line.get("discount"),
+                f"pricingLines.{index}.discount",
+                Decimal("0"),
+                places=4,
+            )
+            tax = parse_decimal(
+                line.get("taxAmount") if line.get("taxAmount") is not None else line.get("tax"),
+                f"pricingLines.{index}.tax",
+                Decimal("0"),
+                places=4,
+            )
             subtotal = quantity * unit_price
-            total = _decimal(line.get("total"), subtotal - discount + tax)
+            transport_by = await _resolve_transport_by(session, line.get("transportBy"))
+            line_errors: dict[str, str] = {}
+            if quantity <= 0:
+                line_errors[f"pricingLines.{index}.quantity"] = "Must be greater than zero."
+            if unit_price < 0:
+                line_errors[f"pricingLines.{index}.unitPrice"] = "Cannot be negative."
+            if discount < 0 or discount > subtotal:
+                line_errors[f"pricingLines.{index}.discount"] = "Must be between zero and the line subtotal."
+            if tax < 0:
+                line_errors[f"pricingLines.{index}.tax"] = "Cannot be negative."
+            if line.get("transportBy") not in (None, "") and transport_by is None:
+                line_errors[f"pricingLines.{index}.transportBy"] = "Choose a valid transport type."
+            if line_errors:
+                raise ValidationFailed("Please correct the quotation lines.", line_errors)
+            if transport_by is not None:
+                # Persist the canonical id so a later rename changes only the label.
+                line["transportBy"] = transport_by
+            # Commercial totals are derived, not copied from the browser.
+            total = subtotal - discount + tax
             session.add(
                 QuotationRevisionLine(
                     quotation_revision_id=revision.id,
@@ -295,6 +391,18 @@ async def get_quotation(session: AsyncSession, context: RequestContext, quotatio
     revision = await get_latest_revision(session, quotation)
     conversions = await _conversions_for(session, [quotation.id])
     record = quotation_record(quotation, revision, quotation.data or {}, conversions.get(quotation.id))
+    if revision is not None:
+        route = await revision_route_payloads(session, revision.id)
+        if route:
+            record["places"] = route
+        elif isinstance(record.get("places"), list):
+            # A revision saved before route rows existed keeps its route in the
+            # JSON copy; normalize the old single date column for the table.
+            record["places"] = [
+                {**row, "planned": row.get("planned") or row.get("plannedActual") or ""}
+                for row in record["places"]
+                if isinstance(row, dict)
+            ]
     if not record.get("customer") and quotation.customer_party_id:
         party_names = await _party_names(session, [quotation.customer_party_id])
         record["customer"] = party_names.get(quotation.customer_party_id)
@@ -303,6 +411,10 @@ async def get_quotation(session: AsyncSession, context: RequestContext, quotatio
 
 async def save_quotation(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
     default_currency = await get_default_currency(session)
+    data = QUOTATION_WRITE_SCHEMA.validate(
+        data,
+        partial=bool(data.get("id") or data.get("quotationId")),
+    )
     quotation_id = data.get("id") or data.get("quotationId")
     quotation: Quotation | None = None
     if quotation_id and str(quotation_id).isdigit():
@@ -375,8 +487,10 @@ async def save_quotation(session: AsyncSession, context: RequestContext, data: d
     await _save_revision_children(session, latest, data)
 
     payload = {key: value for key, value in data.items() if key not in {"id", "quotationId", "createdAt", "updatedAt"}}
-    if party is not None:
-        # Keep the denormalised display name in sync with the selected party.
+    if party is not None and not str(payload.get("customer") or "").strip():
+        # Fall back to the linked party's legal name only when the operator did
+        # not type a company name of their own; a hand-entered name is the
+        # record and must survive the party lookup.
         payload["customer"] = party.legal_name
     quotation.data = jsonable({**(quotation.data or {}), **payload})
     await session.commit()
@@ -437,6 +551,24 @@ async def _clone_revision(
                 remarks=container.remarks,
             )
         )
+    for place in (
+        await session.execute(
+            select(QuotationRevisionPlace)
+            .where(QuotationRevisionPlace.quotation_revision_id == source.id)
+            .order_by(QuotationRevisionPlace.sequence_no, QuotationRevisionPlace.id)
+        )
+    ).scalars().all():
+        session.add(
+            QuotationRevisionPlace(
+                quotation_revision_id=clone.id,
+                place_role_id=place.place_role_id,
+                place_role=place.place_role,
+                sequence_no=place.sequence_no,
+                planned_at=place.planned_at,
+                free_text=place.free_text,
+                notes=place.notes,
+            )
+        )
     for line in (
         await session.execute(select(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == source.id))
     ).scalars().all():
@@ -463,6 +595,7 @@ async def _clone_revision(
 
 async def create_revision(session: AsyncSession, context: RequestContext, quotation_id: int, data: dict[str, Any]) -> dict:
     default_currency = await get_default_currency(session)
+    data = QUOTATION_WRITE_SCHEMA.validate(data, partial=True)
     quotation = await session.get(Quotation, quotation_id)
     if quotation is None:
         raise NotFound("Quotation not found.")

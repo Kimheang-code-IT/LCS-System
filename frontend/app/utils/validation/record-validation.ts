@@ -19,6 +19,16 @@ function infersEmail(key: string): boolean {
   return /(^|[a-z])e?mail$/i.test(key) || /email$/i.test(key)
 }
 
+/**
+ * Field keys that carry a telephone number even when the column type is plain
+ * text. Matching is per camelCase/underscore token rather than on the raw suffix,
+ * so `phone`, `contactPhone` and `phoneNumber` qualify while `hotel` does not.
+ */
+function infersPhone(key: string): boolean {
+  const tokens = String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/)
+  return tokens.some(token => /^(phone|telephone|mobile|fax|contactnumber|phonenumber)$/i.test(token))
+}
+
 function infersUrl(fieldType?: string): boolean {
   return fieldType === 'url'
 }
@@ -39,7 +49,12 @@ function optionValues(options: FreightField['options']): string[] | undefined {
 export function inferFieldRule(field: FieldRuleInput): FieldRule {
   const rule: FieldRule = { required: Boolean(field.required) }
   if (infersEmail(field.key)) rule.email = true
+  if (infersPhone(field.key)) rule.phone = true
   if (infersUrl(field.type)) rule.url = true
+  // Any password the backend will hash has to satisfy the shared policy
+  // (`validate_password_strength`); inferring it from the input type means a
+  // new password form cannot silently skip the check.
+  if (field.type === 'password' || field.key === 'password') rule.password = true
   if (field.type === 'date' || field.type === 'datetime') rule.date = true
   // A select can only hold one of its declared values; a reference select has
   // no static options, so its membership is the backend's call.
@@ -54,6 +69,7 @@ export function inferColumnRule(column: Pick<FreightLineColumn, 'key' | 'type' |
   if (column.type === 'number') rule.number = true
   if (column.type === 'date' || column.type === 'datetime') rule.date = true
   if (infersEmail(column.key)) rule.email = true
+  if (infersPhone(column.key)) rule.phone = true
   if (column.options?.length) rule.allowed = [...column.options]
   return { ...rule, ...(column.rule || {}) }
 }
@@ -155,6 +171,27 @@ export function validateTableRows(input: TableValidationInput): ValidationFailur
         row: index,
         label: columnLabel?.(column) || column.label || column.key,
       })
+    }
+    // Inline cells (discount / tax beside a computed total) are editable inputs
+    // of their own, so a bad value must address its exact sub-cell rather than
+    // the computed column that owns the layout.
+    for (const column of columns) {
+      for (const inline of column.inlineFields || []) {
+        const rule = inferColumnRule({
+          key: inline.key,
+          type: 'number',
+          required: Boolean(inline.required),
+          rule: inline.rule,
+        })
+        const issue = validateFieldValue(row[inline.key], rule)
+        if (!issue) continue
+        failures.push({
+          ...issue,
+          key: rowCellKey(table.key, index, inline.key),
+          row: index,
+          label: columnLabel?.(inline as FreightLineColumn) || inline.label || inline.key,
+        })
+      }
     }
   })
 

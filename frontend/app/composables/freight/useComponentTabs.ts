@@ -5,6 +5,7 @@ import {
   componentRowToFlatRow,
   isPersistedComponentRowId,
 } from '~/utils/freight/component-tabs'
+import { componentGroupIsSingleRecord } from '~/utils/freight/component-layout'
 
 type FlatRow = Record<string, unknown>
 
@@ -50,7 +51,9 @@ export function useComponentTabs(
       const map: Record<string, FlatRow[]> = {}
       for (const tab of tabs.value) {
         for (const group of tab.groups) {
-          map[group.id] = mergeRows(group.id, (group.rows || []).map(componentRowToFlatRow))
+          // A single-record form with no saved row still needs one editable row,
+          // otherwise required-field validation would have nothing to inspect.
+          map[group.id] = ensureCardinality(group, mergeRows(group.id, (group.rows || []).map(componentRowToFlatRow)))
         }
       }
       rowsByGroup.value = map
@@ -94,22 +97,41 @@ export function useComponentTabs(
     return tabs.value.find(tab => tab.code === code) || null
   }
 
-  function rowsForGroup(groupId: string): FlatRow[] {
-    return rowsByGroup.value[groupId] || []
+  function findGroup(groupId: string): ComponentTabGroup | undefined {
+    return tabs.value.flatMap(tab => tab.groups).find(group => group.id === groupId)
   }
 
-  function setGroupRows(groupId: string, rows: FlatRow[]) {
-    rowsByGroup.value = { ...rowsByGroup.value, [groupId]: rows }
-  }
-
-  function addRow(group: ComponentTabGroup) {
+  function blankRow(group: ComponentTabGroup): FlatRow {
     const blank: FlatRow = {}
     for (const attribute of group.attributes) {
       if (attribute.fieldType === 'checkbox' || attribute.fieldType === 'boolean') blank[attribute.code] = false
       else if (['number', 'decimal', 'money'].includes(attribute.fieldType)) blank[attribute.code] = attribute.defaultValue ?? 0
+      else if (attribute.fieldType === 'multi_select') blank[attribute.code] = []
       else blank[attribute.code] = attribute.defaultValue ?? ''
     }
-    setGroupRows(group.id, [...rowsForGroup(group.id), blank])
+    return blank
+  }
+
+  /** A single-record group always exposes exactly one editable row. */
+  function ensureCardinality(group: ComponentTabGroup, rows: FlatRow[]): FlatRow[] {
+    return componentGroupIsSingleRecord(group) && rows.length === 0 ? [blankRow(group)] : rows
+  }
+
+  function rowsForGroup(groupId: string): FlatRow[] {
+    const existing = rowsByGroup.value[groupId] || []
+    const group = findGroup(groupId)
+    return group ? ensureCardinality(group, existing) : existing
+  }
+
+  function setGroupRows(groupId: string, rows: FlatRow[]) {
+    const group = findGroup(groupId)
+    rowsByGroup.value = { ...rowsByGroup.value, [groupId]: group ? ensureCardinality(group, rows) : rows }
+  }
+
+  function addRow(group: ComponentTabGroup) {
+    // A single-record group edits its one row instead of appending another.
+    if (componentGroupIsSingleRecord(group) && rowsForGroup(group.id).length >= 1) return
+    setGroupRows(group.id, [...rowsForGroup(group.id), blankRow(group)])
   }
 
   function removeRow(groupId: string, index: number) {
@@ -124,12 +146,13 @@ export function useComponentTabs(
         id: isPersistedComponentRowId(row.id) ? String(row.id) : undefined,
         values: componentFlatRowToValues(row),
       }))
-      const saved = await componentConfig.saveGroupRows(orderKey.value, groupId, payload)
+      const saved = await componentConfig.saveGroupRows(
+        orderKey.value,
+        groupId,
+        payload,
+        findGroup(groupId)?.tabGroupId,
+      )
       setGroupRows(groupId, saved.map(componentRowToFlatRow))
-    }
-    catch (err) {
-      error.value = err instanceof Error ? err.message : String(err)
-      throw err
     }
     finally {
       saving.value = false

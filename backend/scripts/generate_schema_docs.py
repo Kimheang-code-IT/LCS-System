@@ -1,9 +1,7 @@
-"""Generate ``docs/06b_database_design_annotated.sql`` from the live SQLAlchemy models.
+"""Generate ``docs/06_database_design.sql`` from the live SQLAlchemy models.
 
-The raw DDL dump in ``docs/06_database_design.sql`` is a faithful but
-unexplained transcription of the schema. This generator produces the annotated
-companion: the same PostgreSQL DDL, plus a description for every table and
-every column, rendered two ways:
+This is the single canonical schema reference for the project. It renders the
+PostgreSQL DDL, plus a description for every table and every column, two ways:
 
 * ``--`` inline comments, so the file reads well for a human scanning it;
 * ``COMMENT ON TABLE`` / ``COMMENT ON COLUMN`` statements, so the prose is
@@ -29,7 +27,7 @@ from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
-OUTPUT_PATH = REPO_ROOT / "docs" / "06b_database_design_annotated.sql"
+OUTPUT_PATH = REPO_ROOT / "docs" / "06_database_design.sql"
 
 # The generator lives outside the package, so make both roots importable when it
 # is run as a plain script (`python scripts/generate_schema_docs.py`).
@@ -64,7 +62,7 @@ UNMAPPED_MODULE = "<unmapped>"
 
 PREAMBLE = """\
 -- Freight Forwarding, Service Operations, and Double-Entry Finance
--- Annotated PostgreSQL schema reference.
+-- PostgreSQL schema reference.
 --
 -- GENERATED FILE - DO NOT EDIT BY HAND.
 -- Regenerate from backend/ with:
@@ -75,7 +73,8 @@ PREAMBLE = """\
 -- DDL is compiled from the live SQLAlchemy models (the same import list as
 -- backend/alembic/env.py) against the PostgreSQL dialect, so it always reflects
 -- the current schema. Alembic remains the migration source of truth; this file is
--- documentation only.
+-- documentation only. It is a reference schema, not an automatic production
+-- migration: do not run it against an existing database.
 --
 -- Every table and column carries its meaning twice: once as an inline `--`
 -- comment for readers of this file, and once as an executable `COMMENT ON`
@@ -94,7 +93,7 @@ PREAMBLE = """\
 -- descriptions. Applying the COMMENT ON section to an existing database refreshes
 -- the prose without touching data:
 --
---     psql -d "$DATABASE_URL" -f docs/06b_database_design_annotated.sql
+--     psql -d "$DATABASE_URL" -f docs/06_database_design.sql
 --
 -- ---------------------------------------------------------------------------
 -- Conventions
@@ -120,8 +119,8 @@ PREAMBLE = """\
 --   NUMERIC(19,8). Journal lines also carry base-currency amounts so the ledger
 --   balances across currencies.
 -- * All timestamps are `TIMESTAMP WITH TIME ZONE` and are stored in UTC.
--- * The database ships empty. First-run provisioning (`/auth/setup` or
---   `python -m app.create_admin`) seeds only the permission catalog, the built-in
+-- * The database ships empty. First-run provisioning (`/auth/setup`) seeds only
+--   the permission catalog, the built-in
 --   Platform Administrator role, the current-year document sequences and the
 --   default app info/config — no finance or business data.
 --

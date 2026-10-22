@@ -10,7 +10,7 @@ import type { ArchiveOptions, ArchiveRecord } from '~/repositories/contracts/arc
 import { confirmsArchiveHardDelete, hasArchivePermission } from '~/utils/archive/access'
 import type { ListSortSelection } from '~/utils/table/list-sort'
 
-definePageMeta({ titleKey: 'freight.pages.archive', permission: 'archive.view' })
+definePageMeta({ titleKey: 'freight.pages.archive', permission: 'admin.archive.view' })
 
 const { t } = useI18n()
 const auth = useAuthStore()

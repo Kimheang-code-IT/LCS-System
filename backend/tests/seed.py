@@ -31,6 +31,7 @@ from app.modules.finance.models import (
 )
 from app.modules.master_data.models import (
     BusinessParty,
+    BusinessPartyRole,
     ComponentAttribute,
     ComponentGroup,
     ComponentGroupAttribute,
@@ -38,7 +39,8 @@ from app.modules.master_data.models import (
     ComponentTabGroup,
     ContainerType,
     FeeType,
-    Place,
+    PartyRole,
+    PlaceRole,
     TradeDirection,
     TransportType,
 )
@@ -169,15 +171,24 @@ async def _ensure_finance_baseline(session: AsyncSession) -> None:
 
 
 async def seed_demo_data(session: AsyncSession) -> None:
-    place_defs = [
-        ("PP", "Phnom Penh"),
-        ("BV", "Bavet"),
-        ("PP_PORT", "Phnom Penh Port"),
-        ("SEZ", "Special Economic Zone"),
-    ]
-    places: dict[str, Place] = {}
-    for code, name in place_defs:
-        places[code] = await _get_or_create(session, Place, {"name": name}, code=code)
+    for index, (code, name, description) in enumerate([
+        ("PICKUP", "Pickup", "Goods are collected at this location."),
+        ("DROPOFF", "Drop-off", "Goods are handed over at this location."),
+        ("ORIGIN", "Origin", "Start of the commercial transport route."),
+        ("DESTINATION", "Destination", "End of the commercial transport route."),
+        ("LOADING", "Loading", "Goods or containers are loaded here."),
+        ("UNLOADING", "Unloading", "Goods or containers are unloaded here."),
+        ("TRANSIT", "Transit", "An intermediate or border crossing point."),
+        ("CUSTOMS", "Customs Clearance", "A customs office or clearance location."),
+        ("DELIVERY", "Delivery", "Final delivery location."),
+        ("RETURN", "Return Location", "Empty containers or equipment are returned here."),
+    ]):
+        await _get_or_create(
+            session,
+            PlaceRole,
+            {"name": name, "description": description, "sort_order": (index + 1) * 10, "status": "ACTIVE"},
+            code=code,
+        )
 
     for code, name, description in [
         ("IMPORT", "Import", "Goods enter the country"),
@@ -263,12 +274,26 @@ async def seed_demo_data(session: AsyncSession) -> None:
         ("CUST-001", "ABC Manufacturing Co., Ltd.", "CUSTOMER"),
         ("CUST-002", "Mekong Trading Co., Ltd.", "CUSTOMER"),
     ]
+    party_roles = {
+        code: await _get_or_create(session, PartyRole, {"name": name.title(), "status": "ACTIVE"}, code=code)
+        for code, name in (("CUSTOMER", "customer"), ("SUPPLIER", "supplier"), ("COMPANY", "company"))
+    }
     for code, name, role in customers:
-        await _get_or_create(
+        party = await _get_or_create(
             session, BusinessParty,
             {"legal_name": name, "display_name": name, "roles": [role.title()], "status": "ACTIVE"},
             party_code=code,
         )
+        exists = (
+            await session.execute(
+                select(BusinessPartyRole).where(
+                    BusinessPartyRole.business_party_id == party.id,
+                    BusinessPartyRole.party_role_id == party_roles[role].id,
+                )
+            )
+        ).scalars().first()
+        if exists is None:
+            session.add(BusinessPartyRole(business_party_id=party.id, party_role_id=party_roles[role].id))
     await session.flush()
 
     roles = {role.code: role for role in (await session.execute(select(Role))).scalars().all()}

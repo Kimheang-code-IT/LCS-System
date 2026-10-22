@@ -40,6 +40,12 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"true", "yes", "1", "on"}
 
 
+def _layout_for(link: ComponentTabGroup, group: ComponentGroup) -> dict[str, Any]:
+    from app.modules.master_data.component_config import resolve_layout
+
+    return resolve_layout(link, group)
+
+
 def _empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
@@ -73,6 +79,7 @@ def attribute_payload(
         "inputType": attribute.input_type,
         "referenceType": attribute.reference_type,
         "isRequired": required,
+        "isVisible": True if membership is None or membership.is_visible is None else bool(membership.is_visible),
         "defaultValue": attribute.default_value,
         "placeholder": attribute.placeholder,
         "width": width,
@@ -82,16 +89,28 @@ def attribute_payload(
     }
 
 
-def group_payload(group: ComponentGroup, attributes: list[dict[str, Any]], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def group_payload(
+    group: ComponentGroup,
+    link: ComponentTabGroup,
+    attributes: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """A runtime group, carrying the layout of the tab assignment it came from."""
+    # Imported lazily: ``component_config`` imports the operations models, so a
+    # module-level import here would close the cycle.
+    from app.modules.master_data.component_config import resolve_layout
+
     return {
         "id": str(group.id),
+        "tabGroupId": str(link.id),
         "code": group.code,
         "name": group.name,
         "nameKm": group.name_km,
         "renderMode": group.render_mode,
-        "displayOrder": group.display_order,
+        "displayOrder": link.display_order,
         "attributes": attributes,
         "rows": rows,
+        **resolve_layout(link, group),
     }
 
 
@@ -132,6 +151,7 @@ async def _group_attributes(session: AsyncSession, group_id: int) -> list[tuple[
             .where(
                 ComponentGroupAttribute.group_id == group_id,
                 ComponentGroupAttribute.status == "ACTIVE",
+                ComponentGroupAttribute.is_visible.is_(True),
                 ComponentAttribute.status == "ACTIVE",
             )
             .order_by(ComponentGroupAttribute.display_order, ComponentGroupAttribute.id)
@@ -233,6 +253,84 @@ def _coerce_value(attribute: ComponentAttribute, value: Any) -> Any:
     return str(value)
 
 
+def snapshot_tabs(
+    snapshot: dict[str, Any],
+    direction_id: int | None,
+    rows_by_group: dict[int, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Render the tabs recorded in a published snapshot.
+
+    The snapshot is the only source of layout here: live tabs, groups and
+    attributes may have been renamed, reordered or removed since publication.
+    Saved rows are still matched by their stable group id.
+    """
+    reference_types: set[str] = set()
+    tabs: list[dict[str, Any]] = []
+    for tab in snapshot.get("tabs") or []:
+        if not isinstance(tab, dict):
+            continue
+        if direction_id is not None and str(tab.get("tradeDirectionId") or "") != str(direction_id):
+            continue
+        groups: list[dict[str, Any]] = []
+        for group in tab.get("groups") or []:
+            if not isinstance(group, dict):
+                continue
+            attributes: list[dict[str, Any]] = []
+            for attribute in group.get("attributes") or []:
+                if not isinstance(attribute, dict) or attribute.get("isVisible") is False:
+                    continue
+                data_type = attribute.get("dataType")
+                reference_type = attribute.get("referenceType")
+                if data_type == "reference" and reference_type:
+                    reference_types.add(str(reference_type))
+                attributes.append({
+                    "id": str(attribute.get("id") or ""),
+                    "code": attribute.get("code"),
+                    "label": attribute.get("label"),
+                    "labelKm": attribute.get("labelKm"),
+                    "fieldType": data_type,
+                    "inputType": attribute.get("inputType"),
+                    "referenceType": reference_type,
+                    "isRequired": bool(attribute.get("isRequired")),
+                    "isVisible": attribute.get("isVisible", True) is not False,
+                    "defaultValue": attribute.get("defaultValue"),
+                    "placeholder": attribute.get("placeholder"),
+                    "width": attribute.get("width"),
+                    "options": attribute.get("options") or [],
+                    "validationRules": attribute.get("validationRules") or {},
+                    "sortOrder": int(attribute.get("displayOrder") or 0),
+                })
+            render_mode = str(group.get("renderMode") or "table")
+            legacy_form = render_mode == "form"
+            group_id = int(group["id"]) if str(group.get("id") or "").isdigit() else 0
+            groups.append({
+                "id": str(group.get("id") or ""),
+                "tabGroupId": group.get("tabGroupId"),
+                "code": group.get("code"),
+                "name": group.get("name"),
+                "nameKm": group.get("nameKm"),
+                "renderMode": render_mode,
+                "displayOrder": int(group.get("displayOrder") or 0),
+                "attributes": attributes,
+                "rows": rows_by_group.get(group_id, []),
+                "displayMode": group.get("displayMode") or ("form_only" if legacy_form else "table_only"),
+                "dataCardinality": group.get("dataCardinality") or ("single" if legacy_form else "multiple"),
+                "formColumns": int(group.get("formColumns") or 3),
+                "showGroupTitle": group.get("showGroupTitle", True) is not False,
+                "editable": group.get("editable", True) is not False,
+                "collapsible": bool(group.get("collapsible")),
+                "defaultExpanded": group.get("defaultExpanded", True) is not False,
+            })
+        tabs.append({
+            "id": str(tab.get("id") or ""),
+            "code": tab.get("code"),
+            "name": tab.get("name"),
+            "displayOrder": int(tab.get("displayOrder") or 0),
+            "groups": groups,
+        })
+    return tabs, reference_types
+
+
 async def bootstrap(
     session: AsyncSession, context: RequestContext, service_order_id: int, direction_id: int | None = None
 ) -> dict:
@@ -270,42 +368,48 @@ async def bootstrap(
         rows_by_group.setdefault(row.group_id, []).append(row_payload(row))
 
     reference_types: set[str] = set()
-    tab_items = []
-    for tab in tabs:
-        group_rows = (
-            await session.execute(
-                select(ComponentTabGroup, ComponentGroup)
-                .join(ComponentGroup, ComponentGroup.id == ComponentTabGroup.group_id)
-                .where(
-                    ComponentTabGroup.tab_id == tab.id,
-                    ComponentTabGroup.status == "ACTIVE",
-                    ComponentGroup.is_active.is_(True),
-                    ComponentGroup.is_archived.is_(False),
+    configuration = await config_versions.version_for_order(session, order)
+    snapshot = (configuration or {}).get("configSnapshot") or {}
+    historical_tabs, historical_reference_types = snapshot_tabs(snapshot, selected_direction_id, rows_by_group)
+    if snapshot.get("tabs"):
+        tab_items = historical_tabs
+        reference_types = historical_reference_types
+    else:
+        tab_items = []
+        for tab in tabs:
+            group_rows = (
+                await session.execute(
+                    select(ComponentTabGroup, ComponentGroup)
+                    .join(ComponentGroup, ComponentGroup.id == ComponentTabGroup.group_id)
+                    .where(
+                        ComponentTabGroup.tab_id == tab.id,
+                        ComponentTabGroup.status == "ACTIVE",
+                        ComponentGroup.is_active.is_(True),
+                        ComponentGroup.is_archived.is_(False),
+                    )
+                    .order_by(ComponentTabGroup.display_order, ComponentTabGroup.id)
                 )
-                .order_by(ComponentTabGroup.display_order, ComponentTabGroup.id)
+            ).all()
+            groups = []
+            for tab_group, group in group_rows:
+                memberships = await _group_attributes(session, group.id)
+                attributes = []
+                for membership, attribute in memberships:
+                    if attribute.data_type == "reference" and attribute.reference_type:
+                        reference_types.add(attribute.reference_type)
+                    attributes.append(attribute_payload(attribute, membership))
+                groups.append(group_payload(group, tab_group, attributes, rows_by_group.get(group.id, [])))
+            tab_items.append(
+                {
+                    "id": str(tab.id),
+                    "code": tab.code,
+                    "name": tab.name,
+                    "displayOrder": tab.display_order,
+                    "groups": groups,
+                }
             )
-        ).all()
-        groups = []
-        for _tab_group, group in group_rows:
-            memberships = await _group_attributes(session, group.id)
-            attributes = []
-            for membership, attribute in memberships:
-                if attribute.data_type == "reference" and attribute.reference_type:
-                    reference_types.add(attribute.reference_type)
-                attributes.append(attribute_payload(attribute, membership))
-            groups.append(group_payload(group, attributes, rows_by_group.get(group.id, [])))
-        tab_items.append(
-            {
-                "id": str(tab.id),
-                "code": tab.code,
-                "name": tab.name,
-                "displayOrder": tab.display_order,
-                "groups": groups,
-            }
-        )
 
     references = await reference_options(session, context, order.id, sorted(reference_types))
-    configuration = await config_versions.version_for_order(session, order)
     return {
         "serviceOrderId": str(order.id),
         "jobNo": order.service_order_no,
@@ -347,12 +451,39 @@ async def bulk_save(
     service_order_id: int,
     group_id: int,
     rows: list[dict[str, Any]],
+    tab_group_id: int | None = None,
 ) -> dict:
     order = await _get_order(session, service_order_id)
     group = await _get_group(session, group_id)
     memberships = await _group_attributes(session, group.id)
-    if group.render_mode == "form" and len(rows) > 1:
-        raise ValidationFailed("This group allows a single record only.")
+
+    # The layout belongs to the group's assignment on a tab, so the caller names
+    # it. Older clients omit it; they keep the pre-existing group-level rule.
+    link: ComponentTabGroup | None = None
+    if tab_group_id is not None:
+        link = await session.get(ComponentTabGroup, tab_group_id)
+        if link is None or link.group_id != group.id:
+            raise ValidationFailed("The group does not belong to that tab.", {"tabGroupId": "Mismatch"})
+    layout = (
+        _layout_for(link, group)
+        if link is not None
+        else {
+            "displayMode": "form_only" if group.render_mode == "form" else "table_only",
+            "dataCardinality": "single" if group.render_mode == "form" else "multiple",
+            "editable": True,
+        }
+    )
+    if layout["editable"] is False:
+        raise ValidationFailed(
+            "This group is configured as read-only.",
+            {"rows": "This group is read-only."},
+        )
+    single_record = layout["dataCardinality"] == "single" or layout["displayMode"] == "form_only"
+    if single_record and len(rows) > 1:
+        raise ValidationFailed(
+            "This group allows a single record only.",
+            {"rows": "Only one record is allowed in this group."},
+        )
 
     existing_rows = (
         await session.execute(
@@ -366,9 +497,17 @@ async def bulk_save(
 
     kept_ids: set[str] = set()
     errors: dict[str, str] = {}
+    seen_ids: set[str] = set()
     validated: list[tuple[ServiceOrderComponentRow | None, dict[str, Any], int]] = []
     for index, item in enumerate(rows, start=1):
         row_id = str(item.get("id") or "") if isinstance(item, dict) else ""
+        # A repeated client id would let one save update the same persisted row
+        # twice, so the last value would silently win.
+        if row_id and row_id in seen_ids:
+            errors[f"{index}.id"] = "Duplicate row"
+            continue
+        if row_id:
+            seen_ids.add(row_id)
         raw_values = item.get("values") if isinstance(item, dict) and isinstance(item.get("values"), dict) else (item or {})
         existing_row = existing_by_id.get(row_id) if row_id else None
         try:

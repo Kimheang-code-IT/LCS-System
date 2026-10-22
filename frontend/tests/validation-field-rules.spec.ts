@@ -57,6 +57,24 @@ describe('field rules', () => {
     expect(validateFieldValue('2026-12-31', { date: true })).toBeNull()
     expect(validateFieldValue('2026-12-31T09:30', { date: true })).toBeNull()
   })
+
+  it('enforces quantity and exchange-rate positivity', () => {
+    expect(validateFieldValue(0, { positive: true })).toEqual({ code: 'positive' })
+    expect(validateFieldValue(-1, { positive: true })).toEqual({ code: 'positive' })
+    expect(validateFieldValue(0.25, { positive: true })).toBeNull()
+  })
+
+  it('enforces money precision at the declared scale', () => {
+    expect(validateFieldValue('10.12345', { decimalPlaces: 4 })).toEqual({ code: 'decimalPlaces', params: { decimals: 4 } })
+    expect(validateFieldValue('10.1200', { decimalPlaces: 4 })).toBeNull()
+    expect(validateFieldValue(0.0004, { decimalPlaces: 8 })).toBeNull()
+  })
+
+  it('applies the shared password policy', () => {
+    expect(validateFieldValue('short', { password: true })).toMatchObject({ code: 'minLength' })
+    expect(validateFieldValue('password123', { password: true })).toEqual({ code: 'commonPassword' })
+    expect(validateFieldValue('Passw0rd!', { password: true })).toBeNull()
+  })
 })
 
 describe('rule inference from module metadata', () => {
@@ -68,6 +86,10 @@ describe('rule inference from module metadata', () => {
 
   it('requires dates to parse', () => {
     expect(inferFieldRule({ key: 'date', type: 'date' }).date).toBe(true)
+  })
+
+  it('applies the password policy to a password input automatically', () => {
+    expect(inferFieldRule({ key: 'password', type: 'password' }).password).toBe(true)
   })
 
   it('lets an explicit rule override the inferred one', () => {
@@ -179,6 +201,24 @@ describe('repeatable table validation', () => {
     }
     expect(validateTableRows({ table: strict, rows: [{ quantity: 1.5 }], label })[0]?.code).toBe('integer')
     expect(validateTableRows({ table: strict, rows: [{ quantity: 2 }], label })).toEqual([])
+  })
+
+  it('locates a bad inline sub-cell (discount beside a computed total)', () => {
+    const withInline = {
+      key: 'lines',
+      columns: [{
+        key: 'amount',
+        label: 'Line Total',
+        type: 'number' as const,
+        computed: true,
+        inlineFields: [{ key: 'discount', label: 'Discount', rule: { nonNegative: true, decimalPlaces: 4 } }],
+      }],
+    }
+    expect(validateTableRows({
+      table: withInline,
+      rows: [{ amount: 100, discount: -1 }],
+      label,
+    })).toEqual([{ code: 'min', params: { min: 0 }, key: 'lines.0.discount', label: 'Discount', row: 0 }])
   })
 
   it('collapses failures into the field-error map used by the renderer', () => {

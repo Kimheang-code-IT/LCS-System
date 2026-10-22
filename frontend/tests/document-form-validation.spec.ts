@@ -27,14 +27,24 @@ function filledRecord(module: NonNullable<ReturnType<typeof getFreightModule>>):
       ? field.options.map(option => (option && typeof option === 'object' && 'value' in option ? String(option.value) : String(option)))[0]
       : undefined
     if (!field.required) {
-      model[field.key] = field.type === 'number' ? 0 : ''
+      // An optional positive number (an exchange rate) still cannot be zero;
+      // the fixture supplies a satisfiable value instead of an invalid sentinel.
+      model[field.key] = field.type === 'number'
+        ? (field.rule?.positive ? 1 : 0)
+        : ''
       continue
     }
     model[field.key] = firstOption ?? (field.type === 'number'
       ? Math.max(1, field.rule?.min ?? 1)
       : field.type === 'date'
         ? '2026-01-01'
-        : 'ACME')
+        : field.rule?.password
+          ? 'Passw0rd!'
+          : field.rule?.email || /email$/i.test(field.key)
+            ? 'filled@example.com'
+            : /currenc(?:y|ies)code$/i.test(field.key) || (module.collection === 'currencies' && field.key === 'code')
+              ? 'USD'
+              : 'ACME')
   }
   return model
 }
@@ -153,35 +163,35 @@ describe('quotation form (/quotations)', () => {
     expect(keys.some(key => key.startsWith('pricingLines.0.'))).toBe(false)
   })
 
-  it('locates a missing route stop on the route tab', () => {
+  it('locates a missing route role on the route tab', () => {
     const rows = [
-      { placeRole: 'Pickup', place: 'Sihanoukville', plannedActual: '2026-01-05' },
-      { placeRole: 'Destination', place: '', plannedActual: '2026-01-08' },
+      { placeRoleId: '1', place: 'Phnom Penh', planned: '2026-01-05T09:00' },
+      { placeRoleId: '', place: 'Bavet', planned: '2026-01-08T10:00' },
     ]
     const keys = validateTableRows({ table: places, rows, label }).map(failure => failure.key)
-    expect(keys).toContain('places.1.place')
+    expect(keys).toContain('places.1.placeRoleId')
     expect(keys.some(key => key.startsWith('places.0.'))).toBe(false)
   })
 
-  it('rejects a route role that is not one of the configured options', () => {
-    const rows = [{ placeRole: 'Unknown', place: 'Sihanoukville' }]
+  it('requires the place role but leaves the free-text location optional', () => {
+    const rows = [{ placeRoleId: '' }]
     expect(validateTableRows({ table: places, rows, label }).map(f => f.key))
-      .toEqual(['places.0.placeRole'])
+      .toEqual(['places.0.placeRoleId'])
   })
 
   it('keeps row identifiers stable so a reorder cannot move an error onto a valid row', () => {
     const rows = [
-      { placeRole: 'Pickup', place: 'Sihanoukville' },
-      { placeRole: 'Destination', place: '' },
+      { placeRoleId: '1', place: 'Phnom Penh' },
+      { placeRoleId: '', place: 'Bavet' },
     ]
     expect(validateTableRows({ table: places, rows, label }).map(f => f.key))
-      .toContain('places.1.place')
+      .toContain('places.1.placeRoleId')
 
     const reordered = [rows[1]!, rows[0]!]
-    // After the reorder the missing place is row 0; the host clears the table's
+    // After the reorder the missing role is row 0; the host clears the table's
     // row errors on the structural edit and recomputes them here.
     expect(validateTableRows({ table: places, rows: reordered, label }).map(f => f.key))
-      .toContain('places.0.place')
+      .toContain('places.0.placeRoleId')
   })
 
   it('never validates the revision history table', () => {
@@ -271,12 +281,28 @@ describe('master data and administration forms', () => {
   it('requires the identifiers of a business party', () => {
     const module = getFreightModule('/master-data/business-parties')!
     expect(validateDocumentFields({ fields: module.fields, model: {}, isCreate: true, label })
-      .map(f => f.key).sort()).toEqual(['legalName', 'partyCode', 'roles'])
+      .map(f => f.key).sort()).toEqual(['legalName', 'partyCode', 'roleIds'])
+  })
+
+  it('checks the business party phone and email formats, and leaves blank ones alone', () => {
+    const module = getFreightModule('/master-data/business-parties')!
+    // Narrowed to the two contact fields; the required identifiers are covered above.
+    const codes = (model: Record<string, unknown>) =>
+      validateDocumentFields({ fields: module.fields, model, isCreate: true, label })
+        .map(f => f.key).filter(key => key === 'phone' || key === 'email')
+
+    expect(codes({ phone: '+855 12 345 678' })).toEqual([])
+    expect(codes({ phone: '(855) 12-345-678' })).toEqual([])
+    expect(codes({ phone: '0123' }), 'too few digits must be refused').toContain('phone')
+    expect(codes({ phone: 'call me' }), 'letters must be refused').toContain('phone')
+    expect(codes({ email: 'contact@example.com' })).toEqual([])
+    expect(codes({ email: 'contact.example.com' })).toContain('email')
+    // Optional fields stay optional: a party with neither is still valid.
+    expect(codes({ phone: '', email: '' })).toEqual([])
   })
 
   it('requires a name on every master-data record', () => {
     for (const path of [
-      '/master-data/places',
       '/master-data/trade-directions',
       '/master-data/container-types',
       '/master-data/transport-types',
@@ -323,11 +349,11 @@ describe('master data and administration forms', () => {
     const module = getFreightModule('/master-data/business-parties')!
     const failures = validateDocumentFields({
       fields: module.fields,
-      model: { ...filledRecord(module), roles: 'SOMEWHERE_ELSE' },
+      model: { ...filledRecord(module), status: 'SOMEWHERE_ELSE' },
       isCreate: true,
       label,
     })
-    expect(failures).toContainEqual({ code: 'allowed', key: 'roles', label: 'roles' })
+    expect(failures).toContainEqual({ code: 'allowed', key: 'status', label: 'status' })
   })
 
   it('rejects an invalid document sequence year', () => {

@@ -7,7 +7,7 @@ every revision, and an additive-only shape for the revisions that introduce the
 47-table design's missing pieces.
 
 Together they are what makes ``alembic downgrade`` a usable rollback rather than
-a promise. ``docs/15_migration_and_rollback_guide.md`` documents the procedure;
+a promise. ``docs/11_deployment_and_security.md`` §8 documents the procedure;
 this module keeps the invariants from silently regressing.
 """
 
@@ -33,7 +33,19 @@ ADDITIVE_REVISIONS = (
     "f8a9b0c1d2e3",  # posting_rules priority + description + indexes
     "a9b0c1d2e3f4",  # journal_entries link to the rule that posted it
     "b0c1d2e3f4a5",  # user_credentials.must_change_password
+    "e3f4a5b6c7d9",  # per-tab component group layouts
+    "a7c1e2f3b4d5",  # configuration version lifecycle metadata + immutability guard
+    "b8d9e0f1a2b3",  # dynamic place roles + structured route stops
+    "f2c3d4e5f6a7",  # draft configuration versions: editable until published
+    "a9b8c7d6e5f4",  # dynamic party roles + business-party role assignments
 )
+
+# The one approved destructive revision: the Places master is removed after its
+# name has been copied into route-stop free text and movement data. Keep this list
+# deliberately short; any other table removal needs its own entry and review.
+DESTRUCTIVE_REVISIONS = {
+    "c3d4e5f6a7b8": ("places", "place_role_places"),
+}
 
 
 def _revision_files() -> dict[str, Path]:
@@ -99,10 +111,21 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["d2e3f4a5b6c8"], (
-        "the head changed; update docs/15_migration_and_rollback_guide.md and the deployed "
+    assert heads == ["c3d4e5f6a7b8"], (
+        "the head changed; update docs/11_deployment_and_security.md and the deployed "
         f"revision expectation (found {heads})"
     )
+
+
+@pytest.mark.parametrize(("revision", "tables"), DESTRUCTIVE_REVISIONS.items())
+def test_destructive_revisions_are_declared_and_reversible(revision: str, tables: tuple[str, ...]):
+    """A declared table removal must drop it and recreate it in downgrade()."""
+    source = _revision_files()[revision].read_text(encoding="utf-8")
+    upgrade_body = source.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
+    downgrade_body = source.split("def downgrade", 1)[1]
+    for table in tables:
+        assert f'op.drop_table("{table}")' in upgrade_body, f"{revision} does not drop {table}"
+        assert f'"{table}"' in downgrade_body, f"{revision} cannot recreate {table} on downgrade"
 
 
 @pytest.mark.parametrize("revision", ADDITIVE_REVISIONS)

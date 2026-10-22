@@ -69,7 +69,7 @@ export function lineTableColumnMetrics(column: FreightLineColumn): LineTableColu
   }
   if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') return metrics(144)
   if (column.key === 'sealNo' || column.key === 'status' || column.key === '_status') return metrics(112)
-  if (column.key === 'placeRole') return metrics(176)
+  if (column.key === 'placeRole' || column.key === 'placeRoleId') return metrics(176)
   if (column.key === 'place' || column.key === 'notes') return metrics(TEXT_FIELD_WIDTH)
 
   if (column.type === 'date' || column.type === 'datetime') return metrics(TEXT_FIELD_WIDTH)

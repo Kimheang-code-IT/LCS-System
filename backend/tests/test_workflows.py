@@ -31,14 +31,14 @@ async def test_business_party_roles(client):
         json={
             "partyCode": "SUP-100",
             "legalName": "Global Carriers Ltd",
-            "roles": ["Carrier", "Supplier"],
+            "roles": ["Supplier", "Company"],
             "phone": "012345678",
             "country": "KH",
         },
     )
     assert response.status_code == 201, response.text
     party = response.json()["data"]
-    assert set(party["roles"]) == {"Carrier", "Supplier"}
+    assert set(party["roles"]) == {"Supplier", "Company"}
 
     listed = await client.get("/api/v1/businessParties", headers=headers, params={"q": "Global"})
     assert listed.status_code == 200

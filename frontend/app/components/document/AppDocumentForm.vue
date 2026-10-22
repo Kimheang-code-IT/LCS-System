@@ -11,12 +11,15 @@ const props = withDefaults(defineProps<{
   fieldErrors?: Record<string, string>
   /** Fired when the user edits a cell so the host can drop that cell's error. */
   onFieldEdit?: (key: string) => void
+  /** Fired when the user leaves an input so the host can validate it then. */
+  onFieldBlur?: (key: string) => void
   /** Force wider shell even without dense field types. */
   wide?: boolean
 }>(), {
   readOnly: false,
   fieldErrors: () => ({}),
   onFieldEdit: undefined,
+  onFieldBlur: undefined,
   wide: false,
 })
 
@@ -115,6 +118,7 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
                   :field-errors="fieldErrors"
                   :on-field-edit="onFieldEdit"
                   @update:model-value="value => onFieldUpdate(field.key, value)"
+                  @blur="onFieldBlur?.(field.key)"
                 />
               </div>
             </div>

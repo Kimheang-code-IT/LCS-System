@@ -1,30 +1,34 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import cache
+from app.core import cache, deletion
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.crypto import encrypt_secret, is_sensitive_field
 from app.core.exceptions import Conflict, NotFound, ValidationFailed
 from app.core.pagination import PageParams, paged
 from app.core.serialization import jsonable, to_camel
+from app.core.validation import FieldSpec, RecordSchema, field_from_column
 from app.modules.master_data.currency_rates import normalize_rate_input
 from app.modules.master_data.models import (
     BusinessParty,
+    BusinessPartyRole,
     ContainerType,
     Currency,
     CurrencyRate,
     FeeType,
     ModuleRecord,
-    Place,
+    PartyRole,
+    PlaceRole,
     TradeDirection,
     TransportAsset,
     TransportType,
@@ -51,6 +55,17 @@ class Spec:
     after_create: Callable[[Any, dict, AsyncSession], None] | None = None
     before_delete: Callable[[Any, AsyncSession], None] | None = None
     status_field: str = "status"
+    #: API field keys the record cannot do without, checked before the write so a
+    #: blank one is reported on the field instead of failing on a NOT NULL column.
+    required: tuple[str, ...] = ()
+    #: Closed vocabularies that are not obvious from the column type (statuses).
+    enums: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Per-field rule overrides (bounds/patterns) applied over the column-derived
+    #: rule. Keep business rules here, beside the collection they belong to.
+    rules: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Default ORDER BY column names for the list endpoint. Empty keeps the
+    #: generic newest-first order. Place roles use it to honour ``sort_order``.
+    default_order: tuple[str, ...] = ()
 
 
 def _enum(value: Any) -> Any:
@@ -104,12 +119,13 @@ async def resolve_reference(session: AsyncSession, target: str, value: Any) -> A
     if text.isdigit():
         return int(text)
     lookup: dict[str, tuple[type, str]] = {
-        "place": (Place, "name"),
+        "place_role": (PlaceRole, "name"),
         "trade_direction": (TradeDirection, "name"),
         "container_type": (ContainerType, "name"),
         "transport_type": (TransportType, "name"),
         "fee_type": (FeeType, "name"),
         "business_party": (BusinessParty, "legal_name"),
+        "party_role": (PartyRole, "name"),
         "currency": (Currency, "code"),
     }
     if target == "chart_of_account":
@@ -157,7 +173,7 @@ async def resolve_or_create_container_type(session: AsyncSession, value: Any) ->
 
     Reference data ships empty and the quotation/job forms submit standard ISO
     container codes (``40HC`` ...). When the value matches no ``container_types``
-    row we register a minimal ACTIVE record instead of writing a dangling FK —
+    row we register a minimal ACTIVE record instead of writing a dangling FK â€”
     the previous ``or 1`` fallback violated the foreign key on an empty table.
     """
     if value is None or value == "" or isinstance(value, bool):
@@ -216,6 +232,21 @@ async def apply_input(spec: Spec, model: Any, data: dict[str, Any], session: Asy
             setattr(model, ref.label, resolved)
 
 
+def _place_role_transform(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalise a place role before it is written.
+
+    Codes are upper-cased so ``pickup`` and ``PICKUP`` cannot become two records
+    that look identical in a dropdown; names are trimmed for the same reason.
+    """
+    if isinstance(data.get("code"), str):
+        data["code"] = data["code"].strip().upper()
+    if isinstance(data.get("name"), str):
+        data["name"] = data["name"].strip()
+    if isinstance(data.get("description"), str):
+        data["description"] = data["description"].strip()
+    return data
+
+
 async def _asset_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
     transport_type = await session.get(TransportType, model.transport_type_id) if model.transport_type_id else None
     owner = await session.get(BusinessParty, model.owner_party_id) if model.owner_party_id else None
@@ -229,18 +260,50 @@ async def _asset_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
 
 
 def _container_transform(data: dict[str, Any]) -> dict[str, Any]:
-    """The form edits width/height in meters; the table stores millimeters."""
+    """Normalise the container-type form before it reaches the model.
+
+    Width and height are edited in metres and stored in millimetres. The
+    conversion uses ``Decimal`` so the round trip is exact (``2.438`` m is
+    ``2438`` mm, never ``2437.999â€¦``), and every numeric field is validated here
+    so a bad dimension is a field error rather than a database error.
+    """
+    errors: dict[str, str] = {}
+    for key in ("code", "name", "size", "kind", "isoCode", "description"):
+        if isinstance(data.get(key), str):
+            data[key] = data[key].strip()
+
     for meters_key, millimeter_key in (("widthMeters", "widthMillimeter"), ("heightMeters", "heightMillimeter")):
         if meters_key not in data:
             continue
-        value = data[meters_key]
+        value = data.get(meters_key)
         if value in (None, ""):
             data[millimeter_key] = None
             continue
         try:
-            data[millimeter_key] = round(float(value) * 1000, 2)
-        except (TypeError, ValueError):
+            meters = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            errors[meters_key] = "Enter a number."
             continue
+        if meters < 0:
+            errors[meters_key] = "Cannot be negative."
+            continue
+        # 1 mm precision is the storage granularity; keep it exact in Decimal.
+        data[millimeter_key] = (meters * 1000).quantize(Decimal("0.01"))
+
+    for key in ("lengthFeet", "maxGrossWeightKg"):
+        value = data.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            errors[key] = "Enter a number."
+            continue
+        if number < 0:
+            errors[key] = "Cannot be negative."
+
+    if errors:
+        raise ValidationFailed("Please correct the container dimensions.", errors)
     return data
 
 
@@ -257,6 +320,188 @@ async def _container_computed(model: Any, session: AsyncSession) -> dict[str, An
     }
 
 
+# --- Transport assets ---------------------------------------------------------
+# `identity_type` records what the `identity` value *is*. The stored vocabulary
+# is the human-readable label shown in the form dropdown, mirroring `PARTY_ROLES`
+# and `ACTIVE_STATUS` in `frontend/app/config/freight-options.ts`; the legacy
+# codes the column used to default to are accepted on write and normalised, so a
+# row written by an older build keeps loading and editing without a data migration.
+IDENTITY_TYPES: tuple[str, ...] = (
+    "License Plate",
+    "IMO Number",
+    "Flight Number",
+    "Other",
+)
+
+_IDENTITY_TYPE_ALIASES: dict[str, str] = {
+    "plate": "License Plate",
+    "license plate": "License Plate",
+    "licence plate": "License Plate",
+    "imo": "IMO Number",
+    "imo number": "IMO Number",
+    "flight": "Flight Number",
+    "flight number": "Flight Number",
+    "tail": "Flight Number",
+    "registration": "Other",
+    "other": "Other",
+}
+
+
+def _asset_transform(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalise a transport asset before it is written.
+
+    The identity type is a closed set, so an unrecognised value is refused with a
+    field error instead of being stored as free text and later failing to match
+    the dropdown. Identifiers are trimmed because the unique indexes compare the
+    raw column, and `` "TRK-001 " `` would otherwise look distinct from
+    ``"TRK-001"`` while the operator sees the same code twice in the list.
+    """
+    supplied = data.get("identityType")
+    if supplied not in (None, ""):
+        canonical = _IDENTITY_TYPE_ALIASES.get(str(supplied).strip().lower())
+        if canonical is None:
+            raise ValidationFailed(
+                "Unsupported identity type.",
+                {"identityType": f"Choose one of: {', '.join(IDENTITY_TYPES)}."},
+            )
+        data["identityType"] = canonical
+    for key in ("assetCode", "identity", "description"):
+        if isinstance(data.get(key), str):
+            data[key] = data[key].strip()
+    return data
+
+
+def _validate_required(spec: Spec, data: dict[str, Any], model: Any = None) -> None:
+    """Refuse a record that would violate a ``NOT NULL`` column, naming the field.
+
+    Without this the column rejects the row at flush time and the caller sees a
+    constraint error, not a field error â€” so the operator is told nothing is wrong
+    with a specific field. On update the value already stored counts, so a partial
+    save that omits an unchanged required field still passes.
+    """
+    missing: dict[str, str] = {}
+    for key in spec.required:
+        supplied = data.get(key)
+        blank = supplied is None or (isinstance(supplied, str) and not supplied.strip())
+        if not blank:
+            continue
+        if model is not None:
+            attribute = spec.refs[key].label if key in spec.refs else spec.fields.get(key)
+            current = getattr(model, attribute, None) if attribute else None
+            if current is not None and str(current).strip():
+                continue
+        missing[key] = "This field is required."
+    if missing:
+        raise ValidationFailed("Please complete the required fields.", missing)
+
+
+async def _business_party_computed(model: Any, session: AsyncSession) -> dict[str, Any]:
+    """Role names for display and ids for the form's multi-select."""
+    rows = (
+        await session.execute(
+            select(PartyRole.id, PartyRole.name)
+            .join(BusinessPartyRole, BusinessPartyRole.party_role_id == PartyRole.id)
+            .where(
+                BusinessPartyRole.business_party_id == model.id,
+                PartyRole.deleted_at.is_(None),
+            )
+            .order_by(PartyRole.name)
+        )
+    ).all()
+    return {
+        "roles": [name for _, name in rows],
+        "roleIds": [str(role_id) for role_id, _ in rows],
+    }
+
+
+async def _sync_business_party_roles(model: Any, data: dict[str, Any], session: AsyncSession) -> None:
+    """Replace a party's assignments from ``roleIds`` (or the legacy ``roles``).
+
+    Labels are accepted on write so pre-existing API clients keep working; the
+    join table is the only storage, so a role rename is reflected everywhere.
+    """
+    key = "roleIds" if "roleIds" in data else "roles"
+    if key not in data:
+        return
+    supplied = data.get(key)
+    values = supplied if isinstance(supplied, list) else ([] if supplied in (None, "") else [supplied])
+    ids: list[int] = []
+    for value in values:
+        text = str(value).strip()
+        if not text:
+            continue
+        if text.isdigit():
+            ids.append(int(text))
+            continue
+        resolved = await resolve_reference(session, "party_role", text)
+        if resolved is None:
+            raise ValidationFailed(
+                "Please correct the party roles.",
+                {key: f"'{text}' does not match any party role."},
+            )
+        ids.append(resolved)
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        raise ValidationFailed("Please correct the party roles.", {key: "Choose at least one role."})
+    known = set(
+        (
+            await session.execute(
+                select(PartyRole.id).where(PartyRole.id.in_(ids), PartyRole.deleted_at.is_(None))
+            )
+        ).scalars().all()
+    )
+    unknown = [role_id for role_id in ids if role_id not in known]
+    if unknown:
+        raise ValidationFailed(
+            "Please correct the party roles.",
+            {key: f"Unknown party role id: {unknown[0]}."},
+        )
+    await session.execute(
+        delete(BusinessPartyRole).where(BusinessPartyRole.business_party_id == model.id)
+    )
+    session.add_all(
+        BusinessPartyRole(business_party_id=model.id, party_role_id=role_id) for role_id in ids
+    )
+
+
+def _party_role_transform(data: dict[str, Any]) -> dict[str, Any]:
+    """Upper-case the code and trim the labels before uniqueness is checked."""
+    if isinstance(data.get("code"), str):
+        data["code"] = data["code"].strip().upper()
+    if isinstance(data.get("name"), str):
+        data["name"] = data["name"].strip()
+    if isinstance(data.get("description"), str):
+        data["description"] = data["description"].strip()
+    return data
+
+
+def _spec_schema(spec: Spec) -> RecordSchema:
+    """Build the write-time schema for one reference collection.
+
+    Types, lengths and decimal scale are read from the model columns; the
+    collection's own ``required``/``enums``/``rules`` add the business rules the
+    database cannot express (a status vocabulary, ``rate > 0`` â€¦). Built per
+    call because a ``Spec`` is cheap and this keeps the definition in one place.
+    """
+    fields: list[FieldSpec] = []
+    for key, attribute in spec.fields.items():
+        column = spec.model.__table__.columns.get(attribute)
+        if column is None:  # pragma: no cover - a typo in SPECS is a startup bug
+            continue
+        fields.append(
+            field_from_column(
+                key,
+                column,
+                required=key in spec.required,
+                choices=spec.enums.get(key),
+                **(spec.rules.get(key) or {}),
+            )
+        )
+    for key in spec.refs:
+        fields.append(FieldSpec(key, "reference", required=key in spec.required))
+    return RecordSchema(tuple(fields))
+
+
 SPECS: dict[str, Spec] = {
     "businessParties": Spec(
         model=BusinessParty,
@@ -269,29 +514,64 @@ SPECS: dict[str, Spec] = {
             "phone": "phone",
             "email": "email",
             "address": "address",
-            "roles": "roles",
             "status": "status",
             "taxIdentifier": "vat_tin",
         },
         search=["party_code", "legal_name", "display_name", "phone", "email"],
+        required=("partyCode", "legalName"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
+        rules={
+            "partyCode": {"pattern": r"[A-Za-z0-9][A-Za-z0-9._/-]*"},
+            "email": {"kind": "email"},
+            "phone": {"kind": "phone"},
+        },
+        # `roleIds` is a relation stored in `business_party_roles`, not a column.
+        # `_sync_business_party_roles` also accepts the legacy `roles` labels.
+        computed=_business_party_computed,
+        after_create=_sync_business_party_roles,
     ),
-    "places": Spec(
-        model=Place,
+    # The route-stop vocabulary. Administrators own this list; the default rows
+    # are seeded as data (see `provision_baseline`), never as form options.
+    "placeRoles": Spec(
+        model=PlaceRole,
         title="name",
         fields={
             "code": "code",
             "name": "name",
             "description": "description",
-            "address": "address",
+            "sortOrder": "sort_order",
             "status": "status",
         },
         search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
+        rules={
+            "code": {"pattern": r"[A-Za-z][A-Za-z0-9_-]*"},
+            "sortOrder": {"minimum": Decimal("0")},
+        },
+        transform_input=_place_role_transform,
+        default_order=("sort_order", "name"),
+    ),
+    # Business-party vocabulary, replacing the hardcoded Customer/Supplier/
+    # Company options. Defaults are seeded as data, never as form options.
+    "partyRoles": Spec(
+        model=PartyRole,
+        title="name",
+        fields={"code": "code", "name": "name", "description": "description", "status": "status"},
+        search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
+        rules={"code": {"pattern": r"[A-Za-z][A-Za-z0-9_-]*"}},
+        transform_input=_party_role_transform,
+        default_order=("name",),
     ),
     "tradeDirections": Spec(
         model=TradeDirection,
         title="name",
         fields={"code": "code", "name": "name", "description": "description", "status": "status"},
         search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
     ),
     "containerTypes": Spec(
         model=ContainerType,
@@ -310,6 +590,12 @@ SPECS: dict[str, Spec] = {
             "status": "status",
         },
         search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
+        rules={
+            "lengthFeet": {"minimum": Decimal("0")},
+            "maxGrossWeightKg": {"minimum": Decimal("0")},
+        },
         computed=_container_computed,
         transform_input=_container_transform,
     ),
@@ -318,6 +604,8 @@ SPECS: dict[str, Spec] = {
         title="name",
         fields={"code": "code", "name": "name", "description": "description", "status": "status"},
         search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
     ),
     "transportAssets": Spec(
         model=TransportAsset,
@@ -336,12 +624,17 @@ SPECS: dict[str, Spec] = {
         },
         search=["asset_code", "identity"],
         computed=_asset_computed,
+        transform_input=_asset_transform,
+        required=("assetCode", "transportType", "identity"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
     ),
     "feeTypes": Spec(
         model=FeeType,
         title="name",
         fields={"code": "code", "name": "name", "description": "description", "status": "status"},
         search=["code", "name"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
     ),
     "currencies": Spec(
         model=Currency,
@@ -356,6 +649,12 @@ SPECS: dict[str, Spec] = {
             "status": "status",
         },
         search=["code", "name", "symbol"],
+        required=("code", "name"),
+        enums={"status": ("ACTIVE", "INACTIVE")},
+        rules={
+            "code": {"min_length": 3, "max_length": 3, "pattern": r"[A-Za-z]{3}"},
+            "decimalPlaces": {"minimum": Decimal("0"), "maximum": Decimal("6")},
+        },
     ),
     # The rate store the document form reads from. Rows are versioned by
     # effective date and only an APPROVED row is ever applied to a document; see
@@ -375,6 +674,15 @@ SPECS: dict[str, Spec] = {
         },
         search=["from_currency_code", "to_currency_code", "source"],
         transform_input=normalize_rate_input,
+        required=("fromCurrencyCode", "toCurrencyCode", "effectiveDate", "rate"),
+        enums={"status": ("PENDING", "APPROVED", "INACTIVE")},
+        rules={
+            "fromCurrencyCode": {"min_length": 3, "max_length": 3, "pattern": r"[A-Za-z]{3}"},
+            "toCurrencyCode": {"min_length": 3, "max_length": 3, "pattern": r"[A-Za-z]{3}"},
+            # A zero or negative rate would make every converted amount zero or
+            # invert the sign of the ledger, so it is refused at the edge.
+            "rate": {"minimum": Decimal("0.00000001")},
+        },
     ),
 }
 
@@ -431,6 +739,7 @@ async def list_reference(session: AsyncSession, context: RequestContext, collect
         search_columns=spec.search,
         status_field=spec.status_field,
         page=page,
+        order_by=spec.default_order,
     )
     items = [await serialize(spec, row, session) for row in rows]
     result = paged(items, page, total)
@@ -461,6 +770,8 @@ async def get_reference(session: AsyncSession, collection: str, record_id: int) 
 _UNIQUE_FIELD_ERRORS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("partyCode", "This party code is already in use.", ("party_code",)),
     ("taxIdentifier", "This tax identifier is already in use.", ("vat_tin",)),
+    ("name", "This role name is already in use.", ("party_roles.name", "uq_party_roles_name_active")),
+    ("code", "This role code is already in use.", ("party_roles.code", "uq_party_roles_code_active")),
     ("assetCode", "This asset code is already in use.", ("asset_code",)),
     ("identity", "This transport type and identity already exist.", ("transport_type_id",)),
     (
@@ -474,6 +785,11 @@ _UNIQUE_FIELD_ERRORS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 def _unique_violation(exc: IntegrityError) -> ValidationFailed:
     detail = str(getattr(exc, "orig", exc)).lower()
+    # A blank NOT NULL column reaches here too, and must not be reported as a
+    # duplicate: the operator needs to be told which field is empty, not that
+    # someone else already used it.
+    if "null value" in detail or "not-null" in detail or "not null" in detail:
+        return ValidationFailed("A required field was left empty.")
     for field_key, message, tokens in _UNIQUE_FIELD_ERRORS:
         if any(token in detail for token in tokens):
             return ValidationFailed(message, {field_key: message})
@@ -484,6 +800,11 @@ async def create_reference(session: AsyncSession, collection: str, data: dict) -
     spec = get_spec(collection)
     if spec.transform_input is not None:
         data = spec.transform_input(dict(data))
+    # Schema validation runs after the form transform, so it sees the values the
+    # model will actually receive (width/height already in millimetres). It
+    # collects every problem at once instead of failing on the first one.
+    data = _spec_schema(spec).validate(data)
+    _validate_required(spec, data)
     model = spec.model()
     await apply_input(spec, model, data, session)
     session.add(model)
@@ -508,6 +829,10 @@ async def update_reference(session: AsyncSession, collection: str, record_id: in
         raise NotFound()
     if spec.transform_input is not None:
         data = spec.transform_input(dict(data))
+    # A partial update only checks the keys it was sent, so an unchanged stored
+    # value is never re-required. An explicitly blank supplied value still fails.
+    data = _spec_schema(spec).validate(data, partial=True)
+    _validate_required(spec, data, model)
     await apply_input(spec, model, data, session)
     if spec.after_create is not None:
         await spec.after_create(model, data, session)
@@ -537,6 +862,19 @@ async def delete_reference(
             "REFERENCE_ACTIVE",
             "Active records cannot be deleted. Deactivate the record first.",
         )
+    if collection == "partyRoles" and models:
+        in_use = (
+            await session.execute(
+                select(BusinessPartyRole.party_role_id)
+                .where(BusinessPartyRole.party_role_id.in_([model.id for model in models]))
+                .limit(1)
+            )
+        ).scalars().first()
+        if in_use is not None:
+            raise Conflict(
+                "PARTY_ROLE_IN_USE",
+                "This party role is assigned to a business party. Deactivate it instead of deleting it.",
+            )
     from app.modules.archive.service import archive_record
 
     for model in models:
@@ -598,7 +936,20 @@ async def get_ui_schema(session: AsyncSession, page: str) -> dict[str, Any] | No
     return dict(row.data or {}) if row is not None else None
 
 
+#: Generic collections have no relational model, but the identity keys that
+#: drive their list/title/search behaviour still have a bounded shape.
+_GENERIC_SCHEMA = RecordSchema(
+    (
+        FieldSpec("code", max_length=64, label="Code"),
+        FieldSpec("name", max_length=255, label="Name"),
+        FieldSpec("documentNo", max_length=64, label="Document number"),
+        FieldSpec("status", max_length=32, label="Status"),
+    )
+)
+
+
 async def create_generic(session: AsyncSession, context: RequestContext, collection: str, data: dict) -> dict:
+    data = _GENERIC_SCHEMA.validate(data)
     payload = _encrypt_payload(
         {key: value for key, value in data.items() if key not in {"id"}}
     )
@@ -620,6 +971,7 @@ async def update_generic(session: AsyncSession, context: RequestContext, collect
     row = await MasterDataRepository(session).generic(collection, record_id)
     if row is None:
         raise NotFound()
+    data = _GENERIC_SCHEMA.validate(data, partial=True)
     payload = _encrypt_payload(
         {key: value for key, value in data.items() if key not in {"id"}}
     )
@@ -638,13 +990,17 @@ async def update_generic(session: AsyncSession, context: RequestContext, collect
 async def delete_generic(session: AsyncSession, context: RequestContext, collection: str, ids: list[int]) -> None:
     from app.modules.archive.service import ARCHIVABLE_GENERIC_COLLECTIONS, archive_record
 
+    rows: list[ModuleRecord] = []
     for record_id in ids:
         row = await session.get(ModuleRecord, record_id)
         if row is not None and row.collection == collection:
-            if collection in ARCHIVABLE_GENERIC_COLLECTIONS:
-                await archive_record(session, context, collection, record_id)
-            else:
-                await session.delete(row)
+            await deletion.require_inactive(row.status, label=f"{collection} record")
+            rows.append(row)
+    for row in rows:
+        if collection in ARCHIVABLE_GENERIC_COLLECTIONS:
+            await archive_record(session, context, collection, row.id)
+        else:
+            await session.delete(row)
     if collection not in ARCHIVABLE_GENERIC_COLLECTIONS:
         await session.commit()
     if collection in CACHEABLE_GENERIC_COLLECTIONS:

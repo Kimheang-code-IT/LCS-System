@@ -56,6 +56,10 @@ async def version(namespace: str) -> int:
 
 async def bump(*namespaces: str) -> None:
     """Invalidate every cached value in the given namespaces."""
+    # Nothing was cached, so there is nothing to invalidate. Skipping the Redis
+    # round-trip keeps a Redis outage from adding a connect timeout to writes.
+    if not enabled():
+        return
     for namespace in namespaces:
         await redis_core.safe_incr(version_key(namespace))
 

@@ -11,7 +11,7 @@ import {
 import { STATUS_COMMANDS, hasStatusCommand, statusCommand } from '../app/utils/freight/status-commands'
 
 const policy: RecordStatusPolicy = {
-  collection: 'places',
+  collection: 'placeRoles',
   statuses: ['ACTIVE', 'INACTIVE'],
   transitions: {
     ACTIVE: [{ to: 'INACTIVE', action: 'deactivate', kind: 'status', confirm: false, reason: false }],
@@ -52,7 +52,7 @@ describe('status commands', () => {
       expect(hasStatusCommand(collection!, action!), key).toBe(true)
       expect(statusCommand(collection!, action!), key).toBeTruthy()
     }
-    expect(hasStatusCommand('places', 'deactivate')).toBe(false)
+    expect(hasStatusCommand('placeRoles', 'deactivate')).toBe(false)
   })
 
   it('dispatches each workflow action to the endpoint that owns it', async () => {

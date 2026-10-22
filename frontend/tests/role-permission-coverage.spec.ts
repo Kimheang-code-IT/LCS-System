@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { freightModules } from '../app/config/freight-modules'
-import { lcsReferenceModules } from '../app/config/lcs-reference-modules'
+import { FREIGHT_REPORTS, freightReportPath } from '../app/config/freight-reports'
+import { PAGE_ROUTE_PERMISSIONS } from '../app/utils/freight/page-access'
+import { reportRoutePermission } from '../app/utils/freight/report-access'
 import {
   PAGE_PERMISSION_ALIASES,
   ROLE_DOCUMENT_TYPES,
@@ -26,46 +27,58 @@ function grantableCodes(): Set<string> {
   return codes
 }
 
-function pagePermissions(): { path: string, permission: string }[] {
-  return [...freightModules, ...lcsReferenceModules]
-    .filter(module => Boolean(module.permission))
-    .map(module => ({ path: module.path, permission: module.permission as string }))
-}
-
 describe('role permission coverage', () => {
-  it('can grant the navigation permission of every page in the app', () => {
+  it('can grant the permission of every routed page', () => {
     const grantable = grantableCodes()
-    const missing = pagePermissions().filter(page => !grantable.has(page.permission))
+    const missing = Object.entries(PAGE_ROUTE_PERMISSIONS)
+      .filter(([, permission]) => !grantable.has(permission))
     expect(missing).toEqual([])
   })
 
-  it('grants navigation aliases together with their row', () => {
+  it('can grant the permission of every report route', () => {
+    const grantable = grantableCodes()
+    const missing = FREIGHT_REPORTS
+      .filter(report => !grantable.has(reportRoutePermission(report)))
+      .map(freightReportPath)
+    expect(missing).toEqual([])
+  })
+
+  it('hydrates legacy navigation codes onto the current rows', () => {
+    const rows = permissionRowsFromFlatKeys(['master.reference.view', 'report.read', 'archive.view'])
+    const row = (documentType: string) => rows.find(item => item.documentType === documentType)
+
+    expect(row('master_business_parties')?.actions).toEqual(['view'])
+    expect(row('reports_trial_balance')?.actions).toEqual(['view'])
+    expect(row('dashboard')?.actions).toEqual(['view'])
+    expect(row('admin_archive')?.actions).toEqual(['view'])
+  })
+
+  it('grants matrix navigation aliases together with their row', () => {
     const codes = permissionRowsToFlatKeys([
       {
-        id: 'perm_master_reference',
-        documentType: 'master_reference',
-        onlyIfCreator: false,
-        level: 0,
-        actions: ['view', 'create'],
-      },
-      {
-        id: 'perm_operations_reports',
-        documentType: 'operations_reports',
+        id: 'perm_reports_accounts_receivable',
+        documentType: 'reports_accounts_receivable',
         onlyIfCreator: false,
         level: 0,
         actions: ['view'],
       },
+      {
+        id: 'perm_reports_service_order_profitability',
+        documentType: 'reports_service_order_profitability',
+        onlyIfCreator: false,
+        level: 0,
+        actions: ['view'],
+      },
+      {
+        id: 'perm_admin_archive',
+        documentType: 'admin_archive',
+        onlyIfCreator: false,
+        level: 0,
+        actions: ['view', 'restore'],
+      },
     ])
-    expect(codes).toContain('operations.jobs.view')
-    expect(codes).toContain('finance.debit_notes.view')
-    expect(codes).toContain('reports.view')
-  })
-
-  it('shows the row as checked for a role that only holds an alias', () => {
-    const rows = permissionRowsFromFlatKeys(['operations.jobs.view', 'reports.view'])
-    const masterData = rows.find(row => row.documentType === 'master_reference')
-    const reports = rows.find(row => row.documentType === 'operations_reports')
-    expect(masterData?.actions).toEqual(['view'])
-    expect(reports?.actions).toEqual(['view'])
+    expect(codes).toContain('finance.accounts_receivable.view')
+    expect(codes).toContain('finance.job_profitability.view')
+    expect(codes).toContain('archive.view')
   })
 })

@@ -24,6 +24,8 @@ export const ISSUE_KEYS: Record<string, string> = {
   date: 'validation.date',
   min: 'validation.min',
   max: 'validation.max',
+  positive: 'validation.positive',
+  decimalPlaces: 'validation.decimalPlaces',
   minLength: 'validation.minLength',
   maxLength: 'validation.maxLength',
   pattern: 'validation.pattern',

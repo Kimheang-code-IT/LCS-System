@@ -37,6 +37,29 @@ from app.modules.auth.models import (
 
 DEFAULT_ROLES = ", ".join(BUILTIN_ROLE_CODES)
 
+#: Starting place roles. Configuration owners edit, reorder, deactivate or add to
+#: this list through Master Data; the codes are only the seed identity.
+DEFAULT_PLACE_ROLES: tuple[tuple[str, str, str], ...] = (
+    ("PICKUP", "Pickup", "Goods are collected at this location."),
+    ("DROPOFF", "Drop-off", "Goods are handed over at this location."),
+    ("ORIGIN", "Origin", "Start of the commercial transport route."),
+    ("DESTINATION", "Destination", "End of the commercial transport route."),
+    ("LOADING", "Loading", "Goods or containers are loaded here."),
+    ("UNLOADING", "Unloading", "Goods or containers are unloaded here."),
+    ("TRANSIT", "Transit", "An intermediate or border crossing point."),
+    ("CUSTOMS", "Customs Clearance", "A customs office or clearance location."),
+    ("DELIVERY", "Delivery", "Final delivery location."),
+    ("RETURN", "Return Location", "Empty containers or equipment are returned here."),
+)
+
+#: Starting business-party roles; formerly the hardcoded Customer/Supplier/Company
+#: options. Administrators rename, deactivate or extend them through Master Data.
+DEFAULT_PARTY_ROLES: tuple[tuple[str, str, str], ...] = (
+    ("CUSTOMER", "Customer", "Buys the freight service."),
+    ("SUPPLIER", "Supplier", "Provides a service or cost to the shipment."),
+    ("COMPANY", "Company", "Internal or group company acting as a party."),
+)
+
 
 async def ensure_permission_catalog(
     session: AsyncSession,
@@ -139,7 +162,7 @@ async def provision_baseline(session: AsyncSession) -> None:
     from app.core.localization import SUPPORTED_CURRENCIES
     from app.core.sequences import DEFAULT_PREFIXES
     from app.modules.finance.models import DocumentSequence
-    from app.modules.master_data.models import Currency, ModuleRecord
+    from app.modules.master_data.models import Currency, ModuleRecord, PartyRole, PlaceRole
     from app.modules.settings.models import AppSetting
     from app.modules.settings.service import (
         APP_CONFIG_COLLECTION,
@@ -181,6 +204,40 @@ async def provision_baseline(session: AsyncSession) -> None:
     for code in SUPPORTED_CURRENCIES:
         if code not in existing_currencies:
             session.add(Currency(code=code, name=code, symbol=None, status="ACTIVE"))
+
+    # The route-stop vocabulary is configuration: these are starting records an
+    # administrator may rename, reorder, deactivate or extend. They are seeded as
+    # data rather than shipped as a code-owned dropdown, and only missing codes
+    # are inserted so a rename survives a restart.
+    existing_roles = set(
+        (await session.execute(select(PlaceRole.code).where(PlaceRole.deleted_at.is_(None)))).scalars().all()
+    )
+    for index, (code, role_name, role_description) in enumerate(DEFAULT_PLACE_ROLES):
+        if code not in existing_roles:
+            session.add(
+                PlaceRole(
+                    code=code,
+                    name=role_name,
+                    description=role_description,
+                    sort_order=(index + 1) * 10,
+                    status="ACTIVE",
+                )
+            )
+
+    # The business-party vocabulary, formerly a hardcoded dropdown.
+    existing_party_roles = set(
+        (await session.execute(select(PartyRole.code).where(PartyRole.deleted_at.is_(None)))).scalars().all()
+    )
+    for code, role_name, role_description in DEFAULT_PARTY_ROLES:
+        if code not in existing_party_roles:
+            session.add(
+                PartyRole(
+                    code=code,
+                    name=role_name,
+                    description=role_description,
+                    status="ACTIVE",
+                )
+            )
 
     existing_settings = set((await session.execute(select(AppSetting.setting_key))).scalars().all())
     if APP_INFO_KEY not in existing_settings:

@@ -4,12 +4,17 @@ import type {
   ComponentGroup,
   ComponentGroupAttribute,
   ComponentGroupInput,
+  ComponentGroupLayoutInput,
   ComponentGroupRow,
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabInput,
   ComponentTabsBootstrap,
   ConfigurationVersion,
+  ConfigurationVersionActivationEvent,
+  ConfigurationVersionComparison,
+  ConfigurationVersionListParams,
+  ConfigurationVersionPage,
   ConfigurationVersionPreview,
 } from '~/types/component-config'
 
@@ -19,6 +24,7 @@ export interface ComponentGroupAttributeInput {
   isRequired?: boolean
   width?: string
   displayOrder?: number
+  isVisible?: boolean
   status?: string
 }
 
@@ -45,15 +51,30 @@ export interface ComponentConfigRepository {
   deleteTab: (id: string) => Promise<{ archived: boolean, id: string }>
 
   listTabGroups: (tabId: string) => Promise<ComponentTabGroupLink[]>
-  addTabGroup: (tabId: string, input: { groupId: string }) => Promise<ComponentTab>
+  addTabGroup: (tabId: string, input: ComponentGroupLayoutInput & { groupId: string }) => Promise<ComponentTab>
+  updateTabGroup: (tabGroupId: string, input: ComponentGroupLayoutInput) => Promise<ComponentTabGroupLink>
   removeTabGroup: (tabGroupId: string) => Promise<{ removed: boolean }>
   reorderTabGroups: (tabId: string, orderedIds: string[]) => Promise<ComponentTabGroupLink[]>
 
   bootstrap: (serviceOrderId: string, directionId?: string) => Promise<ComponentTabsBootstrap>
-  saveGroupRows: (serviceOrderId: string, groupId: string, rows: Array<{ id?: string, values: Record<string, unknown> }>) => Promise<ComponentGroupRow[]>
+  saveGroupRows: (
+    serviceOrderId: string,
+    groupId: string,
+    rows: Array<{ id?: string, values: Record<string, unknown> }>,
+    tabGroupId?: string,
+  ) => Promise<ComponentGroupRow[]>
 
-  listConfigurationVersions: () => Promise<ConfigurationVersion[]>
+  listConfigurationVersions: (params?: ConfigurationVersionListParams) => Promise<ConfigurationVersionPage>
+  activeConfigurationVersion: () => Promise<ConfigurationVersion | null>
+  getConfigurationVersion: (id: string) => Promise<ConfigurationVersion>
+  updateConfigurationVersion: (id: string, input: { changeNote: string }) => Promise<ConfigurationVersion>
+  deleteConfigurationVersion: (id: string) => Promise<{ removed: number }>
   previewConfigurationVersion: () => Promise<ConfigurationVersionPreview>
+  previewConfigurationVersionById: (id: string) => Promise<ConfigurationVersion>
+  compareConfigurationVersions: (id: string, otherId: string) => Promise<ConfigurationVersionComparison>
   publishConfigurationVersion: (changeNote?: string) => Promise<ConfigurationVersion>
+  activateConfigurationVersion: (id: string) => Promise<ConfigurationVersion>
+  rollbackConfigurationVersion: (id: string, reason: string) => Promise<ConfigurationVersion>
+  configurationActivationHistory: (params?: ConfigurationVersionListParams & { versionId?: string }) => Promise<{ items: ConfigurationVersionActivationEvent[], meta: { page: number, page_size: number, total: number } }>
   retireConfigurationVersion: (id: string) => Promise<ConfigurationVersion>
 }

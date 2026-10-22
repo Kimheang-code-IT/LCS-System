@@ -10,7 +10,6 @@ from app.modules.auth.models import User
 from app.modules.master_data.models import (
     BusinessParty,
     FeeType,
-    Place,
     TransportAsset,
     TransportType,
 )
@@ -18,7 +17,6 @@ from app.modules.operations.models import ServiceOrderContainer
 
 REFERENCE_TYPES = (
     "business_party",
-    "place",
     "transport_asset",
     "transport_type",
     "container",
@@ -36,9 +34,6 @@ async def _reference_options(
                 select(BusinessParty.id, BusinessParty.legal_name).where(BusinessParty.status == "ACTIVE")
             )
         ).all()
-        return {int(row[0]): str(row[1]) for row in rows}
-    if reference_type == "place":
-        rows = (await session.execute(select(Place.id, Place.name).where(Place.status == "ACTIVE"))).all()
         return {int(row[0]): str(row[1]) for row in rows}
     if reference_type == "transport_asset":
         rows = (
