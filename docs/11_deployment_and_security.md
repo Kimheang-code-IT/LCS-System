@@ -486,8 +486,8 @@ each exception as soon as its upstream dependency publishes a fixed release.
 - Sensitive columns are excluded from the Google Sheets backup mirror.
 - Secrets never appear in logs, responses, seed data, audit payloads, or the
   repository. Production `.env` files are written atomically with mode 0600.
-- First-run setup is accepted only while no user exists. Complete it immediately
-  or provision the administrator headlessly.
+- First-run setup is accepted only while no user exists. Complete it
+  immediately, then use the forgot-password flow for lost credentials.
 
 ## 18. Known Risks and Limitations
 

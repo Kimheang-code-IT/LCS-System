@@ -48,7 +48,7 @@ and double-entry financial records for a single-tenant freight forwarder.
 
 - Dashboard KPIs and report tables are served by the backend reporting API.
 - First-run setup provisions the initial administrator and baseline
-  configuration; the same provisioning is available headlessly.
+  configuration from the browser (`/auth/setup`).
 - Single-tenant runtime: organizations and branches were removed from the
   schema and UI (migration `b7f1c2a9d4e0`); access is governed by users, roles,
   and permissions.
