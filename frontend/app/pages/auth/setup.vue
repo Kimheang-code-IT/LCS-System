@@ -6,7 +6,7 @@ import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { apiErrorDetails } from '~/utils/freight/errors'
 import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
-import { strongPasswordSchema } from '~/utils/validation/password-schema'
+import { passwordIssueMessage, strongPasswordSchema } from '~/utils/validation/password-schema'
 
 definePageMeta({
   layout: 'auth',
@@ -32,6 +32,27 @@ function slotPassword(slot: unknown): string {
   const state = (slot as { state?: { password?: string } }).state
   return String(state?.password ?? '')
 }
+
+/**
+ * The submit button is disabled while a rule fails, so without these the reason
+ * would never be visible: they render the shared policy message under the
+ * password field (and the mismatch under the confirmation field) while typing.
+ * Both stay empty on fresh fields so the form does not scold untouched inputs.
+ */
+const passwordHint = computed(() => {
+  const state = setupForm.value?.state
+  return state?.password
+    ? passwordIssueMessage(t, state.password, t('pages.setup.password'))
+    : ''
+})
+
+const confirmationHint = computed(() => {
+  const state = setupForm.value?.state
+  return state?.passwordConfirmation
+    && state.password !== state.passwordConfirmation
+    ? t('validation.passwordMismatch')
+    : ''
+})
 
 /** Enter, or the submit button, is refused until every rule and the match pass. */
 const passwordsValid = computed(() => {
@@ -190,6 +211,14 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
     >
       <template #password-help="slot">
         <CommonAppPasswordRequirements :value="slotPassword(slot)" />
+        <p v-if="passwordHint" class="mt-1 text-xs text-error" role="alert">
+          {{ passwordHint }}
+        </p>
+      </template>
+      <template #passwordConfirmation-help>
+        <p v-if="confirmationHint" class="text-xs text-error" role="alert">
+          {{ confirmationHint }}
+        </p>
       </template>
       <template #leading>
         <img src="/logo.png" alt="Logo" class="mx-auto h-16 w-auto">

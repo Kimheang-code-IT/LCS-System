@@ -10,6 +10,11 @@ import * as z from 'zod'
 import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from './field-rules'
 import { issueMessage, type Translate } from './messages'
 
+/** The first password-policy problem as a ready-to-render message, or '' when strong. */
+export function passwordIssueMessage(t: Translate, value: string, label?: string): string {
+  return issueMessage(t, validatePasswordStrength(String(value ?? '')) ?? undefined, label)
+}
+
 export function strongPasswordSchema(t: Translate, label: string, maxMessage?: string) {
   const schema = z
     .string()

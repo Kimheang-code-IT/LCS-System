@@ -17,6 +17,7 @@
 import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
 import { generateStrongPassword, validatePasswordStrength } from '~/utils/validation/field-rules'
 import { issueMessage } from '~/utils/validation/messages'
+import { passwordIssueMessage } from '~/utils/validation/password-schema'
 import { useLcsRepositories } from '~/repositories'
 
 const props = withDefaults(defineProps<{
@@ -117,6 +118,16 @@ async function submit() {
     submitting.value = false
   }
 }
+
+// Live field errors: the submit button is disabled until the policy passes, so
+// the reason must appear under the field while typing, not only on submit.
+watch([password, confirmation], () => {
+  fieldErrors.value.password = passwordIssueMessage(t, password.value, t('users.password.newPassword'))
+  fieldErrors.value.passwordConfirmation = confirmation.value
+    && confirmation.value !== password.value
+    ? t('validation.passwordMismatch')
+    : ''
+})
 
 function close() {
   emit('update:open', false)

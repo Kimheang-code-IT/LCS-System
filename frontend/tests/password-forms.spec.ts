@@ -5,6 +5,7 @@ import { getFreightModule } from '../app/config/freight-modules'
 import { validateRecoveryForm } from '../app/utils/auth/recovery'
 import { issueFromBackendMessage, validatePasswordStrength } from '../app/utils/validation/field-rules'
 import { validateDocumentFields } from '../app/utils/validation/record-validation'
+import { passwordIssueMessage } from '../app/utils/validation/password-schema'
 
 /**
  * Every new-password form, checked where a unit test can reach it.
@@ -53,6 +54,34 @@ describe('every password form', () => {
     const login = source('pages/auth/login.vue')
     expect(login).not.toContain('validatePasswordStrength')
     expect(login).not.toContain('CommonAppPasswordRequirements')
+  })
+})
+
+describe('the disabled save button shows its reason under the password field', () => {
+  // A disabled submit button runs no validation, so the policy message must be
+  // rendered live (red text under the field) instead of waiting for a submit
+  // that can never happen in that state.
+  it('the shared helper turns the first policy issue into a message', () => {
+    const t = (key: string) => key
+    expect(passwordIssueMessage(t, 'Admin@12345', 'Password')).toBe('')
+    expect(passwordIssueMessage(t, 'short', 'Password')).toContain('passwordMinLength')
+  })
+
+  it.each([
+    'pages/auth/setup.vue',
+    'pages/auth/change-password.vue',
+    'components/freight/UserPasswordDialog.vue',
+  ])('%s renders password policy errors under the field while typing', (file) => {
+    const text = source(file)
+    expect(text).toContain('passwordIssueMessage')
+    expect(text).toMatch(/role="alert"/)
+  })
+
+  it('the mismatch message is also live on the confirmation field', () => {
+    for (const file of ['pages/auth/setup.vue', 'pages/auth/change-password.vue']) {
+      expect(source(file)).toContain('passwordConfirmation-help')
+      expect(source(file)).toContain('passwordMismatch')
+    }
   })
 })
 
