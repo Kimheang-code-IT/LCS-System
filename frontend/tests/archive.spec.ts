@@ -11,11 +11,22 @@ describe('archive permissions and actions', () => {
     expect(hasArchivePermission(['ALL_PAGES'], 'archive.hard_delete')).toBe(true)
   })
 
-  it('maps archive permissions through the Roles & Permissions matrix', () => {
+  it('maps legacy archive actions onto the matrix row', () => {
     const rows = permissionRowsFromFlatKeys(['archive.view', 'archive.restore', 'archive.hard_delete'])
     const archive = rows.find(row => row.documentType === 'admin_archive')
-    expect(archive?.actions).toEqual(['view', 'edit', 'delete'])
-    expect(permissionRowsToFlatKeys(rows)).toContain('admin.archive.delete')
+    expect(archive?.actions).toEqual(['view', 'restore'])
+
+    const codes = permissionRowsToFlatKeys(rows)
+    expect(codes).toContain('admin.archive.view')
+    expect(codes).toContain('admin.archive.restore')
+    expect(codes).not.toContain('admin.archive.delete')
+    expect(codes).not.toContain('admin.archive.hard_delete')
+  })
+
+  it('does not imply restore from view or export', () => {
+    const rows = permissionRowsFromFlatKeys(['admin.archive.view', 'admin.archive.export'])
+    const archive = rows.find(row => row.documentType === 'admin_archive')
+    expect(archive?.actions).toEqual(['view', 'export'])
   })
 
   it('requires the exact destructive confirmation phrase', () => {

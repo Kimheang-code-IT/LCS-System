@@ -8,7 +8,6 @@ import type {
 } from '~/types/common'
 import { useConfirm } from '~/composables/common/useConfirm'
 import type { ExportRequest } from '~/types/export'
-import type { ValidationSummaryItem } from '~/composables/common/useFormValidation'
 
 const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
@@ -25,8 +24,8 @@ const props = withDefaults(defineProps<{
   fieldErrors?: Record<string, string>
   /** Host hook so an edit can drop that field's (or cell's) error at once. */
   onFieldEdit?: (key: string) => void
-  /** Rows rendered by the error summary above the form. */
-  summaryItems?: ValidationSummaryItem[]
+  /** Host hook that validates one field when the user leaves it. */
+  onFieldBlur?: (key: string) => void
   /** Messages that belong to no single field (business rule, network). */
   formErrors?: string[]
   showSave?: boolean
@@ -61,7 +60,7 @@ const props = withDefaults(defineProps<{
   saveLabel: '',
   fieldErrors: () => ({}),
   onFieldEdit: undefined,
-  summaryItems: () => [],
+  onFieldBlur: undefined,
   formErrors: () => [],
   listTo: '',
   currentUser: undefined,
@@ -120,8 +119,6 @@ const emit = defineEmits<{
   navigatePrevious: []
   navigateNext: []
   export: [request: ExportRequest]
-  /** An error-summary row was activated: reveal + focus that field. */
-  selectError: [key: string]
 }>()
 
 const { t } = useI18n()
@@ -232,7 +229,7 @@ v-if="showTabs && showForm && !notFound && !error"
 v-if="notFound"
 class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
 :class="contentWide
-              ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
+              ? 'w-[95%] max-w-[1800px]'
               : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
 color="error"
 :title="t('lcs.states.notFound')" />
@@ -240,21 +237,19 @@ color="error"
 v-else-if="error"
 class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
 :class="contentWide
-              ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
+              ? 'w-[95%] max-w-[1800px]'
               : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
 color="error"
 :title="error" />
 
             <template v-else-if="showForm">
               <CommonAppFormErrorSummary
-                v-if="summaryItems.length || formErrors.length"
+                v-if="formErrors.length"
                 class="mx-auto mt-6 w-full px-4 sm:px-6 lg:px-10"
                 :class="contentWide
-                  ? 'max-w-5xl lg:max-w-6xl xl:max-w-7xl'
+                  ? 'w-[95%] max-w-[1800px]'
                   : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
-                :items="summaryItems"
                 :form-errors="formErrors"
-                @select="emit('selectError', $event)"
               />
 
               <slot name="before-form" />
@@ -272,6 +267,7 @@ class="flex min-h-0 w-full"
 :read-only="readOnly"
 :field-errors="fieldErrors"
 :on-field-edit="onFieldEdit"
+:on-field-blur="onFieldBlur"
 :wide="contentWide" />
                   </slot>
 

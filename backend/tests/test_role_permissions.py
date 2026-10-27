@@ -97,7 +97,33 @@ def test_resolve_page_keys_includes_matrix_pages():
     assert "sales.quotations.view" in pages
     assert "finance.accounting.edit" in pages
     assert "finance.accounting.view" in pages
-    assert "dashboard.view" in pages
+    # The dashboard is an explicit grant, not a side effect of any other page.
+    assert "dashboard.view" not in pages
+
+
+def test_archive_view_does_not_imply_restore_or_hard_delete():
+    view_only = auth_service.expand_source_permissions({"admin.archive.view"})
+    assert "archive.view" in view_only
+    assert "archive.restore" not in view_only
+    assert "archive.hard_delete" not in view_only
+
+    _, pages = auth_service.resolve_page_keys(view_only, False)
+    assert "admin.archive.view" in pages
+
+    restore = auth_service.expand_source_permissions({"admin.archive.restore"})
+    assert "archive.restore" in restore
+    assert "archive.hard_delete" not in restore
+
+
+def test_legacy_admin_page_codes_still_open_their_screens():
+    permissions = auth_service.expand_source_permissions(
+        {"admin.user_manage", "admin.role_manage", "finance.view", "configuration.configure"}
+    )
+    _, pages = auth_service.resolve_page_keys(permissions, False)
+    assert "admin.users.view" in pages
+    assert "admin.roles.view" in pages
+    assert "finance.chart_of_accounts.view" in pages
+    assert "configuration.view" in pages
 
 
 def test_legacy_source_role_still_maps_to_new_pages():

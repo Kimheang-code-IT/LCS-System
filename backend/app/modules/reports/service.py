@@ -480,8 +480,11 @@ async def ledger_lines(session: AsyncSession, context: RequestContext) -> list[d
                 "id": str(row["id"]),
                 "postingDate": row["posting_date"].isoformat() if row["posting_date"] else None,
                 "journalNo": row["entry_no"],
+                "journalId": str(row["journal_id"]),
                 "sourceDocument": row["source_document_no"],
+                "sourceDocumentId": str(row["source_document_id"]) if row["source_document_id"] else None,
                 "accountCode": account_code,
+                "accountId": str(row["account_id"]),
                 "account": f"{account_code} · {row['account_name']}",
                 "accountName": row["account_name"],
                 "accountType": str(row["account_type"]).capitalize(),
@@ -621,7 +624,7 @@ async def _service_order_status_counts(
         "awaitingClosure": counts.get("FINISHED", 0),
         # Charts are data-driven, so they report the real lifecycle. The frontend
         # KPI cards deep-link with the pre-simplification filter values and need
-        # the same mapping applied; tracked in docs/18_implementation_checklist.md.
+        # the same mapping applied; tracked in docs/10_testing_and_quality.md.
         "byStatus": [
             {"status": status, "count": counts.get(status, 0)}
             for status in SERVICE_ORDER_LIFECYCLE

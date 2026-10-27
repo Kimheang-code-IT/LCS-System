@@ -40,7 +40,7 @@ from alembic import op
 
 revision: str = "a9b0c1d2e3f4"
 down_revision: str | None = "f8a9b0c1d2e3"
-# Revision 6 in docs/15_migration_and_rollback_guide.md.
+# See docs/11_deployment_and_security.md §8.
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

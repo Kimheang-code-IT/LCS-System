@@ -24,12 +24,19 @@ export const ISSUE_KEYS: Record<string, string> = {
   date: 'validation.date',
   min: 'validation.min',
   max: 'validation.max',
+  positive: 'validation.positive',
+  decimalPlaces: 'validation.decimalPlaces',
   minLength: 'validation.minLength',
   maxLength: 'validation.maxLength',
   pattern: 'validation.pattern',
   allowed: 'validation.allowed',
   balanced: 'validation.balanced',
   commonPassword: 'validation.commonPassword',
+  passwordMinLength: 'validation.passwordMinLength',
+  passwordUppercase: 'validation.passwordUppercase',
+  passwordLowercase: 'validation.passwordLowercase',
+  passwordNumber: 'validation.passwordNumber',
+  passwordSpecial: 'validation.passwordSpecial',
 }
 
 /**

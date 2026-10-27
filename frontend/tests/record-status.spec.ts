@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RecordStatusPolicy } from '../app/types/status'
-import { freightModules } from '../app/config/freight-modules'
+import { freightModules, getFreightModule } from '../app/config/freight-modules'
+import { isNetworkFailure } from '../app/utils/api/errors'
 import { moduleDocumentTabs } from '../app/utils/freight/document-tabs'
 import {
   normalizeRecordStatus,
   statusActionMeta,
   statusTransitionsFor,
   statusValueOf,
+  supportsStatusPolicy,
 } from '../app/utils/freight/status-actions'
 import { STATUS_COMMANDS, hasStatusCommand, statusCommand } from '../app/utils/freight/status-commands'
 
 const policy: RecordStatusPolicy = {
-  collection: 'places',
+  collection: 'placeRoles',
   statuses: ['ACTIVE', 'INACTIVE'],
   transitions: {
     ACTIVE: [{ to: 'INACTIVE', action: 'deactivate', kind: 'status', confirm: false, reason: false }],
@@ -45,6 +47,48 @@ describe('status transitions', () => {
   })
 })
 
+describe('status policy support', () => {
+  it('never asks for a policy on a historical or derived page', () => {
+    // Regression: the Audit Logs page requested /auditLogs/status-policy, which
+    // answers 404 by design, and the shared status manager turned that expected
+    // answer into a user-visible error.
+    for (const path of [
+      '/administration/audit-logs',
+      '/administration/archive',
+      '/reports',
+      '/finance/accounts-receivable',
+      '/finance/accounts-payable',
+      '/finance/job-profitability',
+    ]) {
+      const module = getFreightModule(path)
+      expect(module, path).toBeTruthy()
+      expect(supportsStatusPolicy(module!), path).toBe(false)
+    }
+  })
+
+  it('keeps the policy request for modules with a lifecycle', () => {
+    for (const path of [
+      '/operations/jobs',
+      '/sales/quotations',
+      '/administration/users',
+      '/administration/roles',
+      '/sales/companies',
+      '/finance/customer-payments',
+    ]) {
+      expect(supportsStatusPolicy(getFreightModule(path)!), path).toBe(true)
+    }
+  })
+
+  it('never treats an HTTP error answer as a connection failure', () => {
+    // ofetch calls both a 404 and a dropped connection a FetchError.
+    expect(isNetworkFailure({ name: 'FetchError', status: 404, statusCode: 404 })).toBe(false)
+    expect(isNetworkFailure({ name: 'FetchError', status: 500 })).toBe(false)
+    expect(isNetworkFailure({ name: 'FetchError' })).toBe(true)
+    expect(isNetworkFailure({ name: 'AbortError' })).toBe(false)
+    expect(isNetworkFailure(undefined)).toBe(false)
+  })
+})
+
 describe('status commands', () => {
   it('keeps one runner per workflow transition key', () => {
     for (const key of Object.keys(STATUS_COMMANDS)) {
@@ -52,7 +96,7 @@ describe('status commands', () => {
       expect(hasStatusCommand(collection!, action!), key).toBe(true)
       expect(statusCommand(collection!, action!), key).toBeTruthy()
     }
-    expect(hasStatusCommand('places', 'deactivate')).toBe(false)
+    expect(hasStatusCommand('placeRoles', 'deactivate')).toBe(false)
   })
 
   it('dispatches each workflow action to the endpoint that owns it', async () => {

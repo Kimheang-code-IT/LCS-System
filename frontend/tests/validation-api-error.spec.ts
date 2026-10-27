@@ -45,6 +45,12 @@ describe('describeMessage', () => {
     expect(describeMessage('Input should be greater than or equal to 0')).toEqual({ code: 'min', params: { min: '0' } })
   })
 
+  it('maps the backend schema validator sentences', () => {
+    expect(describeMessage('Use at most 4 decimal places.')).toEqual({ code: 'decimalPlaces', params: { decimals: 4 } })
+    expect(describeMessage('Enter a value greater than zero.')).toEqual({ code: 'positive' })
+    expect(describeMessage('Choose one of the available options.')).toEqual({ code: 'allowed' })
+  })
+
   it('returns null for a sentence it does not recognise', () => {
     expect(describeMessage('The period is closed')).toBeNull()
   })
@@ -73,6 +79,26 @@ describe('normalizeApiError — FastAPI validation envelope', () => {
     }))
 
     expect(result.fieldErrors).toEqual({ 'lines.1.amount': 'Input should be greater than or equal to 0' })
+  })
+
+  it('reads the coded errors array and keeps its stable code', () => {
+    const result = normalizeApiError(fetchError(422, {
+      success: false,
+      code: 'VALIDATION_ERROR',
+      message: 'The submitted data is invalid.',
+      field_errors: { code: 'This code is already in use.' },
+      errors: [
+        { field: 'code', code: 'DUPLICATE', message: 'This code is already in use.' },
+        { field: 'lines.1.quantity', code: 'OUT_OF_RANGE', message: 'Must be greater than zero.' },
+      ],
+    }))
+
+    expect(result.fieldErrors).toEqual({
+      code: 'This code is already in use.',
+      'lines.1.quantity': 'Must be greater than zero.',
+    })
+    expect(result.items.find(item => item.key === 'code')?.code).toBe('DUPLICATE')
+    expect(result.items.find(item => item.key === 'lines.1.quantity')?.code).toBe('OUT_OF_RANGE')
   })
 
   it('understands the raw Pydantic detail array', () => {

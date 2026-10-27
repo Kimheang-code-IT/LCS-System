@@ -144,7 +144,8 @@ async def test_publishing_without_any_active_tab_is_rejected(client):
 
     rejected = await _publish(client, headers)
     assert rejected.status_code == 422, rejected.text
-    assert "changeNote" in rejected.json()["field_errors"]
+    # The publish validator reports the empty configuration under `tabs`.
+    assert "tabs" in rejected.json()["field_errors"]
 
 
 async def test_publishing_requires_configuration_permission(client):

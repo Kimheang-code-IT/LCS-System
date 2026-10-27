@@ -11,12 +11,15 @@ const props = withDefaults(defineProps<{
   fieldErrors?: Record<string, string>
   /** Fired when the user edits a cell so the host can drop that cell's error. */
   onFieldEdit?: (key: string) => void
+  /** Fired when the user leaves an input so the host can validate it then. */
+  onFieldBlur?: (key: string) => void
   /** Force wider shell even without dense field types. */
   wide?: boolean
 }>(), {
   readOnly: false,
   fieldErrors: () => ({}),
   onFieldEdit: undefined,
+  onFieldBlur: undefined,
   wide: false,
 })
 
@@ -84,7 +87,9 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
   <div class="min-w-0 w-full flex-1 overflow-x-hidden">
     <DocumentAppDocumentContentShell :wide="wideForm">
       <template v-for="tab in tabs" :key="tab.id">
-        <div v-show="activeTab === tab.id || tabs.length === 1" class="space-y-8 py-6">
+        <div
+          v-show="activeTab === tab.id || tabs.length === 1"
+          :class="tab.sections.length ? 'space-y-8 py-6' : ''">
           <section
             v-for="(section, sectionIndex) in tab.sections"
             :key="section.id"
@@ -115,6 +120,7 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
                   :field-errors="fieldErrors"
                   :on-field-edit="onFieldEdit"
                   @update:model-value="value => onFieldUpdate(field.key, value)"
+                  @blur="onFieldBlur?.(field.key)"
                 />
               </div>
             </div>

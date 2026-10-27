@@ -31,14 +31,14 @@ async def test_business_party_roles(client):
         json={
             "partyCode": "SUP-100",
             "legalName": "Global Carriers Ltd",
-            "roles": ["Carrier", "Supplier"],
+            "roles": ["Supplier", "Company"],
             "phone": "012345678",
             "country": "KH",
         },
     )
     assert response.status_code == 201, response.text
     party = response.json()["data"]
-    assert set(party["roles"]) == {"Carrier", "Supplier"}
+    assert set(party["roles"]) == {"Supplier", "Company"}
 
     listed = await client.get("/api/v1/businessParties", headers=headers, params={"q": "Global"})
     assert listed.status_code == 200
@@ -111,10 +111,93 @@ async def test_quotation_lifecycle_and_conversion(client):
     service_order_id = converted.json()["data"]["serviceOrderId"]
     assert service_order_id
 
+    listed = await client.get("/api/v1/service-orders", headers=headers)
+    assert listed.status_code == 200, listed.text
+    listed_order = next(row for row in listed.json()["data"]["items"] if row["id"] == service_order_id)
+    assert listed_order["quotationNo"] == quotation["quotationNo"], "the list keeps the source quotation number"
+    assert listed_order["quotationId"] == quotation["id"], "the list links to the real quotation record"
+
     second = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
     assert second.status_code == 409
 
     return service_order_id
+
+
+async def test_conversion_prepares_pending_actual_containers(client):
+    """Requirements expand into one pending box each, and numbering updates in place."""
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Container Test Customer",
+            "direction": "Import",
+            "currency": "USD",
+            "amount": 300,
+            "containerRequirements": [
+                {"containerType": "40HC", "quantity": 2},
+                {"containerType": "20GP", "quantity": 1},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    revision_id = created.json()["data"]["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    order_id = converted.json()["data"]["serviceOrderId"]
+
+    detail = await client.get(f"/api/v1/service-orders/{order_id}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    prepared = detail.json()["data"]["actualContainers"]
+    assert len(prepared) == 3
+    assert {row["containerType"] for row in prepared} == {"40HC", "20GP"}
+    assert all(row["pending"] is True and row["containerNumber"] == "" for row in prepared)
+
+    # Re-reading must not duplicate the prepared rows.
+    again = await client.get(f"/api/v1/service-orders/{order_id}/containers", headers=headers)
+    assert len(again.json()["data"]) == 3
+
+    first = prepared[0]
+    numbered = await client.post(
+        f"/api/v1/service-orders/{order_id}/containers",
+        headers=headers,
+        json={
+            "id": first["id"],
+            "containerNumber": "MSCU1234567",
+            "containerTypeId": first["containerTypeId"],
+            "grossWeightKg": 21000,
+        },
+    )
+    assert numbered.status_code == 201, numbered.text
+    assert numbered.json()["data"]["containerNumber"] == "MSCU1234567"
+    assert numbered.json()["data"]["pending"] is False
+
+    final = await client.get(f"/api/v1/service-orders/{order_id}/containers", headers=headers)
+    rows = final.json()["data"]
+    assert len(rows) == 3
+    assert [row["containerNumber"] for row in rows if row["containerNumber"]] == ["MSCU1234567"]
+
+    # A container referenced by a payment row cannot be deleted.
+    saved = await client.post(
+        f"/api/v1/service-orders/{order_id}",
+        headers=headers,
+        json={
+            "id": order_id,
+            "containerPayments": [{"containerNo": "MSCU1234567", "feeType": "Documentation", "unitPrice": 10}],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    blocked = await client.request(
+        "DELETE",
+        f"/api/v1/service-orders/{order_id}/containers",
+        headers=headers,
+        json={"ids": [numbered.json()["data"]["id"]]},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "CONTAINER_IN_USE"
 
 
 async def test_service_order_components_and_containers(client):
@@ -196,6 +279,32 @@ async def _create_and_post_invoice(client, headers, service_order_id: str, amoun
     assert posted.status_code == 200, posted.text
     assert posted.json()["data"]["status"] == "Posted"
     return posted.json()["data"]
+
+
+async def test_service_charge_list_resolves_the_order_party(client):
+    """A charge created from the order tab carries no free-text company; the list
+    must fall back to the linked service order's Business Party."""
+    headers = await login(client)
+    service_order_id = await test_quotation_lifecycle_and_conversion(client)
+    created = await client.post(
+        f"/api/v1/service-orders/{service_order_id}/charges",
+        headers=headers,
+        json={
+            "documentType": "SERVICE_NOTE",
+            "documentDate": date.today().isoformat(),
+            "currency": "USD",
+            "lines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert created.status_code == 201, created.text
+    charge_id = created.json()["data"]["id"]
+
+    listed = await client.get("/api/v1/service-charges", headers=headers, params={"page_size": 200})
+    assert listed.status_code == 200, listed.text
+    row = next(item for item in listed.json()["data"]["items"] if item["id"] == charge_id)
+    assert row["customer"], "the party comes from the linked service order"
+    assert row["jobNo"]
+    assert row["chargeNo"]
 
 
 async def test_service_charge_to_invoice_and_posting(client):

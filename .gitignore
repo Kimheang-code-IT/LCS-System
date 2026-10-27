@@ -33,6 +33,9 @@ coverage/
 coverage.xml
 junit.xml
 *.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
+.playwright-mcp/
 
 # Database backups (never commit a dump: it contains real records)
 backups/

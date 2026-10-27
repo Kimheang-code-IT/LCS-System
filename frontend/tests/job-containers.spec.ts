@@ -109,6 +109,65 @@ describe('service order containers', () => {
     expect(row.note).toBe('Seal replaced')
   })
 
+  it('keeps a prepared row without a container number', () => {
+    const rows = persistableActuals([
+      { id: '12', containerType: '40HC', containerNo: '', grossWeightKg: 20000 },
+      { id: 'ac-1', containerType: '40HC', containerNo: 'MSCU1234567' },
+    ])
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toMatchObject({ id: '12', containerType: '40HC', containerNo: '' })
+    expect(JOB_ACTUAL_CONTAINER_TABLE.columns.find(column => column.key === 'containerNo')?.required)
+      .toBeFalsy()
+  })
+
+  it('generates one payment per actual container and one shipment charge', () => {
+    const actuals = [
+      { id: '11', containerType: '40HC', containerNo: '' },
+      { id: '12', containerType: '40HC', containerNo: '' },
+    ]
+    const rows = jobContainerPaymentRows({}, {
+      actuals,
+      quotation: {
+        pricingLines: [
+          { feeType: 'Documentation Fee', containerType: '40HC', quantity: 1, unitPrice: 10 },
+          { feeType: 'Customs Clearance', quantity: 1, unitPrice: 50 },
+        ],
+      },
+    })
+    const perContainer = rows.filter(row => row.feeType === 'Documentation Fee')
+    expect(perContainer).toHaveLength(2)
+    expect(perContainer.map(row => row.serviceOrderContainerId)).toEqual(['11', '12'])
+    expect(rows.filter(row => row.feeType === 'Customs Clearance')).toHaveLength(1)
+    expect(rows.find(row => row.feeType === 'Customs Clearance')?.containerNo).toBe('')
+  })
+
+  it('does not duplicate stored payments and refreshes their container reference', () => {
+    const stored = [{
+      id: 'cp-1',
+      feeType: 'Documentation Fee',
+      containerNo: '',
+      serviceOrderContainerId: '11',
+      quantity: 1,
+      unitPrice: 10,
+    }]
+    const actuals = [{ id: '11', containerType: '40HC', containerNo: 'MSCU1234567' }]
+    const rows = jobContainerPaymentRows({ containerPayments: stored }, {
+      actuals,
+      quotation: { pricingLines: [{ feeType: 'Documentation Fee', containerType: '40HC', quantity: 1, unitPrice: 10 }] },
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: 'cp-1', containerNo: 'MSCU1234567', unitPrice: 10 })
+  })
+
+  it('reads persisted actual containers instead of a stale json copy', () => {
+    const rows = jobActualContainers(
+      { actualContainers: [{ id: 'stale', containerNo: 'OLD1' }] },
+      { actuals: [{ id: '11', containerType: '40HC', containerNo: '' }] },
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: '11', containerNo: '' })
+  })
+
   it('shows container, fee, money, note and utility columns on container payments', () => {
     expect(JOB_CONTAINER_PAYMENT_TABLE.columns.map(column => column.key)).toEqual([
       'containerNo',

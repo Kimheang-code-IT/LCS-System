@@ -4,6 +4,7 @@ export type ConnectionStatus =
   | 'not_tested'
   | 'testing'
   | 'connected'
+  | 'not_verified'
   | 'failed'
   | 'disabled'
 
@@ -87,6 +88,13 @@ export interface TelegramDestination {
 }
 
 export interface TelegramConfig {
+  removeBotToken?: boolean
+  botTokenConfigured?: boolean
+  adminGroupName?: string
+  adminGroupVerifiedAt?: string
+  lastVerifiedAt?: string
+  webhookStatus?: string
+  rules?: Record<string, TelegramAlertRule>
   enabled: boolean
   botDisplayName: string
   botToken: string
@@ -101,6 +109,30 @@ export interface TelegramConfig {
   lastTestMessage?: string
   destinations: TelegramDestination[]
   messageTemplate: string
+}
+
+export interface TelegramAlertRule {
+  enabled: boolean
+  destination: 'ADMIN' | 'PRIVATE'
+  minimumSeverity: 'INFO' | 'WARNING' | 'CRITICAL'
+  cooldownMinutes: number
+  notifyOnRecovery: boolean
+  maxAttempts: number
+}
+
+export interface TelegramPairing {
+  challenge: string
+  url?: string
+  command?: string
+  expiresAt: string
+}
+
+export interface TelegramDeliveryHistory {
+  items: Array<{ id: number, createdAt: string, category: string, event: string, destination: string, status: string, attempts: number, error: string | null, canRetry: boolean }>
+  meta: { page: number, page_size: number, total: number }
+  lastSentAt: string | null
+  lastFailedAt: string | null
+  linkedUsers: number
 }
 
 export interface NotificationRule {
@@ -146,6 +178,8 @@ export interface AppConfigNotifications {
 
 export interface AppConfigSecurity {
   sessionTimeoutMinutes: number
+  accessTokenMinutes: number
+  sessionAbsoluteMinutes: number
   maxLoginAttempts: number
   accountLockMinutes: number
   passwordExpiryDays: number

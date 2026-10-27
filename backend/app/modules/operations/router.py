@@ -10,9 +10,11 @@ from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import get_current_context, require_permission
 from app.core.pagination import PageParams, page_params
+from app.core.validation import EntityId, validate_id_list
 from app.modules.master_data import config_versions
 from app.modules.operations import component_tabs as component_tabs_service
 from app.modules.operations import service
+from app.modules.operations.schemas import ATTACHMENT_PRESIGN_SCHEMA
 
 router = APIRouter()
 
@@ -38,10 +40,10 @@ async def create_service_order(
 @router.delete("/service-orders")
 async def delete_service_orders(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_order.update")),
+    context: RequestContext = Depends(require_permission("service_order.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     removed = await service.delete_service_orders(session, ids)
     return {"data": {"removed": removed}}
 
@@ -65,6 +67,18 @@ async def add_container(
     container = await service.add_container(session, context, identifier, payload)
     await session.commit()
     return {"data": container}
+
+
+@router.delete("/service-orders/{identifier}/containers")
+async def delete_containers(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = validate_id_list(payload)
+    removed = await service.delete_containers(session, context, identifier, ids)
+    return {"data": {"removed": removed}}
 
 
 @router.get("/service-orders/{identifier}/movements")
@@ -93,7 +107,7 @@ async def delete_movements(
     context: RequestContext = Depends(require_permission("service_order.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     removed = await service.delete_movements(session, context, identifier, ids)
     return {"data": {"removed": removed}}
 
@@ -124,7 +138,7 @@ async def delete_milestones(
     context: RequestContext = Depends(require_permission("service_order.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     removed = await service.delete_milestones(session, context, identifier, ids)
     return {"data": {"removed": removed}}
 
@@ -175,7 +189,11 @@ async def bulk_save_component_group_rows(
     rows = payload.get("rows") if isinstance(payload, dict) else None
     if rows is None and isinstance(payload, dict):
         rows = payload.get("items") or []
-    result = await component_tabs_service.bulk_save(session, context, order.id, group_id, rows or [])
+    raw_tab_group = payload.get("tabGroupId") if isinstance(payload, dict) else None
+    tab_group_id = int(raw_tab_group) if raw_tab_group not in (None, "") else None
+    result = await component_tabs_service.bulk_save(
+        session, context, order.id, group_id, rows or [], tab_group_id
+    )
     await session.commit()
     return {"data": result}
 
@@ -247,7 +265,7 @@ async def update_service_order(
 @router.post("/service-orders/{identifier}/finish")
 async def finish_service_order(
     identifier: str,
-    context: RequestContext = Depends(require_permission("service_order.update")),
+    context: RequestContext = Depends(require_permission("service_order.submit")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     before = await service.order_status(session, identifier)
@@ -278,18 +296,18 @@ async def create_service_charge(
 
 @router.get("/service-charges/{charge_id}")
 async def get_service_charge(
-    charge_id: str,
+    charge_id: EntityId,
     context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_charge(session, context, int(charge_id))}
+    return {"data": await service.get_charge(session, context, charge_id)}
 
 
 @router.put("/service-charges/{charge_id}")
 async def update_service_charge(
-    charge_id: str,
+    charge_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.save_charge(session, context, {**payload, "id": charge_id})}
@@ -298,36 +316,36 @@ async def update_service_charge(
 @router.delete("/service-charges")
 async def delete_service_charges(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("service_charge.create")),
+    context: RequestContext = Depends(require_permission("service_charge.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     removed = await service.delete_charges(session, ids)
     return {"data": {"removed": removed}}
 
 
 @router.post("/service-charges/{charge_id}/issue")
 async def issue_service_charge(
-    charge_id: str,
+    charge_id: EntityId,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    context: RequestContext = Depends(require_permission("service_charge.issue")),
+    context: RequestContext = Depends(require_permission("service_charge.submit")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    before = await service.charge_status(session, int(charge_id))
-    charge = await service.issue_charge(session, context, int(charge_id))
-    await service.record_charge_status_change(session, context, int(charge_id), before, charge)
+    before = await service.charge_status(session, charge_id)
+    charge = await service.issue_charge(session, context, charge_id)
+    await service.record_charge_status_change(session, context, charge_id, before, charge)
     await session.commit()
     return {"data": charge}
 
 
 @router.post("/service-charges/{charge_id}/create-finance-invoice", status_code=status.HTTP_201_CREATED)
 async def create_finance_invoice(
-    charge_id: str,
+    charge_id: EntityId,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("service_charge.convert_to_invoice")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    document = await service.charge_to_invoice(session, context, int(charge_id))
+    document = await service.charge_to_invoice(session, context, charge_id)
     await session.commit()
     return {"data": document}
 
@@ -338,11 +356,12 @@ async def presign_attachment(
     context: RequestContext = Depends(require_permission("attachment.upload")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    values = ATTACHMENT_PRESIGN_SCHEMA.validate(payload)
     return {
         "data": await service.presign(
             session,
-            str(payload.get("file_name") or payload.get("fileName") or "file"),
-            str(payload.get("mime_type") or payload.get("mimeType") or ""),
+            str(values["fileName"]),
+            str(values.get("mimeType") or ""),
         )
     }
 
@@ -364,8 +383,19 @@ async def delete_attachments(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Soft-delete attachments so they stop being listed, served, or linked."""
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     return {"data": {"removed": await service.delete_attachments(session, context, ids)}}
+
+
+@router.patch("/attachments/{attachment_id}")
+async def update_attachment(
+    attachment_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("attachment.upload")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Edit the note only; the stored file is immutable through this endpoint."""
+    return {"data": await service.update_attachment_note(session, context, attachment_id, payload.get("note"))}
 
 
 @router.get("/attachments/file/{storage_key:path}")
@@ -389,9 +419,16 @@ async def download_attachment(
 async def upload_attachment(
     file: UploadFile = File(...),
     storage_key: str | None = Form(default=None),
+    module: str | None = Form(default=None),
+    record_no: str | None = Form(default=None),
+    note: str | None = Form(default=None),
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     context.require("attachment.upload")
     content = await file.read(settings.upload_max_size_mb * 1024 * 1024 + 1)
-    return {"data": await service.store_upload(session, context, file.filename or "file", file.content_type or "", content, storage_key)}
+    uploaded = await service.store_upload(
+        session, context, file.filename or "file", file.content_type or "", content, storage_key, note
+    )
+    await service.link_attachment(session, int(uploaded["id"]), module or "", record_no or "")
+    return {"data": uploaded}

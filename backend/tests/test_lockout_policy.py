@@ -72,12 +72,25 @@ async def test_the_default_threshold_applies_when_nothing_is_configured(client):
     ).status_code == 200, "four failures must not lock when the threshold is five"
 
 
-async def test_an_unsafe_threshold_is_clamped_rather_than_obeyed(client):
-    """A stored value that would remove the control must not take effect."""
-    headers = await login(client)
-    # maxLoginAttempts 0 would lock every account immediately; the stored value is
-    # accepted (it is a number) but the effective policy clamps it.
-    await _set_security(client, headers, {"maxLoginAttempts": 0, "accountLockMinutes": 0})
+async def test_an_unsafe_stored_threshold_is_clamped_rather_than_obeyed(client, session_factory):
+    """A legacy stored value that would remove the control must not take effect.
+
+    The settings API now refuses these values, so this writes the row directly to
+    simulate data stored before that validation existed.
+    """
+    from sqlalchemy import select
+
+    from app.modules.settings.models import AppSetting
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(AppSetting).where(AppSetting.setting_key == "security"))
+        ).scalars().first()
+        if row is None:
+            row = AppSetting(setting_key="security", setting_group="security", setting_value={})
+            session.add(row)
+        row.setting_value = {"maxLoginAttempts": 0, "accountLockMinutes": 0}
+        await session.commit()
 
     assert (
         await client.post(

@@ -4,23 +4,26 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import cache
+from app.core import cache, deletion
 from app.core.bootstrap import provision_admin, requires_setup
 from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import AccessDenied, AuthRequired, Conflict, NotFound, ValidationFailed
 from app.core.locks import advisory_lock
 from app.core.pagination import PageParams, paged
-from app.core.permissions import PAGE_PERMISSION_SOURCE_CODES, ROLE_DEFINITIONS, SOURCE_PERMISSIONS
-from app.core.redis import safe_delete, safe_get, safe_set
+from app.core.permissions import (
+    PAGE_KEYS_BY_SOURCE,
+    PAGE_PERMISSION_SOURCE_CODES,
+    ROLE_DEFINITIONS,
+    SOURCE_PERMISSIONS,
+)
+from app.core.redis import safe_delete
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_token,
-    generate_reset_code,
     hash_password,
     hash_token,
     validate_password_strength,
@@ -33,6 +36,7 @@ from app.modules.auth.models import (
     Permission,
     Role,
     RolePermission,
+    UsedRefreshToken,
     User,
     UserCredential,
     UserRoleAssignment,
@@ -40,119 +44,32 @@ from app.modules.auth.models import (
 )
 from app.modules.auth.repository import AuthRepository
 
-# Map source permissions to frontend page keys (mirrors the Nuxt contract).
-# Page keys come from the Roles & Permissions matrix catalog; a few source codes
-# double as page keys for backwards compatibility.
-PAGE_KEYS_BY_SOURCE: dict[str, tuple[str, ...]] = {
-    "user.read": ("admin.users.view",),
-    "user.manage": ("admin.users.view", "admin.users.create", "admin.users.edit", "admin.users.delete"),
-    "role.read": ("admin.roles.view",),
-    "role.manage": ("admin.roles.view", "admin.roles.create", "admin.roles.edit", "admin.roles.delete"),
-    "quotation.read": ("sales.quotations.view",),
-    "quotation.create": ("sales.quotations.create",),
-    "quotation.update_draft": ("sales.quotations.edit",),
-    "quotation.send": ("sales.quotations.edit",),
-    "quotation.accept": ("sales.quotations.edit",),
-    "quotation.convert": ("sales.quotations.edit", "operations.service_orders.view"),
-    "service_order.read": ("operations.service_orders.view",),
-    "service_order.create": ("operations.service_orders.create",),
-    "service_order.update": ("operations.service_orders.edit", "configuration.view", "configuration.manage"),
-    "service_order.complete": ("operations.service_orders.edit",),
-    "service_order_config.view": ("operations.service_orders.view",),
-    "service_order_config.create": ("operations.service_orders.create", "operations.service_orders.edit"),
-    "service_order_config.update": ("operations.service_orders.edit",),
-    "service_order_config.delete": ("operations.service_orders.delete",),
-    "service_charge.read": ("finance.service_charges.view",),
-    "service_charge.create": ("finance.service_charges.create",),
-    "service_charge.issue": ("finance.service_charges.edit",),
-    "service_charge.convert_to_invoice": ("finance.service_charges.edit",),
-    "financial_document.read": ("finance.financial_documents.view",),
-    "financial_document.create": ("finance.financial_documents.create",),
-    "financial_document.update_draft": ("finance.financial_documents.edit",),
-    "financial_document.post": ("finance.financial_documents.edit",),
-    "financial_document.reverse": ("finance.financial_documents.edit",),
-    "financial_document.allocate": ("finance.financial_documents.edit",),
-    "journal_entry.read": ("finance.accounting.view",),
-    "journal_entry.create": ("finance.accounting.create",),
-    "journal_entry.post": ("finance.accounting.edit",),
-    "accounting_period.read": ("finance.accounting.view",),
-    "accounting_period.close": ("finance.accounting.edit",),
-    "chart_of_accounts.manage": ("finance.accounting.edit",),
-    "posting_rule.read": ("finance.posting_rules.view",),
-    "posting_rule.manage": (
-        "finance.posting_rules.view",
-        "finance.posting_rules.create",
-        "finance.posting_rules.edit",
-        "finance.posting_rules.delete",
+# Legacy source permissions expand into the finer-grained action codes the
+# matrix stores, so a role created before the matrix keeps working.
+SOURCE_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
+    "quotation.update_draft": ("quotation.update", "quotation.delete", "quotation.revise"),
+    "quotation.send": ("quotation.submit",),
+    "service_order.update": ("service_order.submit",),
+    "service_charge.create": ("service_charge.update", "service_charge.delete"),
+    "service_charge.issue": ("service_charge.submit",),
+    "financial_document.update_draft": ("financial_document.update", "financial_document.delete"),
+    "financial_document.post": ("financial_document.submit",),
+    "journal_entry.read": ("chart_of_accounts.read", "financial_account.read"),
+    "journal_entry.create": ("journal_entry.update", "journal_entry.delete"),
+    "accounting_period.close": ("accounting_period.update",),
+    "chart_of_accounts.manage": (
+        "chart_of_accounts.read",
+        "chart_of_accounts.create",
+        "chart_of_accounts.update",
+        "chart_of_accounts.delete",
+        "financial_account.read",
+        "financial_account.create",
+        "financial_account.update",
+        "financial_account.delete",
     ),
-    "audit_log.read": ("admin.audit_logs.view",),
-    "archive.view": ("archive.view", "admin.archive.view"),
-    "archive.restore": ("admin.archive.edit",),
-    "archive.hard_delete": ("admin.archive.delete",),
-    "report.read": (
-        "operations.reports.view",
-        "finance.reports.view",
-        "reports.view",
-        "finance.accounts_receivable.view",
-        "finance.accounts_payable.view",
-        "finance.job_profitability.view",
-    ),
-    "report.export": ("operations.reports.export", "finance.reports.export"),
-    "attachment.read": (
-        "sales.quotations.view",
-        "operations.service_orders.view",
-        "finance.financial_documents.view",
-    ),
-    "attachment.upload": (
-        "sales.quotations.edit",
-        "operations.service_orders.edit",
-        "finance.financial_documents.edit",
-    ),
-    "attachment.delete": ("finance.financial_documents.edit",),
-    "customs_credential.retrieve": ("master.reference.edit",),
-    "master.reference.view": (
-        "master.reference.view",
-        "sales.companies.view",
-        "operations.jobs.view",
-        "operations.shipments.view",
-        "operations.customs.view",
-        "operations.documents.view",
-        "operations.deliveries.view",
-        "finance.debit_notes.view",
-        "finance.customer_payments.view",
-        "finance.job_charges.view",
-        "finance.supplier_costs.view",
-        "finance.supplier_payments.view",
-    ),
-    "master.reference.manage": ("master.reference.create", "master.reference.edit", "master.reference.delete"),
-    # Publishing a configuration version changes the live Service Order form for
-    # every user, so the Roles screen grants it through the same page key as the
-    # rest of the configuration screens.
-    "service_order_config.publish": ("configuration.edit",),
-    "configuration.manage": (
-        "configuration.view",
-        "configuration.create",
-        "configuration.edit",
-        "configuration.delete",
-        "configuration.manage",
-        "admin.document_sequences.view",
-        "admin.document_sequences.create",
-        "admin.document_sequences.edit",
-        "admin.document_sequences.delete",
-        "settings.app_config.view",
-        "settings.app_config.edit",
-    ),
-    "configuration.configure": ("configuration.edit", "configuration.configure"),
-    "settings.manage": (
-        "settings.app_config.view",
-        "settings.app_config.edit",
-        "settings.backup.view",
-        "settings.backup.edit",
-        "settings.manage",
-    ),
-    "backup.read": ("settings.backup.view",),
-    "backup.manage": ("settings.backup.edit",),
-    "finance.view": ("finance.accounting.view", "finance.view"),
+    "posting_rule.manage": ("posting_rule.create", "posting_rule.update", "posting_rule.delete"),
+    "user.manage": ("user.read",),
+    "role.manage": ("role.read",),
 }
 
 SOURCE_PERMISSION_CODES = {code for code, _, _ in SOURCE_PERMISSIONS}
@@ -221,12 +138,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _refresh_session_lifetime(remember_me: bool) -> timedelta:
-    if remember_me:
-        return timedelta(days=settings.refresh_token_expire_days)
-    return timedelta(hours=settings.session_refresh_token_expire_hours)
-
-
 def _assert_can_manage_platform_admin(context: RequestContext | None, role_code: str | None) -> None:
     """Only a platform administrator may touch the super-admin role."""
     if role_code == PLATFORM_ADMIN_ROLE and not (context and context.is_platform_admin):
@@ -240,7 +151,9 @@ def _assert_can_grant_permissions(context: RequestContext, codes: list[str]) -> 
     required: set[str] = set()
     for code in codes:
         if code in PAGE_PERMISSION_SOURCE_CODES:
-            required.update(PAGE_PERMISSION_SOURCE_CODES[code])
+            # A page with no source mapping is its own capability; requiring
+            # nothing would let a role manager grant a page they cannot open.
+            required.update(PAGE_PERMISSION_SOURCE_CODES[code] or (code,))
         else:
             required.add(code)
     missing = sorted(code for code in required if not context.has_permission(code))
@@ -273,6 +186,9 @@ async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
     for record in records:
         record.revoked_at = now
     user.token_version = int(user.token_version or 0) + 1
+    from app.modules.telegram.models import TelegramPairing
+
+    await session.execute(delete(TelegramPairing).where(TelegramPairing.user_id == user.id))
     await safe_delete(f"revoked:{user.id}")
 
 
@@ -283,10 +199,24 @@ async def must_change_password(session: AsyncSession, user_id: int) -> bool:
 
 
 def expand_source_permissions(permissions: set[str]) -> set[str]:
-    """Expand stored page permissions into the source/API permissions they imply."""
+    """Expand stored page permissions into the source/API permissions they imply.
+
+    Chains are followed (page -> source -> legacy compatibility), so a role that
+    only stored ``quotation.update_draft`` still receives the newer, narrower
+    action codes that the route guards check.
+    """
     expanded = set(permissions)
-    for code in permissions:
-        expanded.update(PAGE_PERMISSION_SOURCE_CODES.get(code, ()))
+    pending = list(permissions)
+    while pending:
+        code = pending.pop()
+        implied = (
+            *PAGE_PERMISSION_SOURCE_CODES.get(code, ()),
+            *SOURCE_PERMISSION_COMPATIBILITY.get(code, ()),
+        )
+        for item in implied:
+            if item not in expanded:
+                expanded.add(item)
+                pending.append(item)
     return expanded
 
 
@@ -302,9 +232,13 @@ async def get_user(session: AsyncSession, user_id: int) -> User:
 
 
 async def authenticate(session: AsyncSession, login: str, password: str) -> User:
+    from app.modules.audit.service import write_audit
+
     user = await get_user_by_login(session, login)
     if user is None:
         verify_password_or_dummy(password, None)
+        await write_audit(session, None, event_type="LOGIN_FAILED", entity_type="user", entity_id=0, action="login", result="REJECTED")
+        await session.commit()
         raise AuthRequired("Invalid username or password.")
     credential = await AuthRepository(session).credential_for_user(user.id)
     now = datetime.now(UTC)
@@ -320,6 +254,8 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
             if credential.failed_attempt_count >= max_attempts:
                 credential.locked_until = now + timedelta(minutes=lockout_minutes)
                 credential.failed_attempt_count = 0
+                await write_audit(session, None, event_type="ACCOUNT_LOCKED", entity_type="user", entity_id=user.id, action="lock", result="REJECTED")
+            await write_audit(session, None, event_type="LOGIN_FAILED", entity_type="user", entity_id=user.id, action="login", result="REJECTED")
             await session.commit()
         raise AuthRequired("Invalid username or password.")
     if str(user.status or "").upper() not in {"ACTIVE"}:
@@ -367,7 +303,7 @@ def resolve_page_keys(permissions: set[str], is_platform_admin: bool) -> tuple[l
     if is_platform_admin or "ALL_PAGES" in permissions:
         return ["ALL_PAGES"], ["ALL_PAGES"]
     source = sorted(code for code in permissions if code in SOURCE_PERMISSION_CODES)
-    pages: set[str] = {"dashboard.view"}
+    pages: set[str] = set()
     for code in permissions:
         # Page-level codes (configuration.manage, master.reference.view, …) are
         # also mapped so they grant the finer-grained matrix pages.
@@ -446,171 +382,212 @@ def build_auth_user(ctx: RequestContext, role_label: str, *, must_change_passwor
     }
 
 
-async def create_session(
-    session: AsyncSession,
-    user: User,
-    *,
-    ip: str | None,
-    user_agent: str | None,
-    remember_me: bool = False,
-) -> tuple[str, str]:
+async def _session_access(session: AsyncSession, user: User, record: UserSession) -> str:
+    from app.modules.settings.service import get_access_policy
+
+    policy = await get_access_policy(session)
+    return create_access_token(
+        user.id, int(user.token_version or 0), session_id=record.id,
+        lifetime_minutes=policy["accessTokenMinutes"],
+        must_change_password=await must_change_password(session, user.id),
+    )
+
+
+async def validate_session(session: AsyncSession, record: UserSession | None, user_id: int) -> UserSession:
+    from app.modules.settings.service import get_access_policy
+
+    if record is None or record.user_id != user_id or record.revoked_at is not None:
+        raise AuthRequired("Session has been revoked. Please sign in again.", code="SESSION_REVOKED")
+    policy = await get_access_policy(session)
     now = datetime.now(UTC)
-    lifetime = _refresh_session_lifetime(remember_me)
-    refresh = create_refresh_token(user.id, expires_delta=lifetime)
+    absolute = min(_as_utc(record.expires_at), _as_utc(record.created_at) + timedelta(minutes=policy["sessionAbsoluteMinutes"]))
+    activity = _as_utc(record.last_activity_at or record.created_at)
+    if now >= absolute or now >= activity + timedelta(minutes=policy["sessionTimeoutMinutes"]):
+        raise AuthRequired("Session has expired. Please sign in again.", code="SESSION_EXPIRED")
+    return record
+
+
+async def create_session(
+    session: AsyncSession, user: User, *, ip: str | None, user_agent: str | None, remember_me: bool = False,
+) -> tuple[str, str]:
+    from app.modules.settings.service import get_access_policy
+
+    now = datetime.now(UTC)
+    policy = await get_access_policy(session)
+    refresh = create_refresh_token(user.id)
     record = UserSession(
-        user_id=user.id,
-        refresh_token_hash=hash_token(refresh),
-        ip_address=ip,
-        user_agent=user_agent,
-        expires_at=now + lifetime,
-        remember_me=remember_me,
+        user_id=user.id, refresh_token_hash=hash_token(refresh),
+        expires_at=now + timedelta(minutes=policy["sessionAbsoluteMinutes"]),
+        created_at=now, last_activity_at=now, remember_me=remember_me,
     )
     session.add(record)
     await session.flush()
-    access = create_access_token(
-        user.id,
-        int(user.token_version or 0),
-        must_change_password=await must_change_password(session, user.id),
-    )
+    access = await _session_access(session, user, record)
     user.last_login_at = now
     await session.commit()
     return access, refresh
 
 
+async def _refresh_record(session: AsyncSession, token: str) -> tuple[UserSession | None, UsedRefreshToken | None]:
+    token_hash = hash_token(token)
+    # History is immutable. Lock the stable session before inspecting its current
+    # hash again: a waiter must observe the winning rotation after the lock.
+    record = await session.scalar(select(UserSession).where(UserSession.refresh_token_hash == token_hash).with_for_update())
+    if record is not None:
+        return record, None
+    used = await session.get(UsedRefreshToken, token_hash)
+    if used is None:
+        return None, None
+    record = await session.scalar(select(UserSession).where(UserSession.id == used.session_id).with_for_update())
+    return record, used
+
+
 async def rotate_refresh_token(
-    session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None
+    session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None,
 ) -> tuple[User, str, str, bool]:
-    """Rotate a refresh token and return ``(user, access, refresh, remember_me)``.
-
-    The replacement session inherits the original absolute ``expires_at`` so
-    rotation never extends the server-side session lifetime.
-    """
-    try:
-        payload = decode_token(refresh_token)
-    except Exception as exc:  # noqa: BLE001
-        raise AuthRequired("Invalid refresh token.") from exc
-    if payload.get("type") != "refresh":
-        raise AuthRequired("Invalid token type.")
-    token_hash = hash_token(refresh_token)
-    record = await AuthRepository(session).session_by_refresh_hash(token_hash)
-    if record is None or record.revoked_at is not None:
-        raise AuthRequired("Session is no longer valid.")
+    record, used = await _refresh_record(session, refresh_token)
+    if record is None:
+        raise AuthRequired("Invalid refresh token.", code="SESSION_INVALID")
     now = datetime.now(UTC)
-    expires_at = _as_utc(record.expires_at)
-    if expires_at <= now:
-        raise AuthRequired("Session has expired.")
+    if used is not None:
+        if record.revoked_at is None and now - _as_utc(used.used_at) <= timedelta(seconds=5):
+            # An overlapping request receives no credential and cannot rotate.
+            # No cookies are changed; its tab can retry using the winning cookie.
+            raise Conflict("REFRESH_CONFLICT", "Another request renewed this session. Retry using the current cookie.")
+        if record.revoked_at is None:
+            from app.modules.audit.service import write_audit
+
+            record.revoked_at = now
+            await write_audit(session, None, event_type="REFRESH_REPLAY", entity_type="user_session",
+                              entity_id=record.id, action="revoke", reason="Consumed refresh credential reused")
+            await session.commit()
+        raise AuthRequired("Session revoked after refresh-token reuse.", code="SESSION_REVOKED")
     user = await session.get(User, record.user_id)
-    if user is None:
-        raise AuthRequired("User not found.")
-    record.revoked_at = now
+    if user is None or str(user.status).upper() != "ACTIVE":
+        raise AuthRequired("This account is not active.", code="SESSION_REVOKED")
+    await validate_session(session, record, user.id)
+    session.add(UsedRefreshToken(token_hash=record.refresh_token_hash, session_id=record.id, used_at=now))
+    new_refresh = create_refresh_token(user.id)
+    record.refresh_token_hash = hash_token(new_refresh)
     record.last_used_at = now
-    remember_me = bool(record.remember_me)
-    new_refresh = create_refresh_token(user.id, expires_delta=expires_at - now)
-    # Rotation issues a brand-new session row. Reusing the now-revoked row would
-    # make the fresh token fail the revoked check on the very next refresh.
-    session.add(
-        UserSession(
-            user_id=user.id,
-            refresh_token_hash=hash_token(new_refresh),
-            ip_address=ip,
-            user_agent=user_agent,
-            expires_at=expires_at,
-            remember_me=remember_me,
-        )
-    )
+    access = await _session_access(session, user, record)
     await session.commit()
-    # Carries the "must change" claim too: refreshing must not be a way to
-    # escape the forced change.
-    access = create_access_token(
-        user.id,
-        int(user.token_version or 0),
-        must_change_password=await must_change_password(session, user.id),
-    )
-    return user, access, new_refresh, remember_me
+    return user, access, new_refresh, bool(record.remember_me)
 
 
-async def revoke_session(session: AsyncSession, user_id: int | None, refresh_token: str | None) -> int | None:
-    """Revoke the session identified by ``refresh_token`` (or every active
-    session of ``user_id``). Returns the owner id when one was resolved."""
+async def revoke_session(session: AsyncSession, user_id: int | None, refresh_token: str | None, *, session_id: int | None = None) -> int | None:
     now = datetime.now(UTC)
     if refresh_token:
-        token_hash = hash_token(refresh_token)
-        record = await AuthRepository(session).session_by_refresh_hash(token_hash)
+        record, _ = await _refresh_record(session, refresh_token)
         if record is not None:
             record.revoked_at = now
             user_id = record.user_id
         await session.commit()
-        if user_id is not None:
-            await safe_delete(f"revoked:{user_id}")
         return user_id
     if user_id is None:
         return None
+    if session_id is not None:
+        record = await session.scalar(select(UserSession).where(UserSession.id == session_id).with_for_update())
+        if record is not None and record.user_id == user_id:
+            record.revoked_at = now
+            await session.commit()
+        return user_id
     records = await AuthRepository(session).active_sessions(user_id)
     for record in records:
         record.revoked_at = now
     await session.commit()
-    await safe_delete(f"revoked:{user_id}")
     return user_id
 
 
 async def request_password_reset(session: AsyncSession, email: str) -> None:
-    user = await AuthRepository(session).user_by_email(email)
-    if user is None:
+    import secrets
+
+    from app.modules.telegram import service as telegram
+    from app.modules.telegram.models import TelegramLink
+    from app.modules.telegram.outbox import enqueue_private, policy
+
+    value = await telegram.config(session)
+    if not value.get("enabled") or not policy(value, "recovery")["enabled"]:
         return
-    code = generate_reset_code()
-    session.add(
-        PasswordResetToken(
-            user_id=user.id,
-            email=email,
-            code_hash=hash_token(code),
-            expires_at=datetime.now(UTC) + timedelta(minutes=settings.password_reset_code_expire_minutes),
-        )
-    )
+    try:
+        telegram.trusted_origin()
+    except ValidationFailed:
+        return
+    user = await AuthRepository(session).user_by_login(email.strip())
+    if user is None or user.status.upper() != "ACTIVE":
+        return
+    # Serialize issuance and consumption per account, including simultaneous requests.
+    user = (await session.execute(select(User).where(User.id == user.id).with_for_update())).scalar_one()
+    link = await session.get(TelegramLink, user.id)
+    if not link or link.blocked_at or link.bot_id != value.get("botId"):
+        return
+    now = datetime.now(UTC)
+    recent = await session.scalar(select(PasswordResetToken.id).where(PasswordResetToken.user_id == user.id, PasswordResetToken.created_at > now - timedelta(minutes=policy(value, "recovery")["cooldownMinutes"])))
+    if recent:
+        return
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=now))
+    token = secrets.token_urlsafe(32)
+    record = PasswordResetToken(user_id=user.id, email=user.email, code_hash=hash_token(token), expires_at=now + timedelta(minutes=15))
+    session.add(record)
+    await session.flush()
+    await enqueue_private(session, user.id, "PASSWORD_RESET_REQUESTED", token=token, reset_id=record.id)
     await session.commit()
-    await safe_set(f"reset:{email}", code, ex=settings.password_reset_code_expire_minutes * 60)
 
 
 async def verify_reset_code(session: AsyncSession, email: str, code: str) -> bool:
-    record = (
-        await session.execute(
-            select(PasswordResetToken)
-            .where(PasswordResetToken.email == email, PasswordResetToken.used_at.is_(None))
-            .order_by(PasswordResetToken.id.desc())
-        )
-    ).scalars().first()
-    if record is not None and record.expires_at >= datetime.now(UTC) and record.code_hash == hash_token(code):
-        return True
-    cached = await safe_get(f"reset:{email}")
-    return cached is not None and cached == code
+    # email is retained as a compatibility argument; identity is derived only from the token.
+    if not 40 <= len(code) <= 128:
+        return False
+    record = await session.scalar(select(PasswordResetToken.id).where(PasswordResetToken.code_hash == hash_token(code), PasswordResetToken.used_at.is_(None), PasswordResetToken.expires_at > datetime.now(UTC)))
+    return record is not None
 
 
 async def reset_password(session: AsyncSession, email: str, code: str, password: str) -> None:
+    from app.modules.audit.service import write_audit
+    from app.modules.telegram import service as telegram
+    from app.modules.telegram.models import TelegramLink
+    from app.modules.telegram.outbox import enqueue_private, policy
+
     password_errors = validate_password_strength(password)
     if password_errors:
         raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
-    if not await verify_reset_code(session, email, code):
-        raise Conflict("INVALID_RESET_CODE", "The reset code is invalid or has expired.")
-    user = await AuthRepository(session).user_by_email(email)
-    if user is None:
-        raise NotFound("User not found.")
+    if not 40 <= len(code) <= 128:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    record = (await session.execute(select(PasswordResetToken).where(PasswordResetToken.code_hash == hash_token(code)))).scalar_one_or_none()
+    if record is None:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    user = (await session.execute(select(User).where(User.id == record.user_id).with_for_update())).scalar_one_or_none()
+    if user is None or user.status.upper() != "ACTIVE":
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    value = await telegram.config(session)
+    link = await session.get(TelegramLink, user.id)
+    if not value.get("enabled") or not policy(value, "recovery")["enabled"] or not link or link.blocked_at or link.bot_id != value.get("botId"):
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    now = datetime.now(UTC)
+    # Atomic conditional consumption is required even when the caller preverified the link.
+    consumed = await session.execute(update(PasswordResetToken).where(PasswordResetToken.id == record.id, PasswordResetToken.used_at.is_(None), PasswordResetToken.expires_at > now).values(used_at=now).returning(PasswordResetToken.id).execution_options(synchronize_session=False))
+    if consumed.scalar_one_or_none() is None:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
     credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None:
-        session.add(UserCredential(user_id=user.id, password_hash=hash_password(password), password_changed_at=datetime.now(UTC)))
+        credential = UserCredential(user_id=user.id, password_hash=hash_password(password))
+        session.add(credential)
     else:
         credential.password_hash = hash_password(password)
-        credential.password_changed_at = datetime.now(UTC)
-    records = (
-        await session.execute(select(PasswordResetToken).where(PasswordResetToken.email == email, PasswordResetToken.used_at.is_(None)))
-    ).scalars().all()
-    for record in records:
-        record.used_at = datetime.now(UTC)
-    # A password reset invalidates every existing session for the account.
+    credential.password_changed_at = now
+    credential.must_change_password = False
+    credential.failed_attempt_count = 0
+    credential.locked_until = None
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=now))
     await _revoke_all_sessions(session, user)
+    await enqueue_private(session, user.id, "PASSWORD_RESET_COMPLETED")
+    await write_audit(session, None, event_type="PASSWORD_RESET_COMPLETED", entity_type="user", entity_id=user.id, action="reset_password")
     await session.commit()
-    await safe_delete(f"reset:{email}")
 
 
 async def change_password(session: AsyncSession, user: User, current_password: str, new_password: str) -> None:
+    from app.modules.telegram.outbox import enqueue_private
+
     credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None or not verify_password(current_password, credential.password_hash):
         raise AuthRequired("Current password is incorrect.")
@@ -625,6 +602,8 @@ async def change_password(session: AsyncSession, user: User, current_password: s
     credential.must_change_password = False
     # Changing the password signs out every device, including the current one.
     await _revoke_all_sessions(session, user)
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=datetime.now(UTC)))
+    await enqueue_private(session, user.id, "PASSWORD_CHANGED")
     await session.commit()
 
 
@@ -667,6 +646,10 @@ async def set_user_password(
     credential.failed_attempt_count = 0
     credential.locked_until = None
     await _revoke_all_sessions(session, user)
+    from app.modules.telegram.outbox import enqueue_private
+
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=datetime.now(UTC)))
+    await enqueue_private(session, user.id, "PASSWORD_CHANGED")
     await session.commit()
     return user
 
@@ -677,11 +660,19 @@ async def force_logout_user(session: AsyncSession, user_id: int) -> None:
     if user is None:
         raise NotFound("User not found.")
     await _revoke_all_sessions(session, user)
+    from app.modules.telegram.outbox import enqueue_private
+
+    await enqueue_private(session, user.id, "SESSIONS_REVOKED")
     await session.commit()
 
 
 async def list_users(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
     rows = await AuthRepository(session).users_with_role_codes(page)
+    from app.core.users import creator_names_from_audit
+
+    creators = await creator_names_from_audit(
+        session, "user", "USER_CREATED", (user.id for user, _assignments in rows)
+    )
     output = []
     for user, assignments in rows:
         output.append(
@@ -693,6 +684,9 @@ async def list_users(session: AsyncSession, page: PageParams | None = None) -> l
                 "displayName": user.display_name,
                 "status": user.status,
                 "roles": list(assignments),
+                "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
+                "createdBy": creators.get(user.id),
+                "createdAt": user.created_at.isoformat() if user.created_at else None,
                 "isProtectedSystemAccount": _is_protected_system_admin(user),
             }
         )
@@ -988,6 +982,11 @@ async def list_roles(
     session: AsyncSession, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
 ) -> dict:
     roles, total = await AuthRepository(session).roles_with_permissions(page, q=q, status=status)
+    from app.core.users import creator_names_from_audit
+
+    creators = await creator_names_from_audit(
+        session, "role", "ROLE_CREATED", (role.id for role, _perms in roles)
+    )
     output = []
     for role, perms in roles:
         user_count = int(
@@ -1012,6 +1011,8 @@ async def list_roles(
                 "permissions": list(perms),
                 "permissionCount": len(perms),
                 "userCount": user_count,
+                "createdBy": creators.get(role.id),
+                "createdAt": role.created_at.isoformat() if role.created_at else None,
             }
         )
     effective_page = page or PageParams(page=1, page_size=max(total, 1))
@@ -1218,6 +1219,9 @@ async def delete_roles(session: AsyncSession, ids: list[int]) -> None:
     roles = [await session.get(Role, role_id) for role_id in set(ids)]
     if any(role is not None and role.is_system_role for role in roles):
         raise AccessDenied("Built-in system roles cannot be deleted.")
+    for role in roles:
+        if role is not None:
+            await deletion.require_inactive(role.status, label="role")
     assigned_role_ids = {
         role.id
         for role in roles
@@ -1275,6 +1279,9 @@ async def delete_users(session: AsyncSession, ids: list[int], context: RequestCo
             )
             if (total_admins or 0) - deleting_admins < 1:
                 raise ValidationFailed("At least one Platform Administrator must remain.")
+
+    for user in users:
+        await deletion.require_inactive(user.status, label="user")
 
     for user in users:
         await session.execute(delete(UserCredential).where(UserCredential.user_id == user.id))

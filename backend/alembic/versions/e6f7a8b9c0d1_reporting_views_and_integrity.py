@@ -15,13 +15,13 @@ Two separate concerns, both PostgreSQL-only and both additive:
    payment allocation may not exceed the remaining balance of either side.
 
    Deliberate departures from the reference DDL are documented in
-   ``docs/14_47_table_migration_analysis.md`` §5 — most importantly allocations
+   ``docs/05_solution_architecture.md`` §5 — most importantly allocations
    stay deletable, because reversing a document legitimately unwinds them.
 
 An administrative data reset would otherwise be blocked by the immutability
 guards, so they honour a transaction-scoped escape hatch
 (``SET LOCAL lcs.allow_financial_purge = 'on'``) that only the audited reset
-path sets. ``docs/15_migration_and_rollback_guide.md`` documents it.
+path sets. ``docs/11_deployment_and_security.md`` documents it.
 
 Revision ID: e6f7a8b9c0d1
 Revises: d5e6f7a8b9c0

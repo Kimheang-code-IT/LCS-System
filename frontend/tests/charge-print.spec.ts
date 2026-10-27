@@ -32,6 +32,7 @@ function charge(overrides: Record<string, unknown> = {}): FreightRecord {
     status: 'Issued',
     feeLines: [
       {
+        id: 'fl-1',
         feeType: 'FREIGHT_SERVICE',
         description: 'Ocean freight',
         containerNo: 'MSCU 482190-7',
@@ -42,6 +43,7 @@ function charge(overrides: Record<string, unknown> = {}): FreightRecord {
         amount: 1320,
       },
       {
+        id: 'fl-2',
         feeType: 'INLAND_TRANSPORT',
         description: 'Trucking',
         containerNo: 'TGHU 771923-4',
@@ -76,5 +78,18 @@ describe('service charge print helpers', () => {
     expect(second.lines[0]?.amount).toBe(1078)
     expect(first.shipment.containerNo).toBe('MSCU 482190-7')
     expect(second.shipment.containerNo).toBe('TGHU 771923-4')
+  })
+
+  it('selects the fee line by its stable id, not by position', () => {
+    const model = buildChargePrintViewModel(charge(), 'tax-invoice', context, { lineId: 'fl-2' })
+    expect(model.lines).toHaveLength(1)
+    expect(model.lines[0]?.description).toBe('Trucking')
+    expect(model.document.number).toBe('SC-2026-0001/2')
+  })
+
+  it('keeps an unissued charge as a draft statement', () => {
+    const model = buildChargePrintViewModel(charge({ status: 'Draft' }), 'tax-invoice', context)
+    expect(model.watermark).toBe('DRAFT')
+    expect(model.document.documentType).not.toBe('CUSTOMER_INVOICE')
   })
 })

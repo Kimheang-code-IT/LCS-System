@@ -17,6 +17,7 @@
 import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
 import { generateStrongPassword, validatePasswordStrength } from '~/utils/validation/field-rules'
 import { issueMessage } from '~/utils/validation/messages'
+import { passwordIssueMessage } from '~/utils/validation/password-schema'
 import { useLcsRepositories } from '~/repositories'
 
 const props = withDefaults(defineProps<{
@@ -54,6 +55,9 @@ const formError = ref('')
 
 const isHandover = computed(() => props.mode === 'handover')
 
+/** Enter, or the submit button, is refused until every rule and the match pass. */
+const passwordsValid = computed(() => !validatePasswordStrength(password.value) && confirmation.value === password.value)
+
 function useGenerated() {
   password.value = generateStrongPassword()
   confirmation.value = password.value
@@ -77,7 +81,7 @@ function validate(): boolean {
   const errors: Record<string, string> = {}
   const issue = validatePasswordStrength(password.value)
   if (issue) {
-    errors.password = issueMessage(t, issue, t('freight.users.password.newPassword'))
+    errors.password = issueMessage(t, issue, t('users.password.newPassword'))
   }
   else if (confirmation.value !== password.value) {
     errors.passwordConfirmation = t('validation.passwordMismatch')
@@ -88,6 +92,7 @@ function validate(): boolean {
 
 async function submit() {
   if (isHandover.value) return close()
+  if (!passwordsValid.value) return
   if (!validate()) return
   submitting.value = true
   formError.value = ''
@@ -113,6 +118,16 @@ async function submit() {
     submitting.value = false
   }
 }
+
+// Live field errors: the submit button is disabled until the policy passes, so
+// the reason must appear under the field while typing, not only on submit.
+watch([password, confirmation], () => {
+  fieldErrors.value.password = passwordIssueMessage(t, password.value, t('users.password.newPassword'))
+  fieldErrors.value.passwordConfirmation = confirmation.value
+    && confirmation.value !== password.value
+    ? t('validation.passwordMismatch')
+    : ''
+})
 
 function close() {
   emit('update:open', false)
@@ -140,11 +155,11 @@ watch(() => [props.open, props.userId], () => {
   <UModal
     :open="open"
     :title="isHandover
-      ? t('freight.users.password.handoverTitle')
-      : t('freight.users.password.title')"
+      ? t('users.password.handoverTitle')
+      : t('users.password.title')"
     :description="isHandover
-      ? t('freight.users.password.handoverDescription', { user: userLabel })
-      : t('freight.users.password.description', { user: userLabel })"
+      ? t('users.password.handoverDescription', { user: userLabel })
+      : t('users.password.description', { user: userLabel })"
     @update:open="emit('update:open', $event)">
     <template #body>
       <div v-if="isHandover" class="space-y-4">
@@ -155,19 +170,19 @@ watch(() => [props.open, props.userId], () => {
             readonly
             size="md"
             class="w-full font-mono"
-            :aria-label="t('freight.users.password.newPassword')" />
+            :aria-label="t('users.password.newPassword')" />
           <UButton
             :icon="copied ? 'i-lucide-check' : 'i-lucide-copy'"
             color="neutral"
             variant="subtle"
-            :aria-label="t('freight.users.password.copy')"
+            :aria-label="t('users.password.copy')"
             @click="copy(revealedPassword)" />
         </div>
         <UAlert
           color="warning"
           variant="subtle"
           icon="i-lucide-triangle-alert"
-          :description="t('freight.users.password.handoverWarning')" />
+          :description="t('users.password.handoverWarning')" />
       </div>
 
       <form v-else class="space-y-4" @submit.prevent="submit">
@@ -175,17 +190,18 @@ watch(() => [props.open, props.userId], () => {
 
         <CommonAppSecretInput
           v-model="password"
-          :label="t('freight.users.password.newPassword')"
-          :help="t('freight.users.password.requirements')"
+          :label="t('users.password.newPassword')"
+          :help="t('users.password.requirements')"
           autocomplete="new-password"
           data-field-key="password" />
+        <CommonAppPasswordRequirements :value="password" class="mt-2" />
         <p v-if="fieldErrors.password" class="text-xs text-error" role="alert">
           {{ fieldErrors.password }}
         </p>
 
         <CommonAppSecretInput
           v-model="confirmation"
-          :label="t('freight.users.password.confirmPassword')"
+          :label="t('users.password.confirmPassword')"
           autocomplete="new-password"
           data-field-key="passwordConfirmation" />
         <p v-if="fieldErrors.passwordConfirmation" class="text-xs text-error" role="alert">
@@ -197,13 +213,13 @@ watch(() => [props.open, props.userId], () => {
           color="neutral"
           variant="subtle"
           type="button"
-          :label="t('freight.users.password.generate')"
+          :label="t('users.password.generate')"
           @click="useGenerated" />
 
         <UCheckbox
           v-model="mustChangePassword"
-          :label="t('freight.users.password.requireChange')"
-          :help="t('freight.users.password.requireChangeHelp')" />
+          :label="t('users.password.requireChange')"
+          :help="t('users.password.requireChangeHelp')" />
       </form>
     </template>
 
@@ -216,9 +232,9 @@ watch(() => [props.open, props.userId], () => {
           @click="close" />
         <UButton
           v-if="!isHandover"
-          :label="t('freight.users.password.submit')"
+          :label="t('users.password.submit')"
           :loading="submitting"
-          :disabled="submitting"
+          :disabled="submitting || !passwordsValid"
           @click="submit" />
       </div>
     </template>

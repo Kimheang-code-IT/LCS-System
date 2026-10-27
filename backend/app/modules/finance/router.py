@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Header, status
+from fastapi import APIRouter, Body, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.database import get_session
-from app.core.deps import require_permission
+from app.core.deps import require_any_permission, require_permission
 from app.core.exceptions import NotFound
 from app.core.pagination import PageParams, page_params
 from app.core.serialization import jsonable
+from app.core.validation import EntityId, validate_id_list
 from app.modules.audit.service import write_audit
 from app.modules.finance import service
 from app.modules.finance.posting_rules import (
@@ -17,6 +18,7 @@ from app.modules.finance.posting_rules import (
     POSTING_RULE_ENTITY,
     POSTING_RULE_UPDATED,
 )
+from app.modules.finance.schemas import REVERSAL_WRITE_SCHEMA
 
 router = APIRouter()
 
@@ -26,7 +28,7 @@ router = APIRouter()
 @router.get("/chartOfAccounts")
 async def list_accounts(
     page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_accounts(session, context, page)}
@@ -36,7 +38,7 @@ async def list_accounts(
 @router.post("/chart-of-accounts", status_code=status.HTTP_201_CREATED)
 async def create_account(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.create_account(session, context, payload)}
@@ -45,32 +47,32 @@ async def create_account(
 @router.put("/chartOfAccounts/{account_id}")
 @router.put("/chart-of-accounts/{account_id}")
 async def update_account(
-    account_id: str,
+    account_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.update_account(session, context, int(account_id), payload)}
+    return {"data": await service.update_account(session, context, account_id, payload)}
 
 
 @router.get("/chartOfAccounts/{account_id}")
 @router.get("/chart-of-accounts/{account_id}")
 async def get_account(
-    account_id: str,
-    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    account_id: EntityId,
+    context: RequestContext = Depends(require_permission("chart_of_accounts.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_account(session, context, int(account_id))}
+    return {"data": await service.get_account(session, context, account_id)}
 
 
 @router.delete("/chartOfAccounts")
 @router.delete("/chart-of-accounts")
 async def delete_accounts(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("chart_of_accounts.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     await service.delete_accounts(session, context, ids)
     return {"data": {"removed": len(ids)}}
 
@@ -80,7 +82,7 @@ async def delete_accounts(
 @router.get("/financialAccounts")
 async def list_financial_accounts(
     page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    context: RequestContext = Depends(require_permission("financial_account.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_financial_accounts(session, context, page)}
@@ -90,7 +92,7 @@ async def list_financial_accounts(
 @router.post("/financial-accounts", status_code=status.HTTP_201_CREATED)
 async def create_financial_account(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("financial_account.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.create_financial_account(session, context, payload)}
@@ -99,32 +101,32 @@ async def create_financial_account(
 @router.get("/financialAccounts/{account_id}")
 @router.get("/financial-accounts/{account_id}")
 async def get_financial_account(
-    account_id: str,
-    context: RequestContext = Depends(require_permission("journal_entry.read")),
+    account_id: EntityId,
+    context: RequestContext = Depends(require_permission("financial_account.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_financial_account(session, context, int(account_id))}
+    return {"data": await service.get_financial_account(session, context, account_id)}
 
 
 @router.put("/financialAccounts/{account_id}")
 @router.put("/financial-accounts/{account_id}")
 async def update_financial_account(
-    account_id: str,
+    account_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("financial_account.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.update_financial_account(session, context, int(account_id), payload)}
+    return {"data": await service.update_financial_account(session, context, account_id, payload)}
 
 
 @router.delete("/financialAccounts")
 @router.delete("/financial-accounts")
 async def delete_financial_accounts(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("chart_of_accounts.manage")),
+    context: RequestContext = Depends(require_permission("financial_account.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     await service.delete_financial_accounts(session, context, ids)
     return {"data": {"removed": len(ids)}}
 
@@ -143,39 +145,40 @@ async def list_periods(
 @router.get("/accounting-periods/{period_id}")
 @router.get("/accountingPeriods/{period_id}")
 async def get_period(
-    period_id: str,
+    period_id: EntityId,
     context: RequestContext = Depends(require_permission("accounting_period.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_period(session, context, int(period_id))}
+    return {"data": await service.get_period(session, context, period_id)}
 
 
 @router.put("/accounting-periods/{period_id}")
 @router.patch("/accounting-periods/{period_id}")
 async def update_period(
-    period_id: str,
+    period_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("accounting_period.close")),
+    context: RequestContext = Depends(require_permission("accounting_period.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.update_period(session, context, int(period_id), payload)}
+    return {"data": await service.update_period(session, context, period_id, payload)}
 
 
 @router.post("/accounting-periods/{period_id}/close")
 async def close_period(
-    period_id: str,
+    period_id: EntityId,
     payload: dict = Body(default={}),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("accounting_period.close")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    period = await service.close_period(session, context, int(period_id))
+    payload = REVERSAL_WRITE_SCHEMA.validate(payload)
+    period = await service.close_period(session, context, period_id)
     await write_audit(
         session,
         context,
         event_type="PERIOD_CLOSED",
         entity_type="accounting_period",
-        entity_id=int(period_id),
+        entity_id=period_id,
         action="close",
         reason=payload.get("reason"),
     )
@@ -188,7 +191,9 @@ async def close_period(
 @router.get("/documentSequences")
 async def list_sequences(
     page: PageParams = Depends(page_params),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(
+        require_any_permission("admin.document_sequences.view", "configuration.manage")
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.list_sequences(session, context, page)}
@@ -198,7 +203,9 @@ async def list_sequences(
 @router.post("/document-sequences", status_code=status.HTTP_201_CREATED)
 async def upsert_sequence(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    context: RequestContext = Depends(
+        require_any_permission("admin.document_sequences.create", "admin.document_sequences.update", "configuration.manage")
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.upsert_sequence(session, context, payload)}
@@ -207,11 +214,13 @@ async def upsert_sequence(
 @router.get("/documentSequences/{sequence_id}")
 @router.get("/document-sequences/{sequence_id}")
 async def get_sequence(
-    sequence_id: str,
-    context: RequestContext = Depends(require_permission("configuration.manage")),
+    sequence_id: EntityId,
+    context: RequestContext = Depends(
+        require_any_permission("admin.document_sequences.view", "configuration.manage")
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_sequence(session, context, int(sequence_id))}
+    return {"data": await service.get_sequence(session, context, sequence_id)}
 
 
 # --- Posting rules -----------------------------------------------------------
@@ -237,7 +246,7 @@ async def list_posting_rules(
 @router.post("/posting-rules", status_code=status.HTTP_201_CREATED)
 async def create_posting_rule(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("posting_rule.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     rule = await service.create_posting_rule(session, context, payload)
@@ -260,29 +269,29 @@ async def create_posting_rule(
 @router.get("/postingRules/{rule_id}")
 @router.get("/posting-rules/{rule_id}")
 async def get_posting_rule(
-    rule_id: str,
+    rule_id: EntityId,
     context: RequestContext = Depends(require_permission("posting_rule.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_posting_rule(session, context, int(rule_id))}
+    return {"data": await service.get_posting_rule(session, context, rule_id)}
 
 
 @router.put("/postingRules/{rule_id}")
 @router.put("/posting-rules/{rule_id}")
 async def update_posting_rule(
-    rule_id: str,
+    rule_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("posting_rule.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    before = jsonable(await service.get_posting_rule(session, context, int(rule_id)))
-    rule = await service.update_posting_rule(session, context, int(rule_id), payload)
+    before = jsonable(await service.get_posting_rule(session, context, rule_id))
+    rule = await service.update_posting_rule(session, context, rule_id, payload)
     await write_audit(
         session,
         context,
         event_type=POSTING_RULE_UPDATED,
         entity_type=POSTING_RULE_ENTITY,
-        entity_id=int(rule_id),
+        entity_id=rule_id,
         action="update",
         before=before,
         after=jsonable(rule),
@@ -295,10 +304,10 @@ async def update_posting_rule(
 @router.delete("/posting-rules")
 async def delete_posting_rules(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("posting_rule.manage")),
+    context: RequestContext = Depends(require_permission("posting_rule.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     before = [await _posting_rule_snapshot(session, context, rule_id) for rule_id in ids]
     await service.delete_posting_rules(session, context, ids)
     for rule_id, snapshot in zip(ids, before, strict=True):
@@ -321,8 +330,8 @@ async def delete_posting_rules(
 @router.get("/financial-documents")
 async def list_financial_documents(
     page: PageParams = Depends(page_params),
-    document_type: str | None = None,
-    party_id: int | None = None,
+    document_type: str | None = Query(None, max_length=32),
+    party_id: int | None = Query(None, ge=1),
     context: RequestContext = Depends(require_permission("financial_document.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
@@ -341,28 +350,28 @@ async def create_financial_document(
 @router.delete("/financial-documents")
 async def delete_financial_documents(
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("financial_document.update_draft")),
+    context: RequestContext = Depends(require_permission("financial_document.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     removed = await service.delete_draft_documents(session, ids)
     return {"data": {"removed": removed}}
 
 
 @router.get("/financial-documents/{document_id}")
 async def get_financial_document(
-    document_id: str,
+    document_id: EntityId,
     context: RequestContext = Depends(require_permission("financial_document.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_document(session, context, int(document_id))}
+    return {"data": await service.get_document(session, context, document_id)}
 
 
 @router.put("/financial-documents/{document_id}")
 async def update_financial_document(
-    document_id: str,
+    document_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("financial_document.update_draft")),
+    context: RequestContext = Depends(require_permission("financial_document.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.save_document(session, context, {**payload, "id": document_id})}
@@ -370,18 +379,18 @@ async def update_financial_document(
 
 @router.post("/financial-documents/{document_id}/post")
 async def post_financial_document(
-    document_id: str,
+    document_id: EntityId,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    context: RequestContext = Depends(require_permission("financial_document.post")),
+    context: RequestContext = Depends(require_permission("financial_document.submit")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    document = await service.post_document(session, context, int(document_id))
+    document = await service.post_document(session, context, document_id)
     await write_audit(
         session,
         context,
         event_type="FINANCIAL_POSTED",
         entity_type="financial_document",
-        entity_id=int(document_id),
+        entity_id=document_id,
         action="post",
         after={"documentNo": document.get("documentNo")},
     )
@@ -391,19 +400,19 @@ async def post_financial_document(
 
 @router.post("/financial-documents/{document_id}/allocate")
 async def allocate_payment(
-    document_id: str,
+    document_id: EntityId,
     payload: dict = Body(default={}),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("financial_document.allocate")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    allocation = await service.allocate_payment(session, context, int(document_id), payload, idempotency_key)
+    allocation = await service.allocate_payment(session, context, document_id, payload, idempotency_key)
     await write_audit(
         session,
         context,
         event_type="PAYMENT_ALLOCATED",
         entity_type="financial_document",
-        entity_id=int(document_id),
+        entity_id=document_id,
         action="allocate",
         after=allocation,
     )
@@ -413,20 +422,20 @@ async def allocate_payment(
 
 @router.post("/financial-documents/{document_id}/reverse", status_code=status.HTTP_201_CREATED)
 async def reverse_financial_document(
-    document_id: str,
+    document_id: EntityId,
     payload: dict = Body(default={}),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("financial_document.reverse")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    reason = str(payload.get("reason") or "Reversal")
-    document = await service.reverse_document(session, context, int(document_id), reason)
+    reason = str(REVERSAL_WRITE_SCHEMA.validate(payload).get("reason") or "Reversal")
+    document = await service.reverse_document(session, context, document_id, reason)
     await write_audit(
         session,
         context,
         event_type="FINANCIAL_REVERSED",
         entity_type="financial_document",
-        entity_id=int(document_id),
+        entity_id=document_id,
         action="reverse",
         reason=reason,
     )
@@ -458,19 +467,19 @@ async def create_journal(
 @router.get("/journal-entries/{journal_id}")
 @router.get("/journals/{journal_id}")
 async def get_journal(
-    journal_id: str,
+    journal_id: EntityId,
     context: RequestContext = Depends(require_permission("journal_entry.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.get_journal(session, context, int(journal_id))}
+    return {"data": await service.get_journal(session, context, journal_id)}
 
 
 @router.put("/journal-entries/{journal_id}")
 @router.put("/journals/{journal_id}")
 async def update_journal(
-    journal_id: str,
+    journal_id: EntityId,
     payload: dict = Body(default={}),
-    context: RequestContext = Depends(require_permission("journal_entry.create")),
+    context: RequestContext = Depends(require_permission("journal_entry.update")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.save_journal(session, context, {**payload, "id": journal_id})}
@@ -479,29 +488,29 @@ async def update_journal(
 @router.delete("/journal-entries/{journal_id}")
 @router.delete("/journals/{journal_id}")
 async def delete_journal(
-    journal_id: str,
-    context: RequestContext = Depends(require_permission("journal_entry.create")),
+    journal_id: EntityId,
+    context: RequestContext = Depends(require_permission("journal_entry.delete")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await service.delete_journals(session, context, [int(journal_id)])
+    await service.delete_journals(session, context, [journal_id])
     return {"data": {"id": journal_id, "deleted": True}}
 
 
 @router.post("/journal-entries/{journal_id}/post")
 @router.post("/journals/{journal_id}/post")
 async def post_journal(
-    journal_id: str,
+    journal_id: EntityId,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("journal_entry.post")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    entry = await service.post_journal(session, context, int(journal_id))
+    entry = await service.post_journal(session, context, journal_id)
     await write_audit(
         session,
         context,
         event_type="JOURNAL_POSTED",
         entity_type="journal_entry",
-        entity_id=int(journal_id),
+        entity_id=journal_id,
         action="post",
     )
     await session.commit()

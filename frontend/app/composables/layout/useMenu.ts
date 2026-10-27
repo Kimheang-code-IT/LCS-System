@@ -1,6 +1,6 @@
 import type { NavigationMenuItem } from '@nuxt/ui'
 import { FREIGHT_REPORTS, freightReportPath } from '~/config/freight-reports'
-import { requiredPagePermissionForPath } from '~/utils/freight/page-access'
+import { pagePermissionCandidatesForPath } from '~/utils/freight/page-access'
 import { reportRoutePermission } from '~/utils/freight/report-access'
 
 const SIDEBAR_COLLAPSED_KEY = 'lcs-freight:sidebar:collapsed'
@@ -59,12 +59,14 @@ export function useMenu() {
       FREIGHT_REPORTS.map(report => [freightReportPath(report), reportRoutePermission(report)]),
     ),
     '/master-data/business-parties': 'master.reference.view',
-    '/master-data/places': 'master.reference.view',
     '/master-data/trade-directions': 'master.reference.view',
     '/master-data/container-types': 'master.reference.view',
     '/master-data/transport-types': 'master.reference.view',
     '/master-data/transport-assets': 'master.reference.view',
+    '/master-data/asset-identity-types': 'master.reference.view',
+  '/master-data/capacity-units': 'master.reference.view',
     '/master-data/fee-types': 'master.reference.view',
+    '/master-data/document-types': 'master.reference.view',
     '/configuration/component-attributes': 'configuration.view',
     '/configuration/component-groups': 'configuration.view',
     '/configuration/component-tabs': 'configuration.view',
@@ -72,7 +74,7 @@ export function useMenu() {
     '/administration/users': 'admin.users.view',
     '/administration/roles': 'admin.roles.view',
     '/administration/audit-logs': 'admin.audit_logs.view',
-    '/administration/archive': 'archive.view',
+    '/administration/archive': 'admin.archive.view',
     '/administration/document-sequences': 'admin.document_sequences.view',
     '/administration/system-settings': 'settings.app_config.view',
   }
@@ -80,8 +82,8 @@ export function useMenu() {
   const auth = useAuthStore()
 
   function canSee(to: string) {
-    const pathPermission = requiredPagePermissionForPath(to)
-    if (pathPermission) return auth.canAccessPage(pathPermission)
+    const pathPermissions = pagePermissionCandidatesForPath(to)
+    if (pathPermissions.length) return auth.canAccessAnyPage(pathPermissions)
     const permission = ROUTE_PERMISSION[to]
     if (!permission) return true
     return auth.canAccessPage(permission)
@@ -124,13 +126,17 @@ export function useMenu() {
       group('financial-reports', t('freight.nav.financialReports'), 'i-lucide-chart-no-axes-combined', reportLinks('finance')),
       group('master', t('freight.nav.master'), 'i-lucide-database', [
         pageLink(t('freight.pages.businessParties'), '/master-data/business-parties'),
-        pageLink(t('freight.pages.places'), '/master-data/places'),
+        pageLink(t('freight.pages.partyRoles'), '/master-data/party-roles'),
+        pageLink(t('freight.pages.placeRoles'), '/master-data/place-roles'),
         pageLink(t('freight.pages.tradeDirections'), '/master-data/trade-directions'),
         pageLink(t('freight.pages.containerTypes'), '/master-data/container-types'),
         pageLink(t('freight.pages.transportTypes'), '/master-data/transport-types'),
         pageLink(t('freight.pages.transportAssets'), '/master-data/transport-assets'),
+        pageLink(t('freight.pages.assetIdentityTypes'), '/master-data/asset-identity-types'),
+        pageLink(t('freight.pages.capacityUnits'), '/master-data/capacity-units'),
         pageLink(t('freight.pages.feeTypes'), '/master-data/fee-types'),
         pageLink(t('freight.pages.currencies'), '/master-data/currencies'),
+        pageLink(t('freight.pages.documentTypes'), '/master-data/document-types'),
       ]),
       group('configuration', t('freight.nav.configuration'), 'i-lucide-blocks', [
         pageLink(t('freight.pages.componentAttributes'), '/configuration/component-attributes'),

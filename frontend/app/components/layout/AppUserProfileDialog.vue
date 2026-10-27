@@ -5,6 +5,8 @@ import { useAuth } from '~/composables/auth/useAuth'
 import { useAuthStore } from '~/stores/auth'
 import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
 import { resolveUserAvatar } from '~/utils/auth/user-avatar'
+import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
+import { strongPasswordSchema } from '~/utils/validation/password-schema'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -44,10 +46,12 @@ const hasCustomAvatar = computed(() => Boolean(auth.user?.avatar))
 
 const passwordSchema = computed(() => z.object({
   currentPassword: z.string().min(1, { error: t('lcs.userProfile.currentPasswordRequired') }),
-  password: z.string().min(8, { error: t('pages.forgetPassword.passwordMin') }).max(20, { error: t('pages.forgetPassword.passwordMax') }),
-  passwordConfirmation: z.string().min(8, { error: t('pages.forgetPassword.passwordMin') }).max(20, { error: t('pages.forgetPassword.passwordMax') }),
+  password: strongPasswordSchema(t, t('pages.forgetPassword.newPassword'), t('pages.forgetPassword.passwordMax')),
+  passwordConfirmation: z.string()
+    .min(1, { error: t('validation.required', { field: t('pages.forgetPassword.confirmPassword') }) })
+    .max(PASSWORD_MAX_LENGTH, { error: t('pages.forgetPassword.passwordMax') }),
 }).refine(data => data.password === data.passwordConfirmation, {
-  message: t('pages.forgetPassword.passwordMismatch'),
+  message: t('validation.passwordMismatch'),
   path: ['passwordConfirmation'],
 }))
 
@@ -58,6 +62,9 @@ const passwordState = reactive({
   password: '',
   passwordConfirmation: '',
 })
+
+/** Enter, or the button, is refused until every rule and the match pass. */
+const passwordValid = computed(() => !validatePasswordStrength(passwordState.password) && passwordState.password === passwordState.passwordConfirmation)
 
 watch(open, (isOpen) => {
   if (!isOpen) {
@@ -145,7 +152,7 @@ async function onRemoveAvatar() {
 }
 
 async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
-  if (submitting.value) return
+  if (submitting.value || !passwordValid.value) return
   submitting.value = true
   passwordError.value = ''
   passwordForm.value?.formRef?.clear()
@@ -300,6 +307,7 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
                 autocomplete="new-password"
                 class="w-full"
               />
+              <CommonAppPasswordRequirements :value="passwordState.password" class="mt-2" />
             </UFormField>
 
             <UFormField
@@ -321,11 +329,13 @@ async function onPasswordSubmit(event: FormSubmitEvent<PasswordSchema>) {
                 type="submit"
                 color="primary"
                 :loading="submitting"
+                :disabled="submitting || !passwordValid"
               >
                 {{ t('lcs.userProfile.updatePassword') }}
               </UButton>
             </div>
           </UForm>
+          <LayoutTelegramSecurity />
         </div>
       </div>
     </template>

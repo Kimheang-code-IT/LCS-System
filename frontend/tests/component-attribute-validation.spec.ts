@@ -47,6 +47,10 @@ describe('component attribute rules', () => {
     expect(componentAttributeRule(attribute({ fieldType: 'decimal' })).integer).toBe(false)
   })
 
+  it('treats an `integer` attribute as a whole number', () => {
+    expect(componentAttributeRule(attribute({ fieldType: 'integer' })).integer).toBe(true)
+  })
+
   it('treats a date attribute as a date', () => {
     expect(componentAttributeRule(attribute({ fieldType: 'date' })).date).toBe(true)
   })

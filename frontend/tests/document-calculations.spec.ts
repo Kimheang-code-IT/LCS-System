@@ -28,6 +28,25 @@ describe('document calculations', () => {
     expect(result.route).toBe('Phnom Penh → Bavet → HCMC')
   })
 
+  it('rounds quotation line totals and the grand total to two decimals', () => {
+    const result = recalculateFreightRecord(
+      { kind: 'quotation', collection: 'quotations', path: '/quotations' },
+      {
+        id: 'q1',
+        pricingLines: [
+          { quantity: 3, unitPrice: 10.01 },
+          { quantity: 2, unitPrice: 0.125 },
+        ],
+      } as FreightRecord,
+    )
+
+    expect(result.pricingLines).toEqual([
+      { quantity: 3, unitPrice: 10.01, subtotal: 30.03, discountAmount: 0, taxAmount: 0, lineTotal: 30.03 },
+      { quantity: 2, unitPrice: 0.125, subtotal: 0.25, discountAmount: 0, taxAmount: 0, lineTotal: 0.25 },
+    ])
+    expect(result.total).toBe(30.28)
+  })
+
   it('zeroes quotation totals when there are no pricing lines', () => {
     const result = recalculateFreightRecord(
       { kind: 'quotation', collection: 'quotations', path: '/sales/quotations' },

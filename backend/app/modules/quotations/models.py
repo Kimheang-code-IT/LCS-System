@@ -21,6 +21,11 @@ class Quotation(PKMixin, TimestampMixin, Base):
     trade_direction_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("trade_directions.id"), nullable=False)
     current_revision_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
+    #: Set when the quotation was raised from an existing service order
+    #: (re-quotation). The order is read only; this column is the trace back.
+    source_service_order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("service_orders.id", ondelete="SET NULL"), index=True
+    )
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
 
 
@@ -49,13 +54,22 @@ class QuotationRevision(PKMixin, TimestampMixin, Base):
 
 class QuotationRevisionPlace(PKMixin, Base):
     __tablename__ = "quotation_revision_places"
+    __table_args__ = (
+        UniqueConstraint("quotation_revision_id", "sequence_no", name="uq_quotation_revision_places_sequence"),
+    )
 
     quotation_revision_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("quotation_revisions.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # The configured role a stop plays, plus the text snapshot that lets a
+    # historical route still print if the role is later deactivated or removed.
+    place_role_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("place_roles.id", ondelete="SET NULL"))
+    # Legacy Places reference retained for historical rows. New writes use the
+    # role and free-text snapshot; this column is not exposed by the form.
     place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     place_role: Mapped[str] = mapped_column(String(32), nullable=False)
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     free_text: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
 

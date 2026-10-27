@@ -81,13 +81,18 @@ const resolvedCreateLabel = computed(() =>
   props.createLabel || t('lcs.actions.addItem'),
 )
 
-const defaultMoreItems = computed<DropdownMenuItem[][]>(() => [[
-  {
-    label: t('actions.export'),
-    icon: 'i-lucide-download',
-    onSelect: () => { exportOpen.value = true },
-  },
-]])
+const defaultMoreItems = computed<DropdownMenuItem[][]>(() => {
+  // Only pages with a field catalog get the field-picker export; otherwise the
+  // ⋯ menu would show an item that can export nothing.
+  if (!props.exportFields?.length) return [[]]
+  return [[
+    {
+      label: t('actions.export'),
+      icon: 'i-lucide-download',
+      onSelect: () => { exportOpen.value = true },
+    },
+  ]]
+})
 
 const menuItems = computed(() => {
   const custom = props.moreItems || []
@@ -95,7 +100,7 @@ const menuItems = computed(() => {
   return [
     [...exportItem, ...(custom[0] || [])],
     ...custom.slice(1),
-  ]
+  ].filter(group => group.length > 0)
 })
 
 function submitExport(request: ExportRequest) {

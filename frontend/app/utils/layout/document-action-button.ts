@@ -1,13 +1,11 @@
 type DocumentActionColor = 'primary' | 'success' | 'warning' | 'error' | 'neutral' | 'secondary' | 'info' | undefined
 
 type DocumentActionButtonUi = {
-  color: 'primary' | 'success' | 'neutral'
-  variant: 'solid' | 'outline'
+  color: 'neutral'
+  variant: 'solid'
 }
 
-/** ERPNext-like header buttons: outline for secondary, solid for primary workflow CTAs. */
-export function documentActionButtonUi(color?: DocumentActionColor): DocumentActionButtonUi {
-  if (color === 'primary') return { color: 'primary', variant: 'solid' }
-  if (color === 'success') return { color: 'success', variant: 'solid' }
-  return { color: 'neutral', variant: 'outline' }
+/** Header workflow buttons match the list header's "New …" button: dark solid. */
+export function documentActionButtonUi(_color?: DocumentActionColor): DocumentActionButtonUi {
+  return { color: 'neutral', variant: 'solid' }
 }

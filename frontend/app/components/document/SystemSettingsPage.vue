@@ -8,6 +8,9 @@ import { useConfirm } from '~/composables/common/useConfirm'
 import { useAppPageTitle } from '~/composables/layout/useAppPageTitle'
 import { useFormValidation } from '~/composables/common/useFormValidation'
 import { apiErrorMessage } from '~/utils/validation/api-error'
+import { validateDocumentFields } from '~/utils/validation/record-validation'
+import type { FieldRule, ValidationFailure } from '~/utils/validation/field-rules'
+import type { FreightField } from '~/config/freight-modules'
 import { getByPath, setByPath } from '~/utils/object-path'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 
@@ -17,8 +20,8 @@ const toast = useToast()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
 const freight = useFreightStore()
-const canEdit = computed(() => auth.canAccessPage('settings.app_config.edit'))
-const canConfigure = computed(() => auth.canAccessPage('settings.app_config.configure'))
+const canEdit = computed(() => auth.canAccessPage('settings.app_config.update'))
+const canConfigure = canEdit
 const canReset = computed(() => auth.canAccessPage('settings.manage'))
 const canManageBackup = computed(() => auth.canAccessPage('backup.manage'))
 const appLocalization = useAppLocalization()
@@ -221,12 +224,92 @@ async function setFieldValue(key: string, value: unknown) {
   setByPath(model.value as unknown as Record<string, unknown>, key, value)
 }
 
+/** Every editable settings field, in tab order (read-only mirrors excluded). */
+function editableSettingsFields() {
+  return systemSettingsTabs
+    .flatMap(tab => tab.sections)
+    .flatMap(section => section.fields)
+    .filter(field => !field.readOnly && !field.type?.includes('connection') && field.type !== 'alert')
+}
+
+function settingsLabel(key: string) {
+  const field = editableSettingsFields().find(item => item.key === key)
+  return field?.labelKey ? t(field.labelKey) : key
+}
+
+/**
+ * Client-side rules for the settings form.
+ *
+ * The backend re-validates all of this; checking here keeps a typo on the
+ * input that caused it instead of sending a request that can only fail.
+ * Conditional requirements are expressed as rule overrides because a blank
+ * SMTP host is fine while email is disabled and required the moment it is on.
+ */
+function settingsRules(): Record<string, FieldRule> {
+  const emailEnabled = Boolean(model.value?.email.enabled)
+  const telegramEnabled = Boolean(model.value?.telegram.enabled)
+  const backupEnabled = Boolean(model.value?.backup.enabled)
+  return {
+    'general.maxUploadSizeMb': { number: true, integer: true, min: 1, max: 100 },
+    'email.smtpHost': { required: emailEnabled, maxLength: 255 },
+    'email.smtpPort': { number: true, integer: true, min: 1, max: 65535, required: emailEnabled },
+    'email.username': { maxLength: 255 },
+    'telegram.botDisplayName': { maxLength: 255 },
+    'telegram.botUsername': { maxLength: 255 },
+    'telegram.botToken': { required: telegramEnabled && !model.value?.telegram.botTokenConfigured, maxLength: 512 },
+    'notifications.deliveryRetries': { number: true, integer: true, min: 0, max: 10 },
+    'security.sessionTimeoutMinutes': { number: true, integer: true, min: 1, max: 1440 },
+    'security.accessTokenMinutes': { number: true, integer: true, min: 1, max: 30 },
+    'security.sessionAbsoluteMinutes': { number: true, integer: true, min: 15, max: 10080 },
+    'security.maxLoginAttempts': { number: true, integer: true, min: 1, max: 100 },
+    'security.accountLockMinutes': { number: true, integer: true, min: 1, max: 1440 },
+    'security.passwordExpiryDays': { number: true, integer: true, min: 0, max: 3650 },
+    'backup.intervalHours': { number: true, integer: true, min: 1, max: 168 },
+    'backup.r2AccountId': { required: backupEnabled, maxLength: 128 },
+    'backup.r2AccessKeyId': { required: backupEnabled, maxLength: 255 },
+    'backup.r2SecretAccessKey': { required: backupEnabled, maxLength: 512 },
+    'backup.r2BucketName': { required: backupEnabled, maxLength: 255 },
+    'backup.r2Endpoint': { required: backupEnabled, url: true, maxLength: 500 },
+    'backup.r2Prefix': { maxLength: 255 },
+  }
+}
+
+function collectSettingsFailures(keys?: string[]): ValidationFailure[] {
+  const fields = editableSettingsFields()
+    .filter(field => !keys || keys.includes(field.key))
+    .map(field => ({
+      key: field.key,
+      type: field.type === 'text' ? 'text' : field.type,
+      required: Boolean(field.required),
+      rule: settingsRules()[field.key],
+    }))
+  return validateDocumentFields({
+    fields: fields as unknown as FreightField[],
+    model: (model.value || {}) as unknown as Record<string, unknown>,
+    isCreate: true,
+    label: settingsLabel,
+  })
+}
+
+function validateSettingsField(key: string) {
+  const failures = collectSettingsFailures([key])
+  validation.clearFieldError(key)
+  const failure = failures.find(item => item.key === key)
+  if (failure) validation.setFieldError(key, validation.message(failure, settingsLabel(key)))
+}
+
 async function save() {
   if (!model.value || saving.value) return
   saving.value = true
   validation.submitting.value = true
   validation.reset()
   try {
+    const failures = collectSettingsFailures()
+    if (failures.length) {
+      validation.applyFailures(failures)
+      await validation.focusFirstInvalid()
+      return
+    }
     model.value = await appConfig.update(model.value)
     appLocalization.apply(model.value.localization)
     usePreferencesStore().syncLocaleWithConfig()
@@ -252,7 +335,7 @@ async function testEmail() {
     model.value = await appConfig.get()
     toast.add({
       title: result.message,
-      color: result.status === 'connected' ? 'success' : 'error',
+      color: result.status === 'connected' ? 'success' : result.status === 'not_verified' ? 'warning' : 'error',
     })
   }
   finally {
@@ -262,14 +345,16 @@ async function testEmail() {
 
 async function testTelegram() {
   testingTelegram.value = true
+  pageErrors.value = []
   try {
     if (model.value) await appConfig.update({ telegram: model.value.telegram })
     const result = await appConfig.testTelegramConnection()
     model.value = await appConfig.get()
-    toast.add({
-      title: result.message,
-      color: result.status === 'connected' ? 'success' : 'error',
-    })
+    if (result.status === 'connected') toast.add({ title: result.message, color: 'success' })
+    else pageErrors.value = [result.message]
+  }
+  catch (error) {
+    pageErrors.value = [apiErrorMessage(error, t('telegram.failed'))]
   }
   finally {
     testingTelegram.value = false
@@ -347,14 +432,21 @@ useAppPageTitle(() => t('freight.pages.settings'))
     :show-list-nav="false"
     :more-items="moreItems"
     :field-errors="validation.fieldErrors.value"
-    :summary-items="validation.summaryItems.value"
     :form-errors="[...validation.formErrors.value, ...pageErrors]"
     :on-field-edit="validation.clearFieldError"
+    :on-field-blur="validateSettingsField"
     content-wide
     @save="save"
     @refresh="load"
-    @select-error="validation.focusFieldKey($event)"
-  />
+  >
+    <template #tab-extra>
+      <DocumentTelegramSettingsPanel
+v-if="activeTab === 'telegram' && model"
+:config="model.telegram"
+:can-manage="canConfigure"
+@refresh="load" />
+    </template>
+  </DocumentAppDocumentPage>
 
   <UModal
     v-model:open="resetOpen"

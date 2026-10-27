@@ -26,11 +26,11 @@ looks right — it is done when the applicable check has actually run and passed
 | Document | Use it for |
 |---|---|
 | `AGENTS.md` §Commands, §Tests | Canonical commands and the test harness |
-| `docs/02_software_requirements_specification.md` | Acceptance criteria to test against |
-| `docs/15_migration_and_rollback_guide.md` | Migration verification and reconciliation queries |
+| `docs/02_software_requirements.md` | Acceptance criteria to test against |
+| `docs/11_deployment_and_security.md` §8, §12 | Migration verification and the backup/restore drill |
 | `backend/tests/sql/integrity_guards.sql` | Executable PostgreSQL invariant checks |
 | `backend/tests/sql/pre_migration_counts.sql` | Row-count and financial-total reconciliation |
-| `docs/17_repository_analysis.md` §Coverage gaps | Known untested areas |
+| `docs/10_testing_and_quality.md` §7 | Known untested areas and open risks |
 
 ## The two harnesses
 
@@ -90,14 +90,13 @@ module resolvers. Do not write component-mount tests.
 
 ```bash
 # Backend (from backend/)
-uv run python -m pytest -q --no-header     # ~12 minutes, 220+ tests
+uv run python -m pytest -q --no-header     # full suite: minutes, SQLite in-memory
 uv run ruff check .
 
 # Schema and PostgreSQL-specific verification
 uv run python -m alembic heads
 uv run python -m pytest tests/test_migration_chain.py tests/test_schema_integrity.py -q
 uv run python scripts/generate_schema_docs.py --check --strict
-uv run python scripts/generate_schema_dump.py --check
 psql <DISPOSABLE_DB> -f tests/sql/integrity_guards.sql         # truncates everything
 psql "$DATABASE_URL" -f tests/sql/pre_migration_counts.sql > post-counts.txt
 
@@ -141,5 +140,5 @@ extend them rather than writing a parallel suite.
 
 - New or updated tests under `backend/tests/` and `frontend/tests/`.
 - New scenarios in `tests/sql/integrity_guards.sql` when a database guard changed.
-- A coverage-gap update in `docs/17_repository_analysis.md`.
+- A coverage-gap update in `docs/10_testing_and_quality.md`.
 - A verification record with commands and observed results.

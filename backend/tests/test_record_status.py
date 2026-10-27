@@ -22,7 +22,7 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.audit.models import AuditEvent
-from app.modules.status.policy import STATUS_POLICIES
+from app.modules.master_data.status_policy import STATUS_POLICIES
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
@@ -32,11 +32,11 @@ FRONTEND_COMMANDS = (
 )
 
 
-async def _create_place(client, headers, code: str = "ST-1") -> dict:
+async def _create_role(client, headers, code: str = "ST-1") -> dict:
     response = await client.post(
-        "/api/v1/places",
+        "/api/v1/placeRoles",
         headers=headers,
-        json={"code": code, "name": f"Status Test {code}", "status": "ACTIVE"},
+        json={"code": code, "name": f"Status Test {code}", "sortOrder": 10, "status": "ACTIVE"},
     )
     assert response.status_code == 201, response.text
     return response.json()["data"]
@@ -89,7 +89,7 @@ async def _create_document(client, headers, amount: int = 250) -> dict:
 
 async def test_the_policy_lists_the_legal_transitions_of_a_reference_record(client):
     headers = await login(client)
-    policy = await _policy(client, headers, "places")
+    policy = await _policy(client, headers, "placeRoles")
 
     assert policy["statuses"] == ["ACTIVE", "INACTIVE"]
     # The policy is keyed by the normalised current status.
@@ -101,13 +101,13 @@ async def test_the_policy_lists_the_legal_transitions_of_a_reference_record(clie
 
 async def test_a_reference_record_is_deactivated_and_reactivated_with_an_audit_row(client, session_factory):
     headers = await login(client)
-    place = await _create_place(client, headers, "ST-2")
+    role = await _create_role(client, headers, "ST-2")
 
-    deactivated = await _change_status(client, headers, "places", place["id"], "INACTIVE")
+    deactivated = await _change_status(client, headers, "placeRoles", role["id"], "INACTIVE")
     assert deactivated.status_code == 200, deactivated.text
     assert deactivated.json()["data"]["status"] == "INACTIVE"
 
-    events = await _events(session_factory, "places", int(place["id"]))
+    events = await _events(session_factory, "placeRoles", int(role["id"]))
     assert len(events) == 1
     event = events[0]
     assert event.event_type == "STATUS_CHANGED"
@@ -117,27 +117,27 @@ async def test_a_reference_record_is_deactivated_and_reactivated_with_an_audit_r
     assert event.actor_user_id is not None
     assert event.occurred_at is not None
 
-    reactivated = await _change_status(client, headers, "places", place["id"], "ACTIVE")
+    reactivated = await _change_status(client, headers, "placeRoles", role["id"], "ACTIVE")
     assert reactivated.status_code == 200, reactivated.text
     assert reactivated.json()["data"]["status"] == "ACTIVE"
-    assert len(await _events(session_factory, "places", int(place["id"]))) == 2
+    assert len(await _events(session_factory, "placeRoles", int(role["id"]))) == 2
 
 
 async def test_changing_to_the_current_status_is_a_no_op_without_an_audit_row(client, session_factory):
     headers = await login(client)
-    place = await _create_place(client, headers, "ST-3")
+    role = await _create_role(client, headers, "ST-3")
 
-    response = await _change_status(client, headers, "places", place["id"], "active")
+    response = await _change_status(client, headers, "placeRoles", role["id"], "active")
     assert response.status_code == 200, response.text
     assert response.json()["data"]["status"] == "ACTIVE"
-    assert await _events(session_factory, "places", int(place["id"])) == []
+    assert await _events(session_factory, "placeRoles", int(role["id"])) == []
 
 
 async def test_an_unknown_status_is_refused_with_a_field_error(client):
     headers = await login(client)
-    place = await _create_place(client, headers, "ST-4")
+    role = await _create_role(client, headers, "ST-4")
 
-    response = await _change_status(client, headers, "places", place["id"], "ARCHIVED")
+    response = await _change_status(client, headers, "placeRoles", role["id"], "ARCHIVED")
     assert response.status_code == 422, response.text
     body = response.json()
     assert body["code"] == "VALIDATION_ERROR"
@@ -150,23 +150,23 @@ async def test_an_unknown_collection_or_missing_record_is_not_found(client):
     unknown = await client.get("/api/v1/notACollection/status-policy", headers=headers)
     assert unknown.status_code == 404, unknown.text
 
-    missing = await _change_status(client, headers, "places", "999999", "INACTIVE")
+    missing = await _change_status(client, headers, "placeRoles", "999999", "INACTIVE")
     assert missing.status_code == 404, missing.text
 
 
 async def test_a_caller_without_the_manage_permission_is_refused_and_sees_no_action(client, session_factory):
     ops_headers = await login(client, "ops.pp")
     admin_headers = await login(client)
-    place = await _create_place(client, admin_headers, "ST-5")
+    role = await _create_role(client, admin_headers, "ST-5")
 
-    policy = await _policy(client, ops_headers, "places")
+    policy = await _policy(client, ops_headers, "placeRoles")
     assert policy["transitions"] == {}, "an unauthorized caller must not be offered the transition"
 
-    refused = await _change_status(client, ops_headers, "places", place["id"], "INACTIVE")
+    refused = await _change_status(client, ops_headers, "placeRoles", role["id"], "INACTIVE")
     assert refused.status_code == 403, refused.text
     assert refused.json()["code"] == "ACCESS_DENIED"
 
-    current = await client.get(f"/api/v1/places/{place['id']}", headers=admin_headers)
+    current = await client.get(f"/api/v1/placeRoles/{role['id']}", headers=admin_headers)
     assert current.json()["data"]["status"] == "ACTIVE", "a refused change must not touch the record"
     denials = await _events(session_factory, "permission")
     assert any(event.result == "REJECTED" for event in denials), "the refusal is audited"
@@ -392,7 +392,7 @@ async def test_every_command_transition_has_a_frontend_runner():
 
 async def test_every_policy_store_has_a_loader_and_an_applier():
     """A ``status`` transition must have an adapter, or the endpoint would 500."""
-    from app.modules.status.service import _APPLIERS, _LOADERS
+    from app.modules.master_data.status_service import _APPLIERS, _LOADERS
 
     for collection, policy in STATUS_POLICIES.items():
         assert policy.store in _LOADERS, f"{collection} has no current-status loader"

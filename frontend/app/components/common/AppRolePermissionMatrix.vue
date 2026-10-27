@@ -3,6 +3,7 @@ import type { AppRolePermissionRow } from '~/types/entities'
 import {
   ROLE_DOCUMENT_TYPES,
   ROLE_PERMISSION_ACTIONS,
+  ROLE_PERMISSION_GROUPS,
   normalizePermissionRows,
   setPermissionAction,
 } from '~/utils/role/permissions'
@@ -16,58 +17,91 @@ const props = withDefaults(defineProps<{ disabled?: boolean }>(), {
 const { t, te } = useI18n()
 
 const search = ref('')
-const actionFilter = ref('all')
-const dirty = ref(false)
+const baseline = ref<AppRolePermissionRow[]>([])
+const expanded = ref(new Set<string>(ROLE_PERMISSION_GROUPS))
+const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.value, item]))
 const normalizedRows = computed(() => normalizePermissionRows(rows.value))
-const displayRows = computed(() => {
+const dirty = computed(() => JSON.stringify(normalizedRows.value) !== JSON.stringify(baseline.value))
+
+const visibleRows = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
+  if (!query) return normalizedRows.value
   return normalizedRows.value.filter((row) => {
-    const matchesAction = actionFilter.value === 'all' || row.actions.includes(actionFilter.value)
-    const searchable = `${documentTypeLabel(row.documentType)} ${moduleLabel(row.documentType)} ${row.actions.join(' ')}`.toLocaleLowerCase()
-    return matchesAction && (!query || searchable.includes(query))
+    const searchable = `${documentTypeLabel(row.documentType)} ${moduleLabel(row.documentType)} ${row.actions.join(' ')}`
+      .toLocaleLowerCase()
+    return searchable.includes(query)
   })
 })
-const grantedCount = computed(() => normalizedRows.value.reduce((sum, row) => sum + row.actions.length, 0))
-const totalCount = ROLE_DOCUMENT_TYPES.reduce((sum, definition) => sum + definition.actions.length, 0)
-const allGranted = computed(() => grantedCount.value === totalCount)
-const someGranted = computed(() => grantedCount.value > 0 && !allGranted.value)
-const actionFilterItems = computed(() => [
-  { label: 'All actions', value: 'all' },
-  ...ROLE_PERMISSION_ACTIONS.map(action => ({ label: actionLabel(action), value: action })),
-])
 
-const actionColumns = computed(() => {
-  const cols: string[][] = [[], [], []]
-  ROLE_PERMISSION_ACTIONS.forEach((action, index) => cols[index % 3]!.push(action))
-  return cols
-})
+const groups = computed(() => ROLE_PERMISSION_GROUPS
+  .map(key => ({
+    key,
+    label: te(`lcs.rolePermissions.groups.${key}`)
+      ? t(`lcs.rolePermissions.groups.${key}`)
+      : key,
+    rows: visibleRows.value.filter(row => definitions.get(row.documentType)?.group === key),
+  }))
+  .filter(group => group.rows.length > 0))
+
+const visibleActions = computed(() => ROLE_PERMISSION_ACTIONS.filter(action =>
+  visibleRows.value.some(row => allowedActions(row.documentType).includes(action)),
+))
+
+const grantedCount = computed(() => normalizedRows.value.reduce((sum, row) => sum + row.actions.length, 0))
+const totalCount = computed(() => ROLE_DOCUMENT_TYPES.reduce((sum, definition) => sum + definition.actions.length, 0))
+const allGranted = computed(() => grantedCount.value === totalCount.value)
+const someGranted = computed(() => grantedCount.value > 0 && !allGranted.value)
+const allExpanded = computed(() => groups.value.every(group => expanded.value.has(group.key)))
 
 function commit(next: AppRolePermissionRow[]) {
-  dirty.value = true
   rows.value = normalizePermissionRows(next)
+}
+
+function clone(rowsToCopy: AppRolePermissionRow[]) {
+  return rowsToCopy.map(row => ({ ...row, actions: [...row.actions] }))
 }
 
 function ensureAllRows() {
   const next = normalizePermissionRows(rows.value)
   if (JSON.stringify(next) !== JSON.stringify(rows.value)) rows.value = next
+  if (!baseline.value.length) baseline.value = clone(next)
 }
 
-onMounted(ensureAllRows)
+onMounted(() => {
+  ensureAllRows()
+  if (import.meta.client) window.addEventListener('beforeunload', warnBeforeUnload)
+})
+onBeforeUnmount(() => {
+  if (import.meta.client) window.removeEventListener('beforeunload', warnBeforeUnload)
+})
 watch(rows, ensureAllRows, { deep: false })
 
+onBeforeRouteLeave(() => {
+  if (!dirty.value) return true
+  return import.meta.client
+    ? window.confirm(t('lcs.rolePermissions.unsavedWarning'))
+    : true
+})
+
+function warnBeforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
 function documentTypeLabel(value: string) {
-  const found = ROLE_DOCUMENT_TYPES.find(item => item.value === value)
+  const found = definitions.get(value)
   if (found && te(found.labelKey)) return t(found.labelKey)
   return value.replaceAll('_', ' ')
 }
 
 function actionLabel(action: string) {
   const key = `lcs.rolePermissions.actions.${action}`
-  return te(key) ? t(key) : action
+  return te(key) ? t(key) : action.replaceAll('_', ' ')
 }
 
 function moduleLabel(documentType: string) {
-  const definition = ROLE_DOCUMENT_TYPES.find(item => item.value === documentType)
+  const definition = definitions.get(documentType)
   const moduleName = definition?.permissionPrefix.split('.')[0] || 'system'
   return moduleName.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase())
 }
@@ -77,11 +111,11 @@ function hasAction(row: AppRolePermissionRow, action: string) {
 }
 
 function allowedActions(documentType: string) {
-  return ROLE_DOCUMENT_TYPES.find(item => item.value === documentType)?.actions || []
+  return definitions.get(documentType)?.actions || []
 }
 
 function actionAllowed(documentType: string, action: string) {
-  return allowedActions(documentType).some(item => item === action)
+  return allowedActions(documentType).includes(action as never)
 }
 
 function toggleAction(documentType: string, action: string, checked: boolean | 'indeterminate') {
@@ -104,9 +138,34 @@ function toggleRow(documentType: string, checked: boolean | 'indeterminate') {
     : row))
 }
 
+/** Toggle one action for every visible row that supports it. */
+function toggleActionForAll(action: string) {
+  if (props.disabled) return
+  const target = actionState(action) !== true
+  const visible = new Set(visibleRows.value.map(row => row.documentType))
+  commit(normalizedRows.value.map(row => visible.has(row.documentType) && actionAllowed(row.documentType, action)
+    ? setPermissionAction(row, action, target)
+    : row))
+}
+
+function actionState(action: string): boolean | 'indeterminate' {
+  const supported = visibleRows.value.filter(row => actionAllowed(row.documentType, action))
+  if (!supported.length) return false
+  const granted = supported.filter(row => hasAction(row, action)).length
+  if (granted === 0) return false
+  return granted === supported.length ? true : 'indeterminate'
+}
+
+function rowState(row: AppRolePermissionRow): boolean | 'indeterminate' {
+  const allowed = allowedActions(row.documentType)
+  const granted = row.actions.filter(action => allowed.includes(action as never)).length
+  if (granted === 0) return false
+  return granted === allowed.length ? true : 'indeterminate'
+}
+
 function toggleAll(checked: boolean) {
   if (props.disabled) return
-  const visible = new Set(displayRows.value.map(row => row.documentType))
+  const visible = new Set(visibleRows.value.map(row => row.documentType))
   commit(normalizedRows.value.map(row => visible.has(row.documentType)
     ? {
         ...row,
@@ -116,6 +175,21 @@ function toggleAll(checked: boolean) {
     : row))
 }
 
+function toggleExpanded(key: string) {
+  const next = new Set(expanded.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expanded.value = next
+}
+
+function toggleAllExpanded() {
+  expanded.value = allExpanded.value ? new Set() : new Set(ROLE_PERMISSION_GROUPS)
+}
+
+function reset() {
+  if (props.disabled) return
+  rows.value = clone(baseline.value)
+}
 </script>
 
 <template>
@@ -130,7 +204,26 @@ function toggleAll(checked: boolean) {
           {{ $t('lcs.rolePermissions.grantedCount', { granted: grantedCount, total: totalCount }) }}
         </p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          :icon="allExpanded ? 'i-lucide-chevrons-up' : 'i-lucide-chevrons-down'"
+          @click="toggleAllExpanded"
+        >
+          {{ allExpanded ? $t('lcs.rolePermissions.collapseAll') : $t('lcs.rolePermissions.expandAll') }}
+        </UButton>
+        <UButton
+          color="neutral"
+          variant="outline"
+          size="sm"
+          icon="i-lucide-rotate-ccw"
+          :disabled="disabled || !dirty"
+          @click="reset"
+        >
+          {{ $t('lcs.rolePermissions.reset') }}
+        </UButton>
         <UButton
           color="neutral"
           variant="outline"
@@ -154,14 +247,34 @@ function toggleAll(checked: boolean) {
       </div>
     </div>
 
-    <div class="grid gap-2 border-b border-default p-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+    <div class="grid gap-2 border-b border-default p-3 sm:grid-cols-[minmax(0,1fr)]">
       <UInput
         v-model="search"
         icon="i-lucide-search"
-        placeholder="Search modules and permissions"
+        :placeholder="$t('lcs.rolePermissions.searchPlaceholder')"
         :disabled="disabled"
       />
-      <USelect v-model="actionFilter" :items="actionFilterItems" :disabled="disabled" />
+    </div>
+
+    <!-- Action-wide toggles: one checkbox applies to every visible row that supports it. -->
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-default bg-muted/20 px-3 py-2">
+      <span class="text-xs font-semibold uppercase tracking-wide text-muted">
+        {{ $t('lcs.rolePermissions.applyAction') }}
+      </span>
+      <label
+        v-for="action in visibleActions"
+        :key="action"
+        class="flex cursor-pointer items-center gap-1.5 text-xs text-highlighted"
+      >
+        <UCheckbox
+          :model-value="actionState(action)"
+          :disabled="disabled"
+          size="sm"
+          :aria-label="$t('lcs.rolePermissions.toggleAction', { action: actionLabel(action) })"
+          @update:model-value="toggleActionForAll(action)"
+        />
+        <span>{{ actionLabel(action) }}</span>
+      </label>
     </div>
 
     <div class="overflow-x-auto">
@@ -176,50 +289,71 @@ function toggleAll(checked: boolean) {
                 @update:model-value="toggleAll($event === true)"
               />
             </th>
-            <th class="w-[22%] whitespace-nowrap px-3 py-2.5 font-semibold">
+            <th class="w-[24%] whitespace-nowrap px-3 py-2.5 font-semibold">
               {{ $t('lcs.rolePermissions.documentType') }}
             </th>
             <th class="px-3 py-2.5 font-semibold">{{ $t('lcs.fields.permissions') }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in displayRows" :key="row.documentType" class="align-top border-t border-default">
-            <td class="px-3 py-3">
-              <UCheckbox
-                :model-value="row.actions.length === allowedActions(row.documentType).length"
-                :disabled="disabled"
-                :aria-label="$t('lcs.rolePermissions.toggleRow', { entity: documentTypeLabel(row.documentType) })"
-                @update:model-value="toggleRow(row.documentType, $event)"
-              />
-            </td>
-            <td class="px-3 py-3 font-medium text-highlighted">
-              <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-muted">
-                {{ moduleLabel(row.documentType) }}
-              </span>
-              <span>{{ documentTypeLabel(row.documentType) }}</span>
-            </td>
-            <td class="px-3 py-3">
-              <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
-                <div v-for="(col, colIndex) in actionColumns" :key="colIndex" class="space-y-1.5">
+          <template v-for="groupItem in groups" :key="groupItem.key">
+            <tr class="border-t border-default bg-muted/30">
+              <td colspan="3" class="px-3 py-2">
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wide text-muted hover:text-highlighted"
+                  @click="toggleExpanded(groupItem.key)"
+                >
+                  <UIcon
+                    :name="expanded.has(groupItem.key) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+                    class="size-4"
+                  />
+                  {{ groupItem.label }}
+                </button>
+              </td>
+            </tr>
+            <tr
+              v-for="row in (expanded.has(groupItem.key) ? groupItem.rows : [])"
+              :key="row.documentType"
+              class="align-top border-t border-default"
+            >
+              <td class="px-3 py-3">
+                <UCheckbox
+                  :model-value="rowState(row)"
+                  :disabled="disabled"
+                  :aria-label="$t('lcs.rolePermissions.toggleRow', { entity: documentTypeLabel(row.documentType) })"
+                  @update:model-value="toggleRow(row.documentType, $event)"
+                />
+              </td>
+              <td class="px-3 py-3 font-medium text-highlighted">
+                <span class="block text-[0.68rem] font-semibold uppercase tracking-wide text-muted">
+                  {{ moduleLabel(row.documentType) }}
+                </span>
+                <span>{{ documentTypeLabel(row.documentType) }}</span>
+              </td>
+              <td class="px-3 py-3">
+                <div class="flex flex-wrap gap-x-4 gap-y-1.5">
                   <label
-                    v-for="action in col"
+                    v-for="action in allowedActions(row.documentType)"
                     :key="action"
                     class="flex cursor-pointer items-center gap-1.5 text-xs text-highlighted sm:text-sm"
                   >
                     <UCheckbox
                       :model-value="hasAction(row, action)"
-                      :disabled="disabled || !actionAllowed(row.documentType, action)"
+                      :disabled="disabled"
                       size="sm"
                       @update:model-value="toggleAction(row.documentType, action, $event)"
                     />
                     <span>{{ actionLabel(action) }}</span>
                   </label>
                 </div>
-              </div>
+              </td>
+            </tr>
+          </template>
+          <tr v-if="groups.length === 0">
+            <td colspan="3" class="px-3 py-8 text-center text-sm text-muted">
+              {{ $t('lcs.rolePermissions.noMatching') }}
             </td>
-          </tr>
-          <tr v-if="displayRows.length === 0">
-            <td colspan="3" class="px-3 py-8 text-center text-sm text-muted">No matching permissions.</td>
           </tr>
         </tbody>
       </table>

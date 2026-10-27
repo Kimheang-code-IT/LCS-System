@@ -78,6 +78,7 @@ export function useQuotationCommands(options: {
 
   /** Re-quotation: clones the latest revision into a new editable draft. */
   async function createRevision() {
+    if (!guardSaved()) return
     const ok = await confirm({
       kind: 'submit',
       title: t('freight.ui.quotationRequoteTitle'),

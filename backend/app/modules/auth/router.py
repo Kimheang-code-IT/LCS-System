@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Body, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,10 +12,12 @@ from app.core.deps import get_current_context, get_optional_context, require_per
 from app.core.exceptions import AccessDenied, AuthRequired, ValidationFailed
 from app.core.pagination import PageParams, page_params
 from app.core.rate_limit import client_ip, enforce_rate_limit, opaque_key
-from app.core.security import create_csrf_token
+from app.core.security import create_csrf_token, decode_token
+from app.core.validation import validate_id_list
 from app.modules.audit.service import write_audit
 from app.modules.auth import service
 from app.modules.auth.schemas import (
+    AvatarUpdate,
     ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
@@ -24,6 +28,7 @@ from app.modules.auth.schemas import (
     RoleDuplicate,
     RoleUpdate,
     SetPasswordRequest,
+    SetupInitializeRequest,
     UserCreate,
     UserUpdate,
     VerifyCodeRequest,
@@ -59,9 +64,8 @@ async def _record_rejected_admin_operation(
     await session.commit()
 
 
-def _set_auth_cookies(response: Response, access: str, refresh: str, *, remember_me: bool) -> None:
-    access_max_age = settings.access_token_expire_minutes * 60
-    refresh_max_age = settings.refresh_token_expire_days * 86400
+def _set_auth_cookies(response: Response, access: str, refresh: str, *, remember_me: bool, refresh_max_age: int) -> None:
+    access_max_age = max(1, decode_token(access)["exp"] - int(datetime.now(UTC).timestamp()))
     response.set_cookie(
         settings.access_cookie_name,
         access,
@@ -72,6 +76,9 @@ def _set_auth_cookies(response: Response, access: str, refresh: str, *, remember
         domain=settings.cookie_domain,
         path="/",
     )
+    response.delete_cookie(settings.refresh_cookie_name, path="/", domain=settings.cookie_domain, secure=settings.cookie_secure)
+    if settings.cookie_secure:
+        response.delete_cookie("__Host-refresh_token", path="/", secure=True, samesite="lax")
     response.set_cookie(
         settings.refresh_cookie_name,
         refresh,
@@ -80,7 +87,7 @@ def _set_auth_cookies(response: Response, access: str, refresh: str, *, remember
         samesite="lax",
         max_age=refresh_max_age if remember_me else None,
         domain=settings.cookie_domain,
-        path="/",
+        path=settings.api_v1_prefix,
     )
     response.set_cookie(
         settings.csrf_cookie_name,
@@ -97,15 +104,18 @@ def _set_auth_cookies(response: Response, access: str, refresh: str, *, remember
 def _auth_tokens(access: str, refresh: str) -> dict[str, str]:
     if not settings.auth_return_tokens:
         return {}
-    return {"access_token": access, "refresh_token": refresh, "token_type": "Bearer"}
+    return {"access_token": access, "token_type": "Bearer"}
 
 
 def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(settings.refresh_cookie_name, path="/", domain=settings.cookie_domain, secure=settings.cookie_secure)
+    if settings.cookie_secure:
+        response.delete_cookie("__Host-refresh_token", path="/", secure=True, samesite="lax")
     for name in (settings.access_cookie_name, settings.refresh_cookie_name, settings.csrf_cookie_name):
         # Secure must be echoed so ``__Host-`` prefixed cookies can be deleted.
         response.delete_cookie(
             name,
-            path="/",
+            path=settings.api_v1_prefix if name == settings.refresh_cookie_name else "/",
             domain=settings.cookie_domain,
             secure=settings.cookie_secure,
             samesite="lax",
@@ -120,11 +130,11 @@ async def setup_status(session: AsyncSession = Depends(get_session)) -> dict:
 @router.post("/auth/setup/initialize", status_code=status.HTTP_201_CREATED)
 async def setup_initialize(
     request: Request,
-    payload: dict = Body(default={}),
+    payload: SetupInitializeRequest,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await enforce_rate_limit(f"setup:ip:{opaque_key(client_ip(request))}", limit=10, window_seconds=3600)
-    return {"data": await service.setup_initialize(session, payload)}
+    return {"data": await service.setup_initialize(session, payload.model_dump(exclude_none=True))}
 
 
 @router.post("/auth/login")
@@ -165,12 +175,16 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
         after={"email": user.email},
     )
     await session.commit()
-    _set_auth_cookies(response, access, refresh, remember_me=payload.remember_me)
+    from app.modules.settings.service import get_access_policy
+
+    policy = await get_access_policy(session)
+    _set_auth_cookies(response, access, refresh, remember_me=payload.remember_me, refresh_max_age=policy["sessionAbsoluteMinutes"] * 60)
     return {
         "data": {
             "user": auth_user,
             **_auth_tokens(access, refresh),
-            "expires_in": settings.access_token_expire_minutes * 60,
+            "expires_in": max(1, decode_token(access)["exp"] - int(datetime.now(UTC).timestamp())),
+            "expires_at": decode_token(access)["exp"],
         }
     }
 
@@ -179,14 +193,14 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
 async def logout(
     request: Request,
     response: Response,
-    refresh_token: str | None = None,
     context: RequestContext | None = Depends(get_optional_context),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    refresh_token = refresh_token or request.cookies.get(settings.refresh_cookie_name)
+    refresh_token = request.cookies.get(settings.refresh_cookie_name) or (request.cookies.get("__Host-refresh_token") if settings.cookie_secure else None)
     # Logout must revoke the refresh session even when the short-lived access
     # token has already expired; the refresh token identifies the session.
-    user_id = await service.revoke_session(session, context.user_id if context else None, refresh_token)
+    user_id = await service.revoke_session(session, context.user_id if context else None, refresh_token,
+                                          session_id=getattr(request.state, "auth_session_id", None))
     actor_id = context.user_id if context else user_id
     if actor_id is None:
         raise AuthRequired("Session is no longer valid.")
@@ -203,7 +217,7 @@ async def logout(
 async def refresh(
     payload: RefreshRequest, request: Request, response: Response, session: AsyncSession = Depends(get_session)
 ) -> dict:
-    token = payload.refresh_token or request.cookies.get(settings.refresh_cookie_name) or ""
+    token = request.cookies.get(settings.refresh_cookie_name) or (request.cookies.get("__Host-refresh_token") if settings.cookie_secure else None) or ""
     user, access, refresh_token, remember_me = await service.rotate_refresh_token(
         session,
         token,
@@ -212,7 +226,11 @@ async def refresh(
     )
     context = await service.build_context(session, user, request_id=getattr(request.state, "request_id", ""))
     _, role_codes = await service.resolve_permissions(session, user.id)
-    _set_auth_cookies(response, access, refresh_token, remember_me=remember_me)
+    from app.modules.auth.models import UserSession
+
+    record = await session.get(UserSession, int(decode_token(access)["sid"]))
+    remaining = max(1, int((service._as_utc(record.expires_at) - datetime.now(UTC)).total_seconds()))
+    _set_auth_cookies(response, access, refresh_token, remember_me=remember_me, refresh_max_age=remaining)
     return {
         "data": {
             "user": service.build_auth_user(
@@ -221,7 +239,8 @@ async def refresh(
                 must_change_password=await service.must_change_password(session, user.id),
             ),
             **_auth_tokens(access, refresh_token),
-            "expires_in": settings.access_token_expire_minutes * 60,
+            "expires_in": max(1, decode_token(access)["exp"] - int(datetime.now(UTC).timestamp())),
+            "expires_at": decode_token(access)["exp"],
         }
     }
 
@@ -262,7 +281,7 @@ async def verify_code(
     payload: VerifyCodeRequest, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict:
     await enforce_rate_limit(f"reset-verify:ip:{opaque_key(client_ip(request))}", limit=20, window_seconds=900)
-    await enforce_rate_limit(f"reset-verify:account:{opaque_key(payload.email)}", limit=8, window_seconds=900)
+    await enforce_rate_limit(f"reset-verify:token:{opaque_key(payload.code)}", limit=8, window_seconds=900)
     verified = await service.verify_reset_code(session, payload.email, payload.code)
     if not verified:
         raise ValidationFailed("Invalid reset code.")
@@ -284,7 +303,7 @@ async def reset_password(
     payload: ResetPasswordRequest, request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict:
     await enforce_rate_limit(f"reset-submit:ip:{opaque_key(client_ip(request))}", limit=20, window_seconds=900)
-    await enforce_rate_limit(f"reset-submit:account:{opaque_key(payload.email)}", limit=8, window_seconds=900)
+    await enforce_rate_limit(f"reset-submit:token:{opaque_key(payload.code)}", limit=8, window_seconds=900)
     if payload.password_confirmation is not None and payload.password != payload.password_confirmation:
         raise ValidationFailed("Passwords do not match.")
     await service.reset_password(session, payload.email, payload.code, payload.password)
@@ -314,11 +333,11 @@ async def change_password(
 
 @router.post("/auth/profile/avatar")
 async def update_profile_avatar(
-    payload: dict = Body(default={}),
+    payload: AvatarUpdate,
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    avatar = str(payload.get("avatar") or "").strip() or None
+    avatar = str(payload.avatar or "").strip() or None
     result = await service.set_user_avatar(session, context, avatar)
     return {"data": {"avatar": result}}
 
@@ -380,6 +399,11 @@ async def set_user_password(
     means choosing that user's password, so this is a recovery path, not a wider
     capability. The password is hashed and never returned.
     """
+    if payload.password_confirmation is not None and payload.password != payload.password_confirmation:
+        raise ValidationFailed(
+            "Passwords do not match.",
+            {"passwordConfirmation": "Passwords do not match."},
+        )
     user = await service.set_user_password(
         session,
         context,
@@ -431,7 +455,7 @@ async def delete_users(
     context: RequestContext = Depends(require_permission("user.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     try:
         await service.delete_users(session, ids, context)
     except AccessDenied as exc:
@@ -585,7 +609,7 @@ async def delete_roles(
     context: RequestContext = Depends(require_permission("role.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    ids = [int(value) for value in payload.get("ids") or [] if str(value).isdigit()]
+    ids = validate_id_list(payload)
     try:
         await service.delete_roles(session, ids)
     except AccessDenied as exc:

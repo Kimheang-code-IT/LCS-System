@@ -26,8 +26,7 @@ must stay immutable, every journal must balance, and each posting must be atomic
 | Document | Use it for |
 |---|---|
 | `docs/05_solution_architecture.md` | Posting engine description and layering |
-| `docs/06b_database_design_annotated.sql` | Exact columns, including base-currency amounts |
-| `docs/14_47_table_migration_analysis.md` §2.5 | Why payments and allocations keep their current shape |
+| `docs/06_database_design.sql` | Exact columns, including base-currency amounts and allocation guards |
 | `backend/alembic/versions/e6f7a8b9c0d1_reporting_views_and_integrity.py` | The authoritative database-level invariants |
 | `backend/tests/sql/integrity_guards.sql` | Executable proof each guard fires |
 

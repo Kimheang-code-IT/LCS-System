@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { printTemplateById, defaultPrintTemplate, supportedPrintTemplates, type PrintTemplateId } from '~/config/print-templates'
+import type { FreightRecord } from '~/types/record'
+import { useLcs } from '~/composables/freight/useLcs'
 import { buildPrintViewModel, type PrintViewModel } from '~/utils/freight/print-model'
 import { buildChargePrintViewModel } from '~/utils/freight/charge-print'
 import { buildJobPrintViewModel } from '~/utils/freight/job-print'
@@ -24,10 +26,48 @@ const { formatDateTime, localization } = useAppLocalization()
 const collection = computed(() => String(route.params.collection || ''))
 const recordId = computed(() => String(route.params.id || ''))
 
+const statementOrderId = computed(() => {
+  const raw = route.query.statementOrder
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return String(value || '').trim()
+})
+
+/** Combined statement: every charge of one service order, fetched read-only. */
+const statementCharges = ref<FreightRecord[] | null>(null)
+const lcs = useLcs()
+
+onMounted(async () => {
+  if (!statementOrderId.value || collection.value !== 'jobCharges') return
+  try {
+    statementCharges.value = await lcs.charges.listForOrder(statementOrderId.value)
+  }
+  catch {
+    statementCharges.value = []
+  }
+})
+
+const statementRecord = computed<FreightRecord | null>(() => {
+  const charges = statementCharges.value || []
+  if (!charges.length) return null
+  const first = charges[0]!
+  const feeLines = charges.flatMap(charge =>
+    Array.isArray(charge.feeLines) ? charge.feeLines as Array<Record<string, unknown>> : [])
+  const allDraft = charges.every(charge => String(charge.status || '').toUpperCase().includes('DRAFT'))
+  return {
+    ...first,
+    id: String(first.id || ''),
+    // A combined statement is identified by the service order, not one charge.
+    chargeNo: String(first.jobNo || first.chargeNo || ''),
+    feeLines,
+    status: allDraft ? 'DRAFT' : String(first.status || ''),
+  } as FreightRecord
+})
+
 const module = computed(() => freightModules.find(item => item.collection === collection.value) || null)
-const record = computed(() => store.get(collection.value, recordId.value))
+const record = computed(() => statementRecord.value || store.get(collection.value, recordId.value))
 const accessDenied = computed(() => Boolean(module.value && !auth.canAccessPage(module.value.permission)))
-const notFound = computed(() => Boolean(collection.value && recordId.value) && !record.value)
+const notFound = computed(() => Boolean(collection.value && recordId.value) && !record.value
+  && !(statementOrderId.value && statementCharges.value === null))
 
 const templateId = computed<PrintTemplateId>({
   get: () => {
@@ -76,6 +116,12 @@ const lineIndex = computed(() => {
   return Number.isFinite(parsed) ? parsed : undefined
 })
 
+const lineId = computed(() => {
+  const raw = route.query.lineId
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return String(value || '').trim()
+})
+
 const viewModel = computed<PrintViewModel | null>(() => {
   if (!record.value) return null
   const context = {
@@ -100,6 +146,7 @@ const viewModel = computed<PrintViewModel | null>(() => {
   if (collection.value === 'jobCharges') {
     return buildChargePrintViewModel(record.value, templateId.value, context, {
       lineIndex: lineIndex.value,
+      lineId: lineId.value || undefined,
     })
   }
   return buildPrintViewModel(record.value, templateId.value, context)

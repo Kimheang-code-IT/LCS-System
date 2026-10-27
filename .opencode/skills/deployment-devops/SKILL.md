@@ -26,9 +26,8 @@ is not cloned there — so every deployment artifact must be self-contained.
 
 | Document | Use it for |
 |---|---|
-| `docs/12_deployment_runbook.md` | The authoritative deploy, backup, restore, and rollback procedure |
-| `docs/13_security_hardening_runbook.md` | Host and application hardening |
-| `docs/15_migration_and_rollback_guide.md` | Schema apply/verify/rollback and the migration boundary |
+| `docs/11_deployment_and_security.md` | The authoritative deploy, backup, restore, rollback, and hardening procedure |
+| `docs/11_deployment_and_security.md` §8 | Schema apply/verify/rollback and the migration boundary |
 | `AGENTS.md` §Commands, §Run stack | Ports, env files, branch and CI model |
 | `infrastructure/`, `deploy/`, `.github/workflows/` | The artifacts themselves |
 
@@ -67,19 +66,19 @@ and the **`Dev CI`** status check.
 3. **Back up before any schema change.** `pg_dump -Fc` plus WAL archiving for
    point-in-time recovery, then **restore the dump into a scratch database and
    confirm the revision and row counts**. An unverified backup is not a backup.
-   `docs/15` §5 has the exact commands.
-4. **Deploy in the order the runbook states:** back up → deploy the backend (its
-   entrypoint migrates before serving) → run the post-deploy verification →
-   deploy the frontend → keep the previous image tagged for rollback.
-5. **Verify after deploying** (`docs/15` §4):
+   `docs/11_deployment_and_security.md` §11-§12 has the exact commands.
+4. **Deploy in the order `docs/11_deployment_and_security.md` §7 states:** back up →
+   deploy the backend (its entrypoint migrates before serving) → run the post-deploy
+   verification → deploy the frontend → keep the previous image tagged for rollback.
+5. **Verify after deploying** (`docs/11_deployment_and_security.md` §9):
    - `SELECT version_num FROM alembic_version;` matches the release head;
    - table and view counts match the expected shape;
    - `pre_migration_counts.sql` diffed against the pre-deploy output;
    - the ledger still nets to zero and there are no unvalidated foreign keys;
    - `/health` and `/health/ready` respond.
-6. **Roll back by the documented boundary.** `alembic downgrade
-   a2b3c4d5e6f7` plus redeploying the previous image is the supported path. Do not
-   attempt `alembic downgrade base` — a pre-existing defect in legacy revision
+6. **Roll back by the documented boundary.** `alembic downgrade <previous-release-head>`
+   plus redeploying the previous image is the supported path. Do not attempt
+   `alembic downgrade base` — a pre-existing defect in legacy revision
    `6e862ce04e46` makes it impossible; use the restore procedure instead.
 
 ## Security requirements
@@ -112,8 +111,8 @@ and the **`Dev CI`** status check.
 | Compose config is valid | `docker compose -f infrastructure/docker-compose.yml config` |
 | Stack healthy | `docker compose ... ps` and both `/health` endpoints |
 | Gates | backend `pytest` + `ruff`; frontend `lint` + `typecheck` + `test` |
-| Migration apply/rollback | `docs/15` §1 verification table |
-| Restore drill | `docs/15` §5 |
+| Migration apply/rollback | `docs/11_deployment_and_security.md` §8 |
+| Restore drill | `docs/11_deployment_and_security.md` §12 |
 
 Run the restore drill at least once per release train, not just once per
 environment.
@@ -124,8 +123,8 @@ environment.
 - No secret is added to a tracked file or an image layer.
 - A backup was taken **and restored** before any schema change, and the drill result
   is recorded.
-- The post-deploy verification in `docs/15` §4 has been executed with its output
-  captured.
+- The post-deploy verification in `docs/11_deployment_and_security.md` §9 has been
+  executed with its output captured.
 - The rollback path is stated, uses the supported revision boundary, and the
   previous image is still available.
 - Any verification that was not run is named as unverified in the report.
@@ -133,6 +132,6 @@ environment.
 ## Expected outputs
 
 - Changed compose / Dockerfile / nginx / workflow / `.env.example`.
-- An updated procedure in `docs/12` or `docs/15` when the steps changed.
+- An updated procedure in `docs/11_deployment_and_security.md` when the steps changed.
 - A recorded verification result (commands and observations).
-- Outstanding operational risks appended to `docs/16`.
+- Outstanding operational risks appended to `docs/11_deployment_and_security.md` §18.

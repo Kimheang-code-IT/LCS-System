@@ -1,6 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it, vi } from 'vitest'
 import type { FreightModule } from '../app/config/freight-modules'
 import { normalizeAuditLog, resolveAuditEntityPath } from '../app/utils/freight/audit-logs'
+
+// `useFreight` renders badges through Nuxt's `#components`; the node test only
+// needs its pure cell formatter.
+vi.mock('#components', () => ({ UBadge: { name: 'UBadge' } }))
+
+const { formatFreightCell } = await import('../app/composables/freight/useFreight')
 
 const moduleStub = (partial: Partial<FreightModule>): FreightModule => ({
   path: '/service-orders', title: 'Service Orders', titleKm: '', singular: 'Service Order', singularKm: '',
@@ -30,5 +38,24 @@ describe('audit log table logic', () => {
     const module = moduleStub({})
     expect(resolveAuditEntityPath({ id: 'log-1', entity: 'MISSING' }, [module], () => [], () => true)).toBe('')
     expect(resolveAuditEntityPath({ id: 'log-2', entity: 'JOB-1' }, [module], () => [{ id: 'job-1', jobNo: 'JOB-1' }], () => false)).toBe('')
+  })
+
+  it('renders the record identifier as an identifier, never as an amount', () => {
+    // Regression: the numeric cell formatter produced "46.00" for entityId.
+    expect(formatFreightCell(46, 'entityId')).toBe('46')
+    expect(formatFreightCell(1234, 'entityId')).toBe('1234')
+    // Money is still formatted as money.
+    expect(formatFreightCell(46, 'amount', 'USD')).not.toBe('46')
+    expect(formatFreightCell(46, 'amount', 'USD')).toMatch(/46/)
+  })
+
+  it('keeps the shared status manager from probing a missing policy', () => {
+    // The pure predicate is what loadPolicy() consults; this pins the call so a
+    // future edit cannot silently re-enable the request for read-only history.
+    const source = readFileSync(
+      fileURLToPath(new URL('../app/composables/freight/useRecordStatus.ts', import.meta.url)),
+      'utf8',
+    )
+    expect(source).toContain('supportsStatusPolicy(current)')
   })
 })

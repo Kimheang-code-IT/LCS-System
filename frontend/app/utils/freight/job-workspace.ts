@@ -84,52 +84,39 @@ export function workspaceSectionForPath(path: string): JobWorkspaceSection {
   return 'overview'
 }
 
-const JOB_ROUTE_STOPS = [
-  { placeRole: 'Pickup', placeKeys: ['pickup', 'origin'], dateKey: 'shipmentDate' },
-  { placeRole: 'Port of Loading', placeKeys: ['port'], dateKey: 'etaPort' },
-  { placeRole: 'Transit / Border', placeKeys: ['border'], dateKey: 'etaBorder' },
-  { placeRole: 'Destination', placeKeys: ['destination'], dateKey: 'deliveryDate' },
-] as const
-
 function routePlaceRow(row: Record<string, unknown>, index: number): Record<string, unknown> {
   return {
-    sequence: Number(row.sequence || index + 1) || index + 1,
-    placeRole: String(row.placeRole || 'Pickup').trim() || 'Pickup',
+    id: row.id !== null && row.id !== undefined ? String(row.id) : '',
+    sequence: Number(row.sequence ?? row.sequenceNo ?? index + 1) || index + 1,
+    // The reference id is what the API stores; the text snapshot beside it keeps
+    // a historical stop readable when the role is deactivated.
+    placeRoleId: row.placeRoleId !== null && row.placeRoleId !== undefined ? String(row.placeRoleId) : '',
+    placeRole: String(row.placeRole || '').trim(),
     place: String(row.place || '').trim(),
     // `plannedActual` was the single date column before Planned/Actual split.
-    planned: String(row.planned || row.plannedActual || '').slice(0, 10),
-    actual: String(row.actual || '').slice(0, 10),
+    planned: String(row.planned ?? row.plannedAt ?? row.plannedActual ?? '').trim(),
+    actual: String(row.actual ?? row.actualAt ?? '').trim(),
     notes: String(row.notes || '').trim(),
   }
 }
 
 /**
- * Route tab lines. Stored on `job.places`; falls back to header
- * pickup/port/border/destination for orders saved without route lines. An order
- * that has no id yet is still being created, so it stays empty — otherwise the
- * header date defaults would seed four blank-looking stops.
+ * Route tab lines, as stored on the order. The backend returns them from
+ * `service_order_places` (falling back to the embedded JSON for an older order),
+ * so this is a normalisation only — there is no hardcoded stop list any more.
  */
 export function jobRoutePlaces(job: Record<string, unknown>): Array<Record<string, unknown>> {
   const stored = Array.isArray(job.places) ? job.places : []
-  if (stored.length) return stored.map((row, index) => routePlaceRow(row as Record<string, unknown>, index))
-  if (!String(job.id ?? '').trim()) return []
-  return JOB_ROUTE_STOPS.map((stop, index) => routePlaceRow({
-    placeRole: stop.placeRole,
-    place: stop.placeKeys.map(key => String(job[key] ?? '').trim()).find(Boolean) || '',
-    planned: job[stop.dateKey],
-  }, index))
+  return stored.map((row, index) => routePlaceRow(row as Record<string, unknown>, index))
 }
 
+/**
+ * The route table writes back only its own rows. Header place text is no longer
+ * mirrored from role names: roles are configuration, so matching a hardcoded
+ * "Pickup" string would silently stop working when an administrator renames it.
+ */
 export function jobFieldsFromPlaces(places: Array<Record<string, unknown>>) {
-  const rows = places.map((row, index) => routePlaceRow(row, index))
-  const patch: Record<string, unknown> = { places: rows }
-  for (const stop of JOB_ROUTE_STOPS) {
-    const row = rows.find(item => String(item.placeRole) === stop.placeRole)
-    if (!row) continue
-    patch[stop.placeKeys[0]] = row.place
-    patch[stop.dateKey] = row.planned
-  }
-  return patch
+  return { places: places.map((row, index) => routePlaceRow(row, index)) }
 }
 
 export function isMoneyKey(key: string) {

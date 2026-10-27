@@ -1,13 +1,13 @@
 """Static guarantees about the Alembic migration chain.
 
-The migration itself cannot be exercised here (tests run on in-memory SQLite and
-the revisions use PostgreSQL features), so these are the properties that *can* be
+The migration itself cannot be exercised here for PostgreSQL-specific behavior
+(tests run on in-memory SQLite), so these are the properties that *can* be
 checked without a database: a single head, a linear chain, a real downgrade for
-every revision, and an additive-only shape for the revisions that introduce the
-47-table design's missing pieces.
+every revision, and an additive/non-destructive shape for the revisions that
+introduce or preserve the design's structures.
 
 Together they are what makes ``alembic downgrade`` a usable rollback rather than
-a promise. ``docs/15_migration_and_rollback_guide.md`` documents the procedure;
+a promise. ``docs/11_deployment_and_security.md`` §8 documents the procedure;
 this module keeps the invariants from silently regressing.
 """
 
@@ -22,10 +22,11 @@ import pytest
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 VERSIONS = BACKEND_ROOT / "alembic" / "versions"
 
-# Revisions that add the capabilities the 47-table reference design has and the
-# 59-table design lacked, plus the later posting-rules revision. None may drop or
-# narrow anything pre-existing.
+# Revisions that add the current capabilities and the preservation guard. None
+# may drop or narrow anything pre-existing.
 ADDITIVE_REVISIONS = (
+    "35bd68fa01ce",  # verified Telegram identities and single-use challenges
+    "46ce79ab12df",  # durable notification outbox and monitoring incident state
     "b3c4d5e6f7a8",  # currencies + currency_rates
     "c4d5e6f7a8b9",  # app_settings
     "d5e6f7a8b9c0",  # configuration_versions
@@ -33,7 +34,26 @@ ADDITIVE_REVISIONS = (
     "f8a9b0c1d2e3",  # posting_rules priority + description + indexes
     "a9b0c1d2e3f4",  # journal_entries link to the rule that posted it
     "b0c1d2e3f4a5",  # user_credentials.must_change_password
+    "e3f4a5b6c7d9",  # per-tab component group layouts
+    "a7c1e2f3b4d5",  # configuration version lifecycle metadata + immutability guard
+    "b8d9e0f1a2b3",  # dynamic place roles + structured route stops
+    "f2c3d4e5f6a7",  # draft configuration versions: editable until published
+    "a9b8c7d6e5f4",  # dynamic party roles + business-party role assignments
+    "e1f2a3b4c5d6",  # transport-asset identity vocabulary + capacity columns
+    "f5a6b7c8d9e0",  # capacity-unit master
+    "b6d7e8f9a0b1",  # component attribute catalog display order
+    "c7e8f9a0b1c2",  # quotation source service order (re-quotation trace)
+    "f6a7b8c9d0e1",  # document_types soft-delete attribution column + indexes
 )
+
+PRESERVATION_REVISIONS = (
+    "c3d4e5f6a7b8",  # Places text backfill; no table/column removal
+    "d4e5f6a7b8c9",  # guard against the old destructive c3d4 form
+)
+
+# These revisions intentionally have nothing to undo. Their upgrade is a data
+# backfill or a read-only guard, and downgrading must not drop Places either.
+NOOP_DOWNGRADES = frozenset(PRESERVATION_REVISIONS)
 
 
 def _revision_files() -> dict[str, Path]:
@@ -42,6 +62,7 @@ def _revision_files() -> dict[str, Path]:
         text = path.read_text(encoding="utf-8")
         match = re.search(r'^revision:\s*str\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
         if match:
+            assert match.group(1) not in files, f"Duplicate revision identity: {match.group(1)}"
             files[match.group(1)] = path
     return files
 
@@ -92,6 +113,9 @@ def test_every_revision_defines_a_working_downgrade():
         assert callable(getattr(module, "downgrade", None)), f"{revision} has no downgrade()"
         source = path.read_text(encoding="utf-8")
         downgrade_body = source.split("def downgrade", 1)[1]
+        if revision in NOOP_DOWNGRADES:
+            assert "pass" in downgrade_body, f"{revision} declares a no-op downgrade without pass"
+            continue
         assert re.search(r"op\.\w+\(", downgrade_body), (
             f"{revision} defines an empty downgrade; the chain would not be reversible"
         )
@@ -99,13 +123,31 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["d2e3f4a5b6c8"], (
-        "the head changed; update docs/15_migration_and_rollback_guide.md and the deployed "
+    assert heads == ["f6a7b8c9d0e1"], (
+        "the head changed; update docs/11_deployment_and_security.md and the deployed "
         f"revision expectation (found {heads})"
     )
 
 
-@pytest.mark.parametrize("revision", ADDITIVE_REVISIONS)
+def test_places_revisions_keep_the_legacy_structures():
+    """The Places table, mapping and legacy foreign keys must survive upgrade."""
+    c3d4 = _revision_files()["c3d4e5f6a7b8"].read_text(encoding="utf-8")
+    c3d4_upgrade = c3d4.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
+    assert "SET free_text = p.name" in c3d4_upgrade
+    assert "originPlace" in c3d4_upgrade
+    assert "destinationPlace" in c3d4_upgrade
+
+    for revision in PRESERVATION_REVISIONS:
+        source = _revision_files()[revision].read_text(encoding="utf-8")
+        upgrade_body = source.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
+        assert 'op.drop_table("places")' not in upgrade_body, f"{revision} drops places"
+        assert 'op.drop_table("place_role_places")' not in upgrade_body, (
+            f"{revision} drops place_role_places"
+        )
+        assert "op.drop_column" not in upgrade_body, f"{revision} drops a legacy column"
+
+
+@pytest.mark.parametrize("revision", (*ADDITIVE_REVISIONS, *PRESERVATION_REVISIONS))
 def test_new_revisions_are_additive_only(revision: str):
     """No additive revision may drop, rename or narrow an existing object.
 
@@ -129,7 +171,7 @@ def test_new_revisions_are_additive_only(revision: str):
 
 
 def test_new_revisions_never_drop_a_pre_existing_table():
-    """The 59-table design keeps every table; nothing may be dropped on upgrade."""
+    """The current schema keeps every pre-existing table; nothing may be dropped on upgrade."""
     pre_existing = (
         "roles",
         "users",
@@ -141,6 +183,7 @@ def test_new_revisions_never_drop_a_pre_existing_table():
         "password_reset_tokens",
         "business_parties",
         "places",
+        "place_role_places",
         "container_types",
         "transport_types",
         "transport_assets",
@@ -191,7 +234,7 @@ def test_new_revisions_never_drop_a_pre_existing_table():
         "backup_records",
         "backup_logs",
     )
-    for revision in ADDITIVE_REVISIONS:
+    for revision in (*ADDITIVE_REVISIONS, *PRESERVATION_REVISIONS):
         source = _revision_files()[revision].read_text(encoding="utf-8")
         upgrade_body = source.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
         for table in pre_existing:
@@ -222,3 +265,60 @@ def test_every_model_module_is_imported_by_the_migration_environment():
         "app.modules.settings.models",
     ):
         assert f"import {module}" in env, f"alembic/env.py does not import {module}"
+
+
+def _migrated_columns() -> dict[str, set[str]]:
+    """Columns each table gains across the whole chain (create_table + add_column)."""
+    columns: dict[str, set[str]] = {}
+    for path in sorted(VERSIONS.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        # Tuple assignments (for example SOFT_DELETE_TABLES) that add_column loops over.
+        tuples = {
+            name: set(re.findall(r'"([a-z_]+)"', body))
+            for name, body in re.findall(r"^(\w+)\s*=\s*\((.*?)\)$", text, re.MULTILINE | re.DOTALL)
+        }
+        for match in re.finditer(r'op\.create_table\(\s*"([^"]+)"(.*?)\n    \)', text, re.DOTALL):
+            table, body = match.group(1), match.group(2)
+            columns.setdefault(table, set()).update(re.findall(r'sa\.Column\("([^"]+)"', body))
+        for match in re.finditer(r'op\.add_column\("([^"]+)",\s*sa\.Column\("([^"]+)"', text):
+            columns.setdefault(match.group(1), set()).add(match.group(2))
+        for match in re.finditer(r'op\.add_column\((\w+)\s*,\s*sa\.Column\("([^"]+)"', text):
+            # The table argument may be a loop variable ("for table in SOFT_DELETE_TABLES").
+            loops = dict(re.findall(r"for (\w+) in (?:reversed\()?(\w+)\)?", text))
+            for table in tuples.get(loops.get(match.group(1), match.group(1)), set()):
+                columns.setdefault(table, set()).add(match.group(2))
+    return columns
+
+
+def test_every_soft_delete_column_exists_in_the_migrated_schema():
+    """Regression: document_types shipped with deleted_at but not deleted_by_user_id.
+
+    The DocumentType model carries SoftDeleteMixin, so every ORM select read the
+    missing column and 500'd on a migrated database (the Audit Logs page loads
+    document types and broke even though /audit-events itself answered fine).
+    Tests build the schema with ``create_all`` and never see this drift, so the
+    chain is checked statically here.
+    """
+    import app.modules.archive.models  # noqa: F401
+    import app.modules.auth.models  # noqa: F401
+    import app.modules.backup.models  # noqa: F401
+    import app.modules.finance.models  # noqa: F401
+    import app.modules.master_data.models  # noqa: F401
+    import app.modules.operations.models  # noqa: F401
+    import app.modules.quotations.models  # noqa: F401
+    import app.modules.settings.models  # noqa: F401
+    from app.core.database import Base
+
+    migrated = _migrated_columns()
+    soft_delete_tables = [
+        name
+        for name, table in Base.metadata.tables.items()
+        if {"deleted_at", "deleted_by_user_id"} <= {column.name for column in table.columns}
+    ]
+    assert soft_delete_tables, "no soft-delete models found; the detection itself broke"
+    for table in sorted(soft_delete_tables):
+        missing = {"deleted_at", "deleted_by_user_id"} - migrated.get(table, set())
+        assert not missing, (
+            f"the migration chain never creates {table}.{sorted(missing)[0]}; "
+            "the ORM model would fail every query against a migrated database"
+        )

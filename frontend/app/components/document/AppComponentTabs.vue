@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import type { ComponentTabAttribute, ComponentTabGroup, ComponentTabRuntime } from '~/types/component-config'
-import { componentGroupToFreightTable } from '~/utils/freight/component-tabs'
-import { formFieldError } from '~/utils/validation/form-field-error'
+import type { ComponentTabRuntime } from '~/types/component-config'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   tab: ComponentTabRuntime
-  references: Record<string, Record<string, string>>
+  references?: Record<string, Record<string, string>>
   rowsByGroup: Record<string, Array<Record<string, unknown>>>
   editable?: boolean
   saving?: boolean
+  loading?: boolean
+  /** Page-level failure while loading the dynamic configuration. */
+  error?: string | null
   /** Cell errors keyed `<groupId>.<rowIndex>.<attributeCode>`. */
   fieldErrors?: Record<string, string>
   /** Fired on any edit so the host can clear that cell's error. */
   onFieldEdit?: (key: string) => void
 }>(), {
+  references: () => ({}),
+  editable: true,
+  saving: false,
+  loading: false,
+  error: null,
   fieldErrors: () => ({}),
   onFieldEdit: undefined,
 })
@@ -22,127 +28,20 @@ const emit = defineEmits<{
   'update:rows': [groupId: string, rows: Array<Record<string, unknown>>]
   'save-group': [groupId: string]
 }>()
-
-const { t, te, locale } = useI18n()
-
-function rowOf(groupId: string): Record<string, unknown> {
-  return (props.rowsByGroup[groupId] || [])[0] || {}
-}
-
-/** Labels for dynamic attributes come from the record, per active locale. */
-function attributeLabel(attribute: ComponentTabAttribute) {
-  if (te(`freight.fields.${attribute.code}`)) return t(`freight.fields.${attribute.code}`)
-  return String(locale.value === 'km' && attribute.labelKm ? attribute.labelKm : attribute.label)
-}
-
-function errorFor(groupId: string, code: string) {
-  // Never `''`: `UFormField.error` casts an empty string to `true`.
-  return formFieldError(props.fieldErrors, `${groupId}.0.${code}`)
-}
-
-function setValue(group: ComponentTabGroup, code: string, value: unknown) {
-  props.onFieldEdit?.(`${group.id}.0.${code}`)
-  const rows = props.rowsByGroup[group.id] || []
-  emit('update:rows', group.id, [{ ...(rows[0] || {}), [code]: value }])
-}
-
-function optionItems(attribute: ComponentTabAttribute) {
-  if (attribute.fieldType === 'reference' && attribute.referenceType) {
-    return Object.entries(props.references[attribute.referenceType] || {})
-      .map(([value, label]) => ({ label: String(label), value: String(value) }))
-  }
-  const options = Array.isArray(attribute.options) ? attribute.options : []
-  return options.map(option => (typeof option === 'string'
-    ? { label: option, value: option }
-    : { label: String(option.label), value: String(option.value) }))
-}
 </script>
 
 <template>
-  <div class="space-y-8">
-    <section v-for="group in tab.groups" :key="group.id" class="space-y-3">
-      <h3 class="text-sm font-semibold text-highlighted">{{ group.name }}</h3>
-
-      <FreightDynamicDataTable
-        v-if="group.renderMode === 'table'"
-        :table="componentGroupToFreightTable(group, references)"
-        :model-value="rowsByGroup[group.id] || []"
-        :disabled="!editable"
-        :saving="saving"
-        :field-errors="fieldErrors"
-        :error-key="group.id"
-        :on-cell-edit="onFieldEdit"
-        @update:model-value="emit('update:rows', group.id, $event)"
-        @save="emit('save-group', group.id)"
-      />
-
-      <div v-else class="space-y-4">
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <UFormField
-            v-for="attribute in group.attributes"
-            :key="attribute.code"
-            :label="attributeLabel(attribute)"
-            :required="attribute.isRequired"
-            :error="errorFor(group.id, attribute.code)"
-            :data-field-key="`${group.id}.0.${attribute.code}`"
-          >
-            <UCheckbox
-              v-if="attribute.fieldType === 'checkbox' || attribute.fieldType === 'boolean'"
-              :model-value="Boolean(rowOf(group.id)[attribute.code])"
-              :disabled="!editable"
-              @update:model-value="setValue(group, attribute.code, $event)"
-            />
-            <UInputNumber
-              v-else-if="['number', 'decimal', 'money'].includes(attribute.fieldType)"
-              :model-value="Number(rowOf(group.id)[attribute.code] ?? 0)"
-              :disabled="!editable"
-              class="w-full"
-              @update:model-value="setValue(group, attribute.code, $event)"
-            />
-            <UTextarea
-              v-else-if="attribute.fieldType === 'textarea'"
-              :model-value="String(rowOf(group.id)[attribute.code] ?? '')"
-              :disabled="!editable"
-              class="w-full"
-              @update:model-value="setValue(group, attribute.code, $event)"
-            />
-            <USelect
-              v-else-if="['select', 'currency', 'multi_select', 'reference'].includes(attribute.fieldType)"
-              :model-value="(rowOf(group.id)[attribute.code] as string | string[] | undefined)"
-              :items="optionItems(attribute)"
-              :multiple="attribute.fieldType === 'multi_select'"
-              :disabled="!editable"
-              class="w-full"
-              @update:model-value="setValue(group, attribute.code, $event)"
-            />
-            <UInput
-              v-else
-              :model-value="String(rowOf(group.id)[attribute.code] ?? '')"
-              :type="attribute.fieldType === 'date' ? 'date' : attribute.fieldType === 'datetime' ? 'datetime-local' : 'text'"
-              :placeholder="attribute.placeholder || undefined"
-              :disabled="!editable"
-              class="w-full"
-              @update:model-value="setValue(group, attribute.code, $event)"
-            />
-          </UFormField>
-        </div>
-
-        <div v-if="editable" class="flex justify-end">
-          <UButton
-            icon="i-lucide-save"
-            :label="t('freight.ui.saveChanges')"
-            :loading="saving"
-            @click="emit('save-group', group.id)"
-          />
-        </div>
-      </div>
-    </section>
-
-    <FreightJobEmptyState
-      v-if="!tab.groups.length"
-      :title="t('freight.ui.noColumnsConfigured')"
-      :description="t('freight.ui.noColumnsConfiguredHint')"
-      icon="i-lucide-columns-3"
-    />
-  </div>
+  <DocumentDynamicTabRenderer
+    :tab="tab"
+    :references="references"
+    :rows-by-group="rowsByGroup"
+    :editable="editable"
+    :saving="saving"
+    :loading="loading"
+    :error="error"
+    :field-errors="fieldErrors"
+    :on-field-edit="onFieldEdit"
+    @update:rows="(groupId, rows) => emit('update:rows', groupId, rows)"
+    @save-group="groupId => emit('save-group', groupId)"
+  />
 </template>

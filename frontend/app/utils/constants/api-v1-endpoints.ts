@@ -1,4 +1,17 @@
 /** Source OpenAPI `/api/v1` operations. Do not invent alternate verbs. */
+export const TelegramEndpoints = {
+  TELEGRAM_WEBHOOK_SETUP: '/api/v1/settings/telegram/webhook',
+  TELEGRAM_GROUP_PAIR: '/api/v1/settings/telegram/group/pair',
+  TELEGRAM_GROUP_CANDIDATE: '/api/v1/settings/telegram/group/candidate',
+  TELEGRAM_GROUP_CONFIRM: '/api/v1/settings/telegram/group/confirm',
+  TELEGRAM_GROUP: '/api/v1/settings/telegram/group',
+  TELEGRAM_MY_LINK: '/api/v1/auth/me/telegram',
+  TELEGRAM_MY_PAIR: '/api/v1/auth/me/telegram/pair',
+  TELEGRAM_MY_DISCONNECT: '/api/v1/auth/me/telegram/disconnect',
+  TELEGRAM_HISTORY: '/api/v1/settings/telegram/history',
+  TELEGRAM_HISTORY_RETRY: (id: number) => `/api/v1/settings/telegram/history/${id}/retry`,
+} as const
+
 export const ApiV1Endpoints = {
   SETUP_STATUS: '/api/v1/auth/setup/status',
   SETUP_INITIALIZE: '/api/v1/auth/setup/initialize',
@@ -16,6 +29,8 @@ export const ApiV1Endpoints = {
   ROLE_ASSIGNMENTS: (userId: number) => `/api/v1/users/${userId}/role-assignments`,
   ROLE_DUPLICATE: (roleId: number | string) => `/api/v1/roles/${roleId}/duplicate`,
   QUOTATIONS: '/api/v1/quotations',
+  PLACE_ROLES: '/api/v1/placeRoles',
+  PARTY_ROLES: '/api/v1/partyRoles',
   QUOTATION_REVISIONS: (quotationId: number | string) => `/api/v1/quotations/${quotationId}/revisions`,
   QUOTATION_SEND: (revisionId: number | string) => `/api/v1/quotation-revisions/${revisionId}/send`,
   QUOTATION_ACCEPT: (revisionId: number | string) => `/api/v1/quotation-revisions/${revisionId}/accept`,
@@ -25,6 +40,7 @@ export const ApiV1Endpoints = {
   QUOTATION_COMPARE: (revisionId: number | string, otherRevisionId: number | string) =>
     `/api/v1/quotation-revisions/${revisionId}/compare/${otherRevisionId}`,
   QUOTATION_CONVERT: (revisionId: number | string) => `/api/v1/quotation-revisions/${revisionId}/convert`,
+  QUOTATION_FROM_SERVICE_ORDER: (identifier: number | string) => `/api/v1/quotations/from-service-order/${identifier}`,
   SERVICE_ORDERS: '/api/v1/service-orders',
   SERVICE_ORDER: (id: number | string) => `/api/v1/service-orders/${id}`,
   SERVICE_ORDER_FINISH: (id: number | string) => `/api/v1/service-orders/${id}/finish`,
@@ -40,6 +56,7 @@ export const ApiV1Endpoints = {
     `/api/v1/service-orders/${id}/component-tabs/groups/${groupId}/rows/bulk`,
   COMPONENT_ATTRIBUTES: '/api/v1/component-attributes',
   COMPONENT_ATTRIBUTE: (id: number | string) => `/api/v1/component-attributes/${id}`,
+  COMPONENT_ATTRIBUTES_REORDER: '/api/v1/component-attributes/reorder',
   COMPONENT_GROUPS: '/api/v1/component-groups',
   COMPONENT_GROUP: (id: number | string) => `/api/v1/component-groups/${id}`,
   COMPONENT_GROUP_ATTRIBUTES: (id: number | string) => `/api/v1/component-groups/${id}/attributes`,
@@ -53,7 +70,16 @@ export const ApiV1Endpoints = {
   COMPONENT_CONFIG_TYPES: '/api/v1/component-tabs/meta/types',
   CONFIGURATION_VERSIONS: '/api/v1/configuration-versions',
   CONFIGURATION_VERSION_PREVIEW: '/api/v1/configuration-versions/preview',
+  CONFIGURATION_VERSION_ACTIVE: '/api/v1/configuration-versions/active',
+  CONFIGURATION_ACTIVATION_HISTORY: '/api/v1/configuration-versions/activation-history',
   CONFIGURATION_VERSION: (id: number | string) => `/api/v1/configuration-versions/${id}`,
+  CONFIGURATION_VERSION_PREVIEW_BY_ID: (id: number | string) => `/api/v1/configuration-versions/${id}/preview`,
+  CONFIGURATION_VERSION_ACTIVATION_HISTORY: (id: number | string) =>
+    `/api/v1/configuration-versions/${id}/activate-history`,
+  CONFIGURATION_VERSION_COMPARE: (id: number | string, otherId: number | string) =>
+    `/api/v1/configuration-versions/${id}/compare/${otherId}`,
+  CONFIGURATION_VERSION_ACTIVATE: (id: number | string) => `/api/v1/configuration-versions/${id}/activate`,
+  CONFIGURATION_VERSION_ROLLBACK: (id: number | string) => `/api/v1/configuration-versions/${id}/rollback`,
   CONFIGURATION_VERSION_RETIRE: (id: number | string) => `/api/v1/configuration-versions/${id}/retire`,
   SERVICE_ORDER_CHARGES: (id: number | string) => `/api/v1/service-orders/${id}/charges`,
   SERVICE_ORDER_INVOICE: (id: number | string) => `/api/v1/service-orders/${id}/invoice`,
@@ -72,6 +98,8 @@ export const ApiV1Endpoints = {
   POSTING_RULES: '/api/v1/posting-rules',
   ATTACHMENTS_PRESIGN: '/api/v1/attachments/presign',
   ATTACHMENTS: '/api/v1/attachments',
+  ATTACHMENTS_ITEM: (id: number | string) => `/api/v1/attachments/${id}`,
+  ATTACHMENTS_UPLOAD: '/api/v1/attachments/upload',
   UI_SCHEMA: (page: string) => `/api/v1/ui-schemas/${encodeURIComponent(page)}`,
   AUDIT_EVENTS: '/api/v1/audit-events',
   USER_SET_PASSWORD: (id: number | string) => `/api/v1/users/${id}/password`,

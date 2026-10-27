@@ -60,12 +60,20 @@ class UserSession(PKMixin, TimestampMixin, Base):
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(Text)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # "Remember me" sessions get persistent cookies and the full configured
-    # lifetime; other sessions are browser-session cookies with a short
-    # server-enforced deadline. Rotation carries this flag forward.
+    # Remember me controls cookie persistence. Both modes obey the same finite
+    # server-side idle/absolute deadlines; rotation preserves this flag.
     remember_me: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+
+
+class UsedRefreshToken(Base):
+    __tablename__ = "used_refresh_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("user_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Role(PKMixin, TimestampMixin, Base):

@@ -11,15 +11,14 @@ export const CURRENCY_RATE_STATUSES = [
 export const CONTAINER_STATUSES = ['Expected', 'Planned', 'Loaded', 'In Transit', 'Delivered', 'Returned'] as const
 export const TRUCK_TYPES = ['1.5T', '2T', '3.5T', '5T', '8T'] as const
 export const TRANSPORT_MODES = ['Road', 'Sea', 'Air', 'Rail'] as const
-export const TRANSPORT_BY = ['Truck', 'Sea', 'Air', 'Rail'] as const
 export const ACTIVE_STATUS = ['Active', 'Inactive'] as const
 
 /**
- * Route stop roles. These values are stored on `job.places[].placeRole` and are
- * matched verbatim against the service-order header place keys by
- * `jobFieldsFromPlaces`, so changing a string here breaks that sync.
+ * Route stop roles were a fixed vocabulary until Place Roles became Master Data
+ * (`/master-data/place-roles`). The dropdown is now populated from the live
+ * records; nothing in code may declare the options. See
+ * `utils/freight/reference-options.ts` and `config/route-stop-table.ts`.
  */
-export const PLACE_ROLES = ['Pickup', 'Port of Loading', 'Transit / Border', 'Destination'] as const
 export const PAYMENT_STATUS = ['Unpaid', 'Partial', 'Paid', 'Overdue'] as const
 export const PAYMENT_METHODS = ['Bank Transfer', 'Cash', 'Cheque'] as const
 export const SERVICE_TYPES = [
@@ -101,7 +100,14 @@ export const QUOTATION_CONDITIONS = [
   'Fuel Surcharge',
 ] as const
 
-export const PARTY_ROLES = ['Customer', 'Supplier', 'Company'] as const
+/**
+ * Transport asset record statuses, mirroring the three-state policy for
+ * `transportAssets` in `backend/app/modules/master_data/status_policy.py`.
+ * `MAINTENANCE` is set from the row's "..." menu, so the list keeps offering the
+ * status and MAINTENANCE/INACTIVE assets are excluded from new assignments
+ * (`reference_options.py` only ever offers `status == 'ACTIVE'`).
+ */
+export const ASSET_STATUSES = ['ACTIVE', 'INACTIVE', 'MAINTENANCE'] as const
 export const ACCOUNT_TYPES = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'] as const
 export const PERIOD_STATUS = ['OPEN', 'CLOSED'] as const
 export const COMPONENT_INSTANCE_MODES = ['SINGLE', 'REPEATABLE'] as const

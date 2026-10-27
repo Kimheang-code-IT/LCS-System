@@ -36,4 +36,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --retries=10 --start-period=20s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4).read()" || exit 1
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}"]
+# Migrations are an explicit deploy step (see .github/workflows/production.yml).
+# The image starts the API only; production compose supplies this command
+# explicitly, so an older rollback image cannot run its former startup
+# migration. Local dev compose adds the migration command explicitly.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]

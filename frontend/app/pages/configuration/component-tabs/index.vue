@@ -1,5 +1,18 @@
 <script setup lang="ts">
-import type { ComponentTab, ComponentTabGroupLink } from '~/types/component-config'
+import type {
+  ComponentDataCardinality,
+  ComponentDisplayMode,
+  ComponentFormColumns,
+  ComponentGroupLayoutInput,
+  ComponentTab,
+  ComponentTabGroupLink,
+} from '~/types/component-config'
+import {
+  COMPONENT_DATA_CARDINALITY_VALUES,
+  COMPONENT_DISPLAY_MODE_VALUES,
+  COMPONENT_FORM_COLUMN_VALUES,
+  resolveComponentLayout,
+} from '~/utils/freight/component-layout'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { useFormValidation } from '~/composables/common/useFormValidation'
@@ -35,6 +48,91 @@ const selectedTabId = ref('')
 const addGroupId = ref<string | undefined>(undefined)
 const draft = ref<TabDraft>({ name: '', description: '', directionId: '' })
 const dialogOpen = ref(false)
+
+type LayoutDraft = {
+  displayMode: ComponentDisplayMode
+  dataCardinality: ComponentDataCardinality
+  formColumns: ComponentFormColumns
+  showGroupTitle: boolean
+  editable: boolean
+  collapsible: boolean
+  defaultExpanded: boolean
+}
+
+const layoutDialogOpen = ref(false)
+const layoutTarget = ref<ComponentTabGroupLink | null>(null)
+const layoutDraft = ref<LayoutDraft>({
+  displayMode: 'form_only',
+  dataCardinality: 'single',
+  formColumns: 2,
+  showGroupTitle: true,
+  editable: true,
+  collapsible: false,
+  defaultExpanded: true,
+})
+
+const displayModeOptions = computed(() => COMPONENT_DISPLAY_MODE_VALUES.map(value => ({
+  label: t(`freight.componentLayout.modes.${value}`),
+  value,
+})))
+const cardinalityOptions = computed(() => COMPONENT_DATA_CARDINALITY_VALUES.map(value => ({
+  label: t(`freight.componentLayout.cardinalities.${value}`),
+  value,
+})))
+const columnOptions = COMPONENT_FORM_COLUMN_VALUES.map(value => ({ label: `${value}`, value }))
+
+function layoutValueFor(link: ComponentTabGroupLink): LayoutDraft {
+  const layout = resolveComponentLayout(link)
+  return {
+    displayMode: layout.displayMode,
+    dataCardinality: layout.dataCardinality,
+    formColumns: layout.formColumns,
+    showGroupTitle: layout.showGroupTitle,
+    editable: layout.editable,
+    collapsible: layout.collapsible,
+    defaultExpanded: layout.defaultExpanded,
+  }
+}
+
+function openLayout(link: ComponentTabGroupLink) {
+  layoutTarget.value = link
+  layoutDraft.value = layoutValueFor(link)
+  pageErrors.value = []
+  layoutDialogOpen.value = true
+}
+
+/** A form-only group has no table, so multiple records is not a legal pairing. */
+watch(() => layoutDraft.value.displayMode, (mode) => {
+  if (mode === 'form_only') layoutDraft.value.dataCardinality = 'single'
+})
+
+async function saveLayout() {
+  const target = layoutTarget.value
+  if (!target) return
+  const input: ComponentGroupLayoutInput = { ...layoutDraft.value }
+  try {
+    await config.updateTabGroup(target.tabGroupId, input)
+    layoutDialogOpen.value = false
+    toast.add({ title: t('freight.ui.save'), color: 'success' })
+  }
+  catch (error) {
+    pageErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
+  }
+}
+
+async function moveGroup(index: number, direction: -1 | 1) {
+  const links = [...config.tabGroups.value]
+  const target = index + direction
+  if (target < 0 || target >= links.length || !selectedTabId.value) return
+  const [moved] = links.splice(index, 1)
+  links.splice(target, 0, moved!)
+  try {
+    await config.reorderTabGroups(selectedTabId.value, links.map(link => link.tabGroupId))
+  }
+  catch (error) {
+    pageErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
+  }
+}
 
 const selectedTab = computed(() => config.tabs.value.find(tab => tab.id === selectedTabId.value) || null)
 const groupOptions = computed(() => config.groups.value
@@ -136,6 +234,8 @@ async function addGroup(groupId: string | undefined) {
   try {
     await config.addTabGroup(selectedTabId.value, groupId)
     addGroupId.value = undefined
+    const link = config.tabGroups.value.find(item => item.id === groupId)
+    if (link) openLayout(link)
     toast.add({ title: t('freight.ui.save'), color: 'success' })
   }
   catch (error) {
@@ -152,7 +252,7 @@ async function removeMembership(link: ComponentTabGroupLink) {
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4">
+  <div class="mx-auto flex w-[95%] max-w-[1800px] flex-col gap-4 p-4">
     <LayoutAppHeaderPageActions
       can-create
       create-label="Add tab"
@@ -216,29 +316,76 @@ async function removeMembership(link: ComponentTabGroupLink) {
             <thead class="bg-elevated text-left text-xs uppercase tracking-wide text-muted">
               <tr>
                 <th class="px-3 py-2 font-medium">Group</th>
-                <th class="w-10" />
+                <th class="px-3 py-2 font-medium">Layout</th>
+                <th class="px-3 py-2 font-medium">Records</th>
+                <th class="px-3 py-2 font-medium">Columns</th>
+                <th class="w-24" />
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="link in config.tabGroups.value"
+                v-for="(link, index) in config.tabGroups.value"
                 :key="link.tabGroupId"
                 class="border-t border-default"
               >
-                <td class="px-3 py-2 text-highlighted">{{ link.name }}</td>
+                <td class="px-3 py-2 text-highlighted">
+                  <div class="flex flex-col">
+                    <span class="font-medium">{{ link.name }}</span>
+                    <span class="text-[11px] text-muted">{{ link.code }}</span>
+                  </div>
+                </td>
+                <td class="px-3 py-2">
+                  <UBadge color="neutral" variant="subtle" size="sm">
+                    {{ t(`freight.componentLayout.modes.${resolveComponentLayout(link).displayMode}`) }}
+                  </UBadge>
+                </td>
+                <td class="px-3 py-2 text-muted">
+                  {{ t(`freight.componentLayout.cardinalities.${resolveComponentLayout(link).dataCardinality}`) }}
+                </td>
+                <td class="px-3 py-2 text-muted">
+                  {{ resolveComponentLayout(link).formColumns }}
+                </td>
                 <td class="px-1 py-1 text-right">
-                  <UButton
-                    size="xs"
-                    color="error"
-                    variant="ghost"
-                    icon="i-lucide-trash-2"
-                    aria-label="Remove"
-                    @click="removeMembership(link)"
-                  />
+                  <div class="flex items-center justify-end">
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-arrow-up"
+                      :disabled="index === 0"
+                      :aria-label="t('actions.moveUp')"
+                      @click="moveGroup(index, -1)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-arrow-down"
+                      :disabled="index === config.tabGroups.value.length - 1"
+                      :aria-label="t('actions.moveDown')"
+                      @click="moveGroup(index, 1)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-sliders-horizontal"
+                      :aria-label="t('freight.componentLayout.editLayout')"
+                      @click="openLayout(link)"
+                    />
+                    <UButton
+                      size="xs"
+                      color="error"
+                      variant="ghost"
+                      icon="i-lucide-trash-2"
+                      :aria-label="t('actions.delete')"
+                      @click="removeMembership(link)"
+                    />
+                  </div>
                 </td>
               </tr>
               <tr class="border-t border-default">
-                <td colspan="2" class="px-3 py-2">
+                <td colspan="5" class="px-3 py-2">
                   <USelect
                     v-model="addGroupId"
                     :items="groupOptions"
@@ -303,6 +450,61 @@ async function removeMembership(link: ComponentTabGroupLink) {
             class="w-full"
           />
         </UFormField>
+      </div>
+    </CommonAppEntityDialog>
+
+    <CommonAppEntityDialog
+      v-model:open="layoutDialogOpen"
+      :title="t('freight.componentLayout.editLayout')"
+      :saving="config.saving.value"
+      :confirm-label="t('actions.save')"
+      :form-errors="[]"
+      @confirm="saveLayout"
+    >
+      <div class="space-y-4">
+        <p v-if="layoutTarget" class="text-sm text-muted">
+          {{ t('freight.componentLayout.groupHint', { name: layoutTarget.name, tab: selectedTab?.name || '' }) }}
+        </p>
+
+        <UFormField :label="t('freight.componentLayout.displayMode')" required>
+          <USelect
+            v-model="layoutDraft.displayMode"
+            :items="displayModeOptions"
+            class="w-full" />
+        </UFormField>
+        <p class="-mt-2 text-xs text-muted">
+          {{ t(`freight.componentLayout.modeHints.${layoutDraft.displayMode}`) }}
+        </p>
+
+        <UFormField :label="t('freight.componentLayout.dataCardinality')" required>
+          <USelect
+            v-model="layoutDraft.dataCardinality"
+            :items="cardinalityOptions"
+            :disabled="layoutDraft.displayMode === 'form_only'"
+            class="w-full" />
+        </UFormField>
+
+        <UFormField :label="t('freight.componentLayout.formColumns')">
+          <USelect
+            v-model="layoutDraft.formColumns"
+            :items="columnOptions"
+            class="w-full" />
+        </UFormField>
+
+        <div class="grid gap-3 sm:grid-cols-2">
+          <UFormField :label="t('freight.componentLayout.showGroupTitle')">
+            <USwitch v-model="layoutDraft.showGroupTitle" />
+          </UFormField>
+          <UFormField :label="t('freight.componentLayout.editable')">
+            <USwitch v-model="layoutDraft.editable" />
+          </UFormField>
+          <UFormField :label="t('freight.componentLayout.collapsible')">
+            <USwitch v-model="layoutDraft.collapsible" />
+          </UFormField>
+          <UFormField :label="t('freight.componentLayout.defaultExpanded')">
+            <USwitch v-model="layoutDraft.defaultExpanded" :disabled="!layoutDraft.collapsible" />
+          </UFormField>
+        </div>
       </div>
     </CommonAppEntityDialog>
   </div>

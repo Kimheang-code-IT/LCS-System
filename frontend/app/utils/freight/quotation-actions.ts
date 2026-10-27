@@ -51,3 +51,15 @@ export function quotationActionAvailability(
     openServiceOrder: converted,
   }
 }
+
+/**
+ * Re-quotation from a service order raises a *new* quotation, so it is offered on
+ * any saved order to whoever may revise a quotation. It never edits the order.
+ */
+export function serviceOrderRequotationAvailability(input: {
+  isCreate: boolean
+  hasRecord: boolean
+  canRevise: boolean
+}): boolean {
+  return input.canRevise && !input.isCreate && input.hasRecord
+}

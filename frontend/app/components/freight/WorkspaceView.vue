@@ -14,9 +14,12 @@ import {
 } from '~/composables/freight/useFreight'
 import { useLcs } from '~/composables/freight/useLcs'
 import type { FreightRecord } from '~/types/record'
+import type { ExportFilters, ExportRequest } from '~/types/export'
 import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
+import type { ExcelModuleInfo } from '~/composables/useExcelIo'
 import { chargeDomainStatus, financeDomainStatus } from '~/utils/freight/states'
 import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
+import { formatRevisionNo } from '~/utils/freight/quotation-revisions'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
 import { enrichJobListRows } from '~/utils/freight/job-list'
 import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
@@ -192,6 +195,107 @@ const bulkAction = computed<{ kind: 'delete' | 'deactivate', label: string, icon
     : { kind: 'delete', label: t('freight.ui.delete'), icon: 'i-lucide-trash-2', color: 'error' }
 })
 
+// --- Excel Import & Export (allowlisted by the backend catalog) ---
+const excelIo = useExcelIo()
+const excelModules = ref<ExcelModuleInfo[]>([])
+void excelIo.modules().then(rows => { excelModules.value = rows }).catch(() => { /* catalog stays empty; actions stay hidden */ })
+const excelModule = computed(() => excelModules.value.find(item => item.key === current.value?.collection) ?? null)
+
+const exportOpen = ref(false)
+const exporting = ref(false)
+const matchingCount = ref<number | null>(null)
+const counting = ref(false)
+let countTimer: ReturnType<typeof setTimeout> | undefined
+let countToken = 0
+
+const exportUsers = computed(() => store.list('users').map(user => ({
+  label: String(user.displayName || user.username || user.id),
+  value: String(user.id),
+})))
+const exportStatuses = computed(() => {
+  const filter = current.value?.filters?.find(item => item.key === 'status')
+  return filter ? filterItems(filter) : []
+})
+
+function exportFilterParams(filters: ExportFilters): Record<string, string> {
+  // Only the export filter keys are sent; scope/fieldCodes stay out.
+  const map: Record<string, string> = {
+    dateFrom: 'date_from',
+    dateTo: 'date_to',
+    updatedBy: 'updated_by',
+    status: 'status',
+  }
+  return Object.fromEntries(Object.entries(filters).map(([key, value]) => [map[key], value]).filter(([key]) => Boolean(key)))
+}
+
+/** Debounced matching-record count for the dialog (cancelled by a newer change). */
+function requestExportCount(filters: ExportFilters) {
+  matchingCount.value = null
+  counting.value = Boolean(excelModule.value)
+  if (countTimer) clearTimeout(countTimer)
+  const token = ++countToken
+  countTimer = setTimeout(async () => {
+    if (!excelModule.value) return
+    try {
+      const data = await excelIo.exportCount(excelModule.value.key, exportFilterParams(filters))
+      if (token === countToken) {
+        matchingCount.value = data.count
+        counting.value = false
+      }
+    }
+    catch {
+      if (token === countToken) {
+        counting.value = false
+        matchingCount.value = null
+      }
+    }
+  }, 400)
+}
+
+const currentPageIds = computed(() => {
+  const start = pagination.value.pageIndex * pagination.value.pageSize
+  return result.value.rows.slice(start, start + pagination.value.pageSize).map(row => String(row.id))
+})
+
+async function runExport(request: ExportRequest) {
+  if (!excelModule.value) return
+  exporting.value = true
+  pageErrors.value = []
+  try {
+    const ids = request.scope === 'selected' ? selectedIds.value : request.scope === 'current_page' ? currentPageIds.value : []
+    await excelIo.exportRows(excelModule.value.key, ids, {
+      format: request.format,
+      filters: exportFilterParams(request.filters ?? {}),
+    })
+    exportOpen.value = false
+    toast.add({ title: t('lcs.exportDialog.completed'), color: 'success' })
+  }
+  catch (error) {
+    pageErrors.value = [lcs.errorMessage(error)]
+  }
+  finally {
+    exporting.value = false
+  }
+}
+
+const importOpen = ref(false)
+
+/**
+ * Header ⋯ menu. One Export entry opens the filter dialog; Import keeps its
+ * own dialog. Creating a record keeps its primary header button.
+ */
+const headerMenuItems = computed<DropdownMenuItem[][]>(() => {
+  const module_ = excelModule.value
+  const io: DropdownMenuItem[] = []
+  if (module_?.exportEnabled && lcs.can(module_.viewPermission as never)) {
+    io.push({ label: t('actions.export'), icon: 'i-lucide-file-down', onSelect: () => { exportOpen.value = true } })
+  }
+  if (module_?.importEnabled && lcs.can(module_.managePermission as never)) {
+    io.push({ label: t('freight.excel.import'), icon: 'i-lucide-upload', onSelect: () => { importOpen.value = true } })
+  }
+  return io.length ? [io] : []
+})
+
 function runBulkAction() {
   const action = bulkAction.value
   if (!action) return
@@ -257,7 +361,43 @@ function recordPath(id: unknown) {
 
 function cellText(row: Record<string, unknown>, key: string) {
   const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row as FreightRecord) : row
-  return formatFreightCell(source[key], key, String(source.currency || '').trim() || undefined)
+  if (key === 'revisionNo') return formatRevisionNo(source[key])
+  // The revision roll-up is authoritative; older JSON copies may only carry `amount`.
+  const value = key === 'total' && source.total == null ? source.amount : source[key]
+  return formatFreightCell(value, key, String(source.currency || '').trim() || undefined)
+}
+
+/** Service Order number: direct id first, then the job list by number. */
+function serviceOrderLinkFor(row: Record<string, unknown>) {
+  if (!auth.canAccessPage('operations.service_orders.view')) return ''
+  const id = String(row.serviceOrderId || '').trim()
+  if (id) return `/service-orders/${id}`
+  return jobLinkFor(row.serviceOrderNo)
+}
+
+/** Linked finance invoice, when the charge has one and the user may open it. */
+function invoiceLinkFor(row: Record<string, unknown>) {
+  if (!auth.canAccessPage('finance.financial_documents.view')) return ''
+  const id = String(row.financialDocumentId || '').trim()
+  return id ? `/finance/documents/${id}` : ''
+}
+
+/** Source financial document of a journal entry. */
+function sourceDocumentLinkFor(row: Record<string, unknown>) {
+  if (!auth.canAccessPage('finance.financial_documents.view')) return ''
+  const id = String(row.sourceDocumentId || '').trim()
+  return id ? `/finance/documents/${id}` : ''
+}
+
+/** Source quotation of a service order: real id from the API, number as fallback. */
+function quotationLinkFor(row: Record<string, unknown>) {
+  if (!auth.canAccessPage('sales.quotations.view')) return ''
+  const id = String(row.quotationId || '').trim()
+  if (id) return `/quotations/${id}`
+  const quotationNo = String(row.quotationNo || '').trim()
+  if (!quotationNo) return ''
+  const found = store.list('quotations').find(item => String(item.quotationNo || '') === quotationNo)
+  return found?.id ? `/quotations/${String(found.id)}` : ''
 }
 
 function auditEntityLinkFor(row: Record<string, unknown>) {
@@ -448,12 +588,46 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       const jobTo = column.key === 'jobNo' && current.value!.collection !== 'jobs'
         ? jobLinkFor(row.original.jobNo)
         : ''
-      const entityTo = column.key === 'entity' ? auditEntityLinkFor(row.original) : ''
+      const entityTo = (column.key === 'entity' || column.key === 'entityId') ? auditEntityLinkFor(row.original) : ''
+      const serviceOrderTo = column.key === 'serviceOrderNo' ? serviceOrderLinkFor(row.original) : ''
+      const invoiceTo = column.key === 'invoiceNo' ? invoiceLinkFor(row.original) : ''
+      const quotationTo = column.key === 'quotationNo' ? quotationLinkFor(row.original) : ''
+      const sourceDocTo = column.key === 'sourceDocumentNo' ? sourceDocumentLinkFor(row.original) : ''
       if (entityTo) {
         return h(ULink, {
           to: entityTo,
           class: 'font-medium text-highlighted hover:text-primary hover:underline',
         }, () => text)
+      }
+      if (serviceOrderTo) {
+        return h(ULink, {
+          to: serviceOrderTo,
+          class: 'font-medium text-highlighted hover:text-primary hover:underline',
+        }, () => text)
+      }
+      if (invoiceTo) {
+        return h(ULink, {
+          to: invoiceTo,
+          class: 'font-medium text-highlighted hover:text-primary hover:underline',
+        }, () => text)
+      }
+      if (quotationTo) {
+        return h(ULink, {
+          to: quotationTo,
+          class: 'font-medium text-highlighted hover:text-primary hover:underline',
+        }, () => text)
+      }
+      if (sourceDocTo) {
+        return h(ULink, {
+          to: sourceDocTo,
+          class: 'font-medium text-highlighted hover:text-primary hover:underline',
+        }, () => text)
+      }
+      // Outstanding only means something for an invoice/bill or its credit note.
+      if (column.key === 'outstanding') {
+        const type = String(row.original.documentType || '').toUpperCase()
+        const meaningful = ['CUSTOMER_INVOICE', 'SUPPLIER_BILL', 'CREDIT_NOTE', 'SUPPLIER_CREDIT_NOTE']
+        if (type && !meaningful.includes(type)) return h('span', { class: 'text-muted' }, '—')
       }
       if (jobTo) {
         return h(ULink, {
@@ -477,7 +651,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       if (column.key === 'direction' || column.key === 'stage') {
         return h(UBadge, { color: 'info', variant: 'subtle', size: 'sm' }, () => text)
       }
-      if (column.key === 'customer') {
+      if (column.key === 'customer' || column.key === 'createdBy') {
         return h('span', { class: 'block max-w-48 truncate text-default', title: text }, text)
       }
       return h('span', { class: 'text-sm text-default' }, text)
@@ -594,9 +768,28 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
     <LayoutAppHeaderPageActions
       :can-create="canCreate"
       :create-label="t('freight.ui.newEntity', { entity: moduleSingular(current) })"
+      :more-items="headerMenuItems"
       :refreshing="pending"
       @create="openCreate"
       @refresh="refresh"
+    />
+
+    <CommonAppExportDialog
+      v-model:open="exportOpen"
+      :loading="exporting"
+      :users="exportUsers"
+      :statuses="exportStatuses"
+      :updated-by-supported="Boolean(excelModule?.updatedBySupported)"
+      :matching-count="matchingCount"
+      :counting="counting"
+      @submit="runExport"
+      @filters-change="requestExportCount"
+    />
+
+    <ExcelImportExportDialog
+      v-model:open="importOpen"
+      :collection="current.collection"
+      @imported="refreshList"
     />
 
     <CommonAppFormErrorSummary class="px-4 pt-3" :form-errors="pageErrors" />

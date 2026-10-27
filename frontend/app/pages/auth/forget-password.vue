@@ -1,141 +1,49 @@
 <script setup lang="ts">
-import * as z from 'zod'
-import type { FormSubmitEvent } from '@nuxt/ui'
 import { useAuth } from '~/composables/auth/useAuth'
-import { usePageSeo } from '~/composables/usePageSeo'
-import { startPasswordReset } from '~/utils/auth/password-reset'
-import { apiErrorDetails } from '~/utils/freight/errors'
+import { useFormValidation } from '~/composables/common/useFormValidation'
+import { validateRecoveryForm } from '~/utils/auth/recovery'
 
-definePageMeta({
-  layout: 'auth',
-})
-
+definePageMeta({ layout: 'auth' })
 const { t } = useI18n()
-const router = useRouter()
-const toast = useToast()
 const { requestPasswordReset } = useAuth()
+const identifier = ref('')
+const sent = ref(false)
 const submitting = ref(false)
-const formError = ref('')
-const forgetForm = useTemplateRef<{
-  formRef?: {
-    setErrors: (errors: { name: string, message: string }[]) => void
-    clear: () => void
-  }
-}>('forgetForm')
-
-/** Errors are placed on the field they belong to, or just above the submit button. */
-function clearErrors() {
-  formError.value = ''
-  forgetForm.value?.formRef?.clear()
-}
-
-function showErrors(error: unknown, fallback: string) {
-  const { message, fieldErrors } = apiErrorDetails(error)
-  const entries = Object.entries(fieldErrors || {})
-    .filter(([name, text]) => name === 'email' && text)
-    .map(([name, text]) => ({ name, message: text }))
-  formError.value = ''
-  if (entries.length) {
-    forgetForm.value?.formRef?.setErrors(entries)
-    return
-  }
-  formError.value = message || fallback
-}
-
-usePageSeo({
-  title: () => t('pages.forgetPassword.title'),
-  description: () => t('pages.forgetPassword.desc'),
-  robots: 'noindex, nofollow',
-})
-
-const schema = computed(() => z.object({
-  email: z.email({ error: t('pages.auth.emailRequired') }),
-}))
-
-const fields = computed(() => [
-  {
-    name: 'email',
-    type: 'email' as const,
-    size: 'lg' as const,
-    label: t('pages.auth.email'),
-    placeholder: t('pages.auth.emailPlaceholder'),
-    required: true,
-    autocomplete: 'email',
-  },
-])
-
-type Schema = { email: string }
-
-async function onSubmit(payload: FormSubmitEvent<Schema>) {
+const validation = useFormValidation({ t: key => t(key), order: () => ['identifier'] })
+async function submit() {
   if (submitting.value) return
-  clearErrors()
+  validation.reset()
+  if (validation.applyFailures(validateRecoveryForm({ identifier: identifier.value }, () => t('telegram.identifier')))) return
   submitting.value = true
-  try {
-    const email = payload.data.email.trim()
-    await requestPasswordReset(email)
-    startPasswordReset(email)
-    toast.add({
-      title: t('pages.forgetPassword.sentTitle'),
-      description: t('pages.forgetPassword.sentDesc', { email }),
-      color: 'success',
-    })
-    await router.push('/auth/verify-code')
-  }
-  catch (error) {
-    showErrors(error, t('api.somethingWentWrong'))
-  }
-  finally {
-    submitting.value = false
-  }
+  try { await requestPasswordReset(identifier.value.trim()); sent.value = true }
+  catch (error) { validation.applyServerError(error) }
+  finally { submitting.value = false }
 }
+useHead({ title: () => t('pages.forgetPassword.title'), meta: [{ name: 'robots', content: 'noindex, nofollow' }, { name: 'referrer', content: 'no-referrer' }] })
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center">
-    <UAuthForm
-      ref="forgetForm"
-      :schema="schema"
-      :title="t('pages.forgetPassword.title')"
-      icon="i-lucide-key-round"
-      :fields="fields"
-      :loading="submitting"
-      :submit="{
-        label: t('pages.forgetPassword.submitBtn'),
-        class: 'w-full h-10! text-xl font-normal',
-        loading: submitting,
-      }"
-      @submit="onSubmit"
-    >
-      <template #leading>
-        <img src="/logo.png" alt="Logo" class="mx-auto h-20 w-auto">
-      </template>
-
-      <template #description>
-        <p class="text-center text-sm text-muted">
-          {{ t('pages.forgetPassword.desc') }}
-        </p>
-      </template>
-
-      <template #footer>
-        <div class="space-y-2 text-center">
-          <p v-if="formError" class="flex items-start gap-2 text-left text-sm text-error" role="alert">
-            <UIcon name="i-lucide-alert-circle" class="mt-0.5 size-4 shrink-0" />
-            <span>{{ formError }}</span>
-          </p>
-          <UButton
-            variant="link"
-            size="sm"
-            to="/auth/login"
-            class="text-muted-foreground underline"
-          >
-            <UIcon name="i-lucide-arrow-left" class="mr-1" />
-            {{ t('pages.forgetPassword.backToLogin') }}
-          </UButton>
-          <div>
-            <span class="text-sm font-normal text-muted">{{ $t('settings.aboutCopyright') }}</span>
-          </div>
-        </div>
-      </template>
-    </UAuthForm>
-  </div>
+  <section class="mx-auto w-full max-w-md space-y-6">
+    <h1 class="text-center text-2xl font-semibold">{{ t('pages.forgetPassword.title') }}</h1>
+    <p class="text-sm text-muted">{{ t('telegram.recoveryHint') }}</p>
+    <UAlert v-if="sent" color="success" :description="t('telegram.genericRecovery')" />
+    <CommonAppFormErrorSummary :form-errors="validation.formErrors.value" />
+    <form class="space-y-4" @submit.prevent="submit">
+      <UFormField :label="t('telegram.identifier')" :error="validation.fieldErrors.value.identifier" required>
+        <UInput
+v-model="identifier"
+data-field-key="identifier"
+autocomplete="username"
+class="w-full"
+:maxlength="255"
+@update:model-value="validation.clearFieldError('identifier')" />
+      </UFormField>
+      <UButton
+type="submit"
+:loading="submitting"
+:label="t('pages.forgetPassword.submitBtn')"
+block />
+    </form>
+    <UButton to="/auth/login" variant="link" :label="t('pages.forgetPassword.backToLogin')" />
+  </section>
 </template>

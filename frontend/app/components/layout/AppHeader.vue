@@ -168,34 +168,27 @@ function onHeaderRefresh() {
           class="rounded-md"
           @click="actions.cancel.onClick?.()"
         />
-        <UButton
+        <CommonAppDocumentActionButton
           v-if="actions?.save"
-          :loading="actions.save.loading"
           icon="i-lucide-save"
           :label="actions.save.label"
-          class="rounded-md"
+          :loading="actions.save.loading"
           @click="actions.save.onClick()"
         />
 
         <template v-if="actions?.createButtons?.length">
-          <UButton
+          <CommonAppDocumentActionButton
             v-for="(button, index) in actions.createButtons"
             :key="`${button.label}-${index}`"
-            color="neutral"
-            variant="solid"
             :icon="button.icon || 'i-lucide-plus'"
             :label="button.label"
-            class="rounded-md"
             @click="button.onClick()"
           />
         </template>
-        <UButton
+        <CommonAppDocumentActionButton
           v-else-if="actions?.canCreate"
-          color="neutral"
-          variant="solid"
           :icon="actions.createIcon || 'i-lucide-plus'"
           :label="actions.createLabel"
-          class="rounded-md"
           @click="actions.onCreate?.()"
         />
       </div>

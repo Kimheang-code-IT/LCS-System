@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  expenseRowWithAmount,
   isJobFinanceRowEditable,
   jobFinanceChargeLines,
   jobFinanceDocumentLines,
   jobFinanceExpenseRows,
   jobFinanceLineTotals,
   jobFinanceLines,
+  jobFinanceSummary,
   normalizeJobFinanceExpense,
 } from '../app/utils/freight/job-finance'
 import { JOB_FINANCE_LINE_KIND } from '../app/utils/table/line-table-rules'
@@ -103,5 +105,32 @@ describe('job finance grid', () => {
 
   it('totals each kind separately', () => {
     expect(jobFinanceLineTotals(grid)).toEqual({ CHARGE: 1120, EXPENSE: 60, DOCUMENT: 1050 })
+  })
+
+  it('summarises charges, expenses, invoices and profit for the finance cards', () => {
+    expect(jobFinanceSummary(grid)).toEqual({
+      charge: 1120,
+      expense: 60,
+      invoice: 1050,
+      profit: 1060,
+    })
+  })
+
+  it('stores an amount typed on an expense row as quantity 1 × amount', () => {
+    expect(expenseRowWithAmount({
+      id: 'exp-2',
+      description: 'Port fee',
+      party: 'Sok',
+      date: '2026-10-23',
+      amount: 45,
+    })).toMatchObject({
+      id: 'exp-2',
+      description: 'Port fee',
+      party: 'Sok',
+      date: '2026-10-23',
+      quantity: 1,
+      unitPrice: 45,
+      amount: 45,
+    })
   })
 })

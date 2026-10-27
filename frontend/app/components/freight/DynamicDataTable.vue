@@ -10,10 +10,19 @@ const props = withDefaults(defineProps<{
   fieldErrors?: Record<string, string>
   errorKey?: string
   onCellEdit?: (cellKey: string) => void
+  rowInlineActions?: (row: Record<string, unknown>) => Array<{
+    label: string
+    icon?: string
+    color?: 'primary' | 'neutral' | 'error'
+    disabled?: boolean
+    loading?: boolean
+    onSelect: () => void
+  }>
 }>(), {
   fieldErrors: undefined,
   errorKey: undefined,
   onCellEdit: undefined,
+  rowInlineActions: undefined,
 })
 
 const emit = defineEmits<{
@@ -44,6 +53,7 @@ const headerActions = computed(() => props.disabled
       :field-errors="fieldErrors"
       :error-key="errorKey"
       :on-cell-edit="onCellEdit"
+      :row-inline-actions="rowInlineActions"
       @update:model-value="emit('update:modelValue', $event)" />
     <FreightJobEmptyState
       v-else

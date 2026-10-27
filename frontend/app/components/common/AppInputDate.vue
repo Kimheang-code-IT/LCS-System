@@ -7,6 +7,7 @@ import {
   parsePickerValue,
   serializePickerValue,
   datePickerPopoverContent,
+  isoZoneSuffix,
 } from '~/utils/date-picker'
 import { formatDateParts } from '~/utils/format/format-service'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
@@ -35,6 +36,9 @@ const anchor = useTemplateRef<HTMLElement | null>('anchor')
 const textInput = useTemplateRef<{ inputRef?: HTMLInputElement } | null>('textInput')
 
 const isDateTime = computed(() => isDateTimeGranularity(props.granularity))
+// Editing keeps the stored zone designator, so a re-saved datetime preserves the
+// original instant instead of shifting when the naive text is re-parsed.
+const zoneSuffix = computed(() => isDateTime.value ? isoZoneSuffix(props.modelValue) : '')
 const pickerIcon = computed(() =>
   isDateTime.value ? 'i-lucide-calendar-clock' : 'i-lucide-calendar',
 )
@@ -69,7 +73,7 @@ const displayValue = computed(() => {
 const dateValue = computed({
   get: () => parsePickerValue(props.modelValue, isDateTime.value),
   set: (value: DateValue | null | undefined) => {
-    emit('update:modelValue', serializePickerValue(value))
+    emit('update:modelValue', serializePickerValue(value) + zoneSuffix.value)
   },
 })
 
@@ -124,7 +128,7 @@ function commitText(raw: string) {
   if (isDateTime.value) {
     const hour = time ? Math.min(23, time.hour) : 0
     const minute = time ? time.minute : 0
-    emit('update:modelValue', `${base.y}-${pad(base.m)}-${pad(base.d)}T${pad(hour)}:${pad(minute)}`)
+    emit('update:modelValue', `${base.y}-${pad(base.m)}-${pad(base.d)}T${pad(hour)}:${pad(minute)}${zoneSuffix.value}`)
     return
   }
   emit('update:modelValue', `${base.y}-${pad(base.m)}-${pad(base.d)}`)

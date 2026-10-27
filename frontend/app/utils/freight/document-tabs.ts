@@ -39,6 +39,18 @@ export const freightDocumentLineTableHeaderKey: InjectionKey<
   (tableKey: string) => FreightDocumentLineTableHeaderAction[]
 > = Symbol('freightDocumentLineTableHeader')
 
+export type FreightDocumentLineMenuItem = {
+  label: string
+  icon?: string
+  color?: 'primary' | 'neutral' | 'error'
+  onSelect: () => void
+}
+
+/** Per-row menu entries for a document line table, keyed by the table key. */
+export const freightDocumentLineTableRowMenuKey: InjectionKey<
+  (tableKey: string) => ((row: Record<string, unknown>) => FreightDocumentLineMenuItem[]) | undefined
+> = Symbol('freightDocumentLineTableRowMenu')
+
 export const freightDocumentRecordKey: InjectionKey<{
   get: (key: string) => unknown
 }> = Symbol('freightDocumentRecord')
@@ -121,6 +133,11 @@ export type ModuleDocumentTabsOptions = {
    * currency); omitting it leaves every conditioned field visible.
    */
   record?: FreightRecord | null
+  /**
+   * Where a file uploaded from a `kind: 'files'` table belongs. Omitting it
+   * keeps the legacy local-preview behaviour for pages with no document id.
+   */
+  uploadContext?: { module: string, recordNo: string }
 }
 
 export function freightSelectOptions(
@@ -150,6 +167,17 @@ export function freightFieldToDocumentField(
     : undefined
   const meta = {
     ...checkboxPair,
+    // The per-record hooks (`referenceFilter`, `labelFor`, `placeholderFor`)
+    // survive the FreightField -> DocumentFieldSchema conversion inside `meta`,
+    // where the dynamic field renderer reads them.
+    ...(field.referenceFilter ? { referenceFilter: field.referenceFilter } : {}),
+    ...(field.labelFor ? { labelFor: field.labelFor } : {}),
+    ...(field.placeholderFor ? { placeholderFor: field.placeholderFor } : {}),
+    // The identity-type form's Test Pattern row (and everything the pattern
+    // needs) rides the same meta channel.
+    ...(field.patternTester ? { patternTester: true } : {}),
+    // A nullable number input keeps `null` instead of coercing a blank to 0.
+    ...(field.nullable ? { nullable: true } : {}),
     ...extra.meta,
   }
   return {
@@ -189,40 +217,34 @@ function visibleTables(module: FreightModule, isCreate?: boolean): FreightTable[
 const VIEW_ONLY_TABLES = new Set(['revisionHistory', 'sourceRelationships', 'journalEntries', 'allocations'])
 
 function withChargeColumns(table: FreightTable, _chargeLinkedToJob?: boolean): FreightTable {
-  if (table.key !== 'feeLines') return table
-  return {
-    ...table,
-    columns: table.columns.map((column) => {
-      if (column.key !== 'amount') return column
-      return {
-        ...column,
-        label: 'Grand Total',
-        labelKey: 'freight.fields.total',
-        inlineFields: [
-          { key: 'discount', label: 'Disc.', labelKm: 'បញ្ចុះ.', labelKey: 'freight.ui.discountCol' },
-          { key: 'taxAmount', label: 'Tax', labelKm: 'ពន្ធ', labelKey: 'freight.ui.taxCol' },
-        ],
-      }
-    }),
-  }
+  // Per-line discount and tax are edited through the row menu (Additional
+  // Details); the grid keeps no inline money columns.
+  return table
 }
 
 export function lineTableField(
   table: FreightTable,
   options: ModuleDocumentTabsOptions = {},
 ): DocumentFieldSchema {
-  const resolved = withChargeColumns(table, options.chargeLinkedToJob)
+  // A file table is editable: it owns upload/remove controls. Other view-only
+  // tables (revisions, journal links) stay read-only.
+  const viewOnly = VIEW_ONLY_TABLES.has(table.key) && table.kind !== 'files'
+  const upload = table.kind === 'files' ? options.uploadContext : undefined
+  const resolved = {
+    ...withChargeColumns(table, options.chargeLinkedToJob),
+    ...(upload ? { upload } : {}),
+  }
   return {
     key: table.key,
     labelKey: table.titleKey || `freight.tables.${table.key}`,
     label: table.title,
     type: 'line-table',
     colSpan: 2,
-    readOnly: VIEW_ONLY_TABLES.has(table.key),
+    readOnly: viewOnly,
     meta: {
       table: resolved,
       compact: options.compact,
-      viewOnly: VIEW_ONLY_TABLES.has(table.key),
+      viewOnly,
       showPricingTotals: Boolean(table.pricing),
       // A table whose prices are already the customer price has no discount or
       // tax step, so neither line is shown.
@@ -341,7 +363,9 @@ function quotationTabs(module: FreightModule, options: ModuleDocumentTabsOptions
     {
       id: 'revisions',
       labelKey: 'freight.quotationTabs.revisions',
-      sections: [{ id: 'revisions', fields: [lineTableField(tableOrThrow(module, 'revisionHistory'), options)] }],
+      // The revision grid is rendered by the document page's `tab-extra` slot
+      // (it owns the row menu and the compact revision column).
+      sections: [],
     },
   ]
 

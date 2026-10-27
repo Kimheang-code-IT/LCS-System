@@ -14,7 +14,7 @@ describe('navigation workspace modules', () => {
       '/finance/accounting-periods',
       '/reports',
       '/master-data/business-parties',
-      '/master-data/places',
+      '/master-data/place-roles',
       '/master-data/trade-directions',
       '/master-data/container-types',
       '/master-data/transport-types',

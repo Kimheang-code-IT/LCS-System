@@ -5,10 +5,14 @@ import type {
   ComponentGroup,
   ComponentGroupAttribute,
   ComponentGroupRow,
+  ComponentGroupLayoutInput,
   ComponentTab,
   ComponentTabGroupLink,
   ComponentTabsBootstrap,
   ConfigurationVersion,
+  ConfigurationVersionActivationEvent,
+  ConfigurationVersionComparison,
+  ConfigurationVersionPage,
   ConfigurationVersionPreview,
 } from '~/types/component-config'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
@@ -30,6 +34,11 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
       unwrapApiData(await api.patch<ApiResponse<ComponentAttribute>>(ApiV1Endpoints.COMPONENT_ATTRIBUTE(id), input)),
     deleteAttribute: async id =>
       unwrapApiData(await api.delete<ApiResponse<{ archived: boolean, id: string }>>(ApiV1Endpoints.COMPONENT_ATTRIBUTE(id))),
+    reorderAttributes: async orderedIds =>
+      asArray(unwrapApiData(await api.post<ApiResponse<ComponentAttribute[]>>(
+        ApiV1Endpoints.COMPONENT_ATTRIBUTES_REORDER,
+        { orderedIds },
+      ))),
 
     listGroups: async includeArchived =>
       asArray(unwrapApiData(await api.get<ApiResponse<ComponentGroup[]>>(ApiV1Endpoints.COMPONENT_GROUPS, { query: { include_archived: includeArchived, page_size: 200 } }))),
@@ -64,6 +73,11 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
       asArray(unwrapApiData(await api.get<ApiResponse<ComponentTabGroupLink[]>>(ApiV1Endpoints.COMPONENT_TAB_GROUPS(tabId)))),
     addTabGroup: async (tabId, input) =>
       unwrapApiData(await api.post<ApiResponse<ComponentTab>>(ApiV1Endpoints.COMPONENT_TAB_GROUPS(tabId), input)),
+    updateTabGroup: async (tabGroupId, input: ComponentGroupLayoutInput) =>
+      unwrapApiData(await api.patch<ApiResponse<ComponentTabGroupLink>>(
+        ApiV1Endpoints.COMPONENT_TAB_GROUP(tabGroupId),
+        input,
+      )),
     removeTabGroup: async tabGroupId =>
       unwrapApiData(await api.delete<ApiResponse<{ removed: boolean }>>(ApiV1Endpoints.COMPONENT_TAB_GROUP(tabGroupId))),
     reorderTabGroups: async (tabId, orderedIds) =>
@@ -74,29 +88,80 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
         ApiV1Endpoints.SERVICE_ORDER_COMPONENT_TABS(serviceOrderId),
         directionId ? { query: { direction_id: directionId } } : undefined,
       )),
-    saveGroupRows: async (serviceOrderId, groupId, rows) => {
+    saveGroupRows: async (serviceOrderId, groupId, rows, tabGroupId) => {
       const result = unwrapApiData(
         await api.post<ApiResponse<{ items: ComponentGroupRow[] }>>(
           ApiV1Endpoints.SERVICE_ORDER_COMPONENT_GROUP_ROWS_BULK(serviceOrderId, groupId),
-          { rows },
+          { rows, tabGroupId },
         ),
       )
       return result?.items ?? []
     },
 
-    listConfigurationVersions: async () =>
-      asArray(unwrapApiData(await api.get<ApiResponse<ConfigurationVersion[]>>(
+    listConfigurationVersions: async (params = {}) =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersionPage>>(
         ApiV1Endpoints.CONFIGURATION_VERSIONS,
-        { query: { page_size: 200 } },
-      ))),
+        {
+          query: {
+            page: params.page ?? 1,
+            page_size: params.pageSize ?? 20,
+            q: params.q || undefined,
+            status: params.status || undefined,
+            sortKey: params.sortKey || undefined,
+            sortDir: params.sortDir || undefined,
+          },
+        },
+      )),
+    activeConfigurationVersion: async () =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersion | null>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_ACTIVE,
+      )),
+    getConfigurationVersion: async id =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION(id),
+      )),
+    updateConfigurationVersion: async (id, input) =>
+      unwrapApiData(await api.patch<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION(id),
+        input,
+      )),
+    deleteConfigurationVersion: async id =>
+      unwrapApiData(await api.delete<ApiResponse<{ removed: number }>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION(id),
+      )),
     previewConfigurationVersion: async () =>
       unwrapApiData(await api.get<ApiResponse<ConfigurationVersionPreview>>(
         ApiV1Endpoints.CONFIGURATION_VERSION_PREVIEW,
+      )),
+    previewConfigurationVersionById: async id =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_PREVIEW_BY_ID(id),
+      )),
+    compareConfigurationVersions: async (id, otherId) =>
+      unwrapApiData(await api.get<ApiResponse<ConfigurationVersionComparison>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_COMPARE(id, otherId),
       )),
     publishConfigurationVersion: async changeNote =>
       unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(
         ApiV1Endpoints.CONFIGURATION_VERSIONS,
         { changeNote },
+      )),
+    activateConfigurationVersion: async id =>
+      unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_ACTIVATE(id),
+        {},
+      )),
+    rollbackConfigurationVersion: async (id, reason) =>
+      unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(
+        ApiV1Endpoints.CONFIGURATION_VERSION_ROLLBACK(id),
+        { reason },
+      )),
+    configurationActivationHistory: async (params = {}) =>
+      unwrapApiData(await api.get<ApiResponse<{ items: ConfigurationVersionActivationEvent[], meta: { page: number, page_size: number, total: number } }>>(
+        params.versionId
+          ? ApiV1Endpoints.CONFIGURATION_VERSION_ACTIVATION_HISTORY(params.versionId)
+          : ApiV1Endpoints.CONFIGURATION_ACTIVATION_HISTORY,
+        { query: { page: params.page ?? 1, page_size: params.pageSize ?? 50 } },
       )),
     retireConfigurationVersion: async id =>
       unwrapApiData(await api.post<ApiResponse<ConfigurationVersion>>(

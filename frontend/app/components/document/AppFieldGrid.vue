@@ -22,6 +22,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   update: [key: string, value: unknown]
+  /** The user left an input; the host validates that field then. */
+  blur: [key: string]
 }>()
 
 const { t, te } = useI18n()
@@ -162,9 +164,11 @@ function spanClass(field: FreightField) {
           :disabled="disabled || field.computed"
           :increment="false"
           :decrement="false"
+          :step-snapping="false"
           size="md"
           class="w-full"
           @update:model-value="updateField(field, $event ?? 0)"
+          @blur="emit('blur', field.key)"
         />
         <UTextarea
           v-else-if="field.type === 'textarea'"
@@ -175,6 +179,7 @@ function spanClass(field: FreightField) {
           autoresize
           class="w-full"
           @update:model-value="updateField(field, $event)"
+          @blur="emit('blur', field.key)"
         />
         <CommonAppInputDate
           v-else-if="field.type === 'date' || field.type === 'datetime'"
@@ -185,16 +190,19 @@ function spanClass(field: FreightField) {
           size="md"
           class="w-full"
           @update:model-value="updateField(field, $event)"
+          @blur="emit('blur', field.key)"
         />
-        <UInput
-          v-else-if="field.type === 'password'"
-          type="password"
-          :model-value="String(model[field.key] ?? '')"
-          :disabled="disabled"
-          size="md"
-          class="w-full"
-          @update:model-value="updateField(field, $event)"
-        />
+        <div v-else-if="field.type === 'password'" class="space-y-2">
+          <UInput
+            type="password"
+            :model-value="String(model[field.key] ?? '')"
+            :disabled="disabled"
+            size="md"
+            class="w-full"
+            @update:model-value="updateField(field, $event)"
+            @blur="emit('blur', field.key)" />
+          <CommonAppPasswordRequirements :value="String(model[field.key] ?? '')" />
+        </div>
         <UInput
           v-else-if="field.type === 'file'"
           type="file"
@@ -213,6 +221,7 @@ function spanClass(field: FreightField) {
           size="md"
           class="w-full"
           @update:model-value="updateField(field, $event)"
+          @blur="emit('blur', field.key)"
         />
       </UFormField>
     </template>

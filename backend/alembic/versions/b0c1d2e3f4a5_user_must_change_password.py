@@ -34,7 +34,7 @@ from alembic import op
 
 revision: str = "b0c1d2e3f4a5"
 down_revision: str | None = "a9b0c1d2e3f4"
-# Revision 7 in docs/15_migration_and_rollback_guide.md.
+# See docs/11_deployment_and_security.md §8.
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

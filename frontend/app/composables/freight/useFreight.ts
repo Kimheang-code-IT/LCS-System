@@ -221,7 +221,7 @@ export function groupedFields(module: FreightModule) {
 export function statusColor(status: string): AppHeaderBadge['color'] {
   const value = status.toLowerCase()
   if (['active', 'paid', 'cleared', 'delivered', 'approved', 'accepted', 'closed', 'completed', 'finished', 'pod received', 'posted', 'issued', 'converted'].some(s => value.includes(s))) return 'success'
-  if (['pending', 'processing', 'partial', 'in transit', 'arriving', 'submitted', 'sent', 'in_progress', 'open', 'draft'].some(s => value.includes(s))) return 'warning'
+  if (['pending', 'processing', 'partial', 'in transit', 'arriving', 'submitted', 'sent', 'in_progress', 'open', 'draft', 'maintenance'].some(s => value.includes(s))) return 'warning'
   if (['inactive', 'overdue', 'missing', 'on hold', 'expired', 'unpaid', 'reversed', 'rejected', 'cancelled', 'superseded'].some(s => value.includes(s))) return 'error'
   return 'neutral'
 }
@@ -232,8 +232,18 @@ export function formatMoney(value: unknown, currency?: string) {
   return formatMoneyValue(value, currency)
 }
 
+/**
+ * Identifiers are labels, never amounts: rendering `entityId` 46 through the
+ * number formatter produced "46.00", which reads like a decimal amount.
+ */
+const IDENTIFIER_KEY = /(?:^id$|Id$|_id$)/
+
 export function formatFreightCell(value: unknown, key: string, currency?: string) {
   if (key === 'documentType') return documentSequenceTypeLabel(value)
+  if (IDENTIFIER_KEY.test(key)) {
+    const identifier = String(value ?? '').trim()
+    if (/^-?\d+$/.test(identifier)) return identifier
+  }
   if (isMoneyKey(key)) return formatMoney(value, currency)
   if (/date$/i.test(key) || key === 'date') return formatDateValue(value)
   if (/(?:At|Activity|Timestamp|DateTime)$/i.test(key)) return formatDateTimeValue(value)

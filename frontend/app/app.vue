@@ -44,6 +44,8 @@ onMounted(() => {
   void loadBranding()
 })
 
+onBeforeUnmount(() => auth.disposeSessionListeners())
+
 watch(() => auth.isLoggedIn, (loggedIn) => {
   if (loggedIn) void loadBranding()
 })
@@ -96,6 +98,7 @@ useSeoMeta({
       error-color="#ef4444"
       :height="3"
     />
+    <CommonAppSessionStatus />
     <NuxtLayout />
     <CommonAppConfirmHost />
     <CommonAppPromptHost />

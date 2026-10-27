@@ -48,8 +48,11 @@ export function createHttpModuleRepository(module: FreightModule): ModuleReposit
       await api.delete<ApiResponse<void>>(base, { body: { ids } })
     },
     statusPolicy: async () =>
+      // A collection without a status workflow answers 404 by design; that is an
+      // expected answer, not an incident, so it raises no toast.
       unwrapApiData(await api.get<ApiResponse<RecordStatusPolicy>>(
         ApiV1Endpoints.RECORD_STATUS_POLICY(module.collection),
+        { expectedErrorStatuses: [404] },
       )),
     changeStatus: async (id, status, reason) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(

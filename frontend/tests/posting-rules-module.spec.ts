@@ -56,7 +56,7 @@ describe('posting rules module', () => {
     // Tax is optional: a rule with no tax posts the gross amount as one line.
     expect(byKey.taxAccount!.required).toBeFalsy()
     // Priority cannot be negative - the backend refuses it, so the form must too.
-    expect(byKey.priority!.rule).toEqual({ min: 0 })
+    expect(byKey.priority!.rule).toEqual({ integer: true, min: 0 })
     expect(byKey.status!.options).toEqual(FINANCIAL_DOCUMENT_STATUSES)
   })
 

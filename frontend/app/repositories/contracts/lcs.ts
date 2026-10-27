@@ -20,6 +20,7 @@ export interface QuotationRepository {
   reject: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
   cancel: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
   createRevision: (quotationId: string) => Promise<FreightRecord>
+  createFromServiceOrder: (serviceOrderId: string) => Promise<FreightRecord>
   listRevisions: (quotationId: string) => Promise<FreightRecord[]>
   submit: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   convert: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
@@ -29,7 +30,9 @@ export interface JobRepository {
   list: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
   get: (id: string) => Promise<FreightRecord>
   save: (record: FreightRecord) => Promise<FreightRecord>
+  /** Create a container, or update the prepared row when `payload.id` is sent. */
   addActualContainer: (serviceOrderId: string, payload: Record<string, unknown>) => Promise<FreightRecord>
+  deleteActualContainers: (serviceOrderId: string, ids: string[]) => Promise<{ removed: number }>
   finish: (id: string, idempotencyKey: string) => Promise<FreightRecord>
 }
 
@@ -88,6 +91,9 @@ export interface UserAdminRepository {
 export interface AttachmentRepository {
   listForRecord: (module: string, recordNo: string) => Promise<FreightRecord[]>
   presign: (fileName: string) => Promise<{ upload_url: string, file_name: string }>
+  upload: (file: File, context?: { module: string, recordNo: string, note?: string }) => Promise<FreightRecord>
+  updateNote: (id: string, note: string) => Promise<FreightRecord>
+  remove: (ids: string[]) => Promise<number>
 }
 
 export interface UiSchemaRepository {

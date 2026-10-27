@@ -35,13 +35,14 @@ class Settings(BaseSettings):
         default="change-me-in-production-use-a-32-byte-minimum-secret", alias="JWT_SECRET_KEY"
     )
     jwt_algorithm: str = "HS256"
-    # Access JWT lifetime. Defaults to a full day (1440 minutes).
-    access_token_expire_minutes: int = Field(default=1440, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
-    # Persistent ("Remember me") refresh session lifetime. Rotating a refresh
-    # token never extends this absolute deadline.
+    access_token_expire_minutes: int = Field(default=15, ge=1, le=30, alias="ACCESS_TOKEN_EXPIRE_MINUTES")
+    session_idle_timeout_minutes: int = Field(default=480, ge=1, le=1440, alias="SESSION_IDLE_TIMEOUT_MINUTES")
+    session_absolute_timeout_minutes: int = Field(default=1440, ge=15, le=10080, alias="SESSION_ABSOLUTE_TIMEOUT_MINUTES")
+    jwt_issuer: str = "lcs"
+    jwt_audience: str = "lcs-api"
+    # Deprecated deployment inputs accepted during rollout. New sessions use
+    # the idle/absolute security policy above in both persistence modes.
     refresh_token_expire_days: int = Field(default=30, alias="REFRESH_TOKEN_EXPIRE_DAYS")
-    # Non-persistent (browser-session) refresh session lifetime. The refresh
-    # cookie has no Max-Age, and the server enforces this absolute deadline.
     session_refresh_token_expire_hours: int = Field(default=12, alias="SESSION_REFRESH_TOKEN_EXPIRE_HOURS")
     password_reset_code_expire_minutes: int = 15
     password_min_length: int = Field(default=8, alias="PASSWORD_MIN_LENGTH")
@@ -63,6 +64,9 @@ class Settings(BaseSettings):
     # Background Google Sheets backup scheduler (in-process asyncio loop).
     backup_scheduler_enabled: bool = Field(default=True, alias="BACKUP_SCHEDULER_ENABLED")
     backup_scheduler_tick_seconds: int = Field(default=60, alias="BACKUP_SCHEDULER_TICK_SECONDS")
+    telegram_public_app_url: str = ""
+    telegram_worker_enabled: bool = True
+    telegram_api_health_url: str = "http://127.0.0.1:8000/health"
 
     storage_provider: str = Field(default="local", alias="STORAGE_PROVIDER")
     storage_local_path: str = Field(default="./storage", alias="STORAGE_LOCAL_PATH")
@@ -110,6 +114,8 @@ class Settings(BaseSettings):
             errors.append("JWT, CSRF and field-encryption secrets must all be different")
         if not self.cookie_secure:
             errors.append("COOKIE_SECURE must be true")
+        if self.refresh_cookie_name.startswith("__Host-"):
+            errors.append("REFRESH_COOKIE_NAME must use __Secure- or an unprefixed name because its path is restricted")
         if self.auth_return_tokens:
             errors.append("AUTH_RETURN_TOKENS must be false for browser cookie authentication")
         if self.access_token_expire_minutes > 30:

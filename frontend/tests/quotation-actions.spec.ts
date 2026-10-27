@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { quotationActionAvailability } from '../app/utils/freight/quotation-actions'
+import { quotationActionAvailability, serviceOrderRequotationAvailability } from '../app/utils/freight/quotation-actions'
 
 const allAllowed = { updateDraft: true, send: true, accept: true, convert: true }
 const readOnly = { updateDraft: false, send: false, accept: false, convert: false }
@@ -70,5 +70,19 @@ describe('quotationActionAvailability', () => {
       revise: false,
       delete: false,
     })
+  })
+})
+
+describe('serviceOrderRequotationAvailability', () => {
+  it('offers re-quotation on a saved service order to a user who may revise', () => {
+    expect(serviceOrderRequotationAvailability({ isCreate: false, hasRecord: true, canRevise: true })).toBe(true)
+  })
+
+  it('hides it without quotation.revise — the backend refuses the call anyway', () => {
+    expect(serviceOrderRequotationAvailability({ isCreate: false, hasRecord: true, canRevise: false })).toBe(false)
+  })
+
+  it('hides it on an unsaved order', () => {
+    expect(serviceOrderRequotationAvailability({ isCreate: true, hasRecord: false, canRevise: true })).toBe(false)
   })
 })

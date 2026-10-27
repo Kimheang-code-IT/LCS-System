@@ -4,7 +4,8 @@ import type { FormSubmitEvent } from '@nuxt/ui'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { apiErrorDetails } from '~/utils/freight/errors'
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '~/utils/validation/field-rules'
+import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
+import { passwordIssueMessage, strongPasswordSchema } from '~/utils/validation/password-schema'
 
 /**
  * Where a session lands when an administrator chose its password.
@@ -30,7 +31,46 @@ const passwordForm = useTemplateRef<{
     setErrors: (errors: { name: string, message: string }[]) => void
     clear: () => void
   }
+  /** Exposed by UAuthForm; the source of truth for the live checklist and gate. */
+  state?: { currentPassword: string, password: string, passwordConfirmation: string }
 }>('passwordForm')
+
+/** UAuthForm types field-slot props as `{}`; this reads the state safely. */
+function slotPassword(slot: unknown): string {
+  const state = (slot as { state?: { password?: string } }).state
+  return String(state?.password ?? '')
+}
+
+/**
+ * The submit button is disabled while a rule fails, so without these the reason
+ * would never be visible: they render the shared policy message under the
+ * password field (and the mismatch under the confirmation field) while typing.
+ * Both stay empty on fresh fields so the form does not scold untouched inputs.
+ */
+const passwordHint = computed(() => {
+  const state = passwordForm.value?.state
+  return state?.password
+    ? passwordIssueMessage(t, state.password, t('pages.changePassword.newPassword'))
+    : ''
+})
+
+const confirmationHint = computed(() => {
+  const state = passwordForm.value?.state
+  return state?.passwordConfirmation
+    && state.password !== state.passwordConfirmation
+    ? t('validation.passwordMismatch')
+    : ''
+})
+
+/** Enter, or the submit button, is refused until every rule and the match pass. */
+const passwordsValid = computed(() => {
+  const state = passwordForm.value?.state
+  return Boolean(
+    state
+    && !validatePasswordStrength(state.password)
+    && state.password === state.passwordConfirmation,
+  )
+})
 
 /** Errors are placed on the field they belong to, or just above the submit button. */
 function clearErrors() {
@@ -60,10 +100,12 @@ usePageSeo({
 
 const schema = computed(() => z.object({
   currentPassword: z.string().min(1, { error: t('pages.changePassword.currentRequired') }).max(PASSWORD_MAX_LENGTH),
-  password: z.string().min(PASSWORD_MIN_LENGTH, { error: t('pages.changePassword.passwordMin', { min: PASSWORD_MIN_LENGTH }) }).max(PASSWORD_MAX_LENGTH),
-  passwordConfirmation: z.string().min(PASSWORD_MIN_LENGTH, { error: t('pages.changePassword.passwordMin', { min: PASSWORD_MIN_LENGTH }) }).max(PASSWORD_MAX_LENGTH),
+  password: strongPasswordSchema(t, t('pages.changePassword.newPassword')),
+  passwordConfirmation: z.string()
+    .min(1, { error: t('validation.required', { field: t('pages.changePassword.confirmPassword') }) })
+    .max(PASSWORD_MAX_LENGTH),
 }).refine(data => data.password === data.passwordConfirmation, {
-  message: t('pages.changePassword.passwordMismatch'),
+  message: t('validation.passwordMismatch'),
   path: ['passwordConfirmation'],
 }))
 
@@ -104,7 +146,7 @@ type Schema = {
 }
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
-  if (submitting.value) return
+  if (submitting.value || !passwordsValid.value) return
   clearErrors()
   submitting.value = true
   try {
@@ -150,9 +192,21 @@ async function signOut() {
         label: t('pages.changePassword.submit'),
         class: 'w-full h-10! text-xl font-normal',
         loading: submitting,
+        disabled: !passwordsValid || submitting,
       }"
       @submit="onSubmit"
     >
+      <template #password-help="slot">
+        <CommonAppPasswordRequirements :value="slotPassword(slot)" />
+        <p v-if="passwordHint" class="mt-1 text-xs text-error" role="alert">
+          {{ passwordHint }}
+        </p>
+      </template>
+      <template #passwordConfirmation-help>
+        <p v-if="confirmationHint" class="text-xs text-error" role="alert">
+          {{ confirmationHint }}
+        </p>
+      </template>
       <template #leading>
         <img src="/logo.png" alt="Logo" class="mx-auto h-20 w-auto">
       </template>

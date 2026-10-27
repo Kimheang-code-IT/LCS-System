@@ -60,6 +60,12 @@ services:
     container_name: ff-api
     build:
       context: ../backend
+    # Local dev keeps the convenience auto-migration on startup. Production
+    # (deploy/compose.yml) runs migrations explicitly before switching images.
+    command:
+      - "sh"
+      - "-c"
+      - "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-freight}:${POSTGRES_PASSWORD:-freight_dev_password}@postgres:5432/${POSTGRES_DB:-freight}
       REDIS_URL: redis://redis:6379/0
@@ -68,6 +74,12 @@ services:
       DEBUG: ${DEBUG:-true}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production-use-a-32-byte-minimum-secret}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-480}
+      SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-1440}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-}
+      TELEGRAM_PUBLIC_APP_URL: ${TELEGRAM_PUBLIC_APP_URL:-}
+      TELEGRAM_WORKER_ENABLED: ${TELEGRAM_WORKER_ENABLED:-true}
+      TELEGRAM_API_HEALTH_URL: http://127.0.0.1:8000/health
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
       SESSION_REFRESH_TOKEN_EXPIRE_HOURS: ${SESSION_REFRESH_TOKEN_EXPIRE_HOURS:-12}
       # Comma-separated browser origins allowed to call the API over CORS.

@@ -3,6 +3,10 @@
 # This file is the ONLY compose file deployed to EC2 (as /opt/lcs/compose.yml)
 # by .github/workflows/production.yml. Nothing is built on the host: images come
 # prebuilt from GHCR and are pinned by the immutable sha-<short> tag in .env.
+# The workflow pre-pulls the new images, runs Alembic explicitly with the new
+# backend image while the old stack still serves, and only then recreates the
+# stack. The backend command here never migrates on startup, so rolling back to
+# a previous image cannot fail on an unknown Alembic head.
 #
 # Networking: only the frontend (nginx) publishes host ports (80/443). Postgres,
 # Redis, MinIO and the backend are reachable only on the internal Docker network
@@ -107,7 +111,21 @@ services:
   backend:
     container_name: ff-api
     image: ${IMAGE_PREFIX}-backend:${IMAGE_TAG}
-    pull_policy: always
+    # Pull only through the workflow's explicit pre-pull; never implicitly while
+    # recreating a healthy stack or starting a rollback image.
+    pull_policy: never
+    # Migrations are a deploy step, not a container startup step. This also
+    # keeps an older rollback image from rejecting a newer alembic_version.
+    command:
+      - "uvicorn"
+      - "app.main:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips"
+      - "*"
     restart: unless-stopped
     read_only: true
     cap_drop: ["ALL"]
@@ -126,8 +144,13 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       CSRF_SECRET_KEY: ${CSRF_SECRET_KEY}
       FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      TELEGRAM_PUBLIC_APP_URL: ${TELEGRAM_PUBLIC_APP_URL:-}
+      TELEGRAM_WORKER_ENABLED: ${TELEGRAM_WORKER_ENABLED:-true}
+      TELEGRAM_API_HEALTH_URL: http://127.0.0.1:8000/health
       AUTH_RETURN_TOKENS: "false"
       ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-480}
+      SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-1440}
       REFRESH_TOKEN_EXPIRE_DAYS: "30"
       SESSION_REFRESH_TOKEN_EXPIRE_HOURS: "12"
       PASSWORD_MIN_LENGTH: "8"
@@ -136,7 +159,7 @@ services:
       ALLOWED_HOSTS: lcslog.minidev.in
       COOKIE_SECURE: "true"
       ACCESS_COOKIE_NAME: __Host-access_token
-      REFRESH_COOKIE_NAME: __Host-refresh_token
+      REFRESH_COOKIE_NAME: __Secure-refresh_token
       CSRF_COOKIE_NAME: __Host-XSRF-TOKEN
       FORWARDED_ALLOW_IPS: "*"
       STORAGE_PROVIDER: s3
@@ -182,7 +205,8 @@ services:
   frontend:
     container_name: ff-frontend
     image: ${IMAGE_PREFIX}-frontend:${IMAGE_TAG}
-    pull_policy: always
+    # Same as backend: the workflow pre-pulls, rollback uses local images.
+    pull_policy: never
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

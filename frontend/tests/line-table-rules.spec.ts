@@ -131,8 +131,9 @@ describe('line table row defaults', () => {
       .toMatchObject({ quantity: 1, containerNo: '', feeType: 'Customs' })
   })
 
-  it('numbers a new route row after the rows already present', () => {
+  it('numbers a new route row and leaves the references for a deliberate choice', () => {
     expect(routePlaceRowDefaults({ rows: [{}, {}] })).toEqual({
+      placeRoleId: '',
       place: '',
       planned: '',
       actual: '',
@@ -175,12 +176,12 @@ describe('line table config is self describing', () => {
         includeTax?: boolean
       }
 
-    // A quotation has no discount or tax step: the quoted rate is what the
-    // customer pays, so only the subtotal and total lines render.
+    // Quotation pricing and service-charge fee lines both expose a discount and
+    // tax step (line-level via Additional Details) and show all totals lines.
     expect(pricingMeta('/quotations', 'pricingLines')).toMatchObject({
       showPricingTotals: true,
-      showDiscountTotals: false,
-      includeTax: false,
+      showDiscountTotals: true,
+      includeTax: true,
     })
     expect(pricingMeta('/service-charges', 'feeLines')).toMatchObject({
       showPricingTotals: true,

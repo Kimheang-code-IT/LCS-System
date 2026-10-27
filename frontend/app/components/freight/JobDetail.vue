@@ -29,6 +29,8 @@ import { useComponentTabs } from '~/composables/freight/useComponentTabs'
 import { useFormValidation } from '~/composables/common/useFormValidation'
 import { validateDocumentFields } from '~/utils/validation/record-validation'
 import { validateComponentRows } from '~/utils/validation/component-rules'
+import { normalizeApiError } from '~/utils/validation/api-error'
+import { issueFromBackendMessage } from '~/utils/validation/field-rules'
 import { jobDomainStatus } from '~/utils/freight/states'
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
@@ -152,7 +154,6 @@ const validation = useFormValidation({
         group.attributes.map(attribute => `${group.id}.0.${attribute.code}`),
       )),
   ),
-  groupLabel: componentCellLabel,
   reveal: (key) => {
     const groupId = key.split('.')[0]!
     const tab = componentTabForGroup(groupId)
@@ -170,6 +171,23 @@ function setComponentRows(groupId: string, rows: Array<Record<string, unknown>>)
   // Row-indexed errors belong to the previous row set; recompute on next save.
   validation.clearTableErrors(groupId)
   componentTabsState.setGroupRows(groupId, rows)
+}
+
+/** Validate one job header field when the user leaves it. */
+function validateJobField(key: string) {
+  const field = module.value?.fields.find(item => item.key === key)
+  if (!field || field.computed) return
+  const failures = validateDocumentFields({
+    fields: [field],
+    model: model.value as Record<string, unknown>,
+    isCreate: isCreate.value,
+    label: item => fieldLabel({ key: item, label: item }),
+  })
+  validation.clearFieldError(key)
+  const failure = failures.find(item => item.key === key)
+  if (failure) {
+    validation.setFieldError(key, validation.message(failure, fieldLabel({ key, label: key })))
+  }
 }
 
 /** Validate the job header plus every visible dynamic tab group. */
@@ -194,9 +212,10 @@ function validateOrder() {
 }
 
 async function saveComponentGroup(groupId: string) {
+  const group = componentTabsState.tabs.value.flatMap(tab => tab.groups).find(item => item.id === groupId)
+    || { id: groupId, attributes: [] }
   const failures = validateComponentRows({
-    group: componentTabsState.tabs.value.flatMap(tab => tab.groups).find(group => group.id === groupId)
-      || { id: groupId, attributes: [] },
+    group,
     rows: componentTabsState.rowsForGroup(groupId),
     label: attribute => String(attribute.label || attribute.code),
     skipBlankRows: true,
@@ -212,7 +231,29 @@ async function saveComponentGroup(groupId: string) {
   }
   catch (error) {
     validation.reset()
-    validation.applyServerError(error)
+    // Component row errors arrive as `<1-based row>.<code>`; the rest of the
+    // app addresses cells as `<groupId>.<0-based row>.<code>`. Remap them so a
+    // rejected cell shows its message inline instead of as a page-level line.
+    const normalized = normalizeApiError(error)
+    const codes = new Set(group.attributes.map(attribute => attribute.code))
+    const mapped: Record<string, string> = {}
+    const formLevel: string[] = []
+    for (const item of normalized.items) {
+      const row = /^(\d+)\.(.+)$/.exec(item.key)
+      if (!row || !codes.has(row[2]!)) {
+        formLevel.push(item.message)
+        continue
+      }
+      const path = `${groupId}.${Math.max(Number(row[1]) - 1, 0)}.${row[2]}`
+      const issue = issueFromBackendMessage(item.message)
+      mapped[path] = issue
+        ? validation.message(issue, componentCellLabel(path))
+        : item.message.trim().toLowerCase() === 'required'
+          ? validation.message({ code: 'required' }, componentCellLabel(path))
+          : item.message
+    }
+    if (normalized.message && !formLevel.length) formLevel.push(normalized.message)
+    validation.setErrors(mapped, formLevel)
     await validation.focusFirstInvalid()
   }
 }
@@ -438,7 +479,6 @@ function onTabChange(value: string) {
     :not-found="notFound"
     :save-label="jobSaveLabel"
     :field-errors="validation.fieldErrors.value"
-    :summary-items="validation.summaryItems.value"
     :form-errors="validation.formErrors.value"
     :on-field-edit="validation.clearFieldError"
     :confirm-save="false"
@@ -464,7 +504,6 @@ function onTabChange(value: string) {
     @update:attachments="setChromeField('attachments', $event)"
     @save="save"
     @refresh="load"
-    @select-error="validation.focusFieldKey($event)"
     @update:comment-body="commentBody = $event"
     @submit-comment="submitComment"
     @update-comment="updateComment"
@@ -490,6 +529,7 @@ function onTabChange(value: string) {
             :model="model"
             :sections="jobSections"
             @update:field="setField"
+            @blur-field="validateJobField"
           />
           <FreightJobRoute
             v-else-if="activeTab === 'route'"
@@ -517,6 +557,8 @@ function onTabChange(value: string) {
             :rows-by-group="componentTabsState.rowsByGroup.value"
             :editable="canEdit"
             :saving="componentTabsState.saving.value"
+            :loading="componentTabsState.loading.value"
+            :error="componentTabsState.error.value"
             :field-errors="validation.fieldErrors.value"
             :on-field-edit="validation.clearFieldError"
             @update:rows="setComponentRows"
@@ -527,6 +569,7 @@ function onTabChange(value: string) {
             :job="model"
             :job-no="jobNo"
             :editable="canEdit"
+            @update:job="patchJob"
           />
           <FreightJobFinance
             v-else-if="activeTab === 'finance'"
@@ -537,7 +580,6 @@ function onTabChange(value: string) {
             :supplier-costs="supplierCosts"
             :receivables="receivables"
             :editable="canEdit"
-            @update:job="patchJob"
           />
           <FreightJobFiles
             v-else-if="activeTab === 'files'"

@@ -29,8 +29,8 @@ to the exact revision it was converted from.
 | `docs/04_functional_design.md` | Intended quotation behaviour |
 | `backend/app/modules/quotations/models.py` | `Quotation`, `QuotationRevision`, `QuotationRevisionLine`, `QuotationConversion` |
 | `backend/app/modules/quotations/service.py` | The authoritative lifecycle implementation |
-| `docs/14_47_table_migration_analysis.md` §2.3 | Why revisions are not renamed to "versions" |
-| `docs/11_permissions_matrix.md` | `quotation.*` permission codes |
+| `docs/06_database_design.sql` | `quotation_revisions` and the conversion ledger |
+| `docs/09_roles_and_permissions.md` | `quotation.*` permission codes |
 
 ## Model and lifecycle
 

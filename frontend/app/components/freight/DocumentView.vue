@@ -24,10 +24,12 @@ import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/docu
 import { recalculateFreightRecord } from '~/utils/freight/document-calculations'
 import { jobForQuotation } from '~/utils/freight/job-workspace'
 import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
-import { referenceOptionSource } from '~/utils/freight/reference-options'
+import { revisionGridRows } from '~/utils/freight/quotation-revisions'
+import { identityTypeRowOf, matchesIdentityPattern, referenceOptionSource } from '~/utils/freight/reference-options'
 import {
   freightDocumentLineActionKey,
   freightDocumentLineTableHeaderKey,
+  freightDocumentLineTableRowMenuKey,
   freightDocumentModelKey,
   moduleDocumentTabs,
   RELATED_FIELD_KEY,
@@ -48,7 +50,7 @@ import type { PrintTemplateId } from '~/config/print-templates'
 import type { RecordStatusTransition } from '~/types/status'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { splitDocumentHeaderActions } from '~/utils/layout/document-header-actions'
-import type { FreightAction, FreightTable } from '~/config/freight-modules'
+import type { FreightAction, FreightField, FreightTable } from '~/config/freight-modules'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useDocumentActions } from '~/composables/freight/useDocumentActions'
 import { useRecordStatus } from '~/composables/freight/useRecordStatus'
@@ -58,6 +60,7 @@ import { focusField } from '~/utils/validation/focus'
 import { parseRowKey } from '~/utils/validation/error-paths'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
+import { validatePasswordStrength } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
@@ -68,7 +71,7 @@ import type { ApiResponse } from '~/types/common'
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const store = useFreightStore()
 const auth = useAuthStore()
-const { t, te } = useI18n()
+const { t } = useI18n()
 const toast = useToast()
 const { moduleTitle, moduleSingular, fieldLabel, actionLabel } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
@@ -103,6 +106,31 @@ function findFieldOwner(key: string) {
   return findField(key) ?? findField(key.split('.')[0]!)
 }
 
+/**
+ * Validate one field when the user leaves it.
+ *
+ * The submit pass remains authoritative (it also runs cross-field and table
+ * rules), but checking on blur reports a malformed email or an over-long code
+ * while the user is still on the input instead of only after a save attempt.
+ * The message is rendered by the same `fieldErrors` map the submit pass uses,
+ * so there is exactly one place an error can appear.
+ */
+function validateFieldOnBlur(key: string) {
+  const owner = findField(key)
+  if (!owner || ('computed' in owner.field && owner.field.computed)) return
+  const failures = validateDocumentFields({
+    // The tab schema is compiled from a FreightField; the renderer's wider
+    // field union also covers system-settings widgets that never reach here.
+    fields: [owner.field as unknown as FreightField],
+    model: model.value as Record<string, unknown>,
+    isCreate: isCreate.value || !model.value.id,
+    label: fieldKeyLabel,
+  })
+  validation.clearFieldError(key)
+  const failure = failures.find(item => item.key === key)
+  if (failure) validation.setFieldError(key, validation.message(failure, fieldKeyLabel(key)))
+}
+
 /** Locally translated label for a rendered document field, including a cell. */
 function fieldKeyLabel(key: string) {
   const row = parseRowKey(key)
@@ -132,15 +160,6 @@ const validation = useFormValidation({
   t: (key, params) => t(key, params as Record<string, unknown>),
   label: fieldKeyLabel,
   order: () => tabs.value.flatMap(tab => tab.sections.flatMap(section => section.fields.map(field => field.key))),
-  groupLabel: (key) => {
-    const owner = findFieldOwner(key)
-    if (!owner) return undefined
-    const tabLabel = owner.tab.labelKey && te(owner.tab.labelKey) ? t(owner.tab.labelKey) : owner.tab.label
-    const sectionLabel = owner.section.titleKey && te(owner.section.titleKey)
-      ? t(owner.section.titleKey)
-      : owner.section.title
-    return [tabLabel, sectionLabel].filter(Boolean).join(' › ')
-  },
   reveal: (key) => {
     const owner = findFieldOwner(key)
     if (!owner) return false
@@ -409,6 +428,9 @@ const quotationHeaderActions = computed<FreightAction[]>(() => {
   if (availability.accept) {
     actions.push({ key: 'accept', label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success' })
   }
+  if (availability.revise) {
+    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
+  }
   if (availability.convert) {
     actions.push({ key: 'convertJob', label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', color: 'primary' })
   }
@@ -421,7 +443,7 @@ const headerActions = computed(() => {
   if (module.value?.collection === 'jobCharges') return []
   const collection = module.value?.collection
   const status = String(model.value.status || '')
-  return (module.value?.actions || []).filter((action) => {
+  const actions = (module.value?.actions || []).filter((action) => {
     if (['save', 'delete'].includes(action.key)) return false
     if (collection === 'debitNotes') {
       const domain = financeDomainStatus(status)
@@ -464,6 +486,16 @@ const headerActions = computed(() => {
     }
     return true
   })
+  // A service order can always be re-quoted into a fresh offer; the order itself
+  // is read only, so this is safe in every status.
+  if (collection === 'serviceOrders' && serviceOrderRequotationAvailability({
+    isCreate: isCreate.value,
+    hasRecord: Boolean(model.value.id),
+    canRevise: lcs.can('quotation.revise'),
+  })) {
+    actions.push({ key: 'requoteFromServiceOrder', label: t('freight.ui.requoteFromServiceOrder'), icon: 'i-lucide-file-plus' })
+  }
+  return actions
 })
 
 const splitHeaderActions = computed(() => splitDocumentHeaderActions(headerActions.value))
@@ -475,6 +507,18 @@ const documentSaveLabel = computed(() => {
     return isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges')
   }
   return t('lcs.common.save')
+})
+
+/**
+ * Creating a user chooses that account's password, so Save stays disabled until
+ * the initial password satisfies the shared policy. Other modules are unaffected.
+ */
+const canSave = computed(() => {
+  if (readOnly.value || module.value?.collection === 'quotations') return false
+  if (isCreate.value && module.value?.collection === 'users') {
+    return !validatePasswordStrength(String(model.value?.password ?? ''))
+  }
+  return true
 })
 
 /** Role names from the Roles & Permissions page, used by the users role select. */
@@ -515,6 +559,11 @@ const formTabs = computed(() => {
     // ...and the record itself, so a `visibleWhen` rule (the exchange rate while
     // the document currency is not the base currency) follows the form live.
     record: model.value,
+    // Files uploaded from this document are linked to it for audit/listing.
+    uploadContext: {
+      module: module.value.collection,
+      recordNo: String(model.value.id || ''),
+    },
   })
   if (module.value.collection === 'roles' && model.value.isSystemRole === true) {
     return compiled.map(tab => ({
@@ -574,15 +623,42 @@ function printServiceChargeInvoice() {
   }))
 }
 
+/** Print one fee line of the open charge; the print page narrows the snapshot. */
+function printServiceChargeLine(index: number, lineId: unknown) {
+  if (!model.value.id) return
+  void navigateTo(buildPrintRoute({
+    collection: 'jobCharges',
+    recordId: String(model.value.id),
+    template: 'tax-invoice',
+    returnTo: route.fullPath,
+    modulePath: '/service-charges',
+    lineIndex: index,
+    lineId: lineId ? String(lineId) : undefined,
+  }))
+}
+
 provide(freightDocumentLineTableHeaderKey, (tableKey) => {
   if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return []
   const feeLines = Array.isArray(model.value.feeLines) ? model.value.feeLines : []
   return [{
-    label: t('freight.ui.printInvoice'),
+    label: t('freight.ui.printAll'),
     icon: 'i-lucide-printer',
     disabled: feeLines.length === 0,
     onClick: printServiceChargeInvoice,
   }]
+})
+
+provide(freightDocumentLineTableRowMenuKey, (tableKey) => {
+  if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return undefined
+  return (row: Record<string, unknown>) => {
+    const index = Number(row._rowIndex ?? -1)
+    if (index < 0) return []
+    return [{
+      label: t('freight.ui.printInvoice'),
+      icon: 'i-lucide-printer',
+      onSelect: () => printServiceChargeLine(index, row.id),
+    }]
+  }
 })
 provide(freightDocumentModelKey, model)
 
@@ -656,6 +732,21 @@ async function loadRevisionHistory() {
   catch {
     revisionHistory.value = []
   }
+}
+
+const revisionTable = computed<FreightTable | null>(() =>
+  module.value?.tables?.find(table => table.key === 'revisionHistory') || null,
+)
+
+const revisionGrid = computed(() => revisionGridRows(revisionHistory.value))
+
+/** The trailing actions column: open a revision; edit/delete are deliberately absent. */
+function revisionMenuItems(row: Record<string, unknown>) {
+  return [{
+    label: t('lcs.actions.view'),
+    icon: 'i-lucide-eye',
+    onSelect: () => { void onLineRowAction('view', row) },
+  }]
 }
 
 watch(
@@ -942,6 +1033,20 @@ function businessRuleFailures(isNew: boolean): Record<string, (record: Record<st
   if (!current) return {}
   const rules: Record<string, (record: Record<string, unknown>) => ValidationFailure | null> = {}
 
+  if (current.collection === 'quotations') {
+    rules.validUntil = () => {
+      const quotationDate = String(model.value.date || '').slice(0, 10)
+      const validUntil = String(model.value.validUntil || '').slice(0, 10)
+      if (!quotationDate || !validUntil || validUntil >= quotationDate) return null
+      return {
+        key: 'validUntil',
+        code: 'custom',
+        message: t('validation.validUntilBeforeDate'),
+        label: fieldKeyLabel('validUntil'),
+      }
+    }
+  }
+
   if (current.collection === 'componentTemplates') {
     rules.maximumInstances = () => {
       const minimum = Number(model.value.minimumInstances || 0)
@@ -988,6 +1093,86 @@ function businessRuleFailures(isNew: boolean): Record<string, (record: Record<st
     }
   }
 
+  if (current.collection === 'transportAssets') {
+    // Master-data vocabulary rules, forechecked before the save round trip; the
+    // backend (`_validate_asset_record`) remains the authority.
+    rules.identityType = () => {
+      const name = String(model.value.identityType || '').trim()
+      if (!name) return null // the required rule already reports the blank choice
+      // An unchanged stored value stays valid even if the vocabulary row was
+      // renamed, archived or deactivated since: the backend preserves it too.
+      const stored = originalModel.value
+      if (stored
+        && name === String(stored.identityType || '').trim()
+        && String(model.value.transportType || '').trim() === String(stored.transportType || '').trim()) {
+        return null
+      }
+      const chosen = store.list('transportAssetIdentityTypes')
+        .find(row => String(row.name || '').trim().toLowerCase() === name.toLowerCase())
+      if (!chosen || String(chosen.status || 'ACTIVE').toUpperCase() === 'INACTIVE') {
+        return { key: 'identityType', code: 'custom', message: t('freight.ui.identityTypeUnknown'), label: fieldKeyLabel('identityType') }
+      }
+      const applies = String(chosen.transportType || '').trim()
+      if (applies && applies.toLowerCase() !== String(model.value.transportType || '').trim().toLowerCase()) {
+        return { key: 'identityType', code: 'custom', message: t('freight.ui.identityTypeMismatch'), label: fieldKeyLabel('identityType') }
+      }
+      return null
+    }
+    rules.identity = () => {
+      const chosen = identityTypeRowOf(model.value as Record<string, unknown>)
+      // An unknown or empty type is what the identityType rule reports.
+      if (!chosen || matchesIdentityPattern(chosen.validationPattern, String(model.value.identity || ''))) return null
+      const label = String(chosen.identityLabel || chosen.name || '').trim()
+      return { key: 'identity', code: 'custom', message: t('freight.ui.invalidIdentityPattern', { label }), label: fieldKeyLabel('identity') }
+    }
+    // Capacity is optional as a whole, but value and unit travel together — the
+    // backend `_validate_asset_record` refuses the half-filled pair as well.
+    rules.capacityValue = () => {
+      if (!String(model.value.capacityUnit || '').trim()) return null
+      const value = model.value.capacityValue
+      if (value === null || value === undefined || value === '') {
+        return { key: 'capacityValue', code: 'custom', message: t('freight.ui.capacityNeedsValue'), label: fieldKeyLabel('capacityValue') }
+      }
+      return null
+    }
+    rules.capacityUnit = () => {
+      const value = model.value.capacityValue
+      if (value === null || value === undefined || value === '') return null
+      if (!String(model.value.capacityUnit || '').trim()) {
+        return { key: 'capacityUnit', code: 'custom', message: t('freight.ui.capacityNeedsUnit'), label: fieldKeyLabel('capacityUnit') }
+      }
+      return null
+    }
+  }
+
+  /**
+   * A period that ends before it starts is not a valid document period, whether
+   * the second date is an offer expiry or a credit due date. Both dates are
+   * ISO `YYYY-MM-DD`, so a lexical comparison is also a chronological one.
+   */
+  const dateOrderRule = (laterKey: string, earlierKey: string) => (): ValidationFailure | null => {
+    const later = String(model.value[laterKey] || '').slice(0, 10)
+    const earlier = String(model.value[earlierKey] || '').slice(0, 10)
+    if (!later || !earlier || later >= earlier) return null
+    return {
+      key: laterKey,
+      code: 'custom',
+      message: t('validation.dateOrder', {
+        field: fieldKeyLabel(laterKey),
+        other: fieldKeyLabel(earlierKey),
+      }),
+      label: fieldKeyLabel(laterKey),
+    }
+  }
+
+  if (current.collection === 'quotations') {
+    rules.validUntil = dateOrderRule('validUntil', 'date')
+  }
+  if (current.collection === 'debitNotes') {
+    rules.dueDate = dateOrderRule('dueDate', 'date')
+    rules.valueDate = dateOrderRule('valueDate', 'date')
+  }
+
   if (current.collection === 'componentTemplates' && !isNew && originalModel.value
     && String(model.value.instanceMode) !== String(originalModel.value.instanceMode || 'SINGLE')) {
     const used = store.list('serviceComponents').some(row =>
@@ -1009,6 +1194,9 @@ function businessRuleFailures(isNew: boolean): Record<string, (record: Record<st
 
 async function save(status?: string) {
   if (!module.value || readOnly.value) return
+  // Creating a user must not bypass the password policy through Enter or a
+  // programmatic call while the Save button is disabled.
+  if (!canSave.value) return
   // Guard against a double click / repeated Enter while the request is pending.
   if (saving.value) return
   saving.value = true
@@ -1084,6 +1272,21 @@ async function save(status?: string) {
           confirmColor: 'warning',
         })
         if (!ok) return
+      }
+    }
+
+    if (module.value.collection === 'transportAssets') {
+      // An asset code is unique across active rows. The backend refuses a
+      // duplicate with a field error, but catching it here keeps the message on
+      // the field without a round trip and covers a code another page owns.
+      const duplicate = store.list('transportAssets').find(row =>
+        String(row.id) !== String(payload.id || '')
+        && String(row.assetCode || '').trim().toLowerCase() === String(payload.assetCode || '').trim().toLowerCase(),
+      )
+      if (duplicate) {
+        validation.setFieldError('assetCode', t('validation.duplicateAssetCode', { code: String(payload.assetCode || '').trim() }))
+        await validation.focusFirstInvalid()
+        return
       }
     }
 
@@ -1212,6 +1415,26 @@ function reportCommandError(error: unknown) {
   void validation.focusFirstInvalid()
 }
 
+/**
+ * Re-quotation from a service order: a new draft offer, never an edit of the
+ * order or of the quotation the order was converted from.
+ */
+async function createRequotation() {
+  const serviceOrderId = String(model.value.id || '')
+  if (!serviceOrderId) return
+  const ok = await confirm({
+    kind: 'submit',
+    title: t('freight.ui.serviceOrderRequoteTitle'),
+    description: t('freight.ui.serviceOrderRequoteDescription'),
+    confirmLabel: t('freight.ui.requote'),
+  })
+  if (!ok) return
+  const created = await lcs.quotations.createFromServiceOrder(serviceOrderId)
+  store.reload()
+  toast.add({ title: t('freight.ui.serviceOrderRequoteCreated'), color: 'success' })
+  await navigateTo(`/quotations/${String(created.id)}`)
+}
+
 async function runAction(key: string) {
   if (!module.value) return
   try {
@@ -1224,6 +1447,7 @@ async function runAction(key: string) {
     if (key === 'accept' && module.value.collection === 'quotations') return quotationCommands.accept()
     if (key === 'createRevision' && module.value.collection === 'quotations') return quotationCommands.createRevision()
     if (key === 'convertJob') return quotationCommands.convertJob()
+    if (key === 'requoteFromServiceOrder' && module.value.collection === 'serviceOrders') return createRequotation()
     if (key === 'issue' && module.value.collection === 'jobCharges') return financeCommands.issueCharge()
     if (key === 'createInvoice' && module.value.collection === 'jobCharges') return financeCommands.createInvoiceFromCharge()
     if (key === 'viewInvoice' && module.value.collection === 'jobCharges') return financeCommands.viewInvoiceFromCharge()
@@ -1283,9 +1507,9 @@ async function confirmReverse() {
 :read-only="readOnly"
 :field-errors="fieldErrors"
       :on-field-edit="clearFieldError"
-      :summary-items="validation.summaryItems.value"
+      :on-field-blur="validateFieldOnBlur"
       :form-errors="validation.formErrors.value"
-      :can-save="!readOnly && module.collection !== 'quotations'"
+      :can-save="canSave"
       :save-label="documentSaveLabel"
       :confirm-save="false"
 :show-cancel="false"
@@ -1311,7 +1535,6 @@ content-wide
 @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
 @refresh="load"
-@select-error="validation.focusFieldKey($event)"
 @submit-comment="submitComment"
 @update-comment="updateComment"
       @delete-comment="deleteComment"
@@ -1347,6 +1570,20 @@ color="error"
 variant="subtle"
             icon="i-lucide-calendar-off"
 :title="$t('lcs.finance.periodClosed')" />
+        </DocumentAppDocumentContentShell>
+      </template>
+
+      <template #tab-extra="{ tabId }">
+        <DocumentAppDocumentContentShell
+          v-if="tabId === 'revisions' && module.collection === 'quotations' && !isCreate"
+          wide>
+          <div class="py-6">
+            <FreightAppLineTable
+              v-if="revisionTable"
+              :table="revisionTable"
+              :model-value="revisionGrid"
+              :extra-row-menu-items="revisionMenuItems" />
+          </div>
         </DocumentAppDocumentContentShell>
       </template>
     </DocumentAppDocumentPage>

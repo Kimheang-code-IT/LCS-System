@@ -68,6 +68,9 @@ class FakeR2:
     def put(self, key: str, data: bytes, content_type: str) -> None:
         self.objects[key] = (data, content_type)
 
+    def exists(self, key: str) -> bool:
+        return key in self.objects
+
 
 async def _configure(session_factory) -> None:
     async with session_factory() as session:

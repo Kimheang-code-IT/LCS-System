@@ -54,7 +54,7 @@ export function lineTableColumnMetrics(column: FreightLineColumn): LineTableColu
     return metrics(column.width, numericColumn(column))
   }
 
-  if (column.type === 'delete' || column.type === 'action' || column.type === 'note' || column.type === 'reorder') {
+  if (column.type === 'delete' || column.type === 'action' || column.type === 'reorder') {
     return metrics(ICON_FIELD_WIDTH, false, true)
   }
   if (column.key === 'blNo' || column.key === 'truckNo' || column.key === 'containerNo') return metrics(144)
@@ -69,7 +69,7 @@ export function lineTableColumnMetrics(column: FreightLineColumn): LineTableColu
   }
   if (column.key === 'containerRequirement' || column.key === 'containerRequirementId' || column.key === 'containerType' || column.key === 'feeType') return metrics(144)
   if (column.key === 'sealNo' || column.key === 'status' || column.key === '_status') return metrics(112)
-  if (column.key === 'placeRole') return metrics(176)
+  if (column.key === 'placeRole' || column.key === 'placeRoleId') return metrics(176)
   if (column.key === 'place' || column.key === 'notes') return metrics(TEXT_FIELD_WIDTH)
 
   if (column.type === 'date' || column.type === 'datetime') return metrics(TEXT_FIELD_WIDTH)
@@ -110,37 +110,6 @@ export function lineTableColumnCellClass(column: FreightLineColumn) {
   const align = lineTableColumnMetrics(column).numeric ? 'text-right tabular-nums' : ''
   if (typeof column.width === 'string' && column.width) return [column.width, align].filter(Boolean).join(' ')
   return align
-}
-
-/**
- * Single-icon row controls: they render a button per row instead of a value.
- * Distinct from `FREIGHT_LINE_UTILITY_COLUMN_TYPES`, which also covers reorder
- * and row actions, and from a note *field*, which is prose.
- */
-export function isRowControlColumn(column: FreightLineColumn) {
-  return column.type === 'note' || column.type === 'delete'
-}
-
-export type SharedRowControls = {
-  /** Key of the column whose cell renders the group, or null when nothing is shared. */
-  host: string | null
-  /** Keys of the row controls that render inside the host cell. */
-  folded: Set<string>
-}
-
-/**
- * Note and delete are both one-icon row controls, so a table that declares both
- * shows them side by side in a single cell rather than spending two narrow
- * columns on every row. The first one in declaration order hosts the group and
- * the rest fold into it; a table that declares only one keeps it where it is.
- */
-export function sharedRowControls(columns: FreightLineColumn[]): SharedRowControls {
-  const controls = columns.filter(isRowControlColumn)
-  if (controls.length < 2) return { host: null, folded: new Set() }
-  return {
-    host: controls[0]!.key,
-    folded: new Set(controls.slice(1).map(column => column.key)),
-  }
 }
 
 export function lineTableNumericColumnKeys(extra: string[] = []) {

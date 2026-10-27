@@ -14,6 +14,7 @@ from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFail
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
+from app.core.validation import parse_decimal, resolve_line_tax, validate_line_items
 from app.modules.finance.models import (
     AccountingPeriod,
     ChartOfAccount,
@@ -40,12 +41,24 @@ from app.modules.finance.posting_rules import (
     validate_postable,
 )
 from app.modules.finance.repository import FinanceRepository
+from app.modules.finance.schemas import (
+    ACCOUNT_SCHEMA,
+    ALLOCATION_WRITE_SCHEMA,
+    DOCUMENT_LINE_SCHEMA,
+    DOCUMENT_WRITE_SCHEMA,
+    FINANCIAL_ACCOUNT_SCHEMA,
+    JOURNAL_LINE_SCHEMA,
+    JOURNAL_WRITE_SCHEMA,
+    PERIOD_WRITE_SCHEMA,
+    POSTING_RULE_WRITE_SCHEMA,
+    SEQUENCE_WRITE_SCHEMA,
+)
 from app.modules.master_data.currency_rates import (
     assert_currency_code,
     currency_precision,
     resolve_document_rate,
 )
-from app.modules.master_data.models import BusinessParty, Currency, FeeType
+from app.modules.master_data.models import BusinessParty, Currency, DocumentType, FeeType
 from app.modules.operations.models import ServiceOrder, ServiceOrderCharge, ServiceOrderChargeLine
 from app.modules.settings.service import get_default_currency
 
@@ -120,6 +133,35 @@ def account_payload(account: ChartOfAccount, parent_code: str | None = None) -> 
     }
 
 
+async def _commit_unique(
+    session: AsyncSession,
+    *,
+    code: str,
+    message: str,
+    field: str,
+) -> None:
+    """Commit, turning a unique-index race into a 409 on the owning field.
+
+    A pre-insert ``SELECT`` cannot make uniqueness safe: two requests can both
+    pass it. The database index remains the guarantee; this only translates its
+    refusal into a response the form can place under the input.
+    """
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise Conflict(code, message, {field: message}) from exc
+
+
+async def _resolve_ledger(session: AsyncSession, reference: Any) -> ChartOfAccount | None:
+    if reference in (None, ""):
+        return None
+    account = await _account_by_code(session, str(reference))
+    if account is None and str(reference).isdigit():
+        account = await session.get(ChartOfAccount, int(reference))
+    return account
+
+
 async def list_accounts(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
     rows, total = await FinanceRepository(session).account_page(page)
     codes = {row.id: row.account_code for row in rows}
@@ -128,16 +170,22 @@ async def list_accounts(session: AsyncSession, context: RequestContext, page: Pa
 
 
 async def create_account(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    values = ACCOUNT_SCHEMA.validate(data)
     account = ChartOfAccount(
-        account_code=str(data.get("accountCode") or data.get("account_code")),
-        account_name=str(data.get("accountName") or data.get("account_name")),
-        account_type=str(data.get("accountType") or "ASSET").upper(),
-        normal_balance=str(data.get("normalBalance") or "DEBIT").upper(),
-        is_postable=bool(data.get("postable", True)),
-        status=str(data.get("status") or "ACTIVE").upper(),
+        account_code=str(values["accountCode"]),
+        account_name=str(values["accountName"]),
+        account_type=str(values.get("accountType") or "ASSET").upper(),
+        normal_balance=str(values.get("normalBalance") or "DEBIT").upper(),
+        is_postable=bool(values.get("postable", True)),
+        status=str(values.get("status") or "ACTIVE").upper(),
     )
     session.add(account)
-    await session.commit()
+    await _commit_unique(
+        session,
+        code="DUPLICATE_ACCOUNT_CODE",
+        message="This account code is already in use.",
+        field="accountCode",
+    )
     return account_payload(account)
 
 
@@ -145,14 +193,26 @@ async def update_account(session: AsyncSession, context: RequestContext, account
     account = await session.get(ChartOfAccount, account_id)
     if account is None:
         raise NotFound("Account not found.")
-    for key, column in (("accountCode", "account_code"), ("accountName", "account_name"), ("accountType", "account_type"), ("normalBalance", "normal_balance")):
-        if data.get(key) is not None:
-            setattr(account, column, str(data[key]))
-    if data.get("postable") is not None:
-        account.is_postable = bool(data["postable"])
-    if data.get("status") is not None:
-        account.status = str(data["status"]).upper()
-    await session.commit()
+    values = ACCOUNT_SCHEMA.validate(data, partial=True)
+    for key, column in (
+        ("accountCode", "account_code"),
+        ("accountName", "account_name"),
+        ("accountType", "account_type"),
+        ("normalBalance", "normal_balance"),
+    ):
+        if key in values:
+            value = str(values[key])
+            setattr(account, column, value.upper() if key in {"accountType", "normalBalance"} else value)
+    if "postable" in values:
+        account.is_postable = bool(values["postable"])
+    if "status" in values:
+        account.status = str(values["status"]).upper()
+    await _commit_unique(
+        session,
+        code="DUPLICATE_ACCOUNT_CODE",
+        message="This account code is already in use.",
+        field="accountCode",
+    )
     return account_payload(account)
 
 
@@ -206,25 +266,27 @@ async def list_financial_accounts(session: AsyncSession, context: RequestContext
 
 async def create_financial_account(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
     default_currency = await get_default_currency(session)
-    ledger_code = data.get("ledgerCode")
-    ledger = (
-        await session.execute(
-            select(ChartOfAccount).where(ChartOfAccount.account_code == ledger_code)
-        )
-    ).scalars().first()
+    values = FINANCIAL_ACCOUNT_SCHEMA.validate(data)
+    ledger = await _resolve_ledger(session, values.get("ledgerCode"))
     if ledger is None:
-        raise ValidationFailed("Ledger account not found.", {"ledgerCode": "Unknown account"})
+        raise ValidationFailed("Ledger account not found.", {"ledgerCode": "Choose an account from the chart of accounts."})
+    currency = await assert_currency_code(session, values.get("currency") or default_currency)
     account = FinancialAccount(
         account_id=ledger.id,
-        account_name=str(data.get("accountName") or ledger.account_name),
-        account_type=str(data.get("accountType") or "Bank").upper(),
-        currency_code=str(data.get("currency") or default_currency),
-        bank_name=data.get("bankName"),
-        account_number_masked=data.get("accountNumberMasked"),
-        status=str(data.get("status") or "ACTIVE").upper(),
+        account_name=str(values.get("accountName") or ledger.account_name),
+        account_type=str(values.get("accountType") or "BANK").upper(),
+        currency_code=currency,
+        bank_name=values.get("bankName"),
+        account_number_masked=values.get("accountNumberMasked"),
+        status=str(values.get("status") or "ACTIVE").upper(),
     )
     session.add(account)
-    await session.commit()
+    await _commit_unique(
+        session,
+        code="DUPLICATE_LEDGER_ACCOUNT",
+        message="This ledger account is already linked to a financial account.",
+        field="ledgerCode",
+    )
     return await financial_account_payload(session, account)
 
 
@@ -288,6 +350,7 @@ async def update_period(session: AsyncSession, context: RequestContext, period_i
     period = await session.get(AccountingPeriod, period_id)
     if period is None:
         raise NotFound("Accounting period not found.")
+    data = PERIOD_WRITE_SCHEMA.validate(data, partial=True)
     status_value = data.get("status")
     if status_value is not None:
         period.status = str(status_value).upper()
@@ -354,6 +417,7 @@ async def list_sequences(session: AsyncSession, context: RequestContext, page: P
 
 
 async def upsert_sequence(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    data = SEQUENCE_WRITE_SCHEMA.validate(data)
     year = int(data.get("year") or datetime.now(UTC).year)
     document_type = str(data.get("documentType") or "").upper()
     sequence = (
@@ -410,6 +474,9 @@ def document_payload(
             "documentNo": document.document_no,
             "debitNoteNo": document.document_no,
             "documentType": document.document_type,
+            "documentTypeId": str((document.data or {}).get("documentTypeId") or ""),
+            "documentTypeCode": (document.data or {}).get("documentTypeCode"),
+            "documentTypeName": (document.data or {}).get("documentTypeName"),
             "documentDate": document.document_date.isoformat() if document.document_date else None,
             "date": document.document_date.isoformat() if document.document_date else None,
             "postingDate": document.posting_date.isoformat() if document.posting_date else None,
@@ -465,10 +532,14 @@ def _line_payload(line: FinancialDocumentLine, account_code: str | None = None) 
         "description": line.description,
         "feeTypeId": line.fee_type_id,
         "quantity": float(line.quantity or 0),
+        # `unitPrice` is the API name; `unitAmount` is the form column. Emitting
+        # both keeps a saved line editable without a translation layer.
         "unitPrice": float(line.unit_price or 0),
+        "unitAmount": float(line.unit_price or 0),
         "discount": float(line.discount_amount or 0),
         "taxRate": float(line.tax_rate or 0),
         "tax": float(line.tax_amount or 0),
+        "taxAmount": float(line.tax_amount or 0),
         "amount": float(line.line_amount or 0),
         "accountId": line.account_id,
         # Derived from the posting rules when the line names no account of its own.
@@ -675,9 +746,17 @@ async def list_documents(
     rows, total = await repository.document_page(page, document_type=document_type, party_id=party_id)
     lines = await repository.document_lines([row.id for row in rows])
     names = await _document_names(session, rows)
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
     return paged(
         [
-            document_payload(row, row.data or {}, lines.get(row.id, []), names.get(row.id))
+            document_payload(
+                row,
+                row.data or {},
+                lines.get(row.id, []),
+                {**(names.get(row.id) or {}), "createdBy": creators.get(row.created_by_user_id)},
+            )
             for row in rows
         ],
         page,
@@ -691,8 +770,12 @@ async def get_document(session: AsyncSession, context: RequestContext, document_
         raise NotFound("Financial document not found.")
     extras = {
         **(await _document_names(session, [document])).get(document.id, {}),
-        **await _document_detail_extras(session, document),
+        **(await _document_detail_extras(session, document)),
     }
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, [document.created_by_user_id])
+    extras["createdBy"] = creators.get(document.created_by_user_id)
     return document_payload(
         document,
         document.data or {},
@@ -800,14 +883,84 @@ async def _line_account_id(session: AsyncSession, line: dict[str, Any]) -> int |
     return _validate_posting_account(account, "line").id
 
 
+DOCUMENT_DATE_FIELDS = ("date", "documentDate", "postingDate", "dueDate", "valueDate")
+
+
 async def save_document(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    data = DOCUMENT_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     default_currency = await get_default_currency(session)
     document_type = str(data.get("documentType") or data.get("document_type") or "CUSTOMER_INVOICE").upper()
+    document_type_record: DocumentType | None = None
+    type_id = _int_or_none(data.get("documentTypeId"))
+    if type_id is not None:
+        document_type_record = await session.get(DocumentType, type_id)
+        if document_type_record is None or str(document_type_record.status or "").upper() != "ACTIVE":
+            raise ValidationFailed(
+                "Choose an active document type.",
+                {"documentTypeId": "Document type is not active."},
+            )
+    elif data.get("documentType"):
+        document_type_record = (
+            await session.execute(
+                select(DocumentType).where(
+                    DocumentType.code == document_type,
+                    DocumentType.deleted_at.is_(None),
+                )
+            )
+        ).scalars().first()
+    if document_type_record is not None:
+        available = document_type_record.available_in or []
+        if str(document_type_record.category or "").upper() != "FINANCE" or "financial_documents" not in available:
+            raise ValidationFailed(
+                "Choose a finance document type that is available for financial documents.",
+                {"documentType": "This type cannot be used on a financial document."},
+            )
+        # Accounting code always comes from the canonical behaviour, never from the label.
+        document_type = str(document_type_record.accounting_behavior or "").upper()
+    date_errors = {
+        key: "Enter a valid date."
+        for key in DOCUMENT_DATE_FIELDS
+        if data.get(key) not in (None, "") and _date(data.get(key)) is None
+    }
+    if date_errors:
+        raise ValidationFailed("Please correct the document dates.", date_errors)
+    issued_on = _date(data.get("documentDate") or data.get("date"))
+    due_on = _date(data.get("dueDate"))
+    if issued_on and due_on and due_on < issued_on:
+        raise ValidationFailed(
+            "The due date cannot precede the document date.",
+            {"dueDate": "Cannot be before the document date."},
+        )
     document_id = data.get("id")
     document: FinancialDocument | None = None
     if document_id and str(document_id).isdigit():
         document = await session.get(FinancialDocument, int(document_id))
-    lines = data.get("lines") or []
+    lines = validate_line_items(data.get("lines"), DOCUMENT_LINE_SCHEMA)
+    manual_order_id = _int_or_none(data.get("serviceOrderId"))
+    if document_id is None and manual_order_id is not None:
+        order = await session.get(ServiceOrder, manual_order_id)
+        if order is None:
+            raise ValidationFailed(
+                "Choose a valid service order.",
+                {"serviceOrderId": "Service order not found."},
+            )
+        party_id = _int_or_none(data.get("partyId"))
+        if party_id is None:
+            raise ValidationFailed(
+                "Choose a business party for this entry.",
+                {"partyId": "Required."},
+            )
+        party = await session.get(BusinessParty, party_id)
+        if party is None or str(party.status or "").upper() != "ACTIVE":
+            raise ValidationFailed(
+                "Choose an active business party.",
+                {"partyId": "Choose an active business party."},
+            )
+        if not lines:
+            raise ValidationFailed(
+                "Add at least one line to the entry.",
+                {"lines": "At least one line is required."},
+            )
     subtotal = Decimal("0")
     discount_total = Decimal("0")
     tax_total = Decimal("0")
@@ -878,13 +1031,33 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     for index, line in enumerate(lines):
         if not isinstance(line, dict):
             continue
-        quantity = _decimal(line.get("quantity"), Decimal("1"))
-        unit_price = _decimal(line.get("unitPrice"), Decimal("0"))
-        discount = _decimal(line.get("discount"), Decimal("0"))
-        tax_rate = _decimal(line.get("taxRate"), Decimal("0"))
+        # The form's column is `unitAmount`; older API clients send `unitPrice`.
+        # Accept both instead of silently saving zero, which used to make the
+        # document total disagree with the form the operator was looking at.
+        unit_value = line.get("unitPrice")
+        if unit_value in (None, ""):
+            unit_value = line.get("unitAmount")
+        quantity = parse_decimal(line.get("quantity"), f"lines.{index}.quantity", Decimal("1"), places=3)
+        unit_price = parse_decimal(unit_value, f"lines.{index}.unitPrice", Decimal("0"), places=4)
+        discount = parse_decimal(line.get("discount"), f"lines.{index}.discount", Decimal("0"), places=4)
         base = quantity * unit_price
-        tax_amount = (base - discount) * tax_rate / Decimal("100") if tax_rate else Decimal("0")
-        amount = _decimal(line.get("amount"), base - discount + tax_amount)
+        line_errors: dict[str, str] = {}
+        if quantity <= 0:
+            line_errors[f"lines.{index}.quantity"] = "Must be greater than zero."
+        if unit_price < 0:
+            line_errors[f"lines.{index}.unitPrice"] = "Cannot be negative."
+        if discount < 0 or discount > base:
+            line_errors[f"lines.{index}.discount"] = "Must be between zero and the line subtotal."
+        tax_rate_field, tax_amount, tax_rate = resolve_line_tax(line, base - discount, f"lines.{index}")
+        if tax_amount < 0:
+            line_errors[f"lines.{index}.taxAmount"] = "Cannot be negative."
+        if tax_rate < 0 or tax_rate > 100:
+            line_errors[f"lines.{index}.{tax_rate_field}"] = "Must be between 0 and 100."
+        if line_errors:
+            raise ValidationFailed("Please correct the document lines.", line_errors)
+        # The line total is derived here, never copied from the client: a
+        # manipulated `amount` must not change what the document posts.
+        amount = base - discount + tax_amount
         subtotal += base
         discount_total += discount
         tax_total += tax_amount
@@ -914,6 +1087,11 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document.discount_amount = discount_total
     document.tax_amount = tax_total
     document.total_amount = subtotal - discount_total + tax_total
+    if document_id is None and manual_order_id is not None and document.total_amount <= 0:
+        raise ValidationFailed(
+            "Enter a positive entry amount.",
+            {"lines.0.unitPrice": "Amount must be greater than zero."},
+        )
     # The converted amounts, rounded with the currency's own precision. Deriving
     # them here (and again at posting) is what keeps the document, the journal it
     # writes and the printed invoice showing the same base-currency figures.
@@ -924,7 +1102,20 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document.base_total_amount = fx.convert_to_base(
         subtotal - discount_total + tax_total, exchange_rate, precision
     )
-    document.data = jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}})
+    document.data = {
+        **jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}}),
+        # Custom type metadata survives the payload echo; posting and numbering
+        # keep reading the canonical document_type code.
+        **(
+            {
+                "documentTypeId": str(document_type_record.id),
+                "documentTypeCode": document_type_record.code,
+                "documentTypeName": document_type_record.name,
+            }
+            if document_type_record is not None
+            else {}
+        ),
+    }
     await session.commit()
     saved_lines = await _document_lines(session, document.id)
     names = (await _document_names(session, [document])).get(document.id, {})
@@ -1243,6 +1434,7 @@ async def allocate_payment(
     data: dict[str, Any],
     idempotency_key: str | None = None,
 ) -> dict:
+    data = ALLOCATION_WRITE_SCHEMA.validate(data)
     if idempotency_key:
         existing = (
             await session.execute(
@@ -1617,12 +1809,21 @@ async def _journal_lines(session: AsyncSession, journal_id: int) -> list[Journal
     )
 
 
-async def journal_payload(session: AsyncSession, entry: JournalEntry) -> dict[str, Any]:
+async def journal_payload(
+    session: AsyncSession,
+    entry: JournalEntry,
+    creator_name: str | None = None,
+) -> dict[str, Any]:
     lines = await _journal_lines(session, entry.id)
     source_no = None
     if entry.source_document_id:
         source = await session.get(FinancialDocument, entry.source_document_id)
         source_no = source.document_no if source else None
+    order_id = next((line.service_order_id for line in lines if line.service_order_id), None)
+    order_no = None
+    if order_id is not None:
+        order = await session.get(ServiceOrder, order_id)
+        order_no = order.service_order_no if order else None
     return {
         "id": str(entry.id),
         "entryNo": entry.entry_no,
@@ -1632,11 +1833,15 @@ async def journal_payload(session: AsyncSession, entry: JournalEntry) -> dict[st
         "periodId": str(entry.accounting_period_id) if entry.accounting_period_id else None,
         "sourceDocumentId": str(entry.source_document_id) if entry.source_document_id else None,
         "sourceDocumentNo": source_no,
+        "serviceOrderId": str(order_id) if order_id is not None else None,
+        "jobNo": order_no,
         "status": entry.status,
         "description": entry.description,
         "debitTotal": float(entry.debit_total or 0),
         "creditTotal": float(entry.credit_total or 0),
         "balanceDifference": float((entry.debit_total or 0) - (entry.credit_total or 0)),
+        "createdBy": creator_name,
+        "createdAt": entry.created_at.isoformat() if entry.created_at else None,
         "lines": [
             {
                 "id": str(line.id),
@@ -1671,6 +1876,12 @@ async def list_journals(session: AsyncSession, context: RequestContext, page: Pa
         )
     ).scalars().all()
     items = [await journal_payload(session, row) for row in rows]
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
+    if creators:
+        for item, row in zip(items, rows, strict=False):
+            item["createdBy"] = creators.get(row.created_by_user_id)
     return paged(items, page, total)
 
 
@@ -1678,10 +1889,14 @@ async def get_journal(session: AsyncSession, context: RequestContext, journal_id
     entry = await session.get(JournalEntry, journal_id)
     if entry is None:
         raise NotFound("Journal entry not found.")
-    return await journal_payload(session, entry)
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, [entry.created_by_user_id])
+    return await journal_payload(session, entry, creators.get(entry.created_by_user_id))
 
 
 async def save_journal(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    data = JOURNAL_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     default_currency = await get_default_currency(session)
     journal_id = data.get("id")
     entry: JournalEntry | None = None
@@ -1690,7 +1905,7 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
     entry_date = _date(data.get("entryDate")) or date.today()
     posting_date = _date(data.get("postingDate")) or entry_date
     period = await resolve_period(session, posting_date)
-    lines = data.get("lines") or []
+    lines = validate_line_items(data.get("lines"), JOURNAL_LINE_SCHEMA)
     if entry is None:
         number = data.get("entryNo")
         if not number or not str(number).strip():
@@ -1736,9 +1951,15 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
                 {"lines": f"Line {index + 1} has an unknown account."},
             )
         _validate_posting_account(account, f"line {index + 1}")
-        debit_amount = _decimal(line.get("debit_amount") or line.get("debitAmount"))
-        credit_amount = _decimal(line.get("credit_amount") or line.get("creditAmount"))
-        exchange_rate = _decimal(line.get("exchangeRate"), Decimal("1"))
+        debit_amount = parse_decimal(
+            line.get("debit_amount") or line.get("debitAmount"), f"lines.{index}.debit_amount", places=4
+        )
+        credit_amount = parse_decimal(
+            line.get("credit_amount") or line.get("creditAmount"), f"lines.{index}.credit_amount", places=4
+        )
+        exchange_rate = parse_decimal(
+            line.get("exchangeRate"), f"lines.{index}.exchangeRate", Decimal("1"), places=8
+        )
         if debit_amount < 0 or credit_amount < 0:
             raise ValidationFailed(
                 "Journal amounts cannot be negative.",
@@ -1851,6 +2072,7 @@ async def _posting_rule_data(session: AsyncSession, data: dict[str, Any], curren
     while the administrator is on the screen is worth far more than failing the
     first posting that hits it.
     """
+    data = POSTING_RULE_WRITE_SCHEMA.validate(data, partial=current is not None)
     errors: dict[str, str] = {}
     document_type = str(data.get("documentType") or (current.document_type if current else "")).strip().upper()
     if not document_type:
@@ -2058,25 +2280,34 @@ async def update_financial_account(session: AsyncSession, context: RequestContex
     account = await session.get(FinancialAccount, account_id)
     if account is None:
         raise NotFound("Financial account not found.")
-    if data.get("ledgerCode") is not None:
-        ledger = await _account_by_code(session, str(data["ledgerCode"]))
+    values = FINANCIAL_ACCOUNT_SCHEMA.validate(data, partial=True)
+    if "ledgerCode" in values:
+        ledger = await _resolve_ledger(session, values["ledgerCode"])
         if ledger is None:
-            raise ValidationFailed("Ledger account not found.", {"ledgerCode": "Unknown account"})
+            raise ValidationFailed(
+                "Ledger account not found.",
+                {"ledgerCode": "Choose an account from the chart of accounts."},
+            )
         account.account_id = ledger.id
     for key, column in (
         ("accountName", "account_name"),
         ("bankName", "bank_name"),
         ("accountNumberMasked", "account_number_masked"),
     ):
-        if data.get(key) is not None:
-            setattr(account, column, data[key])
-    if data.get("accountType") is not None:
-        account.account_type = str(data["accountType"]).upper()
-    if data.get("currency") is not None:
-        account.currency_code = str(data["currency"])
-    if data.get("status") is not None:
-        account.status = str(data["status"]).upper()
-    await session.commit()
+        if key in values:
+            setattr(account, column, values[key])
+    if "accountType" in values:
+        account.account_type = str(values["accountType"]).upper()
+    if "currency" in values:
+        account.currency_code = await assert_currency_code(session, values["currency"])
+    if "status" in values:
+        account.status = str(values["status"]).upper()
+    await _commit_unique(
+        session,
+        code="DUPLICATE_LEDGER_ACCOUNT",
+        message="This ledger account is already linked to a financial account.",
+        field="ledgerCode",
+    )
     return await financial_account_payload(session, account)
 
 

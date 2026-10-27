@@ -5,7 +5,7 @@ import { matchesRegisteredKey, parseRowKey } from '~/utils/validation/error-path
 import { failuresToMap } from '~/utils/validation/record-validation'
 import { failureMessage, formErrorMessage } from '~/utils/validation/messages'
 import type { RevealField } from '~/utils/validation/focus'
-import { focusField, focusFirstInvalidField } from '~/utils/validation/focus'
+import { focusFirstInvalidField } from '~/utils/validation/focus'
 
 export type UseFormValidationOptions = {
   /** Translates `validation.*` copy and field labels. */
@@ -13,31 +13,18 @@ export type UseFormValidationOptions = {
   /** Resolves the display label for a field key (already localized). */
   label?: (key: string) => string
   /**
-   * Model keys in logical (document) order. Drives "first invalid field" and
-   * the order of the error summary, so it must follow the tab → section →
-   * field order rather than a hash map.
+   * Model keys in logical (document) order. Drives "first invalid field", so it
+   * must follow the tab → section → field order rather than a hash map.
    */
   order?: () => string[]
   /** Opens the tab/section/dialog that owns a key before it is focused. */
   reveal?: RevealField
-  /**
-   * Human path to a field (`Service Order → Import → Declaration No.`), shown
-   * in the error summary so a user understands where a hidden field lives.
-   */
-  groupLabel?: (key: string) => string | undefined
-}
-
-export type ValidationSummaryItem = {
-  key: string
-  message: string
-  /** Human path to the field, e.g. `Service Order → Import → Declaration No.` */
-  groupLabel?: string
 }
 
 export type ApplyServerErrorResult = {
   /** At least one message landed on a field. */
   hasFieldErrors: boolean
-  /** Page-level message(s) to render above the form. */
+  /** Messages no field could take, rendered as a slim form-level line. */
   formErrors: string[]
   /** Field keys, in logical order, that now carry an error. */
   keys: string[]
@@ -80,15 +67,6 @@ export function useFormValidation(options: UseFormValidationOptions = {}) {
       .filter(key => fieldErrors.value[key])
       .sort((a, b) => (rank.get(a) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b) ?? Number.MAX_SAFE_INTEGER))
   })
-
-  /** Error summary rows, in the same logical order as the form itself. */
-  const summaryItems = computed<ValidationSummaryItem[]>(() =>
-    orderedErrorKeys.value.map(key => ({
-      key,
-      message: fieldErrors.value[key]!,
-      ...(options.groupLabel ? { groupLabel: options.groupLabel(key) } : {}),
-    })),
-  )
 
   function reset() {
     fieldErrors.value = {}
@@ -221,11 +199,6 @@ export function useFormValidation(options: UseFormValidationOptions = {}) {
     return focusFirstInvalidField(orderedErrorKeys.value, options.reveal)
   }
 
-  /** Reveal + focus one specific field (used by the error summary links). */
-  async function focusFieldKey(key: string) {
-    return focusField(key, options.reveal)
-  }
-
   return {
     // state
     fieldErrors,
@@ -236,7 +209,6 @@ export function useFormValidation(options: UseFormValidationOptions = {}) {
     hasErrors,
     errorCount,
     orderedErrorKeys,
-    summaryItems,
     // actions
     reset,
     setFieldError,
@@ -249,7 +221,6 @@ export function useFormValidation(options: UseFormValidationOptions = {}) {
     applyFailures,
     applyServerError,
     focusFirstInvalid,
-    focusFieldKey,
     // helpers
     label,
     message: (issue: ValidationIssue, fieldLabel?: string) =>
