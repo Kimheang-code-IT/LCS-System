@@ -372,6 +372,15 @@ schema is already current; otherwise the old image may not understand the
 database. `latest` is a convenience tag only and must never be used for
 production rollback.
 
+The host's root disk is small, so dispatch the workflow with `cleanup=true`
+before a release that adds new image layers: it removes dangling image layers
+and build cache, deletes stale release images of this repository (the pair the
+running containers use is kept by image ID, so the rollback tags survive), and
+trims the local dump directory to the five newest dumps. Every deploy then runs
+a disk check and refuses to start when the root disk cannot hold a full
+pre-pull; in that case expand the EBS root volume (`growpart` + `resize2fs`)
+and re-run. Containers, volumes and the running application are never touched.
+
 If a database restore is required, first stop or limit writes, restore the
 pre-deployment dump into an isolated database, verify Places and financial
 totals, then restore production. Never automatically restore an older database
