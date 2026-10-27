@@ -47,7 +47,7 @@ function emptyDraft(): Record<string, unknown> {
   const blank: Record<string, unknown> = {}
   for (const attribute of attributes.value) {
     if (attribute.fieldType === 'checkbox' || attribute.fieldType === 'boolean') blank[attribute.code] = false
-    else if (['number', 'decimal', 'money'].includes(attribute.fieldType)) blank[attribute.code] = attribute.defaultValue ?? 0
+    else if (['number', 'integer', 'decimal', 'money'].includes(attribute.fieldType)) blank[attribute.code] = attribute.defaultValue ?? 0
     else if (attribute.fieldType === 'multi_select') blank[attribute.code] = []
     else blank[attribute.code] = attribute.defaultValue ?? ''
   }

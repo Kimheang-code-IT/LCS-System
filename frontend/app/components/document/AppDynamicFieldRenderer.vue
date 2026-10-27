@@ -24,6 +24,7 @@ import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import {
   freightDocumentLineActionKey,
   freightDocumentLineTableHeaderKey,
+  freightDocumentLineTableRowMenuKey,
   freightDocumentModelKey,
   freightDocumentRecordKey,
 } from '~/utils/freight/document-tabs'
@@ -69,8 +70,13 @@ const selectValue = computed({
 })
 
 const numberValue = computed({
-  get: () => (typeof props.modelValue === 'number' ? props.modelValue : Number(props.modelValue || 0)),
-  set: (v: number | null) => emit('update:modelValue', v ?? 0),
+  get: () => {
+    if (props.field.meta?.nullable && (props.modelValue === null || props.modelValue === undefined || props.modelValue === '')) {
+      return null
+    }
+    return typeof props.modelValue === 'number' ? props.modelValue : Number(props.modelValue || 0)
+  },
+  set: (v: number | null) => emit('update:modelValue', props.field.meta?.nullable ? (v ?? null) : (v ?? 0)),
 })
 
 const boolValue = computed({
@@ -185,11 +191,20 @@ const optionsPending = ref(false)
 const freightStore = useFreightStore()
 
 // Master Data pages drive these selects; static options are ignored when a
-// reference source matches the field key.
+// reference source matches the field key. A field's `referenceFilter` hook
+// narrows the records by the record being edited (e.g. an asset's identity
+// types fit the transport type it names); nothing to filter on keeps them all.
+const recordForHooks = computed<Record<string, unknown> | null>(() => documentModel?.value ?? null)
+
 const referenceOptions = computed(() => {
   const source = referenceOptionSource(props.field.key)
   if (!source) return null
-  return referenceSelectItems(freightStore.list(source.collection), source)
+  const records = freightStore.list(source.collection)
+  const filter = props.field.meta?.referenceFilter as
+    | ((record: Record<string, unknown>, records: FreightRecord[]) => FreightRecord[])
+    | undefined
+  const record = recordForHooks.value
+  return referenceSelectItems(filter && record ? filter(record, records) : records, source)
 })
 
 const resolvedOptionsEndpoint = computed(() => props.field.optionsEndpoint || undefined)
@@ -228,6 +243,12 @@ const selectItems = computed(() => {
 })
 
 const labelText = computed(() => {
+  // A per-record label hook wins: the hook decides itself when it has nothing to
+  // say (returns ''), so an absent record or unset master row keeps the shipped label.
+  const labelFor = props.field.meta?.labelFor as ((record: Record<string, unknown>) => string) | undefined
+  const record = recordForHooks.value
+  const dynamic = labelFor ? labelFor(record ?? {}) : ''
+  if (dynamic) return dynamic
   if (props.field.labelKey && te(props.field.labelKey)) return t(props.field.labelKey)
   if (props.field.label) return props.field.label
   return props.field.labelKey || ''
@@ -244,11 +265,35 @@ const hintText = computed(() => {
 })
 
 const placeholderText = computed(() => {
+  const placeholderFor = props.field.meta?.placeholderFor as ((record: Record<string, unknown>) => string) | undefined
+  const record = recordForHooks.value
+  const dynamic = placeholderFor ? placeholderFor(record ?? {}) : ''
+  if (dynamic) return dynamic
   if (props.field.placeholder) return props.field.placeholder
   if (props.field.placeholderKey && te(props.field.placeholderKey)) {
     return t(props.field.placeholderKey)
   }
   return labelText.value
+})
+
+/** `FreightField.patternTester` — a sample the admin checks the pattern against. */
+const patternTesterOn = computed(() => props.field.meta?.patternTester === true)
+const patternSample = ref('')
+
+const patternTestState = computed<'unset' | 'invalid' | 'match' | 'mismatch'>(() => {
+  // Same full-match semantics as the backend `re.fullmatch` (`matchesIdentityPattern`).
+  const pattern = String(props.modelValue || '').trim()
+  if (!pattern) return 'unset'
+  let regex: RegExp
+  try {
+    regex = new RegExp(`^(?:${pattern})$`)
+  }
+  catch {
+    return 'invalid'
+  }
+  const sample = patternSample.value.trim()
+  if (!sample) return 'unset'
+  return regex.test(sample) ? 'match' : 'mismatch'
 })
 
 const isBoolean = computed(() => props.field.type === 'boolean')
@@ -275,6 +320,7 @@ const dynamicTableRows = computed({
 
 const lineAction = inject(freightDocumentLineActionKey, undefined)
 const lineTableHeaderActions = inject(freightDocumentLineTableHeaderKey, undefined)
+const lineTableRowMenu = inject(freightDocumentLineTableRowMenuKey, undefined)
 const documentModel = inject(freightDocumentModelKey, null)
 const recordAccess = inject(freightDocumentRecordKey, null)
 
@@ -301,6 +347,11 @@ const lineHeaderActions = computed(() => {
   return lineTableHeaderActions(lineTable.value.key)
 })
 
+const lineExtraRowMenuItems = computed(() => {
+  if (!lineTableRowMenu || !lineTable.value) return undefined
+  return lineTableRowMenu(lineTable.value.key)
+})
+
 const { formatMoney } = useAppLocalization()
 
 const documentCurrency = computed(() => String(recordAccess?.get('currency') || '').trim() || undefined)
@@ -312,6 +363,13 @@ function moneyAmount(key: string) {
 function moneyLabel(value: unknown) {
   return formatMoney(value, documentCurrency.value)
 }
+
+/** Effective rate implied by the stored tax and taxable base (display only). */
+const effectiveTaxRate = computed(() => {
+  const taxable = moneyAmount('subtotal') - moneyAmount('discount')
+  if (!(taxable > 0)) return 0
+  return Number((moneyAmount('tax') / taxable * 100).toFixed(2))
+})
 
 function onFileChange(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
@@ -465,6 +523,7 @@ function removeDestination(id: string) {
       :compact="lineCompact"
       :view-only-actions="lineViewOnly"
       :header-actions="lineHeaderActions"
+      :extra-row-menu-items="lineExtraRowMenuItems"
       :field-errors="fieldErrors"
       :error-key="field.key"
       :on-cell-edit="onFieldEdit"
@@ -473,7 +532,7 @@ function removeDestination(id: string) {
     />
     <div
       v-if="showPricingTotals"
-      class="ms-auto grid w-full max-w-sm gap-1 px-1 py-1.5 text-xs"
+      class="ms-auto grid w-full max-w-sm gap-1.5 px-1 py-2 text-sm"
     >
       <div class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ $t('freight.fields.subtotal') }}</span>
@@ -481,7 +540,14 @@ function removeDestination(id: string) {
       </div>
       <div v-if="showDiscountTotals" class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ $t('freight.fields.discount') }}</span>
-        <span class="font-medium text-highlighted">− {{ moneyLabel(moneyAmount('discount')) }}</span>
+        <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('discount')) }}</span>
+      </div>
+      <div
+        v-if="includeTaxTotal"
+        class="flex items-center justify-between gap-4"
+      >
+        <span class="text-muted">{{ $t('freight.ui.taxRatePct') }}</span>
+        <span class="font-medium text-highlighted">{{ effectiveTaxRate }} %</span>
       </div>
       <div
         v-if="includeTaxTotal"
@@ -491,7 +557,7 @@ function removeDestination(id: string) {
         <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('tax')) }}</span>
       </div>
       <div class="mt-1 flex items-center justify-between gap-4 border-t border-default pt-2 text-base">
-        <span class="font-semibold text-highlighted">{{ $t('freight.fields.total') }}</span>
+        <span class="font-semibold text-highlighted">{{ $t('freight.fields.grandTotal') }}</span>
         <span class="font-bold text-primary">{{ moneyLabel(moneyAmount('total')) }}</span>
       </div>
     </div>
@@ -970,6 +1036,34 @@ function removeDestination(id: string) {
         class="mt-1.5 shrink-0 text-muted"
         @click="toggleHint"
       />
+    </div>
+
+    <!-- Test Pattern: same full-match check the backend runs, shown live. -->
+    <div
+      v-if="patternTesterOn && String(modelValue || '').trim()"
+      class="mt-2 flex items-center gap-2 rounded-md border border-default bg-elevated px-2.5 py-1.5 text-xs"
+    >
+      <span class="shrink-0 font-medium text-toned">{{ $t('freight.ui.patternTestTitle') }}</span>
+      <UInput
+        v-model="patternSample"
+        :placeholder="t('freight.ui.patternTestSample')"
+        size="sm"
+        class="max-w-56 flex-1"
+        maxlength="120"
+        :aria-label="$t('freight.ui.patternTestTitle')"
+      />
+      <span
+        v-if="patternTestState === 'invalid'"
+        class="font-medium text-error"
+      >{{ $t('freight.ui.patternTestInvalid') }}</span>
+      <span
+        v-else-if="patternTestState === 'match'"
+        class="font-medium text-success"
+      >{{ $t('freight.ui.patternTestMatched') }}</span>
+      <span
+        v-else-if="patternTestState === 'mismatch'"
+        class="font-medium text-warning"
+      >{{ $t('freight.ui.patternTestMismatched') }}</span>
     </div>
 
     <div

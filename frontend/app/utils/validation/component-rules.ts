@@ -67,6 +67,9 @@ export function componentAttributeRule(attribute: ComponentTabAttribute): FieldR
   const rule: FieldRule = { required: Boolean(attribute.isRequired) || firstBoolean(raw, ['required', 'isRequired']) }
 
   switch (attribute.fieldType) {
+    case 'integer':
+      rule.integer = true
+      break
     case 'number':
     case 'decimal':
     case 'money':

@@ -15,10 +15,10 @@ describe('component attribute inline editing', () => {
   })
 
   it('recognises only the grid columns as editable fields', () => {
-    for (const key of ['label', 'dataType', 'isRequired', 'helpText']) {
+    for (const key of ['code', 'label', 'dataType', 'options', 'referenceType', 'validationRules', 'isRequired', 'helpText']) {
       expect(isAttributeFieldKey(key)).toBe(true)
     }
-    expect(isAttributeFieldKey('code')).toBe(false)
+    expect(isAttributeFieldKey('displayOrder')).toBe(false)
   })
 
   it('sends one trimmed field per PATCH', () => {
@@ -26,6 +26,11 @@ describe('component attribute inline editing', () => {
     expect(attributeFieldPayload('helpText', { helpText: '  Enter it  ' })).toEqual({ placeholder: 'Enter it' })
     expect(attributeFieldPayload('isRequired', { isRequired: true })).toEqual({ isRequired: true })
     expect(attributeFieldPayload('dataType', { dataType: 'decimal' })).toEqual({ dataType: 'decimal' })
+    expect(attributeFieldPayload('code', { code: '  seal-no  ' })).toEqual({ code: 'seal-no' })
+    expect(attributeFieldPayload('options', { options: 'A, B|C' })).toEqual({ options: ['A', { label: 'B', value: 'C' }] })
+    expect(attributeFieldPayload('referenceType', { referenceType: 'business_party' })).toEqual({ referenceType: 'business_party' })
+    expect(attributeFieldPayload('referenceType', { referenceType: '' })).toEqual({ referenceType: null })
+    expect(attributeFieldPayload('validationRules', { validationRules: 'maxLength=20' })).toEqual({ validationRules: { maxLength: 20 } })
   })
 
   it('falls back to text for an unsupported persisted data type', () => {
@@ -46,6 +51,32 @@ describe('component attribute inline editing', () => {
     expect(attributeFieldIssue('label', { label: 'Seal No.' })).toBeNull()
   })
 
+  it('requires a stable, unique, lower-case code', () => {
+    expect(attributeFieldIssue('code', { code: '' })?.code).toBe('required')
+    expect(attributeFieldIssue('code', { code: 'Seal No.' })?.code).toBe('pattern')
+    expect(attributeFieldIssue('code', { code: 'seal-no' })).toBeNull()
+    expect(attributeFieldIssue('code', { code: 'seal_no' })).toBeNull()
+    expect(attributeFieldIssue('code', { code: 'seal-no' }, ['seal_no'])?.message)
+      .toBe('This code is already used by another attribute.')
+  })
+
+  it('requires static choices for a select and a source for a reference', () => {
+    expect(attributeFieldIssue('options', { dataType: 'select', options: '' })?.code).toBe('required')
+    expect(attributeFieldIssue('options', { dataType: 'select', options: 'Open, Closed' })).toBeNull()
+    expect(attributeFieldIssue('options', { dataType: 'text', options: '' })).toBeNull()
+    expect(attributeFieldIssue('referenceType', { dataType: 'reference', referenceType: '' })?.code).toBe('required')
+    expect(attributeFieldIssue('referenceType', { dataType: 'reference', referenceType: 'business_party' })).toBeNull()
+    expect(attributeFieldIssue('referenceType', { dataType: 'text', referenceType: '' })).toBeNull()
+  })
+
+  it('explains an unparseable validation rule', () => {
+    expect(attributeFieldIssue('validationRules', { validationRules: 'max=1; min=2' })).toMatchObject({
+      code: 'custom',
+      message: 'min cannot be greater than max.',
+    })
+    expect(attributeFieldIssue('validationRules', { validationRules: 'maxLength=20' })).toBeNull()
+  })
+
   it('caps Help Text but allows it to be blank', () => {
     expect(attributeFieldIssue('helpText', { helpText: '' })).toBeNull()
     expect(attributeFieldIssue('helpText', { helpText: 'x'.repeat(256) })?.code).toBe('maxLength')
@@ -56,7 +87,7 @@ describe('component attribute inline editing', () => {
     expect(attributeFieldIssue('isRequired', { isRequired: true })).toBeNull()
   })
 
-  it('maps backend code errors onto the Label cell', () => {
+  it('maps backend code errors onto the Code cell', () => {
     const mapped = attributeServerError({
       status: 409,
       data: {
@@ -68,7 +99,7 @@ describe('component attribute inline editing', () => {
     }, 3)
 
     expect(mapped.fieldErrors).toEqual({
-      'componentAttributes.3.label': 'Already in use',
+      'componentAttributes.3.code': 'Already in use',
     })
     expect(mapped.isValidation).toBe(true)
   })

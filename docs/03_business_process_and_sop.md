@@ -185,7 +185,9 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
    a configured Place Role (for example port, warehouse, or checkpoint) and a
    free-text location; the separate Places master no longer exists.
 3. User confirms container requirements.
-4. User adds actual containers when numbers are available.
+4. Conversion has already prepared one actual-container row per required unit; the
+   user enters the real number, seal, and weights on those rows when the boxes
+   are collected, and may add extra containers manually.
 5. User adds repeatable components such as cargo, transport, documents, and milestones.
 6. User enters template-defined values.
 7. User uploads supporting files.

@@ -28,6 +28,7 @@ function routeColumns(withActual: boolean): FreightLineColumn[] {
       label: 'Location',
       labelKey: 'freight.ui.cols.location',
       type: 'text',
+      required: true,
       width: 220,
     },
     {

@@ -4,7 +4,8 @@ import type { FormSubmitEvent } from '@nuxt/ui'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { apiErrorDetails } from '~/utils/freight/errors'
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '~/utils/validation/field-rules'
+import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
+import { strongPasswordSchema } from '~/utils/validation/password-schema'
 
 /**
  * Where a session lands when an administrator chose its password.
@@ -30,7 +31,25 @@ const passwordForm = useTemplateRef<{
     setErrors: (errors: { name: string, message: string }[]) => void
     clear: () => void
   }
+  /** Exposed by UAuthForm; the source of truth for the live checklist and gate. */
+  state?: { currentPassword: string, password: string, passwordConfirmation: string }
 }>('passwordForm')
+
+/** UAuthForm types field-slot props as `{}`; this reads the state safely. */
+function slotPassword(slot: unknown): string {
+  const state = (slot as { state?: { password?: string } }).state
+  return String(state?.password ?? '')
+}
+
+/** Enter, or the submit button, is refused until every rule and the match pass. */
+const passwordsValid = computed(() => {
+  const state = passwordForm.value?.state
+  return Boolean(
+    state
+    && !validatePasswordStrength(state.password)
+    && state.password === state.passwordConfirmation,
+  )
+})
 
 /** Errors are placed on the field they belong to, or just above the submit button. */
 function clearErrors() {
@@ -60,10 +79,12 @@ usePageSeo({
 
 const schema = computed(() => z.object({
   currentPassword: z.string().min(1, { error: t('pages.changePassword.currentRequired') }).max(PASSWORD_MAX_LENGTH),
-  password: z.string().min(PASSWORD_MIN_LENGTH, { error: t('pages.changePassword.passwordMin', { min: PASSWORD_MIN_LENGTH }) }).max(PASSWORD_MAX_LENGTH),
-  passwordConfirmation: z.string().min(PASSWORD_MIN_LENGTH, { error: t('pages.changePassword.passwordMin', { min: PASSWORD_MIN_LENGTH }) }).max(PASSWORD_MAX_LENGTH),
+  password: strongPasswordSchema(t, t('pages.changePassword.newPassword')),
+  passwordConfirmation: z.string()
+    .min(1, { error: t('validation.required', { field: t('pages.changePassword.confirmPassword') }) })
+    .max(PASSWORD_MAX_LENGTH),
 }).refine(data => data.password === data.passwordConfirmation, {
-  message: t('pages.changePassword.passwordMismatch'),
+  message: t('validation.passwordMismatch'),
   path: ['passwordConfirmation'],
 }))
 
@@ -104,7 +125,7 @@ type Schema = {
 }
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
-  if (submitting.value) return
+  if (submitting.value || !passwordsValid.value) return
   clearErrors()
   submitting.value = true
   try {
@@ -150,9 +171,13 @@ async function signOut() {
         label: t('pages.changePassword.submit'),
         class: 'w-full h-10! text-xl font-normal',
         loading: submitting,
+        disabled: !passwordsValid || submitting,
       }"
       @submit="onSubmit"
     >
+      <template #password-help="slot">
+        <CommonAppPasswordRequirements :value="slotPassword(slot)" />
+      </template>
       <template #leading>
         <img src="/logo.png" alt="Logo" class="mx-auto h-20 w-auto">
       </template>

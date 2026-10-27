@@ -127,7 +127,6 @@ onMounted(load)
               <UBadge v-if="active" color="success" variant="subtle">
                 {{ t('freight.configVersions.current', { no: active.versionNo }) }}
               </UBadge>
-              <UBadge v-else color="warning" variant="subtle">{{ t('freight.configVersions.none') }}</UBadge>
             </div>
           </template>
 
@@ -158,14 +157,7 @@ onMounted(load)
             </UFormField>
 
             <UAlert
-              v-if="live && live.tabCount === 0"
-              color="warning"
-              variant="subtle"
-              :title="t('freight.configVersions.emptyTitle')"
-              :description="t('freight.configVersions.emptyDescription')"
-            />
-            <UAlert
-              v-else-if="live?.unchanged"
+              v-if="live?.unchanged"
               color="info"
               variant="subtle"
               :description="t('freight.configVersions.unchangedDescription')"

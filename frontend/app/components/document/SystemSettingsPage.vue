@@ -20,8 +20,8 @@ const toast = useToast()
 const { confirm } = useConfirm()
 const auth = useAuthStore()
 const freight = useFreightStore()
-const canEdit = computed(() => auth.canAccessPage('settings.app_config.edit'))
-const canConfigure = computed(() => auth.canAccessPage('settings.app_config.configure'))
+const canEdit = computed(() => auth.canAccessPage('settings.app_config.update'))
+const canConfigure = canEdit
 const canReset = computed(() => auth.canAccessPage('settings.manage'))
 const canManageBackup = computed(() => auth.canAccessPage('backup.manage'))
 const appLocalization = useAppLocalization()
@@ -256,9 +256,11 @@ function settingsRules(): Record<string, FieldRule> {
     'email.username': { maxLength: 255 },
     'telegram.botDisplayName': { maxLength: 255 },
     'telegram.botUsername': { maxLength: 255 },
-    'telegram.botToken': { required: telegramEnabled, maxLength: 512 },
+    'telegram.botToken': { required: telegramEnabled && !model.value?.telegram.botTokenConfigured, maxLength: 512 },
     'notifications.deliveryRetries': { number: true, integer: true, min: 0, max: 10 },
     'security.sessionTimeoutMinutes': { number: true, integer: true, min: 1, max: 1440 },
+    'security.accessTokenMinutes': { number: true, integer: true, min: 1, max: 30 },
+    'security.sessionAbsoluteMinutes': { number: true, integer: true, min: 15, max: 10080 },
     'security.maxLoginAttempts': { number: true, integer: true, min: 1, max: 100 },
     'security.accountLockMinutes': { number: true, integer: true, min: 1, max: 1440 },
     'security.passwordExpiryDays': { number: true, integer: true, min: 0, max: 3650 },
@@ -333,7 +335,7 @@ async function testEmail() {
     model.value = await appConfig.get()
     toast.add({
       title: result.message,
-      color: result.status === 'connected' ? 'success' : 'error',
+      color: result.status === 'connected' ? 'success' : result.status === 'not_verified' ? 'warning' : 'error',
     })
   }
   finally {
@@ -343,14 +345,16 @@ async function testEmail() {
 
 async function testTelegram() {
   testingTelegram.value = true
+  pageErrors.value = []
   try {
     if (model.value) await appConfig.update({ telegram: model.value.telegram })
     const result = await appConfig.testTelegramConnection()
     model.value = await appConfig.get()
-    toast.add({
-      title: result.message,
-      color: result.status === 'connected' ? 'success' : 'error',
-    })
+    if (result.status === 'connected') toast.add({ title: result.message, color: 'success' })
+    else pageErrors.value = [result.message]
+  }
+  catch (error) {
+    pageErrors.value = [apiErrorMessage(error, t('telegram.failed'))]
   }
   finally {
     testingTelegram.value = false
@@ -434,7 +438,15 @@ useAppPageTitle(() => t('freight.pages.settings'))
     content-wide
     @save="save"
     @refresh="load"
-  />
+  >
+    <template #tab-extra>
+      <DocumentTelegramSettingsPanel
+v-if="activeTab === 'telegram' && model"
+:config="model.telegram"
+:can-manage="canConfigure"
+@refresh="load" />
+    </template>
+  </DocumentAppDocumentPage>
 
   <UModal
     v-model:open="resetOpen"

@@ -155,10 +155,22 @@ async def test_route_stop_stores_the_role_and_free_text_location(client):
     assert stop["place"] == "Phnom Penh Port"
     assert "placeId" not in stop
 
-    # A location is helpful but not required: the role alone still describes a
-    # planned stop, and the row may be filled in later.
-    role_only = await _quotation(client, headers, [{"placeRoleId": role["id"]}])
-    assert role_only["places"][0]["place"] == ""
+    # A new stop needs a location; a role alone is not a printable route.
+    party = await _party(client, headers)
+    role_only = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "direction": "Import",
+            "currency": "USD",
+            "customerPartyId": party["id"],
+            "amount": 500,
+            "places": [{"placeRoleId": role["id"]}],
+        },
+    )
+    assert role_only.status_code == 422, role_only.text
+    assert "places.0.place" in role_only.json()["field_errors"]
 
 
 async def test_inactive_roles_are_refused_for_new_stops_but_history_stays_readable(client):

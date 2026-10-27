@@ -17,8 +17,27 @@ permissions:
   - action: shell
     resource: "*"
     effect: ask
+  # Read-only inspection only: no git command that stages, commits or rewrites work.
   - action: shell
-    resource: "git *"
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse*"
+    effect: allow
+  - action: shell
+    resource: "git ls-files*"
+    effect: allow
+  - action: shell
+    resource: "git blame*"
     effect: allow
   - action: shell
     resource: "uv run pytest*"
@@ -26,8 +45,33 @@ permissions:
   - action: shell
     resource: "uv run ruff*"
     effect: allow
+  # Defence in depth: obvious mutations stay blocked even if a pattern is close.
   - action: shell
     resource: "*git push*"
+    effect: deny
+  - action: shell
+    resource: "*git add*"
+    effect: deny
+  - action: shell
+    resource: "*git commit*"
+    effect: deny
+  - action: shell
+    resource: "*git restore*"
+    effect: deny
+  - action: shell
+    resource: "*git checkout*"
+    effect: deny
+  - action: shell
+    resource: "*git reset*"
+    effect: deny
+  - action: shell
+    resource: "*git clean*"
+    effect: deny
+  - action: shell
+    resource: "*git stash*"
+    effect: deny
+  - action: shell
+    resource: "*git apply*"
     effect: deny
   - action: shell
     resource: "*alembic downgrade*"

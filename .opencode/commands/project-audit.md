@@ -5,8 +5,9 @@ description: Audit the OpenCode, LeanCTX and project tooling setup
 Read-only audit. Report findings by expected benefit, and apply only changes that are
 safe and reversible.
 
-1. Effective config: `opencode debug config` (sources and merged values) and
-   `opencode debug agents` / `opencode debug paths`.
+1. Effective config: `opencode debug config` (configuration sources) and
+   `opencode debug agents` (merged agent permissions and modes); `opencode debug paths`
+   for data, cache and config locations.
 2. MCP: `opencode mcp list` — every connected server costs tool descriptions in every
    session; flag any that is unused or `needs authentication`.
 3. Extensions: list `.opencode/skills/*/SKILL.md` (name + description + line count),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isRowControlColumn, lineTableColumnCellClass, lineTableColumnMetrics, lineTableColumnWidth, sharedRowControls } from '../app/utils/table/line-table-columns'
+import { lineTableColumnCellClass, lineTableColumnMetrics, lineTableColumnWidth } from '../app/utils/table/line-table-columns'
 
 describe('line table column sizing', () => {
   it('sizes dynamic attribute columns by field type', () => {
@@ -34,7 +34,10 @@ describe('line table column sizing', () => {
 
   it('marks icon columns so they stay as narrow as their button', () => {
     expect(lineTableColumnMetrics({ key: '_delete', label: '', type: 'delete' }).iconOnly).toBe(true)
-    expect(lineTableColumnMetrics({ key: 'remark', label: 'Note', type: 'note' }).iconOnly).toBe(true)
+    expect(lineTableColumnMetrics({ key: '_reorder', label: '', type: 'reorder' }).iconOnly).toBe(true)
+    // A note is a normal text field now, not an icon cell.
+    expect(lineTableColumnMetrics({ key: 'note', label: 'Note', type: 'note' }).iconOnly).toBe(false)
+    expect(lineTableColumnWidth({ key: 'note', label: 'Note', type: 'note' })).toBe(160)
     expect(lineTableColumnMetrics({ key: 'place', label: 'Place', type: 'text' }).iconOnly).toBe(false)
   })
 
@@ -52,35 +55,8 @@ describe('line table column sizing', () => {
   })
 })
 
-describe('note and delete share one column', () => {
-  const note = { key: 'note', label: 'Note', type: 'note' } as const
-  const remove = { key: '_delete', label: '', type: 'delete' } as const
-
-  it('recognises the row control types', () => {
-    expect(isRowControlColumn(note)).toBe(true)
-    expect(isRowControlColumn(remove)).toBe(true)
-    expect(isRowControlColumn({ key: 'total', label: 'Total', type: 'number' })).toBe(false)
-    expect(isRowControlColumn({ key: '_reorder', label: '', type: 'reorder' })).toBe(false)
-  })
-
-  it('folds the delete icon into the note column, in declaration order', () => {
-    const shared = sharedRowControls([{ key: 'containerNo', label: 'Container No.', type: 'text' }, note, remove])
-
-    expect(shared.host).toBe('note')
-    expect([...shared.folded]).toEqual(['_delete'])
-  })
-
-  it('leaves a table with only one row control alone', () => {
-    expect(sharedRowControls([{ key: 'feeType', label: 'Fee', type: 'select' }, remove]))
-      .toEqual({ host: null, folded: new Set() })
-    expect(sharedRowControls([note]))
-      .toEqual({ host: null, folded: new Set() })
-  })
-
-  it('folds every extra icon into the first one', () => {
-    const shared = sharedRowControls([note, remove, { key: '_delete2', label: '', type: 'delete' }])
-
-    expect(shared.host).toBe('note')
-    expect([...shared.folded]).toEqual(['_delete', '_delete2'])
+describe('line table row controls', () => {
+  it('treats the note as a normal text field', () => {
+    expect(lineTableColumnMetrics({ key: 'note', label: 'Note', type: 'note' }).iconOnly).toBe(false)
   })
 })

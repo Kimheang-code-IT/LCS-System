@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import weakref
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import datetime
@@ -9,6 +10,8 @@ from urllib.parse import urlparse
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
+from app.core.config import settings
 from app.core.context import RequestContext
 from app.core.exceptions import ValidationFailed
 from app.core.localization import (
@@ -44,6 +47,15 @@ DEFAULT_APP_INFO: dict[str, Any] = {
     },
     "footer": {"copyrightText": ""},
 }
+
+_ACCESS_POLICY_CACHE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+#: Safety net only: every settings write in this process calls
+#: ``invalidate_access_policy()``, so this bounds propagation from *another*
+#: process. It must stay well above one request, otherwise whether a request
+#: re-reads the policy depends on wall-clock timing (that made query-budget
+#: assertions in ``test_redis_integration.py`` intermittently fail).
+_ACCESS_POLICY_TTL_SECONDS = 5.0
 
 DEFAULT_APP_CONFIG: dict[str, Any] = {
     "general": {
@@ -87,7 +99,9 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "rules": [],
     },
     "security": {
-        "sessionTimeoutMinutes": 60,
+        "sessionTimeoutMinutes": settings.session_idle_timeout_minutes,
+        "accessTokenMinutes": settings.access_token_expire_minutes,
+        "sessionAbsoluteMinutes": settings.session_absolute_timeout_minutes,
         "maxLoginAttempts": 5,
         "accountLockMinutes": 15,
         "passwordExpiryDays": 0,
@@ -262,10 +276,38 @@ async def _current_app_config(session: AsyncSession) -> tuple[dict[str, Any], da
     return {}, None
 
 
+async def _system_status(session: AsyncSession, config: dict[str, Any]) -> dict[str, Any]:
+    """Real environment and runtime status, never a hardcoded 'healthy'."""
+    from app.core import cache as cache_core
+    from app.core.config import settings as app_settings
+    from app.modules.backup.service import schedule_status
+    from app.modules.master_data.models import ConfigurationVersion
+
+    published = (
+        await session.execute(
+            select(ConfigurationVersion.version_no).where(ConfigurationVersion.status == "PUBLISHED")
+        )
+    ).scalar_one_or_none()
+    schedule = schedule_status(config.get("backup") or {})
+    if schedule["running"]:
+        job_status = "running"
+    elif schedule["enabled"]:
+        job_status = "scheduled"
+    else:
+        job_status = "idle"
+    return {
+        "environment": app_settings.environment,
+        "cacheStatus": "enabled" if cache_core.enabled() else "disabled",
+        "backgroundJobStatus": job_status,
+        "configurationVersion": f"v{published}" if published is not None else "Not published",
+    }
+
+
 async def get_app_config(session: AsyncSession, context: RequestContext | None = None) -> dict:
     stored, updated_at = await _current_app_config(session)
     merged = deep_merge(DEFAULT_APP_CONFIG, stored)
     merged["localization"] = normalize_localization(merged.get("localization"))
+    merged["system"] = {**(merged.get("system") or {}), **await _system_status(session, merged)}
     return _with_timestamp(merged, updated_at)
 
 
@@ -282,6 +324,7 @@ def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
         email["password"] = ""
     telegram = payload.get("telegram")
     if isinstance(telegram, dict) and "botToken" in telegram:
+        telegram.pop("webhookSecret", None)
         telegram["botTokenConfigured"] = bool(telegram.get("botToken"))
         telegram["botToken"] = ""
     return payload
@@ -353,6 +396,8 @@ def _validate_backup_config(config: dict[str, Any]) -> None:
 
 async def update_app_config(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
     patch = dict(patch or {})
+    if "telegram" in patch:
+        await session.execute(select(AppSetting).where(AppSetting.setting_key == "telegram").with_for_update().execution_options(populate_existing=True))
     current, _updated_at = await _current_app_config(session)
     if "localization" in patch:
         localization_patch = patch["localization"]
@@ -360,7 +405,36 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
             validate_localization_patch(localization_patch)
         current_localization = normalize_localization(current.get("localization"))
         patch["localization"] = validate_localization_patch(deep_merge(current_localization, localization_patch))
-    data = deep_merge(current, _without_blank_secrets(patch))
+    cleaned = _without_blank_secrets(patch)
+    if "telegram" in patch:
+        from app.modules.telegram.service import prepare_patch
+
+        cleaned["telegram"] = prepare_patch(patch["telegram"], current.get("telegram") or {})
+    data = deep_merge(current, cleaned)
+    if "telegram" in patch:
+        previous = current.get("telegram") or {}
+        changed = data.get("telegram") or {}
+        if changed.get("botToken") != previous.get("botToken") or previous.get("enabled") and not changed.get("enabled") or (previous.get("rules", {}).get("recovery") or {}).get("enabled") and not (changed.get("rules", {}).get("recovery") or {}).get("enabled"):
+            from datetime import UTC
+
+            from sqlalchemy import update
+
+            from app.modules.auth.models import PasswordResetToken
+            from app.modules.telegram.models import NotificationOutbox
+
+            await session.execute(update(PasswordResetToken).where(PasswordResetToken.used_at.is_(None)).values(used_at=datetime.now(UTC)))
+            await session.execute(update(NotificationOutbox).where(NotificationOutbox.category == "recovery", NotificationOutbox.status.in_(["PENDING", "PROCESSING"])).values(status="CANCELLED", sensitive_payload=None, claim_token=None, locked_until=None))
+    if "security" in patch:
+        previous_required = bool((current.get("security") or {}).get("requirePasswordChange"))
+        now_required = bool((data.get("security") or {}).get("requirePasswordChange"))
+        if now_required and not previous_required:
+            from datetime import UTC
+
+            # One-shot rollout marker: users whose password predates this moment
+            # must change it. Turning the policy off clears the marker.
+            data.setdefault("security", {})["requirePasswordChangeSince"] = datetime.now(UTC).isoformat()
+        elif not now_required:
+            data.get("security", {}).pop("requirePasswordChangeSince", None)
     telegram = data.get("telegram")
     if isinstance(telegram, dict) and "messageLanguage" in telegram:
         # Rebind rather than mutate: deep_merge may hand back a reference into
@@ -368,7 +442,9 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
         data["telegram"] = {**telegram, "messageLanguage": normalize_message_language(telegram["messageLanguage"])}
     if "backup" in patch:
         _validate_backup_config(deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}))
+    _validate_app_config(deep_merge(DEFAULT_APP_CONFIG, data))
 
+    changed_groups = sorted(key for key, value in patch.items() if isinstance(value, dict))
     # One row per setting group: a write touches only the groups it changes, so
     # two administrators editing different sections cannot overwrite each other.
     rows = await _load_settings(session)
@@ -382,12 +458,89 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
             f"Application settings group '{group}'.",
         )
         rows[group] = row
+    if context is not None and changed_groups:
+        from app.modules.audit.service import write_audit
+
+        await write_audit(
+            session,
+            context,
+            event_type="SETTINGS_UPDATED",
+            entity_type="settings",
+            entity_id=0,
+            action="update",
+            # Group names only: secret values never reach the audit history.
+            metadata={"groups": changed_groups},
+        )
     await _mirror_legacy_settings(session, APP_CONFIG_COLLECTION, data)
     await session.commit()
     stored, updated_at = await _current_app_config(session)
     merged = deep_merge(DEFAULT_APP_CONFIG, stored)
     merged["localization"] = normalize_localization(merged.get("localization"))
+    merged["system"] = {**(merged.get("system") or {}), **await _system_status(session, merged)}
+    # Security-sensitive config (session policy, access modes) must not linger
+    # in other processes' Redis identity cache for the full 300s TTL.
+    await cache.bump("auth")
+    invalidate_access_policy()
     return _with_timestamp(merged, updated_at)
+
+
+async def get_access_policy(session: AsyncSession) -> dict[str, Any]:
+    """One read of the access-affecting settings, defaulted and clamped.
+
+    Used by authentication on every request. A short in-process cache keeps the
+    read off the hot path; switching a mode invalidates it explicitly.
+    """
+
+    import time
+
+    from sqlalchemy import select as _select
+
+    from app.modules.settings.models import AppSetting
+
+    bind = session.get_bind()
+    cache_key = bind
+    now = time.monotonic()
+    cached = _ACCESS_POLICY_CACHE.get(cache_key)
+    if cached is not None and now - cached[0] < _ACCESS_POLICY_TTL_SECONDS:
+        return cached[1]
+
+    rows = dict(
+        (
+            await session.execute(
+                _select(AppSetting.setting_key, AppSetting.setting_value).where(
+                    AppSetting.setting_key.in_(("system", "security"))
+                )
+            )
+        ).all()
+    )
+    system = rows.get("system") if isinstance(rows.get("system"), dict) else {}
+    security = rows.get("security") if isinstance(rows.get("security"), dict) else {}
+    defaults_system = DEFAULT_APP_CONFIG["system"]
+    defaults_security = DEFAULT_APP_CONFIG["security"]
+    session_timeout = _int_in_range(
+        security.get("sessionTimeoutMinutes", defaults_security["sessionTimeoutMinutes"]), 1, 1440
+    )
+    expiry_days = _int_in_range(
+        security.get("passwordExpiryDays", defaults_security["passwordExpiryDays"]), 0, 3650
+    )
+    policy = {
+        "maintenance": bool(system.get("maintenanceMode", defaults_system["maintenanceMode"])),
+        "readOnly": bool(system.get("readOnlyMode", defaults_system["readOnlyMode"])),
+        "sessionTimeoutMinutes": session_timeout or defaults_security["sessionTimeoutMinutes"],
+        "accessTokenMinutes": _int_in_range(security.get("accessTokenMinutes"), 1, 30) or defaults_security["accessTokenMinutes"],
+        "sessionAbsoluteMinutes": _int_in_range(security.get("sessionAbsoluteMinutes"), 15, 10080) or defaults_security["sessionAbsoluteMinutes"],
+        "passwordExpiryDays": expiry_days if expiry_days is not None else 0,
+        "requirePasswordChange": bool(
+            security.get("requirePasswordChange", defaults_security["requirePasswordChange"])
+        ),
+        "requirePasswordChangeSince": str(security.get("requirePasswordChangeSince") or ""),
+    }
+    _ACCESS_POLICY_CACHE[cache_key] = (now, policy)
+    return policy
+
+
+def invalidate_access_policy() -> None:
+    _ACCESS_POLICY_CACHE.clear()
 
 
 async def get_localization(session: AsyncSession) -> dict[str, Any]:
@@ -402,7 +555,73 @@ async def get_default_currency(session: AsyncSession) -> str:
 def connection_result(enabled: bool, label: str) -> dict[str, str]:
     if not enabled:
         return {"status": "disabled", "message": f"{label} is disabled in App Config."}
-    return {"status": "connected", "message": f"{label} configuration saved. Delivery is sent by the backend worker."}
+    # No SMTP/Telegram client is wired into this build. Reporting "connected"
+    # without a call would be fabricated, so the API says exactly what it knows.
+    return {
+        "status": "not_verified",
+        "message": f"{label} settings are saved. This build does not run a live delivery check.",
+    }
+
+
+_PAGE_SIZE_VALUES = {10, 20, 25, 50}
+_ENCRYPTION_VALUES = {"none", "ssl", "tls", "starttls"}
+
+
+def _int_in_range(value: Any, low: int, high: int) -> int | None:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if low <= number <= high else None
+
+
+def _validate_app_config(config: dict[str, Any]) -> None:
+    """Reject values the Settings form already refuses, so the API is authoritative."""
+    errors: dict[str, str] = {}
+
+    general = config.get("general") or {}
+    if _int_in_range(general.get("maxUploadSizeMb"), 1, 100) is None:
+        errors["general.maxUploadSizeMb"] = "Enter a whole number between 1 and 100."
+    if general.get("defaultPageSize") is not None and _int_in_range(general.get("defaultPageSize"), 1, 500) is None:
+        errors["general.defaultPageSize"] = "Choose a supported page size."
+
+    security = config.get("security") or {}
+    bounds = {
+        "sessionTimeoutMinutes": (1, 1440),
+        "accessTokenMinutes": (1, 30),
+        "sessionAbsoluteMinutes": (15, 10080),
+        "maxLoginAttempts": (1, 100),
+        "accountLockMinutes": (1, 1440),
+        "passwordExpiryDays": (0, 3650),
+    }
+    for key, (low, high) in bounds.items():
+        if _int_in_range(security.get(key), low, high) is None:
+            errors[f"security.{key}"] = f"Enter a whole number between {low} and {high}."
+
+    notifications = config.get("notifications") or {}
+    if _int_in_range(notifications.get("deliveryRetries"), 0, 10) is None:
+        errors["notifications.deliveryRetries"] = "Enter a whole number between 0 and 10."
+
+    system = config.get("system") or {}
+    if system.get("paginationDefault") is not None and _int_in_range(system.get("paginationDefault"), 1, 500) is None:
+        errors["system.paginationDefault"] = "Choose a supported page size."
+
+    email = config.get("email") or {}
+    if email.get("enabled"):
+        if not str(email.get("smtpHost") or "").strip():
+            errors["email.smtpHost"] = "Required while email is enabled."
+        if _int_in_range(email.get("smtpPort"), 1, 65535) is None:
+            errors["email.smtpPort"] = "Enter a port between 1 and 65535."
+        encryption = str(email.get("encryption") or "").strip().lower()
+        if encryption and encryption not in _ENCRYPTION_VALUES:
+            errors["email.encryption"] = "Choose None, SSL, TLS or STARTTLS."
+
+    telegram = config.get("telegram") or {}
+    if telegram.get("enabled") and not str(telegram.get("botToken") or "").strip():
+        errors["telegram.botToken"] = "Required while Telegram is enabled."
+
+    if errors:
+        raise ValidationFailed("Please correct the application settings.", errors)
 
 
 # --- Global search -----------------------------------------------------------

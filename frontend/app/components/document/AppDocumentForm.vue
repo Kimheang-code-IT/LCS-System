@@ -87,7 +87,9 @@ function isFullWidthField(field: DocumentTabSchema['sections'][0]['fields'][0]) 
   <div class="min-w-0 w-full flex-1 overflow-x-hidden">
     <DocumentAppDocumentContentShell :wide="wideForm">
       <template v-for="tab in tabs" :key="tab.id">
-        <div v-show="activeTab === tab.id || tabs.length === 1" class="space-y-8 py-6">
+        <div
+          v-show="activeTab === tab.id || tabs.length === 1"
+          :class="tab.sections.length ? 'space-y-8 py-6' : ''">
           <section
             v-for="(section, sectionIndex) in tab.sections"
             :key="section.id"

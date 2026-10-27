@@ -69,6 +69,18 @@ async def add_container(
     return {"data": container}
 
 
+@router.delete("/service-orders/{identifier}/containers")
+async def delete_containers(
+    identifier: str,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("service_order.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ids = validate_id_list(payload)
+    removed = await service.delete_containers(session, context, identifier, ids)
+    return {"data": {"removed": removed}}
+
+
 @router.get("/service-orders/{identifier}/movements")
 async def list_movements(
     identifier: str,
@@ -375,6 +387,17 @@ async def delete_attachments(
     return {"data": {"removed": await service.delete_attachments(session, context, ids)}}
 
 
+@router.patch("/attachments/{attachment_id}")
+async def update_attachment(
+    attachment_id: int,
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("attachment.upload")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Edit the note only; the stored file is immutable through this endpoint."""
+    return {"data": await service.update_attachment_note(session, context, attachment_id, payload.get("note"))}
+
+
 @router.get("/attachments/file/{storage_key:path}")
 async def download_attachment(
     storage_key: str,
@@ -396,9 +419,16 @@ async def download_attachment(
 async def upload_attachment(
     file: UploadFile = File(...),
     storage_key: str | None = Form(default=None),
+    module: str | None = Form(default=None),
+    record_no: str | None = Form(default=None),
+    note: str | None = Form(default=None),
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     context.require("attachment.upload")
     content = await file.read(settings.upload_max_size_mb * 1024 * 1024 + 1)
-    return {"data": await service.store_upload(session, context, file.filename or "file", file.content_type or "", content, storage_key)}
+    uploaded = await service.store_upload(
+        session, context, file.filename or "file", file.content_type or "", content, storage_key, note
+    )
+    await service.link_attachment(session, int(uploaded["id"]), module or "", record_no or "")
+    return {"data": uploaded}

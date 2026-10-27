@@ -125,6 +125,7 @@ backend/app/modules/
 | `docs/09_roles_and_permissions.md` | Permission catalog, role templates, page mapping, enforcement |
 | `docs/10_testing_and_quality.md` | Test architecture, gates, coverage gaps, status, open risks |
 | `docs/11_deployment_and_security.md` | Deploy, CI/CD, migrations, backup/restore, rollback, hardening |
+| `docs/12_feature_status.md` | Feature status matrix, module assessments, production readiness, backlog |
 
 Reusable agent workflows live in `.opencode/skills/` (`lcs-development` is the
 umbrella; `database-migration`, `fastapi-backend`, `nuxt-frontend`,

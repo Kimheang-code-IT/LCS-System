@@ -218,6 +218,14 @@ async def _validate_values(
 
 def _coerce_value(attribute: ComponentAttribute, value: Any) -> Any:
     field_type = attribute.data_type
+    if field_type == "integer":
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("Must be a whole number") from exc
+        if number != number.to_integral_value():
+            raise ValueError("Must be a whole number")
+        return int(number)
     if field_type in {"number"}:
         try:
             number = Decimal(str(value))

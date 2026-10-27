@@ -231,7 +231,7 @@ const versionColumns: TableColumn<ConfigurationVersion>[] = [
   },
   {
     accessorKey: 'changeNote',
-    header: 'Name',
+    header: 'Description',
     meta: { sortKind: 'text' },
     cell: ({ row }) => h('span', { class: 'block max-w-72 truncate text-sm', title: row.original.changeNote || '' }, row.original.changeNote || '—'),
   },
@@ -242,16 +242,22 @@ const versionColumns: TableColumn<ConfigurationVersion>[] = [
     cell: ({ row }) => h(UBadge, { color: statusColor(row.original), variant: 'subtle', size: 'sm' }, () => row.original.status),
   },
   {
-    accessorKey: 'publishedBy',
+    accessorKey: 'createdBy',
     header: 'Created By',
     meta: { sortKind: 'text' },
-    cell: ({ row }) => h('span', { class: 'text-sm' }, row.original.publishedBy || row.original.activatedBy || '—'),
+    cell: ({ row }) => h('span', { class: 'text-sm' }, row.original.createdBy || '—'),
   },
   {
     accessorKey: 'createdAt',
     header: 'Created At',
     meta: { sortKind: 'date' },
     cell: ({ row }) => h('span', { class: 'whitespace-nowrap text-sm' }, when(row.original.createdAt)),
+  },
+  {
+    accessorKey: 'publishedBy',
+    header: 'Published By',
+    meta: { sortKind: 'text' },
+    cell: ({ row }) => h('span', { class: 'text-sm' }, row.original.publishedBy || '—'),
   },
   {
     accessorKey: 'publishedAt',
@@ -309,10 +315,6 @@ onMounted(refreshAll)
         <UBadge v-if="active" color="success" variant="subtle">
           {{ t('freight.configVersions.current', { no: active.versionNo }) }}
         </UBadge>
-        <UBadge v-else color="warning" variant="subtle">
-          {{ t('freight.configVersions.none') }}
-        </UBadge>
-        <UBadge color="neutral" variant="subtle" size="sm">{{ meta.total }} versions</UBadge>
       </template>
       <template #default>
         <UButton
@@ -331,14 +333,7 @@ onMounted(refreshAll)
 
     <div class="space-y-3 px-4 pt-3">
       <UAlert
-        v-if="livePreview && livePreview.tabCount === 0"
-        color="warning"
-        variant="subtle"
-        :title="t('freight.configVersions.emptyTitle')"
-        :description="t('freight.configVersions.emptyDescription')"
-      />
-      <UAlert
-        v-else-if="active && !livePreview?.unchanged"
+        v-if="active && !livePreview?.unchanged"
         color="warning"
         variant="subtle"
         description="The live configuration has changes that are not part of the published version. Creating a new version freezes them."

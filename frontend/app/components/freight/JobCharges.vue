@@ -9,6 +9,7 @@ import type { FreightRecord } from '~/types/record'
 import type { SaveGridChange } from '~/types/save-grid'
 import { useLcs } from '~/composables/freight/useLcs'
 import { useConfirm } from '~/composables/common/useConfirm'
+import { formatMoney } from '~/composables/freight/useFreight'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import { validateTableRows } from '~/utils/validation/record-validation'
 import { SAVE_GRID_NEW_PREFIX, rowsBeingSaved as selectRowsBeingSaved } from '~/types/save-grid'
@@ -18,12 +19,17 @@ import {
   serviceChargePayload,
   serviceChargeRows,
   serviceChargeTable,
+  serviceChargeTotals,
 } from '~/utils/freight/job-charges'
 
 const props = defineProps<{
   job: FreightRecord
   jobNo: string
   editable?: boolean
+}>()
+
+const emit = defineEmits<{
+  'update:job': [patch: Record<string, unknown>]
 }>()
 
 const { t } = useI18n()
@@ -33,7 +39,6 @@ const route = useRoute()
 const { confirm } = useConfirm()
 
 const charges = ref<FreightRecord[]>([])
-const invoice = ref<FreightRecord | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 /** Page-level refusal (business rule, dependency, network) — never a toast. */
@@ -43,27 +48,20 @@ const orderId = computed(() => String(props.job.id || props.jobNo || ''))
 const currency = computed(() => String(props.job.currency || ''))
 const rows = computed(() => serviceChargeRows(charges.value))
 const table = computed(() => serviceChargeTable())
-const canCreateInvoice = computed(() => props.editable === true && rows.value.length > 0 && !invoice.value)
+const totals = computed(() => serviceChargeTotals(rows.value, props.job.vatRate, props.job.discount))
 
-const headerActions = computed(() => (props.editable !== true
-  ? []
-  : [{
-      label: t('freight.ui.createFinanceInvoice'),
-      icon: 'i-lucide-file-plus',
-      disabled: saving.value || !canCreateInvoice.value,
-      onClick: () => { void createInvoice() },
-    }]))
+function money(value: number) {
+  return formatMoney(value, currency.value)
+}
 
 async function load() {
   if (!orderId.value) return
   loading.value = true
   try {
     charges.value = await lcs.charges.listForOrder(orderId.value)
-    invoice.value = await lcs.charges.getOrderInvoice(orderId.value)
   }
   catch {
     charges.value = []
-    invoice.value = null
   }
   finally {
     loading.value = false
@@ -72,24 +70,59 @@ async function load() {
 
 watch(() => props.jobNo, () => { void load() }, { immediate: true })
 
-/** Per-row print icon. Hidden for rows that are still being composed locally. */
-function rowAction(action: string, row: Record<string, unknown>) {
-  if (action !== 'print') return null
+/**
+ * Per-row menu: open the charge document and print its invoice. Delete is added
+ * by the shared table as the last menu entry, so the grid stays narrow.
+ */
+function rowMenuItems(row: Record<string, unknown>) {
   const id = String(row.id ?? '')
-  if (!id || id.startsWith(SAVE_GRID_NEW_PREFIX)) return null
-  return {
-    label: t('freight.ui.printInvoice'),
-    icon: 'i-lucide-printer',
-    color: 'primary' as const,
-    onSelect: () => { void navigateTo(buildPrintRoute({
-      collection: 'jobCharges',
-      recordId: id,
-      template: 'tax-invoice',
-      returnTo: route.fullPath,
-      modulePath: '/service-orders',
-    })) },
-  }
+  if (!id || id.startsWith(SAVE_GRID_NEW_PREFIX)) return []
+  return [
+    {
+      label: t('freight.ui.viewDocument'),
+      icon: 'i-lucide-arrow-up-right',
+      onSelect: () => { void navigateTo(`/service-charges/${id}`) },
+    },
+    {
+      label: t('freight.ui.printInvoice'),
+      icon: 'i-lucide-printer',
+      onSelect: () => {
+        const charge = charges.value.find(item => String(item.id ?? '') === id)
+        const line = Array.isArray(charge?.feeLines) ? (charge!.feeLines as Array<Record<string, unknown>>)[0] : undefined
+        void navigateTo(buildPrintRoute({
+          collection: 'jobCharges',
+          recordId: id,
+          template: 'tax-invoice',
+          returnTo: route.fullPath,
+          modulePath: '/service-orders',
+          lineIndex: 0,
+          lineId: line?.id ? String(line.id) : undefined,
+        }))
+      },
+    },
+  ]
 }
+
+/** Combined statement for every charge of this order (read-only). */
+function printAllCharges() {
+  const first = charges.value[0]
+  if (!first?.id) return
+  void navigateTo(buildPrintRoute({
+    collection: 'jobCharges',
+    recordId: String(first.id),
+    template: 'tax-invoice',
+    returnTo: route.fullPath,
+    modulePath: '/service-orders',
+    statementOrderId: orderId.value,
+  }))
+}
+
+const printAllActions = computed(() => [{
+  label: t('freight.ui.printAll'),
+  icon: 'i-lucide-printer',
+  disabled: charges.value.length === 0,
+  onClick: printAllCharges,
+}])
 
 /**
  * The rows this save will actually write, with their position in the grid.
@@ -172,49 +205,10 @@ async function removeCharge(charge: FreightRecord): Promise<boolean> {
   toast.add({ title: t('actions.delete'), color: 'success' })
   return true
 }
-
-async function createInvoice() {
-  saving.value = true
-  try {
-    invoice.value = await lcs.charges.createOrderInvoice(orderId.value, `order-invoice-${orderId.value}`)
-    toast.add({ title: t('freight.ui.draftInvoiceCreated'), color: 'success' })
-    await load()
-  }
-  catch (error) {
-    formErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
-  }
-  finally {
-    saving.value = false
-  }
-}
-
-function printInvoice() {
-  if (!invoice.value?.id) return
-  void navigateTo(buildPrintRoute({
-    collection: 'debitNotes',
-    recordId: String(invoice.value.id),
-    template: 'tax-invoice',
-    returnTo: route.fullPath,
-    modulePath: '/service-orders',
-  }))
-}
 </script>
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-wrap items-center justify-end gap-2">
-      <UBadge v-if="invoice" color="success" variant="subtle">
-        {{ invoice.documentNo || invoice.invoiceNo }} · {{ invoice.status }}
-      </UBadge>
-      <UButton
-        icon="i-lucide-printer"
-        color="neutral"
-        variant="soft"
-        :disabled="!invoice"
-        :label="t('freight.ui.printInvoice')"
-        @click="printInvoice" />
-    </div>
-
     <CommonAppFormErrorSummary class="pt-4" :form-errors="formErrors" />
 
     <TableAppSaveGrid
@@ -223,8 +217,8 @@ function printInvoice() {
       :rows="rows"
       :disabled="editable !== true"
       :saving="saving"
-      :header-actions="headerActions"
-      :row-actions="rowAction"
+      :header-actions="printAllActions"
+      :extra-row-menu-items="rowMenuItems"
       @save="save" />
 
     <FreightJobEmptyState
@@ -232,5 +226,54 @@ function printInvoice() {
       :title="t('freight.ui.noServiceCharges')"
       :description="t('freight.ui.addCharge')"
       icon="i-lucide-receipt-text" />
+
+    <div
+      v-if="rows.length"
+      class="ms-auto grid w-full max-w-sm gap-1.5 px-1 py-2 text-sm">
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-muted">{{ t('freight.fields.subtotal') }}</span>
+        <span class="font-medium tabular-nums text-highlighted">{{ money(totals.subtotal) }}</span>
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-muted">{{ t('freight.fields.discount') }}</span>
+        <UInputNumber
+          :model-value="Number(props.job.discount || 0)"
+          :min="0"
+          :increment="false"
+          :decrement="false"
+          :step-snapping="false"
+          :disabled="editable !== true"
+          size="md"
+          class="w-40 text-right"
+          :aria-label="t('freight.fields.discount')"
+          @update:model-value="value => emit('update:job', { discount: value ?? 0 })" />
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-muted">{{ t('containerPaymentTaxRate') }}</span>
+        <div class="flex w-40 items-center gap-2">
+          <UInputNumber
+            :model-value="Number(props.job.vatRate || 0)"
+            :min="0"
+            :max="100"
+            :increment="false"
+            :decrement="false"
+            :step-snapping="false"
+            :disabled="editable !== true"
+            size="md"
+            class="w-full text-right"
+            :aria-label="t('containerPaymentTaxRate')"
+            @update:model-value="value => emit('update:job', { vatRate: value ?? 0 })" />
+          <span class="text-muted">%</span>
+        </div>
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-muted">{{ t('freight.fields.tax') }}</span>
+        <span class="font-medium tabular-nums text-highlighted">{{ money(totals.vat) }}</span>
+      </div>
+      <div class="mt-1 flex items-center justify-between gap-4 border-t border-default pt-2 text-base">
+        <span class="font-semibold text-highlighted">{{ t('freight.fields.grandTotal') }}</span>
+        <span class="font-bold tabular-nums text-primary">{{ money(totals.total) }}</span>
+      </div>
+    </div>
   </div>
 </template>

@@ -101,13 +101,13 @@ export const QUOTATION_CONDITIONS = [
 ] as const
 
 /**
- * What a transport asset's `identity` value is. These strings are stored verbatim
- * on `transport_assets.identity_type` and are the closed set the backend accepts,
- * so they must stay in step with `IDENTITY_TYPES` in
- * `backend/app/modules/master_data/service.py`; the backend also accepts the
- * legacy codes (`PLATE`, `IMO`, `TAIL`, `REGISTRATION`) and normalises them.
+ * Transport asset record statuses, mirroring the three-state policy for
+ * `transportAssets` in `backend/app/modules/master_data/status_policy.py`.
+ * `MAINTENANCE` is set from the row's "..." menu, so the list keeps offering the
+ * status and MAINTENANCE/INACTIVE assets are excluded from new assignments
+ * (`reference_options.py` only ever offers `status == 'ACTIVE'`).
  */
-export const IDENTITY_TYPES = ['License Plate', 'IMO Number', 'Flight Number', 'Other'] as const
+export const ASSET_STATUSES = ['ACTIVE', 'INACTIVE', 'MAINTENANCE'] as const
 export const ACCOUNT_TYPES = ['Asset', 'Liability', 'Equity', 'Revenue', 'Expense'] as const
 export const PERIOD_STATUS = ['OPEN', 'CLOSED'] as const
 export const COMPONENT_INSTANCE_MODES = ['SINGLE', 'REPEATABLE'] as const

@@ -48,3 +48,11 @@ def encrypt_secret(value: str) -> str:
     if value.startswith(_PREFIX):
         return value
     return _PREFIX + _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_secret(value: str) -> str:
+    """Decrypt a stored credential; callers must never log the result."""
+    if not value.startswith(_PREFIX):
+        # Compatibility with credentials saved before field encryption existed.
+        return value
+    return _fernet().decrypt(value[len(_PREFIX):].encode("utf-8")).decode("utf-8")

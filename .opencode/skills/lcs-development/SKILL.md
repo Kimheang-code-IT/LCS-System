@@ -30,9 +30,9 @@ rules, acceptance criteria and expected outputs live in the focused skill below.
 | Writing or running tests, interpreting a failing suite, gate commands | `testing-qa` |
 | Compose, CI/CD, environments, backups, restore drills, release verification | `deployment-devops` |
 
-A task that spans areas loads each relevant skill. Slash commands cover the routine runs
-(`/check`, `/test-fast`, `/test-backend`, `/test-frontend`, `/verify`, `/docs-check`,
-`/debug`, `/build-fast`).
+A task that spans areas loads each relevant skill. The slash commands cover the routine
+runs and tooling audits; the current list lives in `AGENTS.md` → Agent tooling rather than
+being repeated here.
 
 ## Before coding
 
@@ -40,6 +40,9 @@ Non-trivial task → locate the owning module and the existing implementation fi
 (`ctx_compose`), then plan with these impact axes: database, API, permissions, business
 logic, frontend contract, tests, documentation. A trivial self-contained edit goes straight
 to implementation.
+
+Follow the FAST / STANDARD / DEEP classification in `AGENTS.md` → Task levels. That section
+owns the workflow and the verification each level requires; do not invent a second one here.
 
 Prefer extending the existing architecture over introducing a pattern. Never create a
 duplicate service, repository, endpoint, schema, store, helper or component when an

@@ -35,8 +35,12 @@ type AttributeRow = Record<string, unknown>
 
 /** Labels used by the shared validation wording; the grid's own headers match. */
 const FIELD_LABELS: Record<AttributeFieldKey, string> = {
+  code: 'Code',
   label: 'Label',
   dataType: 'Data Type',
+  options: 'Choices',
+  referenceType: 'Master Data',
+  validationRules: 'Rules',
   isRequired: 'Required',
   helpText: 'Help Text',
 }
@@ -70,6 +74,14 @@ const table = computed(() => componentConfigTable({
 
 function rowIndex(id: string): number {
   return rows.value.findIndex(row => String(row.id ?? '') === id)
+}
+
+/** Codes held by the other rows, for the in-grid duplicate check. */
+function otherCodes(id: string): string[] {
+  return rows.value
+    .filter(row => String(row.id ?? '') !== id)
+    .map(row => String(row.code ?? ''))
+    .filter(Boolean)
 }
 
 function patchRow(id: string, patch: AttributeRow) {
@@ -118,9 +130,9 @@ async function startAdd() {
   rows.value = [...rows.value, { ...blankComponentAttributeRow(), id, _saving: false }]
   clearAllCellErrors()
   const index = rows.value.length - 1
-  // Wait for UTable to paint the new row before placing the caret in Label.
+  // Wait for UTable to paint the new row before placing the caret in Code.
   await nextTick()
-  await focusField(attributeCellKey(index, 'label'))
+  await focusField(attributeCellKey(index, 'code'))
 }
 
 function cancelNew(id: string) {
@@ -138,7 +150,7 @@ function onCellEdit(_cellKey: string, change?: { index: number, key: string, val
   if (isAttributeFieldKey(change.key)) clearCellError(change.index, change.key)
   const row = rows.value[change.index]
   if (!row || isSaveGridNewRow(row) || !isAttributeFieldKey(change.key)) return
-  if (change.key !== 'dataType' && change.key !== 'isRequired') return
+  if (change.key !== 'dataType' && change.key !== 'isRequired' && change.key !== 'referenceType') return
   const id = String(row.id ?? '')
   void nextTick(() => queueFieldSave(id, change.key as AttributeFieldKey))
 }
@@ -146,14 +158,14 @@ function onCellEdit(_cellKey: string, change?: { index: number, key: string, val
 function onCellBlur(_cellKey: string, change: { index: number, key: string }) {
   const row = rows.value[change.index]
   if (!row || isSaveGridNewRow(row) || !isAttributeFieldKey(change.key)) return
-  if (change.key !== 'label' && change.key !== 'helpText') return
+  if (change.key === 'dataType' || change.key === 'isRequired' || change.key === 'referenceType') return
 
   const id = String(row.id ?? '')
   const trimmed = String(row[change.key] ?? '').trim()
   if (trimmed !== row[change.key]) patchRow(id, { [change.key]: trimmed })
 
   const current = { ...row, [change.key]: trimmed }
-  const issue = attributeFieldIssue(change.key, current)
+  const issue = attributeFieldIssue(change.key, current, otherCodes(id))
   if (issue) {
     setCellError(change.index, change.key, issueText(issue, change.key))
     void focusField(attributeCellKey(change.index, change.key))
@@ -191,7 +203,21 @@ async function persistField(id: string, key: AttributeFieldKey) {
     return
   }
 
-  const issue = attributeFieldIssue(key, row)
+  // A data type change is only valid together with its dependent settings:
+  // select needs choices, reference needs a Master Data source. Refuse it
+  // before the request and leave the typed value in place on the failing cell.
+  if (key === 'dataType') {
+    const dependent = (['options', 'referenceType'] as AttributeFieldKey[])
+      .find(candidate => attributeFieldIssue(candidate, row))
+    if (dependent) {
+      const issue = attributeFieldIssue(dependent, row)!
+      setCellError(index, dependent, issueText(issue, dependent))
+      patchRow(id, { dataType: saved.dataType })
+      return
+    }
+  }
+
+  const issue = attributeFieldIssue(key, row, otherCodes(id))
   if (issue) {
     setCellError(index, key, issueText(issue, key))
     return
@@ -225,7 +251,7 @@ async function persistField(id: string, key: AttributeFieldKey) {
     // transport/server failure means the edit never happened: put the last
     // confirmed value back. A validation refusal on free text stays visible so
     // the user can correct what they typed.
-    if (!mapped.isValidation || key === 'isRequired' || key === 'dataType') {
+    if (!mapped.isValidation || key === 'isRequired' || key === 'dataType' || key === 'referenceType') {
       patchRow(id, { [key]: saved[key] })
     }
   }
@@ -244,17 +270,37 @@ async function saveNewRow(row: AttributeRow) {
 
   const label = String(row.label ?? '').trim()
   const helpText = String(row.helpText ?? '').trim()
-  const nextRow = { ...row, label, helpText, dataType: attributeFieldValue('dataType', row) }
+  const nextRow = {
+    ...row,
+    label,
+    // A blank code keeps the pre-existing convenience of deriving one from the
+    // label; the value is shown and editable in its own column before saving.
+    code: String(row.code ?? '').trim() || slugify(label),
+    helpText,
+    dataType: attributeFieldValue('dataType', row),
+    referenceType: attributeFieldValue('referenceType', row),
+    options: String(row.options ?? '').trim(),
+    validationRules: String(row.validationRules ?? '').trim(),
+  }
 
+  const fields: AttributeFieldKey[] = [
+    'code',
+    'label',
+    'dataType',
+    'options',
+    'referenceType',
+    'validationRules',
+    'helpText',
+  ]
+  const codes = otherCodes(id)
   const errors: Record<string, string> = {}
-  for (const key of ['label', 'dataType', 'helpText'] as AttributeFieldKey[]) {
-    const issue = attributeFieldIssue(key, nextRow)
+  for (const key of fields) {
+    const issue = attributeFieldIssue(key, nextRow, codes)
     if (issue) errors[attributeCellKey(index, key)] = issueText(issue, key)
   }
   if (Object.keys(errors).length) {
     fieldErrors.value = { ...fieldErrors.value, ...errors }
-    const firstKey = (['label', 'dataType', 'helpText'] as AttributeFieldKey[])
-      .find(key => attributeCellKey(index, key) in errors) || 'label'
+    const firstKey = fields.find(key => attributeCellKey(index, key) in errors) || 'label'
     await nextTick()
     await focusField(attributeCellKey(index, firstKey))
     return
@@ -281,7 +327,7 @@ async function saveNewRow(row: AttributeRow) {
 }
 
 function slugify(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
 
 // --- Delete ------------------------------------------------------------------
@@ -317,6 +363,28 @@ async function removeExisting(id: string) {
   }
   catch (error) {
     formErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
+  }
+}
+
+// --- Reorder -----------------------------------------------------------------
+/** Persist the catalog order after the grid's move buttons reorder the rows. */
+async function reorderRows(next: AttributeRow[]) {
+  // An unsaved row has no server id and must keep its typed values; refusing
+  // the move is better than reloading the page and losing them.
+  if (next.some(isSaveGridNewRow)) {
+    formErrors.value = ['Save or cancel the new attribute before changing the order.']
+    return
+  }
+  const ids = next.map(row => String(row.id ?? '')).filter(Boolean)
+  if (!ids.length) return
+  clearAllCellErrors()
+  try {
+    formErrors.value = []
+    await config.reorderAttributes(ids)
+  }
+  catch (error) {
+    formErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
+    await refresh()
   }
 }
 
@@ -374,11 +442,20 @@ function rowInlineActions(row: AttributeRow) {
     <LayoutAppHeaderPageActions
       can-create
       create-label="Add attribute"
+      :refreshing="config.loading.value"
       @create="startAdd"
       @refresh="refresh"
     />
 
     <CommonAppFormErrorSummary class="mb-2" :form-errors="formErrors" />
+
+    <div
+      v-if="config.loading.value && !rows.length"
+      class="flex items-center gap-2 text-sm text-muted"
+      role="status">
+      <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
+      Loading attributes…
+    </div>
 
     <FreightAppLineTable
       :table="table"
@@ -388,6 +465,7 @@ function rowInlineActions(row: AttributeRow) {
       :row-inline-actions="rowInlineActions"
       :on-cell-edit="onCellEdit"
       :on-cell-blur="onCellBlur"
+      :on-reorder="reorderRows"
       @update:model-value="rows = $event" />
   </div>
 </template>

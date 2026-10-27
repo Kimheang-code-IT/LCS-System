@@ -43,4 +43,28 @@ describe('quotation party fields', () => {
     expect(zh.freight.fields.customerPartyId).toBeTruthy()
     expect(zh.freight.fields.customerPartyId).not.toBe('Business Party')
   })
+
+  it('names the printed company field separately from the party record', () => {
+    const company = field('customer')
+    expect(company.label).toContain('printed')
+    expect(en.freight.fieldHelp.customerPartyId).toBeTruthy()
+    expect(en.freight.fieldHelp.customerName).toBeTruthy()
+  })
+
+  it('offers fee type and charge basis while keeping the container optional', () => {
+    const pricing = quotation.tables!.find(table => table.key === 'pricingLines')!
+    const column = (key: string) => pricing.columns.find(item => item.key === key)!
+
+    expect(column('feeType').type).toBe('select')
+    expect(column('transportBy').labelKey).toBe('freight.ui.chargeBasis')
+    expect(column('transportBy').required).toBe(true)
+    expect(column('containerType').required).toBeFalsy()
+    expect(column('quantity').rule).toMatchObject({ min: 0.001 })
+    expect(column('unitPrice').rule).toMatchObject({ min: 0 })
+  })
+
+  it('requires a location on a new route stop', () => {
+    const route = quotation.tables!.find(table => table.key === 'places')!
+    expect(route.columns.find(column => column.key === 'place')?.required).toBe(true)
+  })
 })

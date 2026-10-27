@@ -72,6 +72,8 @@ function syntheticChargeRecord(
 
 export type ChargePrintOptions = {
   lineIndex?: number
+  /** Stable fee-line id; wins over the index when the row still exists. */
+  lineId?: string
 }
 
 /** Build a print view model for a service charge (whole document or one fee line). */
@@ -84,7 +86,10 @@ export function buildChargePrintViewModel(
   const feeLines = Array.isArray(charge.feeLines) ? charge.feeLines as RawLine[] : []
   const currency = printStr(charge.currency) || getFormatConfig().currency
   const reference = printStr(charge.chargeNo) || printStr(charge.jobNo) || printStr(charge.id)
-  const lineIndex = options.lineIndex
+  const byId = options.lineId
+    ? feeLines.findIndex(row => printStr(row.id) === String(options.lineId))
+    : -1
+  const lineIndex = byId >= 0 ? byId : options.lineIndex
   const selectedSource = lineIndex !== undefined && feeLines[lineIndex]
     ? [feeLines[lineIndex]!]
     : feeLines
@@ -108,7 +113,10 @@ export function buildChargePrintViewModel(
   model.lines = printLines
 
   if (templateId === 'tax-invoice') {
-    model.document.documentType = 'CUSTOMER_INVOICE'
+    // An unissued charge stays a charge statement, never an official invoice.
+    model.document.documentType = printStr(charge.status).toUpperCase().includes('DRAFT')
+      ? (printStr(charge.documentType) || 'SERVICE_NOTE')
+      : 'CUSTOMER_INVOICE'
   }
 
   const containerNo = printStr(selectedSource[0]?.containerNo)

@@ -43,7 +43,9 @@ export const JOB_ACTUAL_CONTAINER_TABLE: FreightTable = {
   title: 'Actual containers',
   titleKm: 'កុងតឺន័រពិត',
   columns: [
-    { key: 'containerNo', label: 'Container No.', labelKey: 'freight.fields.containerNo', type: 'text', required: true },
+    // A row prepared from a quotation requirement may be saved before the box
+    // number is known; the grid only demands a number once the row is started.
+    { key: 'containerNo', label: 'Container No.', labelKey: 'freight.fields.containerNo', type: 'text' },
     { key: 'containerType', label: 'Type', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true },
     { key: 'sealNo', label: 'Seal', labelKey: 'freight.fields.sealNo', type: 'text' },
     { key: 'netWeightKg', label: 'Net Weight', labelKm: 'ទម្ងន់សុទ្ធ', labelKey: 'freight.ui.cols.netWeight', type: 'number' },
@@ -83,6 +85,7 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
   computeRow: computeContainerPaymentLine,
   rowDefaults: containerPaymentRowDefaults,
   pricing: true,
+  lineDetails: true,
 }
 
 /**
@@ -98,17 +101,14 @@ export const JOB_FINANCE_LINES_TABLE: FreightTable = {
   titleKm: 'បន្ទាត់ហិរញ្ញវត្ថុ',
   columns: [
     { key: 'type', label: 'Type', labelKm: 'ប្រភេទ', labelKey: 'freight.ui.cols.type', type: 'text', computed: true },
-    { key: 'reference', label: 'Reference', labelKm: 'លេខយោង', labelKey: 'freight.ui.cols.reference', type: 'text' },
     { key: 'date', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', labelKey: 'freight.ui.cols.date', type: 'date' },
     { key: 'description', label: 'Description', labelKm: 'បរិយាយ', labelKey: 'freight.ui.cols.description', type: 'text', required: true },
-    { key: 'party', label: 'Party', labelKm: 'ភាគី', labelKey: 'freight.ui.cols.party', type: 'text' },
-    { key: 'quantity', label: 'Qty', labelKm: 'ចំនួន', labelKey: 'freight.ui.qty', type: 'number' },
-    { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកត្តរ', labelKey: 'freight.ui.unitPriceCol', type: 'number' },
+    { key: 'party', label: 'Business Party', labelKm: 'ដៃគូអាជីវកម្ម', labelKey: 'freight.ui.cols.customer', type: 'text' },
     { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', labelKey: 'freight.ui.cols.amount', type: 'number', computed: true },
-    { key: 'outstanding', label: 'Outstanding', labelKm: 'នៅសល់', labelKey: 'freight.ui.outstandingAmount', type: 'number', computed: true },
-    { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព', labelKey: 'freight.ui.cols.status', type: 'text' },
-    { key: 'remark', label: 'Remark', labelKm: 'កំណត់សម្គាល់', labelKey: 'freight.ui.cols.remark', type: 'text' },
+    { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព', labelKey: 'freight.ui.status', type: 'text', computed: true },
   ],
+  // This grid is read-only; expenses are added through the tab's own dialog.
+  hideAddRow: true,
   addLabel: 'Add expense',
   addLabelKey: 'freight.ui.addExpense',
   computeRow: computeJobFinanceLine,

@@ -1,5 +1,7 @@
-import { useSettingsRepositories } from '~/repositories'
+import { useLcsRepositories, useSettingsRepositories } from '~/repositories'
 import { createClientId } from '~/utils/client-id'
+import { hasSourcePermission } from '~/utils/freight/permissions'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import { safeExternalUrl, safeFilePreviewUrl } from '~/utils/security/url'
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -125,16 +127,31 @@ export function revokeFilePreview(row: Record<string, unknown>) {
   previewCache.delete(key)
 }
 
-export function useFileAttachments() {
+const DEFAULT_ALLOWED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'docx', 'xlsx', 'csv']
+
+/**
+ * File picker state shared by every `kind: 'files'` table.
+ *
+ * When the host supplies an upload context the selected files are stored by the
+ * attachment API and the returned row (with its URL/storage key) is what the
+ * document saves. Without a context the legacy local-preview row is kept, so
+ * pages that do not own a persisted record still behave as before.
+ */
+export function useFileAttachments(options: {
+  /** Read at pick time: the document id may arrive after the table mounts. */
+  upload?: () => { module: string, recordNo: string } | undefined
+} = {}) {
   const inputRef = ref<HTMLInputElement | null>(null)
   const auth = useAuthStore()
   const toast = useToast()
   const { t } = useI18n()
   const maxMb = useState('max-upload-size-mb', () => 50)
+  const allowedExtensions = useState<string[]>('allowed-upload-extensions', () => DEFAULT_ALLOWED_EXTENSIONS)
+  const uploading = ref(false)
   /**
    * Rejected files are reported next to the file grid, not in a toast. The
-   * accepted files are still added, so one oversized file does not discard the
-   * rest of the selection.
+   * accepted files are still added, so one bad file does not discard the rest
+   * of the selection.
    */
   const rejected = ref<string[]>([])
   const maxSizeMb = computed(() => maxMb.value)
@@ -144,9 +161,15 @@ export function useFileAttachments() {
       const config = await useSettingsRepositories().appConfig.get()
       const next = Number(config.general?.maxUploadSizeMb)
       if (Number.isFinite(next) && next > 0) maxMb.value = next
+      const configured = config.security?.allowedUploadExtensions
+      if (Array.isArray(configured) && configured.length) {
+        allowedExtensions.value = configured
+          .map(value => String(value).trim().toLowerCase().replace(/^\./, ''))
+          .filter(Boolean)
+      }
     }
     catch {
-      /* keep default */
+      /* keep defaults */
     }
   })
 
@@ -154,25 +177,89 @@ export function useFileAttachments() {
     inputRef.value?.click()
   }
 
-  function rowsFromInput(event: Event) {
+  function uploadedRow(meta: Record<string, unknown>, file: File, uploadedBy: string, uploadedAt: string) {
+    const previewKey = createClientId('file')
+    rememberFilePreview(previewKey, file)
+    return {
+      id: String(meta.id || ''),
+      fileName: String(meta.fileName || meta.name || file.name),
+      file: String(meta.fileName || meta.name || file.name),
+      uploadedBy,
+      uploadedAt: String(meta.uploadedAt || uploadedAt),
+      uploadDate: String(meta.uploadedAt || uploadedAt).slice(0, 10),
+      mimeType: String(meta.mimeType || mimeFromFileName(file.name, file.type)),
+      fileSize: Number(meta.sizeBytes || file.size),
+      url: meta.url,
+      storageKey: meta.storageKey,
+      note: String(meta.note || ''),
+      previewKey,
+    }
+  }
+
+  async function rowsFromInput(event: Event): Promise<Array<Record<string, unknown>>> {
     const input = event.target as HTMLInputElement
     const files = Array.from(input.files || [])
     input.value = ''
     const uploadedBy = String(auth.user?.name || t('freight.ui.currentUser'))
     const uploadedAt = new Date().toISOString()
-    const accepted: Array<Record<string, unknown>> = []
-    const tooLarge: string[] = []
+    const acceptedFiles: File[] = []
+    const errors: string[] = []
     for (const file of files) {
       if (file.size > maxMb.value * 1024 * 1024) {
-        tooLarge.push(`${file.name} — ${t('freight.ui.fileTooLarge', { size: maxMb.value })}`)
+        errors.push(`${file.name} — ${t('freight.ui.fileTooLarge', { size: maxMb.value })}`)
         continue
       }
-      accepted.push(attachmentRowFromFile(file, uploadedBy, uploadedAt))
+      if (!allowedExtensions.value.includes(extensionOf(file.name))) {
+        errors.push(`${file.name} — ${t('freight.ui.fileTypeRejected')}`)
+        continue
+      }
+      acceptedFiles.push(file)
     }
-    rejected.value = tooLarge
-    if (accepted.length) toast.add({ title: t('freight.ui.fileUploaded'), color: 'success' })
-    return accepted
+    rejected.value = errors
+    if (!acceptedFiles.length) return []
+
+    const upload = options.upload?.()
+    if (!upload) {
+      const local = acceptedFiles.map(file => attachmentRowFromFile(file, uploadedBy, uploadedAt))
+      toast.add({ title: t('freight.ui.fileUploaded'), color: 'success' })
+      return local
+    }
+
+    uploading.value = true
+    try {
+      const repository = useLcsRepositories().attachments
+      const rows: Array<Record<string, unknown>> = []
+      for (const file of acceptedFiles) {
+        const meta = await repository.upload(file, upload)
+        rows.push(uploadedRow(meta as Record<string, unknown>, file, uploadedBy, uploadedAt))
+      }
+      toast.add({ title: t('freight.ui.fileUploaded'), color: 'success' })
+      return rows
+    }
+    catch (error) {
+      rejected.value = [...errors, apiErrorMessage(error, t('api.somethingWentWrong'))]
+      return []
+    }
+    finally {
+      uploading.value = false
+    }
   }
 
-  return { inputRef, openPicker, rowsFromInput, rejected, maxSizeMb }
+  /**
+   * Remove the stored file when the caller may delete attachments. The row is
+   * detached from the document either way; without `attachment.delete` the
+   * stored object stays for audit instead of being destroyed.
+   */
+  async function removeUploaded(row: Record<string, unknown>) {
+    const id = String(row.id || '')
+    if (!id || !hasSourcePermission(auth.user, 'attachment.delete')) return
+    try {
+      await useLcsRepositories().attachments.remove([id])
+    }
+    catch (error) {
+      rejected.value = [apiErrorMessage(error, t('api.somethingWentWrong'))]
+    }
+  }
+
+  return { inputRef, openPicker, rowsFromInput, rejected, maxSizeMb, uploading, removeUploaded }
 }

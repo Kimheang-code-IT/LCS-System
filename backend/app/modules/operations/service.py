@@ -135,7 +135,75 @@ async def list_service_orders(session: AsyncSession, context: RequestContext, pa
         page,
         status=normalize_order_status(page.status) if page.status else None,
     )
-    return paged([order_record(row, row.data or {}) for row in rows], page, total)
+    order_ids = [row.id for row in rows]
+    containers: list[ServiceOrderContainer] = []
+    requirements: list[ServiceOrderContainerRequirement] = []
+    if order_ids:
+        containers = list(
+            (
+                await session.execute(
+                    select(ServiceOrderContainer)
+                    .where(ServiceOrderContainer.service_order_id.in_(order_ids))
+                    .order_by(ServiceOrderContainer.id)
+                )
+            ).scalars().all()
+        )
+        requirements = list(
+            (
+                await session.execute(
+                    select(ServiceOrderContainerRequirement)
+                    .where(ServiceOrderContainerRequirement.service_order_id.in_(order_ids))
+                    .order_by(ServiceOrderContainerRequirement.id)
+                )
+            ).scalars().all()
+        )
+    labels = await _container_type_labels(
+        session,
+        {int(c.container_type_id) for c in containers} | {int(r.container_type_id) for r in requirements},
+    )
+    containers_by_order: dict[int, list[dict[str, Any]]] = {}
+    for container in containers:
+        containers_by_order.setdefault(container.service_order_id, []).append(
+            _container_payload(container, labels.get(int(container.container_type_id)))
+        )
+    requirements_by_order: dict[int, list[dict[str, Any]]] = {}
+    for requirement in requirements:
+        requirements_by_order.setdefault(requirement.service_order_id, []).append(
+            _requirement_payload(requirement, labels.get(int(requirement.container_type_id)))
+        )
+    revision_ids = [row.quotation_revision_id for row in rows if row.quotation_revision_id]
+    quotations: dict[int, tuple[str, str]] = {}
+    if revision_ids:
+        quotations = {
+            revision_id: (str(quotation_id), quotation_no)
+            for revision_id, quotation_id, quotation_no in (
+                await session.execute(
+                    select(QuotationRevision.id, Quotation.id, Quotation.quotation_no)
+                    .join(Quotation, Quotation.id == QuotationRevision.quotation_id)
+                    .where(QuotationRevision.id.in_(revision_ids))
+                )
+            ).all()
+        }
+    records = []
+    from app.core.users import user_display_names
+
+    creator_names = await user_display_names(session, (row.created_by_user_id for row in rows))
+    for row in rows:
+        extra: dict[str, Any] = {"createdBy": creator_names.get(row.created_by_user_id)}
+        if row.quotation_revision_id:
+            quotation = quotations.get(row.quotation_revision_id)
+            if quotation:
+                extra["quotationId"], extra["quotationNo"] = quotation
+        # Database rows win when they exist, but an order created before the rows
+        # were exposed keeps its legacy JSON copy instead of appearing empty.
+        containers_for_order = containers_by_order.get(row.id)
+        if containers_for_order:
+            extra["actualContainers"] = containers_for_order
+        requirements_for_order = requirements_by_order.get(row.id)
+        if requirements_for_order:
+            extra["containerRequirements"] = requirements_for_order
+        records.append(order_record(row, row.data or {}, extra))
+    return paged(records, page, total)
 
 
 async def order_route_payloads(session: AsyncSession, order_id: int) -> list[dict[str, Any]]:
@@ -156,11 +224,21 @@ async def get_service_order(session: AsyncSession, context: RequestContext, iden
     order = await resolve_order(session, context, identifier)
     containers, requirements = await OperationsRepository(session).order_containers(order.id)
     route = await order_route_payloads(session, order.id)
-    extra: dict[str, Any] = {
-        "containers": [_container_payload(c) for c in containers],
-        "containerRequirements": [_requirement_payload(r) for r in requirements],
-        "components": [],
-    }
+    labels = await _container_type_labels(
+        session,
+        {int(c.container_type_id) for c in containers} | {int(r.container_type_id) for r in requirements},
+    )
+    container_payloads = [_container_payload(c, labels.get(int(c.container_type_id))) for c in containers]
+    extra: dict[str, Any] = {"components": []}
+    if container_payloads:
+        # Prepared or numbered rows are authoritative once they exist; an order
+        # without rows keeps whatever JSON copy it was created with.
+        extra["containers"] = container_payloads
+        extra["actualContainers"] = container_payloads
+    if requirements:
+        extra["containerRequirements"] = [
+            _requirement_payload(r, labels.get(int(r.container_type_id))) for r in requirements
+        ]
     if route:
         extra["places"] = route
     return order_record(order, order.data or {}, extra)
@@ -433,6 +511,7 @@ async def create_service_order_from_quotation(
         )
     ).scalars().all()
     requirement_by_source: dict[int, ServiceOrderContainerRequirement] = {}
+    prepared: list[ServiceOrderContainer] = []
     for source in requirements:
         requirement = ServiceOrderContainerRequirement(
             service_order_id=order.id,
@@ -446,6 +525,28 @@ async def create_service_order_from_quotation(
         session.add(requirement)
         await session.flush()
         requirement_by_source[source.id] = requirement
+        # One pending box per required unit: the number is entered when the box is
+        # actually collected, so the row starts with no identifier rather than a
+        # fabricated one. Re-conversion cannot duplicate these because a quotation
+        # converts once (idempotency key + duplicate guard in the quotation service).
+        for _ in range(max(1, int(source.quantity or 1))):
+            prepared.append(
+                ServiceOrderContainer(
+                    service_order_id=order.id,
+                    container_requirement_id=requirement.id,
+                    container_type_id=source.container_type_id,
+                    container_number=None,
+                    status="EXPECTED",
+                    gross_weight_kg=source.gross_weight_kg,
+                    data={
+                        "sourceQuotationContainerId": str(source.id),
+                        "prepared": True,
+                    },
+                )
+            )
+    if prepared:
+        session.add_all(prepared)
+        await session.flush()
 
     pricing = ServiceOrderPricing(
         service_order_id=order.id,
@@ -481,18 +582,20 @@ async def create_service_order_from_quotation(
     return order
 
 
-def _container_payload(container: ServiceOrderContainer) -> dict[str, Any]:
+def _container_payload(container: ServiceOrderContainer, type_label: str | None = None) -> dict[str, Any]:
     payload = dict(container.data or {})
     payload.update(
         {
             "id": str(container.id),
             "serviceOrderId": str(container.service_order_id),
             "containerRequirementId": str(container.container_requirement_id) if container.container_requirement_id else None,
-            "containerType": str(container.container_type_id),
+            "containerType": type_label or str(container.container_type_id),
             "containerTypeId": container.container_type_id,
-            "containerNumber": container.container_number,
-            "containerNo": container.container_number,
+            "containerNumber": container.container_number or "",
+            "containerNo": container.container_number or "",
+            "pending": not bool(container.container_number),
             "sealSerial": container.seal_serial,
+            "sealNo": container.seal_serial,
             "status": container.status,
             "netWeightKg": float(container.net_weight_kg) if container.net_weight_kg is not None else None,
             "grossWeightKg": float(container.gross_weight_kg) if container.gross_weight_kg is not None else None,
@@ -503,38 +606,69 @@ def _container_payload(container: ServiceOrderContainer) -> dict[str, Any]:
     return payload
 
 
-def _requirement_payload(requirement: ServiceOrderContainerRequirement) -> dict[str, Any]:
+def _requirement_payload(requirement: ServiceOrderContainerRequirement, type_label: str | None = None) -> dict[str, Any]:
     return {
         "id": str(requirement.id),
         "serviceOrderId": str(requirement.service_order_id),
         "containerTypeId": requirement.container_type_id,
-        "containerType": str(requirement.container_type_id),
+        "containerType": type_label or str(requirement.container_type_id),
         "quantity": float(requirement.quantity or 0),
         "grossWeightKg": float(requirement.gross_weight_kg) if requirement.gross_weight_kg is not None else None,
+        "description": requirement.description,
         "remarks": requirement.remarks,
     }
+
+
+async def _container_type_labels(session: AsyncSession, ids: set[int]) -> dict[int, str]:
+    """Human label for each container type, so a pending row reads ``40HC`` not ``3``."""
+    from app.modules.master_data.models import ContainerType
+
+    if not ids:
+        return {}
+    rows = (
+        await session.execute(select(ContainerType.id, ContainerType.code, ContainerType.name).where(ContainerType.id.in_(ids)))
+    ).all()
+    return {int(row[0]): str(row[1] or row[2] or row[0]) for row in rows}
 
 
 async def list_containers(session: AsyncSession, context: RequestContext, identifier: str) -> list[dict]:
     order = await resolve_order(session, context, identifier)
     rows = (
-        await session.execute(select(ServiceOrderContainer).where(ServiceOrderContainer.service_order_id == order.id))
+        await session.execute(
+            select(ServiceOrderContainer)
+            .where(ServiceOrderContainer.service_order_id == order.id)
+            .order_by(ServiceOrderContainer.id)
+        )
     ).scalars().all()
-    return [_container_payload(row) for row in rows]
+    labels = await _container_type_labels(session, {int(row.container_type_id) for row in rows})
+    return [_container_payload(row, labels.get(int(row.container_type_id))) for row in rows]
 
 
 async def add_container(session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]) -> dict:
+    """Create a container, or update the prepared row when ``id`` is supplied.
+
+    A row prepared from a quotation requirement starts with no number; supplying
+    the number later updates that same row instead of creating a second one.
+    """
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot add containers to an inactive service order.")
     from app.core.validation import parse_decimal
 
     data = CONTAINER_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
+    existing: ServiceOrderContainer | None = None
+    container_id = _int_or_none(data.get("id"))
+    if container_id is not None:
+        existing = await session.get(ServiceOrderContainer, container_id)
+        if existing is None or existing.service_order_id != order.id:
+            raise NotFound("Container not found.")
 
     errors: dict[str, str] = {}
     container_number = str(data.get("containerNumber") or data.get("container_number") or data.get("containerNo") or "").strip()
     if not container_number:
-        errors["containerNumber"] = "This field is required."
+        # Only a prepared row may stay unnumbered; a manually added box must be identified.
+        if existing is None:
+            errors["containerNumber"] = "This field is required."
     elif len(container_number) > 32:
         errors["containerNumber"] = "Use at most 32 characters."
     elif not all(char.isalnum() or char in " -_" for char in container_number):
@@ -557,11 +691,17 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
         errors["returnDate"] = "Cannot be before the pickup date."
     if errors:
         raise ValidationFailed("Please correct the container details.", errors)
-    if (
-        await session.execute(select(ServiceOrderContainer).where(ServiceOrderContainer.container_number == container_number))
-    ).scalars().first():
-        raise Conflict("DUPLICATE_NUMBER", "Container number already exists.", {"containerNumber": "Already in use"})
+    if container_number:
+        clash = (
+            await session.execute(
+                select(ServiceOrderContainer).where(ServiceOrderContainer.container_number == container_number)
+            )
+        ).scalars().first()
+        if clash is not None and (existing is None or clash.id != existing.id):
+            raise Conflict("DUPLICATE_NUMBER", "Container number already exists.", {"containerNumber": "Already in use"})
     container_type_id = data.get("containerTypeId") or data.get("container_type_id")
+    if not container_type_id and existing is not None:
+        container_type_id = existing.container_type_id
     if not container_type_id:
         from app.modules.master_data.service import resolve_or_create_container_type
 
@@ -578,22 +718,78 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
             "That container type is inactive.",
             {"containerType": "Choose an active container type."},
         )
-    container = ServiceOrderContainer(
+    payload_data = jsonable({k: v for k, v in data.items() if k not in {"id"}})
+    container = existing or ServiceOrderContainer(
         service_order_id=order.id,
         container_requirement_id=_int_or_none(data.get("containerRequirementId") or data.get("container_requirement_id")),
         container_type_id=int(container_type_id),
-        container_number=container_number,
-        seal_serial=data.get("sealSerial") or data.get("seal_serial"),
-        status=str(data.get("status") or "EXPECTED"),
-        net_weight_kg=net_weight,
-        gross_weight_kg=gross_weight,
-        pickup_date=pickup_date,
-        return_date=return_date,
-        data=jsonable({k: v for k, v in data.items() if k not in {"id"}}),
+        container_number=None,
     )
+    if existing is not None:
+        # Keep the link to the prepared requirement when the form does not carry it.
+        if data.get("containerRequirementId") or data.get("container_requirement_id"):
+            container.container_requirement_id = _int_or_none(
+                data.get("containerRequirementId") or data.get("container_requirement_id")
+            )
+        container.data = jsonable({**(existing.data or {}), **payload_data})
+    else:
+        container.data = payload_data
+    container.container_type_id = int(container_type_id)
+    container.container_number = container_number or None
+    container.seal_serial = data.get("sealSerial") or data.get("seal_serial") or None
+    container.status = str(data.get("status") or (existing.status if existing is not None else "EXPECTED"))
+    container.net_weight_kg = net_weight if net_weight else None
+    container.gross_weight_kg = gross_weight if gross_weight else None
+    container.pickup_date = pickup_date
+    container.return_date = return_date
     session.add(container)
     await session.commit()
-    return _container_payload(container)
+    label = str(container_type.code or container_type.name or container_type_id)
+    return _container_payload(container, label)
+
+
+async def delete_containers(
+    session: AsyncSession, context: RequestContext, identifier: str, ids: list[int]
+) -> int:
+    """Delete containers unless a fee row references them.
+
+    Container payments live in the order's document data (one row per charge),
+    so the guard reads the same structure the form writes. A referenced container
+    is never silently removed; the caller reports the conflict instead.
+    """
+    order = await resolve_order(session, context, identifier)
+    rows = (
+        await session.execute(
+            select(ServiceOrderContainer).where(
+                ServiceOrderContainer.service_order_id == order.id,
+                ServiceOrderContainer.id.in_(ids),
+            )
+        )
+    ).scalars().all()
+    payments = (order.data or {}).get("containerPayments")
+    referenced: set[str] = set()
+    if isinstance(payments, list):
+        for payment in payments:
+            if not isinstance(payment, dict):
+                continue
+            for key in ("serviceOrderContainerId", "containerNo"):
+                value = str(payment.get(key) or "").strip()
+                if value:
+                    referenced.add(value)
+    blocked = [
+        row for row in rows
+        if row.container_number and (str(row.id) in referenced or row.container_number in referenced)
+    ]
+    if blocked:
+        raise Conflict(
+            "CONTAINER_IN_USE",
+            "Remove the linked container payment before deleting this container.",
+            {"containers": ", ".join(str(row.container_number) for row in blocked)},
+        )
+    for row in rows:
+        await session.delete(row)
+    await session.commit()
+    return len(rows)
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -636,11 +832,16 @@ async def _order_no(session: AsyncSession, order_id: int) -> str | None:
     return order.service_order_no if order else None
 
 
-async def _charge_with_details(session: AsyncSession, charge: ServiceOrderCharge) -> dict[str, Any]:
+async def _charge_with_details(
+    session: AsyncSession,
+    charge: ServiceOrderCharge,
+    creator_name: str | None = None,
+) -> dict[str, Any]:
     """Charge payload enriched with its fee lines and, when present, the linked invoice."""
     from app.modules.finance.models import FinancialDocument, FinancialDocumentSource
 
     payload = charge_record(charge, charge.data or {})
+    payload["createdBy"] = creator_name
     payload["jobNo"] = await _order_no(session, charge.service_order_id)
     lines = (
         await session.execute(
@@ -649,11 +850,19 @@ async def _charge_with_details(session: AsyncSession, charge: ServiceOrderCharge
             .order_by(ServiceOrderChargeLine.line_no)
         )
     ).scalars().all()
+    from app.modules.master_data.models import FeeType
+
+    fee_ids = [line.fee_type_id for line in lines if line.fee_type_id]
+    fee_names = (
+        dict((await session.execute(select(FeeType.id, FeeType.name).where(FeeType.id.in_(fee_ids)))).all())
+        if fee_ids else {}
+    )
     payload["feeLines"] = [
         {
             "id": str(line.id),
             "lineNo": line.line_no,
             "feeTypeId": line.fee_type_id,
+            "feeType": fee_names.get(line.fee_type_id),
             "description": line.description,
             "quantity": float(line.quantity or 0),
             "unit": line.unit_code,
@@ -685,6 +894,18 @@ async def _charge_with_details(session: AsyncSession, charge: ServiceOrderCharge
         if document is not None:
             payload["financialDocumentId"] = str(document.id)
             payload["invoiceNo"] = document.document_no
+    if not payload.get("customer"):
+        # The list needs the party even when the charge was created without its
+        # own free-text company; fall back to the linked service order's party.
+        party_name = (
+            await session.execute(
+                select(BusinessParty.display_name, BusinessParty.legal_name)
+                .join(ServiceOrder, ServiceOrder.customer_party_id == BusinessParty.id)
+                .where(ServiceOrder.id == charge.service_order_id)
+            )
+        ).first()
+        if party_name is not None:
+            payload["customer"] = party_name[0] or party_name[1]
     return payload
 
 
@@ -700,7 +921,13 @@ async def list_charges(session: AsyncSession, context: RequestContext, page: Pag
             .offset(page.offset)
         )
     ).scalars().all()
-    items = [await _charge_with_details(session, row) for row in rows]
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
+    items = [
+        await _charge_with_details(session, row, creators.get(row.created_by_user_id))
+        for row in rows
+    ]
     return paged(items, page, total)
 
 
@@ -713,14 +940,23 @@ async def list_order_charges(session: AsyncSession, context: RequestContext, ide
             .order_by(ServiceOrderCharge.id)
         )
     ).scalars().all()
-    return [await _charge_with_details(session, row) for row in rows]
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
+    return [
+        await _charge_with_details(session, row, creators.get(row.created_by_user_id))
+        for row in rows
+    ]
 
 
 async def get_charge(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
     charge = await session.get(ServiceOrderCharge, charge_id)
     if charge is None:
         raise NotFound("Service charge not found.")
-    return await _charge_with_details(session, charge)
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, [charge.created_by_user_id])
+    return await _charge_with_details(session, charge, creators.get(charge.created_by_user_id))
 
 
 async def save_charge(session: AsyncSession, context: RequestContext, data: dict[str, Any], order_identifier: str | None = None) -> dict:
@@ -940,6 +1176,43 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
     return [_attachment_payload(item) for item in links]
 
 
+async def link_attachment(
+    session: AsyncSession,
+    attachment_id: int,
+    module: str,
+    record_no: str,
+) -> None:
+    """Link an upload to the document that owns it, when the caller supplied one.
+
+    The upload endpoint predated links, so files were stored but never listed
+    against their record. The link is optional: a generic upload without a
+    module/record stays usable on its own.
+    """
+    entity_type = str(module or "").strip()[:64]
+    entity_id = _int_or_none(record_no)
+    if not entity_type or entity_id is None:
+        return
+    existing = (
+        await session.execute(
+            select(AttachmentLink.id).where(
+                AttachmentLink.attachment_id == attachment_id,
+                AttachmentLink.entity_type == entity_type,
+                AttachmentLink.entity_id == entity_id,
+            )
+        )
+    ).first()
+    if existing is not None:
+        return
+    session.add(
+        AttachmentLink(
+            attachment_id=attachment_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    )
+    await session.commit()
+
+
 async def delete_attachments(session: AsyncSession, context: RequestContext, ids: list[int]) -> int:
     """Soft-delete attachments so they stop being served.
 
@@ -990,8 +1263,37 @@ def _attachment_payload(attachment: Attachment) -> dict[str, Any]:
         "storageProvider": attachment.storage_provider,
         "storageKey": attachment.storage_key,
         "uploadedAt": attachment.uploaded_at.isoformat() if attachment.uploaded_at else None,
+        "note": attachment.note,
         "url": url,
     }
+
+
+ATTACHMENT_NOTE_MAX_LENGTH = 1000
+
+
+def _attachment_note(value: Any) -> str | None:
+    """Normalize the optional note; over-long text is refused, not truncated."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) > ATTACHMENT_NOTE_MAX_LENGTH:
+        raise ValidationFailed(
+            f"The note must be {ATTACHMENT_NOTE_MAX_LENGTH} characters or fewer.",
+            {"note": "Note is too long"},
+        )
+    return text
+
+
+async def update_attachment_note(
+    session: AsyncSession, context: RequestContext, attachment_id: int, note: Any
+) -> dict:
+    """Update only the note. The file and its links are never touched."""
+    attachment = await session.get(Attachment, attachment_id)
+    if attachment is None or attachment.is_deleted:
+        raise NotFound("Attachment not found.")
+    attachment.note = _attachment_note(note)
+    await session.commit()
+    return _attachment_payload(attachment)
 
 
 _UPLOAD_TYPES = {
@@ -1104,10 +1406,17 @@ async def presign(session: AsyncSession, file_name: str, mime_type: str = "") ->
 
 
 async def store_upload(
-    session: AsyncSession, context: RequestContext, file_name: str, mime_type: str, content: bytes, storage_key: str | None = None
+    session: AsyncSession,
+    context: RequestContext,
+    file_name: str,
+    mime_type: str,
+    content: bytes,
+    storage_key: str | None = None,
+    note: str | None = None,
 ) -> dict:
     storage = get_storage()
     clean_name, extension, content_type = _upload_metadata(file_name, await effective_upload_extensions(session))
+    clean_note = _attachment_note(note)
     max_bytes = settings.upload_max_size_mb * 1024 * 1024
     if not content or len(content) > max_bytes:
         raise ValidationFailed(
@@ -1126,6 +1435,7 @@ async def store_upload(
         file_size_bytes=len(content),
         storage_provider=storage.provider,
         uploaded_by_user_id=context.user_id,
+        note=clean_note,
     )
     session.add(attachment)
     await session.commit()

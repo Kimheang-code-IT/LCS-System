@@ -129,12 +129,19 @@ _REFERENCE_COLLECTIONS = (
     "tradeDirections",
     "containerTypes",
     "transportTypes",
-    "transportAssets",
+    # "transportAssets" has its own three-state policy below (Maintenance).
+    "transportAssetIdentityTypes",
+    "capacityUnits",
     "feeTypes",
     "currencies",
 )
 
 _ACTIVE_STATUSES = ("ACTIVE", "INACTIVE")
+
+#: An asset parked for repairs must not be available for a new leg, but it is a
+#: normal (and reversible) state. `MAINTENANCE` therefore completes the
+#: reference toggle into a fixed vocabulary a row menu can move between freely.
+_ASSET_STATUSES = ("ACTIVE", "INACTIVE", "MAINTENANCE")
 
 #: Progress vocabularies for the generic reference store. The spellings match
 #: the option lists the forms used before status moved to the row menu, so the
@@ -222,6 +229,15 @@ def _policies() -> dict[str, StatusPolicy]:
             statuses=_ACTIVE_STATUSES,
             transitions=_toggle_transitions(),
         )
+
+    # A transport asset moves between Active / Inactive / Maintenance from the
+    # row "..." menu; historical legs keep their references either way.
+    policies["transportAssets"] = StatusPolicy(
+        entity_type="transportAssets",
+        store="reference",
+        statuses=_ASSET_STATUSES,
+        transitions=_vocabulary_transitions(_ASSET_STATUSES),
+    )
 
     # Party Roles are a reference table with their own matrix page, so their
     # status actions use the page permission before the legacy coarse code.

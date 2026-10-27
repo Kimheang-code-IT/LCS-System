@@ -1,4 +1,7 @@
+import { TelegramEndpoints } from './api-v1-endpoints'
+
 export const ApiEndpoints = {
+  ...TelegramEndpoints,
   APP_INFO: '/api/v1/settings/app-info',
   APP_INFO_RESET: '/api/v1/settings/app-info/reset',
   APP_CONFIG: '/api/v1/settings/app-config',

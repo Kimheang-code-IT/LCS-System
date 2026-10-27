@@ -18,6 +18,14 @@ from app.modules.backup.sheets import BackupConfigurationError, SheetsApiError
 router = APIRouter()
 
 
+async def _record_restore_failure(session: AsyncSession, context: RequestContext) -> None:
+    from app.modules.audit.service import write_audit
+
+    await session.rollback()
+    await write_audit(session, context, event_type="BACKUP_RESTORE_FAILED", entity_type="backup", entity_id=0, action="restore", result="FAILED", reason="Restore execution failed; review authorized backup logs.")
+    await session.commit()
+
+
 @router.get("/backup/status")
 async def backup_status(
     context: RequestContext = Depends(require_permission("backup.read")),
@@ -89,7 +97,11 @@ async def restore_backup(
     except ValueError as exc:
         raise ValidationFailed(str(exc), {"confirm": str(exc)}) from exc
     except SheetsApiError as exc:
+        await _record_restore_failure(session, context)
         raise ValidationFailed(f"Google Sheets error: {exc}", {"spreadsheetId": str(exc)}) from exc
+    except Exception:
+        await _record_restore_failure(session, context)
+        raise
     return {"data": result}
 
 

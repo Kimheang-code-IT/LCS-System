@@ -3,6 +3,7 @@ import {
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   generateStrongPassword,
+  passwordRequirements,
   validatePasswordStrength,
 } from '../app/utils/validation/field-rules'
 import { issueMessage, ISSUE_KEYS } from '../app/utils/validation/messages'
@@ -22,7 +23,37 @@ describe('password policy', () => {
 
   it('refuses a password below the minimum', () => {
     const issue = validatePasswordStrength('short')
-    expect(issue).toEqual({ code: 'minLength', params: { minLength: PASSWORD_MIN_LENGTH } })
+    expect(issue).toEqual({ code: 'passwordMinLength', params: { minLength: PASSWORD_MIN_LENGTH } })
+  })
+
+  it('refuses a password missing any required character class', () => {
+    // The five approved requirements, each proved independently.
+    expect(validatePasswordStrength('abc@1234')).toEqual({ code: 'passwordUppercase' })
+    expect(validatePasswordStrength('ABC@1234')).toEqual({ code: 'passwordLowercase' })
+    expect(validatePasswordStrength('Abcd@efg')).toEqual({ code: 'passwordNumber' })
+    expect(validatePasswordStrength('Abcd1234')).toEqual({ code: 'passwordSpecial' })
+    expect(validatePasswordStrength('Ab@123')).toMatchObject({ code: 'passwordMinLength' })
+  })
+
+  it('accepts the approved example passwords and longer passphrases', () => {
+    for (const password of ['Abc@1234', 'Freight#2026', 'Admin@12345']) {
+      expect(validatePasswordStrength(password), password).toBeNull()
+    }
+    // Length is a floor, not a fixed size.
+    expect(validatePasswordStrength('Freight-Forwarding-2026!')).toBeNull()
+    expect(validatePasswordStrength('Correct Horse Battery 2026!')).toBeNull()
+  })
+
+  it('reports one requirement at a time through the live checklist state', () => {
+    expect(passwordRequirements('Ab@123')).toMatchObject({
+      minLength: false,
+      uppercase: true,
+      lowercase: true,
+      number: true,
+      special: true,
+    })
+    const complete = passwordRequirements('Abc@1234')
+    expect(Object.values(complete).every(Boolean)).toBe(true)
   })
 
   it('refuses a password above the maximum', () => {
@@ -40,34 +71,46 @@ describe('password policy', () => {
       expect(validatePasswordStrength(` ${weak.toUpperCase()} `), weak).toEqual({ code: 'commonPassword' })
     }
     expect(validatePasswordStrength('letmein')).toEqual({
-      code: 'minLength',
+      code: 'passwordMinLength',
       params: { minLength: PASSWORD_MIN_LENGTH },
     })
-  })
-
-  it('accepts a password that meets the policy', () => {
-    expect(validatePasswordStrength('Sup3r-Secret-9')).toBeNull()
-    expect(validatePasswordStrength('correct horse battery staple')).toBeNull()
   })
 
   it('has copy for every code it can return', () => {
     expect(ISSUE_KEYS.minLength).toBe('validation.minLength')
     expect(ISSUE_KEYS.maxLength).toBe('validation.maxLength')
     expect(ISSUE_KEYS.commonPassword).toBe('validation.commonPassword')
+    expect(ISSUE_KEYS.passwordMinLength).toBe('validation.passwordMinLength')
+    expect(ISSUE_KEYS.passwordUppercase).toBe('validation.passwordUppercase')
+    expect(ISSUE_KEYS.passwordLowercase).toBe('validation.passwordLowercase')
+    expect(ISSUE_KEYS.passwordNumber).toBe('validation.passwordNumber')
+    expect(ISSUE_KEYS.passwordSpecial).toBe('validation.passwordSpecial')
   })
 
   it('renders a message that names the field', () => {
     const t = (key: string, params?: Record<string, unknown>) =>
       `${key}${params ? `|${JSON.stringify(params)}` : ''}`
     const issue = validatePasswordStrength('short')
-    expect(issueMessage(t, issue!, 'New password')).toContain('validation.minLength')
+    expect(issueMessage(t, issue!, 'New password')).toContain('validation.passwordMinLength')
   })
 })
 
 describe('generated passwords', () => {
   it('satisfies the policy it is generated against', () => {
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      expect(validatePasswordStrength(generateStrongPassword())).toBeNull()
+      const password = generateStrongPassword()
+      expect(validatePasswordStrength(password), password).toBeNull()
+    }
+  })
+
+  it('always contains every required class', () => {
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      expect(passwordRequirements(generateStrongPassword())).toMatchObject({
+        uppercase: true,
+        lowercase: true,
+        number: true,
+        special: true,
+      })
     }
   })
 

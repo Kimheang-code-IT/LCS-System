@@ -1,4 +1,17 @@
 /** Source OpenAPI `/api/v1` operations. Do not invent alternate verbs. */
+export const TelegramEndpoints = {
+  TELEGRAM_WEBHOOK_SETUP: '/api/v1/settings/telegram/webhook',
+  TELEGRAM_GROUP_PAIR: '/api/v1/settings/telegram/group/pair',
+  TELEGRAM_GROUP_CANDIDATE: '/api/v1/settings/telegram/group/candidate',
+  TELEGRAM_GROUP_CONFIRM: '/api/v1/settings/telegram/group/confirm',
+  TELEGRAM_GROUP: '/api/v1/settings/telegram/group',
+  TELEGRAM_MY_LINK: '/api/v1/auth/me/telegram',
+  TELEGRAM_MY_PAIR: '/api/v1/auth/me/telegram/pair',
+  TELEGRAM_MY_DISCONNECT: '/api/v1/auth/me/telegram/disconnect',
+  TELEGRAM_HISTORY: '/api/v1/settings/telegram/history',
+  TELEGRAM_HISTORY_RETRY: (id: number) => `/api/v1/settings/telegram/history/${id}/retry`,
+} as const
+
 export const ApiV1Endpoints = {
   SETUP_STATUS: '/api/v1/auth/setup/status',
   SETUP_INITIALIZE: '/api/v1/auth/setup/initialize',
@@ -27,6 +40,7 @@ export const ApiV1Endpoints = {
   QUOTATION_COMPARE: (revisionId: number | string, otherRevisionId: number | string) =>
     `/api/v1/quotation-revisions/${revisionId}/compare/${otherRevisionId}`,
   QUOTATION_CONVERT: (revisionId: number | string) => `/api/v1/quotation-revisions/${revisionId}/convert`,
+  QUOTATION_FROM_SERVICE_ORDER: (identifier: number | string) => `/api/v1/quotations/from-service-order/${identifier}`,
   SERVICE_ORDERS: '/api/v1/service-orders',
   SERVICE_ORDER: (id: number | string) => `/api/v1/service-orders/${id}`,
   SERVICE_ORDER_FINISH: (id: number | string) => `/api/v1/service-orders/${id}/finish`,
@@ -42,6 +56,7 @@ export const ApiV1Endpoints = {
     `/api/v1/service-orders/${id}/component-tabs/groups/${groupId}/rows/bulk`,
   COMPONENT_ATTRIBUTES: '/api/v1/component-attributes',
   COMPONENT_ATTRIBUTE: (id: number | string) => `/api/v1/component-attributes/${id}`,
+  COMPONENT_ATTRIBUTES_REORDER: '/api/v1/component-attributes/reorder',
   COMPONENT_GROUPS: '/api/v1/component-groups',
   COMPONENT_GROUP: (id: number | string) => `/api/v1/component-groups/${id}`,
   COMPONENT_GROUP_ATTRIBUTES: (id: number | string) => `/api/v1/component-groups/${id}/attributes`,
@@ -83,6 +98,8 @@ export const ApiV1Endpoints = {
   POSTING_RULES: '/api/v1/posting-rules',
   ATTACHMENTS_PRESIGN: '/api/v1/attachments/presign',
   ATTACHMENTS: '/api/v1/attachments',
+  ATTACHMENTS_ITEM: (id: number | string) => `/api/v1/attachments/${id}`,
+  ATTACHMENTS_UPLOAD: '/api/v1/attachments/upload',
   UI_SCHEMA: (page: string) => `/api/v1/ui-schemas/${encodeURIComponent(page)}`,
   AUDIT_EVENTS: '/api/v1/audit-events',
   USER_SET_PASSWORD: (id: number | string) => `/api/v1/users/${id}/password`,

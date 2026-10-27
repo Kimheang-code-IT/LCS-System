@@ -10,10 +10,30 @@ stable catalogue and the contract the Nuxt client relies on.
 
 Requests and responses use JSON. Authentication is a JWT access token sent as
 `Authorization: Bearer <token>`, or the HttpOnly access cookie set by the login
-endpoint. Refresh tokens rotate on every refresh. Browser requests that
+endpoint. Login/refresh return `data.user`, `expires_in` and authoritative Unix
+`expires_at`; `access_token` and `token_type` are included only when
+`AUTH_RETURN_TOKENS=true`. Refresh credentials are never returned in JSON.
+`POST /auth/refresh` accepts an empty JSON object and authenticates only with
+the HttpOnly refresh cookie; body/query refresh tokens are unsupported.
+Refresh tokens are opaque random values, hashed in PostgreSQL and rotated
+atomically on the same `user_sessions` row. Consumed hashes are retained in
+`used_refresh_tokens`. A duplicate within five seconds receives
+`409 REFRESH_CONFLICT` with no credential or cookie changes; later reuse revokes
+that session and records `REFRESH_REPLAY`. Browser requests that
 authenticate with cookies must also send the `X-CSRF-Token` header with the value
 of the `XSRF-TOKEN` cookie; the middleware rejects a missing or mismatched token
 with `CSRF_VALIDATION_FAILED`.
+
+Refresh/logout require the signed CSRF pair even when an Authorization header
+is present, and reject an Origin outside the configured trusted origins.
+Only `401 ACCESS_TOKEN_EXPIRED` authorizes a renewal/retry. `SESSION_EXPIRED`,
+`SESSION_REVOKED` and `SESSION_INVALID` require sign-in; refresh 401 responses
+clear auth cookies. Invalid signatures, issuer/audience errors, business errors
+and permission denials do not trigger automatic renewal. Every protected
+request validates the token's `sid` against the session and checks user status
+and token version. `X-User-Activity: 1` marks a user-driven API operation;
+activity writes are throttled to 15 seconds. Refresh, health checks, `/auth/me`
+and unmarked passive API calls never extend idle time.
 
 `tests/test_frontend_api_contract.py` statically checks every endpoint referenced
 by the frontend constants against the FastAPI route table, so a frontend call
@@ -123,10 +143,38 @@ handler and its request/response schemas are in the linked router.
 | DELETE | `/quotations` | Delete Quotations |
 | GET | `/quotations` | List Quotations |
 | POST | `/quotations` | Save Quotation |
+| POST | `/quotations/from-service-order/{identifier}` | Re-quote from a Service Order |
 | GET | `/quotations/{quotation_id}` | Get Quotation |
 | PUT | `/quotations/{quotation_id}` | Update Quotation |
 | GET | `/quotations/{quotation_id}/revisions` | List Revisions |
 | POST | `/quotations/{quotation_id}/revisions` | Create Revision |
+
+A new quotation requires a Quotation Date, a Business Party (or the legacy
+free-text `customer` name, which resolves or creates one) and a Trade Direction;
+an unknown supplied direction is refused rather than replaced. `validUntil` may
+not precede `date`.
+When `pricingLines` (or `lines`) are supplied the server recomputes every line
+and the revision roll-up from quantity, unit price, discount and tax, rounding
+each amount half-up to two decimals; a browser-supplied `amount`/`total` is
+never trusted. Route stops require a Place Role and a free-text location, keep
+their submitted order, and persist planned dates. `POST /attachments/upload`
+accepts optional `module`, `record_no` and `note` form fields and links the stored
+file to that document; the Files tab sends `module`/`record_no`.
+`PATCH /attachments/{attachment_id}` edits only that note (maximum 1000
+characters, empty clears it) and needs `attachment.upload`; the stored file is
+unchanged.
+
+`POST /quotations/from-service-order/{identifier}` is the re-quotation path: it
+accepts a service order id or number, copies the customer, trade direction, route
+stops, container requirements and priced lines into a **new** draft quotation, and
+records `sourceServiceOrderId` on the new record. The service order is read only —
+nothing on it, on its pricing or on the quotation it came from is modified. It
+requires `quotation.revise`.
+
+`POST /quotation-revisions/{revision_id}/convert` accepts an optional
+`Idempotency-Key` header: a replay with the same key returns the original
+conversion instead of creating a second service order, and a concurrent duplicate
+is rolled back and reported as `409 DUPLICATE_CONVERSION`.
 
 ### Service orders
 
@@ -145,7 +193,8 @@ handler and its request/response schemas are in the linked router.
 | POST | `/service-orders/{identifier}/component-tabs/groups/{group_id}/rows/bulk` | Bulk Save Component Group Rows |
 | GET | `/service-orders/{identifier}/configuration-version` | Get Service Order Configuration Version |
 | GET | `/service-orders/{identifier}/containers` | List Containers |
-| POST | `/service-orders/{identifier}/containers` | Add Container |
+| POST | `/service-orders/{identifier}/containers` | Add or number a Container (send `id` to update a prepared row) |
+| DELETE | `/service-orders/{identifier}/containers` | Delete Containers (refused while a payment references one) |
 | POST | `/service-orders/{identifier}/finish` | Finish Service Order |
 | GET | `/service-orders/{identifier}/invoice` | Get Service Order Invoice |
 | POST | `/service-orders/{identifier}/invoice` | Create Service Order Invoice |
@@ -175,6 +224,7 @@ handler and its request/response schemas are in the linked router.
 | DELETE | `/attachments` | Delete Attachments |
 | GET | `/attachments` | List Attachments |
 | GET | `/attachments/file/{storage_key}` | Download Attachment |
+| PATCH | `/attachments/{attachment_id}` | Update Attachment Note |
 | POST | `/attachments/presign` | Presign Attachment |
 | POST | `/attachments/upload` | Upload Attachment |
 
@@ -259,6 +309,7 @@ handler and its request/response schemas are in the linked router.
 | POST | `/component-attributes` | Create Component Attribute |
 | DELETE | `/component-attributes/{attribute_id}` | Delete Component Attribute |
 | PATCH | `/component-attributes/{attribute_id}` | Update Component Attribute |
+| POST | `/component-attributes/reorder` | Reorder Component Attributes |
 | DELETE | `/component-group-attributes/{membership_id}` | Remove Component Group Attribute |
 | PATCH | `/component-group-attributes/{membership_id}` | Update Component Group Attribute |
 | GET | `/component-groups` | List Component Groups |
@@ -294,6 +345,17 @@ handler and its request/response schemas are in the linked router.
 | POST | `/configuration-versions/{version_id}/retire` | Retire Configuration Version |
 | POST | `/configuration-versions/{version_id}/rollback` | Rollback Configuration Version |
 
+Component attributes are validated on both sides. `code` is a stable, unique,
+lower-case key (letters, digits, hyphens) and may not be reused; `select` and
+`multi_select` require a non-empty `options` array; `reference` requires a
+`referenceType` from `business_party`, `transport_asset`, `transport_type`,
+`container`, `fee_type` or `user`. `validationRules` accepts `min`, `max`,
+`minLength`, `maxLength` (non-negative numbers), `pattern` (a compilable regular
+expression) and the boolean flags `email`, `url`, `integer`, `nonNegative` and
+`positive`. A malformed rule is a 422 on `validationRules`. Deleting an attribute
+that a group, a saved Service Order row, or any published configuration snapshot
+still references archives it (`status = INACTIVE`) instead of removing the row.
+
 ### Settings, search and UI schemas
 
 | Method | Path | Purpose |
@@ -302,10 +364,10 @@ handler and its request/response schemas are in the linked router.
 | POST | `/search/ask` | Search Ask |
 | GET | `/settings/app-config` | Get App Config |
 | PATCH | `/settings/app-config` | Update App Config |
-| POST | `/settings/app-config/email/send-test` | Send Test Email |
-| POST | `/settings/app-config/email/test-connection` | Test Email Connection |
-| POST | `/settings/app-config/telegram/send-test` | Send Test Telegram |
-| POST | `/settings/app-config/telegram/test-connection` | Test Telegram Connection |
+| POST | `/settings/app-config/email/send-test` | Send Test Email (configuration check only) |
+| POST | `/settings/app-config/email/test-connection` | Test Email Connection (configuration check only) |
+| POST | `/settings/app-config/telegram/send-test` | Send Test Telegram (configuration check only) |
+| POST | `/settings/app-config/telegram/test-connection` | Test Telegram Connection (configuration check only) |
 | GET | `/settings/app-info` | Get App Info |
 | PATCH | `/settings/app-info` | Update App Info |
 | POST | `/settings/app-info/reset` | Reset App Info |
@@ -358,7 +420,7 @@ deactivate it first. The status command is separate:
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/{collection}/status-policy` | Read the status policy for the collection |
+| GET | `/{collection}/status-policy` | Read the status policy for the collection. Answer is `404` for a collection with no lifecycle (for example `auditLogs`, `archive`, report views); callers must treat that as "no status actions", not an error. |
 | POST | `/{collection}/{item_id}/status` | Change `ACTIVE` / `INACTIVE` status |
 
 Reference collections and their permission families:
@@ -371,16 +433,50 @@ Reference collections and their permission families:
 | `tradeDirections` | `master.trade_directions.*` | Import, export, transit, and related directions |
 | `containerTypes` | `master.container_types.*` | Size, kind, ISO code, dimensions, weight |
 | `transportTypes` | `master.transport_types.*` | |
-| `transportAssets` | `master.transport_assets.*` | |
+| `transportAssets` | `master.transport_assets.*` | `identityType` must name a live (non-archived) `transportAssetIdentityTypes` row that applies to the asset's transport type — a stored type that was later renamed or archived keeps describing the asset and stays editable, and only a value that actually changes is re-validated. The type's `validationPattern` is full-match: enforced on the supplied identity, and on the stored identity when only `identityType` moves. An asset saved without `identityType` defaults to the first applicable row. Optional `assetName`; `capacityValue` (>= 0) and `capacityUnit` (normally a `capacityUnits` code, the dropdown) are optional as a pair — a write leaving exactly one of them set is refused on the missing field, and a stored unit code is preserved even if the unit is later archived. Status is `ACTIVE` / `INACTIVE` / `MAINTENANCE` (three-state policy) |
+| `transportAssetIdentityTypes` | `master.transport_assets.*` | The asset identity vocabulary, seeded as data (License Plate, IMO Number, ...); unique active name, optional transport-type link, `identityLabel` / `identityPlaceholder` / `validationPattern` drive the asset form. A pattern must compile under Python `re` and be free of nested quantifiers such as `(x+)+`; a bad one is refused on save with a `validationPattern` field error, so the asset write path never meets a pattern that hangs |
+| `capacityUnits` | `master.transport_assets.*` | The asset capacity-unit list, seeded as data (PCS, KG, T, CBM, CTN, PAL); unique active `code` is what `transportAssets.capacityUnit` stores, `name` is the label, status is two-state |
 | `feeTypes` | `master.fee_types.*` | |
 | `currencies` | `master.currencies.*` | Includes currency rates |
 | `currencyRates` | `master.currencies.*` | Rate rows for a currency |
+| `documentTypes` | `master.reference.*` | Administrator-managed document classification, seeded with the ten canonical accounting behaviours. A custom row must reference one of them in `accountingBehavior`; a canonical code keeps its behaviour and cannot be deleted (`SYSTEM_DOCUMENT_TYPE`). `availableIn` lists where the type may be selected (financial_documents, service_order_finance, posting_rules, operations_documents, attachments). Financial documents accept `documentTypeId`; the canonical behaviour is stored as `documentType` and `documentTypeId/Code/Name` ride in the payload `data` echo |
 
 Generic records are stored in `module_records` and use the same CRUD shape:
 `companies`, `shipments`, `customs`, `documents`, `deliveries`,
 `customerPayments`, `supplierCosts`, and `supplierPayments`. Their authorization
 comes from the owning page and module; the record serializer and reference
 validator live in `master_data`.
+
+### Shared Excel Import & Export (`/api/v1/excel`)
+
+A centralized, allowlisted engine — only collections registered in
+`backend/app/modules/excel_io/registry.py` are reachable; the API never exposes
+arbitrary tables. Each collection read/export/template uses the module's view
+permission (`master.reference.view` for the Master Data lists); every import call
+requires the module's manage permission (`master.reference.manage`) — viewing a
+list is never enough to import. Uploads accept only `.xlsx`, are capped (10 MB,
+2 000 rows), reject formulas and stale template versions, and the confirmation is
+a short-lived session bound to the uploading user, module, file checksum, mode
+and validated preview; a token confirms at most once and the commit revalidates.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/excel/modules` | Supported modules with columns, match keys and permissions |
+| GET | `/api/v1/excel/{module}/template` | Download the generated .xlsx import template |
+| POST | `/api/v1/excel/{module}/validate` | Upload a workbook (`file`, `mode`), validate and preview (writes nothing) |
+| GET | `/api/v1/excel/imports/{token}` | Re-read the stored preview for the session owner |
+| POST | `/api/v1/excel/imports/{token}/commit` | Revalidate and commit the batch atomically (single use) |
+| POST | `/api/v1/excel/imports/{token}/cancel` | Discard a not-yet-committed session |
+| GET | `/api/v1/excel/imports/{token}/error-report` | Download the XLSX per-row error report |
+| POST | `/api/v1/excel/{module}/export` | Export rows as .xlsx or .csv; body `{"ids": [...]}` selects rows, omitted exports all authorized rows. Optional `format` (`xlsx` default, `csv`) and `filters` (`dateFrom`, `dateTo`, `createdBy`, `updatedBy` — only where the module tracks attribution, `status`, `search`); invalid dates/users/formats or a user filter on an unsupported module are 422s, and filters apply at the database query level |
+| GET | `/api/v1/excel/{module}/export-count` | Number of rows the export filters would include (same filter validation; used by the Export dialog to disable exporting when nothing matches) |
+| GET | `/api/v1/excel/history` | Import history (`?module=` filters; view permission required) |
+
+Registered modules (Phase B): `businessParties`, `partyRoles`, `placeRoles`,
+`tradeDirections`, `containerTypes`, `transportTypes`, `transportAssets`,
+`transportAssetIdentityTypes`, `capacityUnits`, `feeTypes`, `currencies`,
+`documentTypes`. Service-order operations, configuration, finance setup,
+finance documents and report exports are **not registered yet** (Phases C–F).
 
 ## 5. Error Codes
 

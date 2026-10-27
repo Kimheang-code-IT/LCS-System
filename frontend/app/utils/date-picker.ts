@@ -51,6 +51,12 @@ export function serializePickerValue(value?: DateValue | null): string {
   return value.toString()
 }
 
+/** The trailing zone designator of a stored ISO datetime (`Z` or `±HH:MM`), else ''. */
+export function isoZoneSuffix(value?: string | null): string {
+  const match = String(value ?? '').match(/(Z|[+-]\d{2}:?\d{2})$/)
+  return match ? match[1]! : ''
+}
+
 export function toCalendarDate(value?: DateValue | null): CalendarDate | undefined {
   if (!value) return undefined
   return new CalendarDate(value.year, value.month, value.day)

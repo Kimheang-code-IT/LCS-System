@@ -18,6 +18,7 @@ from app.core.database import SessionLocal
 from app.core.redis import close_redis
 from app.core.security import constant_time_compare, verify_csrf_token
 from app.modules.backup.scheduler import start_scheduler, stop_scheduler
+from app.modules.telegram.client import TelegramError
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,23 @@ async def _sync_permission_catalog() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    from app.modules.telegram.worker import start_worker, stop_worker
+
     await _sync_permission_catalog()
+    from app.modules.telegram.service import encrypt_legacy_credentials
+
+    try:
+        async with SessionLocal() as session:
+            await encrypt_legacy_credentials(session)
+    except Exception:
+        logger.warning("Telegram credential migration deferred until settings are available.")
     start_scheduler()
+    start_worker()
     try:
         yield
     finally:
         await stop_scheduler()
+        await stop_worker()
         await close_redis()
 
 
@@ -63,6 +75,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(TelegramError)
+async def telegram_error_handler(request: Request, exc: TelegramError) -> JSONResponse:
+    return JSONResponse(status_code=503 if exc.retryable else 422, content={"code": "TELEGRAM_UNAVAILABLE", "message": exc.code, "request_id": _request_id(request), "field_errors": {}})
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -73,6 +90,8 @@ app.add_middleware(
         "Content-Type",
         settings.csrf_header_name,
         "X-Requested-With",
+        "X-User-Activity",
+        "X-Expected-User-Id",
         "X-Request-Id",
         "Idempotency-Key",
     ],
@@ -83,8 +102,20 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_li
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
+    import time
+
+    from app.modules.telegram.monitor import rate_violations, server_errors
+
     request_id = _request_id(request)
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        server_errors.append(time.monotonic())
+        raise
+    if response.status_code >= 500:
+        server_errors.append(time.monotonic())
+    elif response.status_code == 429:
+        rate_violations.append(time.monotonic())
     response.headers["X-Request-Id"] = request_id
     if request.url.path.startswith(settings.api_v1_prefix):
         response.headers["Cache-Control"] = "no-store"
@@ -105,14 +136,21 @@ async def csrf_middleware(request: Request, call_next):
         f"{settings.api_v1_prefix}/auth/forgot-password/resend",
         f"{settings.api_v1_prefix}/auth/forgot-password/reset",
         f"{settings.api_v1_prefix}/auth/setup/initialize",
+        # This endpoint authenticates with Telegram's independent webhook secret.
+        f"{settings.api_v1_prefix}/integrations/telegram/webhook",
     }
     if request.url.path in public_auth_paths:
         return await call_next(request)
 
     access_cookie = request.cookies.get(settings.access_cookie_name)
-    refresh_cookie = request.cookies.get(settings.refresh_cookie_name)
+    refresh_cookie = request.cookies.get(settings.refresh_cookie_name) or (request.cookies.get("__Host-refresh_token") if settings.cookie_secure else None)
     uses_bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
-    if uses_bearer or not (access_cookie or refresh_cookie):
+    cookie_action = request.url.path in {f"{settings.api_v1_prefix}/auth/refresh", f"{settings.api_v1_prefix}/auth/logout"}
+    origin = request.headers.get("origin")
+    expected_origin = str(request.base_url).rstrip("/")
+    if cookie_action and origin and origin not in {expected_origin, *settings.cors_origin_list}:
+        return JSONResponse(status_code=403, content={"code": "CSRF_VALIDATION_FAILED", "message": "Untrusted request origin.", "request_id": _request_id(request), "field_errors": {}})
+    if (uses_bearer and not cookie_action) or not (access_cookie or refresh_cookie):
         return await call_next(request)
 
     cookie_token = request.cookies.get(settings.csrf_cookie_name, "")
@@ -243,7 +281,12 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
             "field_errors": {},
             "errors": [],
         }
-    return JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
+    response = JSONResponse(status_code=exc.status_code, content=payload, headers=exc.headers)
+    if request.url.path.endswith("/auth/refresh") and exc.status_code == 401:
+        from app.modules.auth.router import _clear_auth_cookies
+
+        _clear_auth_cookies(response)
+    return response
 
 
 @app.exception_handler(RequestValidationError)

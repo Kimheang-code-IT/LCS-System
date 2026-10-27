@@ -57,7 +57,10 @@ async def get_app_config(
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": service.redact_app_config(await service.get_app_config(session, context))}
+    result = service.redact_app_config(await service.get_app_config(session, context))
+    if not context.has_permission("settings.app_config.view") and not context.has_permission("configuration.manage"):
+        result["telegram"] = {"enabled": bool(result.get("telegram", {}).get("enabled"))}
+    return {"data": result}
 
 
 @router.patch("/settings/app-config")
@@ -67,6 +70,8 @@ async def update_app_config(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     values = APP_CONFIG_WRITE_SCHEMA.validate(payload, partial=True)
+    if "telegram" in values:
+        await enforce_rate_limit(f"telegram:config:{context.user_id}", limit=10, window_seconds=300)
     return {"data": service.redact_app_config(await service.update_app_config(session, context, values))}
 
 
@@ -94,8 +99,10 @@ async def test_telegram_connection(
     context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    config = await service.get_app_config(session, context)
-    return {"data": service.connection_result(bool(config.get("telegram", {}).get("enabled")), "Telegram")}
+    from app.modules.telegram.service import test_connection
+
+    await enforce_rate_limit(f"telegram:test:{context.user_id}", limit=5, window_seconds=300)
+    return {"data": await test_connection(session)}
 
 
 @router.post("/settings/app-config/telegram/send-test")
@@ -104,8 +111,14 @@ async def send_test_telegram(
     context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    config = await service.get_app_config(session, context)
-    return {"data": service.connection_result(bool(config.get("telegram", {}).get("enabled")), "Telegram")}
+    from app.modules.telegram.service import client, config
+
+    await enforce_rate_limit(f"telegram:send-test:{context.user_id}", limit=3, window_seconds=300)
+    value = await config(session)
+    if not value.get("adminGroupId"):
+        raise ValidationFailed("Verify an admin group first.")
+    await client(value).send_message(value["adminGroupId"], "LCS admin-group delivery test.")
+    return {"data": {"status": "connected", "message": "Telegram accepted the test message."}}
 
 
 # --- Danger zone: full data reset -------------------------------------------

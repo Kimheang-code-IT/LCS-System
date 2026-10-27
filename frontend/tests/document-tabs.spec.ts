@@ -250,12 +250,13 @@ describe('moduleDocumentTabs', () => {
     }
   })
 
-  it('builds quotation pricing lines with container, transport, qty, price and total', () => {
+  it('builds quotation pricing lines with fee type, optional container, charge basis, qty, price and total', () => {
     const field = moduleDocumentTabs(getFreightModule('/quotations')!)
       .find(tab => tab.id === 'pricing')?.sections[0]?.fields[0]
     expect(field?.meta?.showPricingTotals).toBe(true)
     const columns = (field?.meta?.table as { columns: Array<{ key: string, type?: string, options?: unknown, inlineFields?: unknown[] }> }).columns
     expect(columns.map(column => column.key)).toEqual([
+      'feeType',
       'containerType',
       'transportBy',
       'quantity',
@@ -263,9 +264,10 @@ describe('moduleDocumentTabs', () => {
       'lineTotal',
       'trust',
     ])
+    expect(columns.find(column => column.key === 'feeType')?.type).toBe('select')
     expect(columns.find(column => column.key === 'containerType')?.type).toBe('select')
     expect(columns.find(column => column.key === 'transportBy')?.type).toBe('select')
-    // The By options come from Master Data -> Transport Types, never a static list.
+    // Charge Basis options come from Master Data -> Transport Types, never a static list.
     expect(columns.find(column => column.key === 'transportBy')?.options).toBeUndefined()
     // A quoted rate is the rate the customer pays: no discount or tax step, so the
     // line total carries no inline fields.
@@ -286,17 +288,14 @@ describe('moduleDocumentTabs', () => {
     // The service order link stays: the backend rejects a charge without it.
     expect(keys).toContain('jobNo')
 
+    // The list may show the document number and status even though the form
+    // treats them as charge-managed.
     const columnKeys = module.columns.map(column => column.key)
-    for (const hidden of ['chargeNo', 'documentDate', 'documentType', 'status']) {
-      expect(columnKeys, hidden).not.toContain(hidden)
-    }
+    expect(columnKeys).toContain('chargeNo')
+    expect(columnKeys).toContain('status')
   })
 
-  it('puts discount and tax under grand total on charge fee lines with or without a job', () => {
-    const inlineFields = [
-      { key: 'discount', label: 'Disc.', labelKm: 'បញ្ចុះ.', labelKey: 'freight.ui.discountCol' },
-      { key: 'taxAmount', label: 'Tax', labelKm: 'ពន្ធ', labelKey: 'freight.ui.taxCol' },
-    ]
+  it('keeps discount and tax out of the fee-line cells with or without a job', () => {
     for (const chargeLinkedToJob of [true, false]) {
       const field = moduleDocumentTabs(getFreightModule('/service-charges')!, {
         chargeLinkedToJob,
@@ -306,8 +305,8 @@ describe('moduleDocumentTabs', () => {
       expect(field?.meta?.compact).toBe(true)
       const amount = (field?.meta?.table as { columns: Array<{ key: string, inlineFields?: unknown[], labelKey?: string }> })
         .columns.find(column => column.key === 'amount')
-      expect(amount?.labelKey).toBe('freight.fields.total')
-      expect(amount?.inlineFields).toEqual(inlineFields)
+      expect(amount?.labelKey).toBe('freight.ui.lineTotal')
+      expect(amount?.inlineFields).toBeUndefined()
     }
   })
 

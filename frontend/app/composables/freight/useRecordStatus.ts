@@ -6,7 +6,7 @@ import { useModuleRepository } from '~/repositories'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { usePrompt } from '~/composables/common/usePrompt'
 import { useLcs } from '~/composables/freight/useLcs'
-import { statusActionMeta, statusTransitionsFor, statusValueOf } from '~/utils/freight/status-actions'
+import { statusActionMeta, statusTransitionsFor, statusValueOf, supportsStatusPolicy } from '~/utils/freight/status-actions'
 import { statusCommand } from '~/utils/freight/status-commands'
 
 /** Policies are static per collection; one fetch per page load is enough. */
@@ -58,6 +58,11 @@ export function useRecordStatus(
   async function loadPolicy(force = false) {
     const current = module.value
     if (!current) {
+      policy.value = null
+      return
+    }
+    // Historical/derived modules have no lifecycle: never ask for their policy.
+    if (!supportsStatusPolicy(current)) {
       policy.value = null
       return
     }

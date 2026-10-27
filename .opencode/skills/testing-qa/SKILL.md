@@ -90,14 +90,13 @@ module resolvers. Do not write component-mount tests.
 
 ```bash
 # Backend (from backend/)
-uv run python -m pytest -q --no-header     # ~12 minutes, 220+ tests
+uv run python -m pytest -q --no-header     # full suite: minutes, SQLite in-memory
 uv run ruff check .
 
 # Schema and PostgreSQL-specific verification
 uv run python -m alembic heads
 uv run python -m pytest tests/test_migration_chain.py tests/test_schema_integrity.py -q
 uv run python scripts/generate_schema_docs.py --check --strict
-uv run python scripts/generate_schema_dump.py --check
 psql <DISPOSABLE_DB> -f tests/sql/integrity_guards.sql         # truncates everything
 psql "$DATABASE_URL" -f tests/sql/pre_migration_counts.sql > post-counts.txt
 

@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.security import verify_password
 from app.modules.audit.models import AuditEvent
 from app.modules.auth.models import UserCredential
@@ -186,12 +187,12 @@ async def test_refreshing_the_token_is_not_a_way_to_escape_the_forced_change(cli
     signed_in = await client.post(
         "/api/v1/auth/login", json={"username": "recover.me", "password": NEW_PASSWORD}
     )
-    refresh_token = signed_in.json()["data"]["refresh_token"]
+    assert "refresh_token" not in signed_in.json()["data"]
     bearer = {"Authorization": f"Bearer {signed_in.json()['data']['access_token']}"}
 
-    # Bearer auth, so the CSRF cookie path does not apply.
+    bearer[settings.csrf_header_name] = client.cookies.get(settings.csrf_cookie_name) or ""
     refreshed = await client.post(
-        "/api/v1/auth/refresh", headers=bearer, json={"refresh_token": refresh_token}
+        "/api/v1/auth/refresh", headers=bearer, json={}
     )
 
     assert refreshed.status_code == 200, refreshed.text

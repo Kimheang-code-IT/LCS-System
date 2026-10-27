@@ -39,6 +39,8 @@ export const PAGE_ROUTE_PERMISSIONS: Readonly<Record<string, string>> = {
   '/master-data/fee-types/new': 'master.fee_types.create',
   '/master-data/currencies': 'master.currencies.view',
   '/master-data/currencies/new': 'master.currencies.create',
+  '/master-data/document-types': 'master.reference.view',
+  '/master-data/document-types/new': 'master.reference.view',
   '/configuration/component-attributes': 'configuration.view',
   '/configuration/component-groups': 'configuration.view',
   '/configuration/component-tabs': 'configuration.view',

@@ -58,7 +58,7 @@ from app.modules.master_data.currency_rates import (
     currency_precision,
     resolve_document_rate,
 )
-from app.modules.master_data.models import BusinessParty, Currency, FeeType
+from app.modules.master_data.models import BusinessParty, Currency, DocumentType, FeeType
 from app.modules.operations.models import ServiceOrder, ServiceOrderCharge, ServiceOrderChargeLine
 from app.modules.settings.service import get_default_currency
 
@@ -474,6 +474,9 @@ def document_payload(
             "documentNo": document.document_no,
             "debitNoteNo": document.document_no,
             "documentType": document.document_type,
+            "documentTypeId": str((document.data or {}).get("documentTypeId") or ""),
+            "documentTypeCode": (document.data or {}).get("documentTypeCode"),
+            "documentTypeName": (document.data or {}).get("documentTypeName"),
             "documentDate": document.document_date.isoformat() if document.document_date else None,
             "date": document.document_date.isoformat() if document.document_date else None,
             "postingDate": document.posting_date.isoformat() if document.posting_date else None,
@@ -743,9 +746,17 @@ async def list_documents(
     rows, total = await repository.document_page(page, document_type=document_type, party_id=party_id)
     lines = await repository.document_lines([row.id for row in rows])
     names = await _document_names(session, rows)
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
     return paged(
         [
-            document_payload(row, row.data or {}, lines.get(row.id, []), names.get(row.id))
+            document_payload(
+                row,
+                row.data or {},
+                lines.get(row.id, []),
+                {**(names.get(row.id) or {}), "createdBy": creators.get(row.created_by_user_id)},
+            )
             for row in rows
         ],
         page,
@@ -759,8 +770,12 @@ async def get_document(session: AsyncSession, context: RequestContext, document_
         raise NotFound("Financial document not found.")
     extras = {
         **(await _document_names(session, [document])).get(document.id, {}),
-        **await _document_detail_extras(session, document),
+        **(await _document_detail_extras(session, document)),
     }
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, [document.created_by_user_id])
+    extras["createdBy"] = creators.get(document.created_by_user_id)
     return document_payload(
         document,
         document.data or {},
@@ -875,6 +890,33 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     data = DOCUMENT_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     default_currency = await get_default_currency(session)
     document_type = str(data.get("documentType") or data.get("document_type") or "CUSTOMER_INVOICE").upper()
+    document_type_record: DocumentType | None = None
+    type_id = _int_or_none(data.get("documentTypeId"))
+    if type_id is not None:
+        document_type_record = await session.get(DocumentType, type_id)
+        if document_type_record is None or str(document_type_record.status or "").upper() != "ACTIVE":
+            raise ValidationFailed(
+                "Choose an active document type.",
+                {"documentTypeId": "Document type is not active."},
+            )
+    elif data.get("documentType"):
+        document_type_record = (
+            await session.execute(
+                select(DocumentType).where(
+                    DocumentType.code == document_type,
+                    DocumentType.deleted_at.is_(None),
+                )
+            )
+        ).scalars().first()
+    if document_type_record is not None:
+        available = document_type_record.available_in or []
+        if str(document_type_record.category or "").upper() != "FINANCE" or "financial_documents" not in available:
+            raise ValidationFailed(
+                "Choose a finance document type that is available for financial documents.",
+                {"documentType": "This type cannot be used on a financial document."},
+            )
+        # Accounting code always comes from the canonical behaviour, never from the label.
+        document_type = str(document_type_record.accounting_behavior or "").upper()
     date_errors = {
         key: "Enter a valid date."
         for key in DOCUMENT_DATE_FIELDS
@@ -894,6 +936,31 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     if document_id and str(document_id).isdigit():
         document = await session.get(FinancialDocument, int(document_id))
     lines = validate_line_items(data.get("lines"), DOCUMENT_LINE_SCHEMA)
+    manual_order_id = _int_or_none(data.get("serviceOrderId"))
+    if document_id is None and manual_order_id is not None:
+        order = await session.get(ServiceOrder, manual_order_id)
+        if order is None:
+            raise ValidationFailed(
+                "Choose a valid service order.",
+                {"serviceOrderId": "Service order not found."},
+            )
+        party_id = _int_or_none(data.get("partyId"))
+        if party_id is None:
+            raise ValidationFailed(
+                "Choose a business party for this entry.",
+                {"partyId": "Required."},
+            )
+        party = await session.get(BusinessParty, party_id)
+        if party is None or str(party.status or "").upper() != "ACTIVE":
+            raise ValidationFailed(
+                "Choose an active business party.",
+                {"partyId": "Choose an active business party."},
+            )
+        if not lines:
+            raise ValidationFailed(
+                "Add at least one line to the entry.",
+                {"lines": "At least one line is required."},
+            )
     subtotal = Decimal("0")
     discount_total = Decimal("0")
     tax_total = Decimal("0")
@@ -1020,6 +1087,11 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document.discount_amount = discount_total
     document.tax_amount = tax_total
     document.total_amount = subtotal - discount_total + tax_total
+    if document_id is None and manual_order_id is not None and document.total_amount <= 0:
+        raise ValidationFailed(
+            "Enter a positive entry amount.",
+            {"lines.0.unitPrice": "Amount must be greater than zero."},
+        )
     # The converted amounts, rounded with the currency's own precision. Deriving
     # them here (and again at posting) is what keeps the document, the journal it
     # writes and the printed invoice showing the same base-currency figures.
@@ -1030,7 +1102,20 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document.base_total_amount = fx.convert_to_base(
         subtotal - discount_total + tax_total, exchange_rate, precision
     )
-    document.data = jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}})
+    document.data = {
+        **jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}}),
+        # Custom type metadata survives the payload echo; posting and numbering
+        # keep reading the canonical document_type code.
+        **(
+            {
+                "documentTypeId": str(document_type_record.id),
+                "documentTypeCode": document_type_record.code,
+                "documentTypeName": document_type_record.name,
+            }
+            if document_type_record is not None
+            else {}
+        ),
+    }
     await session.commit()
     saved_lines = await _document_lines(session, document.id)
     names = (await _document_names(session, [document])).get(document.id, {})
@@ -1724,12 +1809,21 @@ async def _journal_lines(session: AsyncSession, journal_id: int) -> list[Journal
     )
 
 
-async def journal_payload(session: AsyncSession, entry: JournalEntry) -> dict[str, Any]:
+async def journal_payload(
+    session: AsyncSession,
+    entry: JournalEntry,
+    creator_name: str | None = None,
+) -> dict[str, Any]:
     lines = await _journal_lines(session, entry.id)
     source_no = None
     if entry.source_document_id:
         source = await session.get(FinancialDocument, entry.source_document_id)
         source_no = source.document_no if source else None
+    order_id = next((line.service_order_id for line in lines if line.service_order_id), None)
+    order_no = None
+    if order_id is not None:
+        order = await session.get(ServiceOrder, order_id)
+        order_no = order.service_order_no if order else None
     return {
         "id": str(entry.id),
         "entryNo": entry.entry_no,
@@ -1739,11 +1833,15 @@ async def journal_payload(session: AsyncSession, entry: JournalEntry) -> dict[st
         "periodId": str(entry.accounting_period_id) if entry.accounting_period_id else None,
         "sourceDocumentId": str(entry.source_document_id) if entry.source_document_id else None,
         "sourceDocumentNo": source_no,
+        "serviceOrderId": str(order_id) if order_id is not None else None,
+        "jobNo": order_no,
         "status": entry.status,
         "description": entry.description,
         "debitTotal": float(entry.debit_total or 0),
         "creditTotal": float(entry.credit_total or 0),
         "balanceDifference": float((entry.debit_total or 0) - (entry.credit_total or 0)),
+        "createdBy": creator_name,
+        "createdAt": entry.created_at.isoformat() if entry.created_at else None,
         "lines": [
             {
                 "id": str(line.id),
@@ -1778,6 +1876,12 @@ async def list_journals(session: AsyncSession, context: RequestContext, page: Pa
         )
     ).scalars().all()
     items = [await journal_payload(session, row) for row in rows]
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, (row.created_by_user_id for row in rows))
+    if creators:
+        for item, row in zip(items, rows, strict=False):
+            item["createdBy"] = creators.get(row.created_by_user_id)
     return paged(items, page, total)
 
 
@@ -1785,7 +1889,10 @@ async def get_journal(session: AsyncSession, context: RequestContext, journal_id
     entry = await session.get(JournalEntry, journal_id)
     if entry is None:
         raise NotFound("Journal entry not found.")
-    return await journal_payload(session, entry)
+    from app.core.users import user_display_names
+
+    creators = await user_display_names(session, [entry.created_by_user_id])
+    return await journal_payload(session, entry, creators.get(entry.created_by_user_id))
 
 
 async def save_journal(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:

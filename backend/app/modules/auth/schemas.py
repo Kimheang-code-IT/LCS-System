@@ -17,7 +17,7 @@ class SetupInitializeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str = Field(min_length=3, max_length=255)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(max_length=128)
     name: str | None = Field(default=None, max_length=255)
     username: str | None = Field(default=None, max_length=255)
 
@@ -57,28 +57,28 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str | None = None
+    model_config = ConfigDict(extra="forbid")
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(min_length=1, max_length=255, validation_alias=AliasChoices("email", "username", "identifier"))
 
 
 class VerifyCodeRequest(BaseModel):
-    email: EmailStr
-    code: str = Field(pattern=r"^\d{6}$")
+    email: str = Field(default="", max_length=255)
+    code: str = Field(min_length=40, max_length=128, validation_alias=AliasChoices("token", "code"))
 
 
 class ResetPasswordRequest(BaseModel):
-    email: EmailStr
-    code: str = Field(pattern=r"^\d{6}$")
-    password: str = Field(min_length=8, max_length=128)
+    email: str = Field(default="", max_length=255)
+    code: str = Field(min_length=40, max_length=128, validation_alias=AliasChoices("token", "code"))
+    password: str = Field(max_length=128)
     password_confirmation: str | None = Field(default=None, max_length=128)
 
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(max_length=128)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(max_length=128)
     password_confirmation: str | None = Field(default=None, max_length=128)
 
 
@@ -91,7 +91,7 @@ class SetPasswordRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(max_length=128)
     password_confirmation: str | None = Field(default=None, max_length=128)
     must_change_password: bool = Field(
         default=True,
@@ -109,7 +109,7 @@ class UserCreate(BaseModel):
     display_name: str = Field(
         min_length=1, max_length=255, validation_alias=AliasChoices("display_name", "displayName", "name")
     )
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    password: str | None = Field(default=None, max_length=128)
     roles: list[str] | None = None
     role_code: str | None = Field(
         default=None, max_length=64, validation_alias=AliasChoices("role_code", "roleCode", "role")

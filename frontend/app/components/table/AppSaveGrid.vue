@@ -35,6 +35,13 @@ const props = withDefaults(defineProps<{
     color?: 'primary' | 'neutral' | 'error'
     onSelect: () => void
   } | null
+  /** Extra entries for the renderer's per-row "..." menu. */
+  extraRowMenuItems?: (row: Record<string, unknown>) => Array<{
+    label: string
+    icon?: string
+    color?: 'primary' | 'neutral' | 'error'
+    onSelect: () => void
+  }>
   /** Called after a `type: 'reorder'` cell moves a row. */
   onReorder?: (rows: Array<Record<string, unknown>>) => void
 }>(), {
@@ -42,6 +49,7 @@ const props = withDefaults(defineProps<{
   saving: false,
   headerActions: () => [],
   rowActions: undefined,
+  extraRowMenuItems: undefined,
   onReorder: undefined,
 })
 
@@ -132,6 +140,7 @@ const allHeaderActions = computed(() => [
     :disabled="disabled"
     :header-actions="allHeaderActions"
     :row-actions="rowActions"
+    :extra-row-menu-items="extraRowMenuItems"
     :on-reorder="onReorder"
     @update:model-value="draft = $event" />
 </template>

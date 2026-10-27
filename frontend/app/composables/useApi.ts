@@ -3,7 +3,8 @@ import { ref } from 'vue'
 import type { TableQueryParams } from '~/types/api'
 import { compactQuery, stableQueryString } from '~/utils/api/query'
 import { csrfRequestHeaders } from '~/utils/security/csrf'
-import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
+import { authErrorCode, canReplayBody } from '~/utils/auth/renewal'
+import { isNetworkFailure } from '~/utils/api/errors'
 
 type ApiRequestOptions = {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
@@ -14,6 +15,8 @@ type ApiRequestOptions = {
     query?: Record<string, any> | TableQueryParams
     suppressErrorToast?: boolean
     suppressAccessAlert?: boolean
+    /** Statuses the caller handles itself; they never raise a toast. */
+    expectedErrorStatuses?: number[]
     requestKey?: string
     cancelPrevious?: boolean
 }
@@ -36,12 +39,6 @@ type ApiFetchError = Error & {
 // request even when composables created separate useApi instances.
 const requestControllers = new Map<string, AbortController>()
 
-// De-duplicates the redirect that follows a burst of 401 responses.
-let pendingUnauthorizedRedirect: Promise<void> | null = null
-
-// De-duplicates concurrent refresh attempts triggered by a burst of 401 responses.
-let refreshAccessTokenPromise: Promise<boolean> | null = null
-
 /**
  * Standard API Fetching Composable
  * ───────────────────────────────────────
@@ -58,7 +55,6 @@ export function useApi() {
     const { $i18n } = useNuxtApp()
     const t = $i18n.t
     const config = useRuntimeConfig()
-    const bearerMode = String(config.public.authMode) === 'bearer'
     const authStore = useAuthStore()
     const activeRequests = ref(0)
     const pending = computed(() => activeRequests.value > 0)
@@ -68,7 +64,12 @@ export function useApi() {
     const baseURL = configuredBase || (import.meta.client ? window.location.origin : '')
 
     function isAuthEndpoint(url: string) {
-        return url.includes('/auth/login') || url.includes('/auth/refresh') || url.includes('/auth/logout')
+        const path = new URL(url, baseURL || 'http://localhost').pathname
+        return new Set([
+            '/api/v1/auth/login', '/api/v1/auth/refresh', '/api/v1/auth/logout',
+            '/api/v1/auth/forgot-password', '/api/v1/auth/forgot-password/verify',
+            '/api/v1/auth/forgot-password/resend', '/api/v1/auth/forgot-password/reset',
+        ]).has(path)
     }
 
     /**
@@ -79,51 +80,6 @@ export function useApi() {
      */
     function isInlineValidationStatus(status: number) {
         return status === 400 || status === 409 || status === 422
-    }
-
-    /**
-     * Exchange the refresh token (or HttpOnly refresh cookie) for a fresh access
-     * token. Shared across useApi instances so a 401 burst triggers one call.
-     */
-    function refreshAccessToken(): Promise<boolean> {
-        if (refreshAccessTokenPromise) return refreshAccessTokenPromise
-        refreshAccessTokenPromise = (async () => {
-            try {
-                const body: Record<string, string> = {}
-                if (authStore.refreshToken) body.refresh_token = authStore.refreshToken
-                const response = await $fetch<{ data?: { access_token?: string | null; refresh_token?: string | null } }>(
-                    ApiV1Endpoints.REFRESH,
-                    {
-                        baseURL,
-                        method: 'POST',
-                        body,
-                        credentials: 'include',
-                        timeout: 10000,
-                        headers: {
-                            'X-Requested-With': 'XMLHttpRequest',
-                            ...csrfRequestHeaders(
-                                'POST',
-                                String(config.public.csrfCookieName),
-                                String(config.public.csrfHeaderName),
-                            ),
-                        },
-                    },
-                )
-                const token = response?.data?.access_token ?? null
-                if (bearerMode && !token) return false
-                if (bearerMode) authStore.setTokens(token, response?.data?.refresh_token ?? null)
-                return true
-            }
-            catch {
-                return false
-            }
-            finally {
-                setTimeout(() => {
-                    refreshAccessTokenPromise = null
-                }, 0)
-            }
-        })()
-        return refreshAccessTokenPromise
     }
 
     function getRequestKey(url: string, options: ApiRequestOptions): string {
@@ -143,40 +99,18 @@ export function useApi() {
         if (!sameOriginApiUrl(url, String(baseURL))) {
             throw new Error('API requests must use the configured API origin')
         }
+        if (!isAuthEndpoint(url)) await authStore.waitForIdentity()
+        if (authStore.identityUnverified && !isAuthEndpoint(url)) {
+            throw { statusCode: 503, data: { code: 'SESSION_IDENTITY_UNAVAILABLE', message: t('session.connection') } }
+        }
+        if (authStore.sessionExpired && !isAuthEndpoint(url)) {
+            throw { statusCode: 401, data: { code: 'SESSION_EXPIRED', message: t('session.expired') } }
+        }
         const requestKey = getRequestKey(url, options)
         const shouldCancelPrevious = options.cancelPrevious !== false
 
         if (shouldCancelPrevious) {
             cancelRequest(requestKey)
-        }
-
-        const redirectAfterUnauthorized = async () => {
-            if (pendingUnauthorizedRedirect) return pendingUnauthorizedRedirect
-            pendingUnauthorizedRedirect = (async () => {
-                let requiresSetup = false
-                try {
-                    const status = await $fetch<{ data?: { requiresSetup?: boolean } }>(
-                        '/api/v1/auth/setup/status',
-                        { baseURL, timeout: 10000 },
-                    )
-                    requiresSetup = Boolean(status?.data?.requiresSetup)
-                }
-                catch {
-                    // Keep the safe default when the probe fails.
-                }
-                useState<boolean | null>('setup-required').value = requiresSetup
-                if (requiresSetup) {
-                    await navigateTo('/auth/setup', { replace: true })
-                }
-                else {
-                    await navigateTo('/auth/login', { replace: true })
-                }
-            })().finally(() => {
-                setTimeout(() => {
-                    pendingUnauthorizedRedirect = null
-                }, 1500)
-            })
-            return pendingUnauthorizedRedirect
         }
 
         const controller = new AbortController()
@@ -196,9 +130,12 @@ export function useApi() {
                 signal: controller.signal,
                 timeout: Number(config.public.apiTimeoutMs) || 30000,
                 credentials: 'include',
+                retry: 0,
                 headers: {
                     'X-Requested-With': 'XMLHttpRequest',
-                    ...(bearerMode && authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
+                    ...authStore.activityHeaders(),
+                    ...(authStore.user?.id ? { 'X-Expected-User-Id': String(authStore.user.id) } : {}),
+                    ...(authStore.accessToken ? { Authorization: `Bearer ${authStore.accessToken}` } : {}),
                     ...csrfRequestHeaders(
                         method,
                         String(config.public.csrfCookieName),
@@ -217,7 +154,8 @@ export function useApi() {
                         return
                     }
 
-                    if (!options.suppressErrorToast && !isInlineValidationStatus(response.status)) {
+                    const expected = options.expectedErrorStatuses?.includes(response.status)
+                    if (!options.suppressErrorToast && !expected && !isInlineValidationStatus(response.status)) {
                         toast.add({
                             title: t('api.errorTitle', { status: response.status }),
                             description: response._data?.message || t('api.somethingWentWrong'),
@@ -238,25 +176,27 @@ export function useApi() {
             }
 
             // Try a single token refresh before forcing the user to sign in again.
-            if (sawUnauthorized && !isRetry && !isAuthEndpoint(url)) {
-                const refreshed = await refreshAccessToken()
-                if (refreshed) {
+            if (sawUnauthorized && authErrorCode(err) === 'ACCESS_TOKEN_EXPIRED' && !isRetry && !isAuthEndpoint(url)) {
+                const refreshed = await authStore.renewAccess()
+                if (refreshed === 'renewed' && canReplayBody(options.body)) {
                     return await fetch<T>(url, options, true)
                 }
             }
 
+            if (authErrorCode(err) === 'SESSION_ACCOUNT_CHANGED') authStore.blockChangedAccount()
+
             if (sawUnauthorized) {
-                authStore.clearSession()
-                if (!options.suppressAccessAlert) {
-                    void redirectAfterUnauthorized()
-                }
+                if (['SESSION_EXPIRED', 'SESSION_REVOKED', 'SESSION_INVALID'].includes(authErrorCode(err))) authStore.expire()
                 throw err
             }
 
             error.value = fetchError?.message || t('api.requestFailed')
 
-            if (fetchError.name === 'FetchError' && !handledAccessError && !options.suppressErrorToast
-                && !isInlineValidationStatus(fetchError.status ?? fetchError.statusCode ?? 0)) {
+            // ofetch names every HTTP failure a `FetchError` too, so only a
+            // missing status (no response at all) is a real connection failure.
+            // A 404 is a server answer the UI already reports; calling it
+            // "could not reach the server" is misleading and duplicates a toast.
+            if (isNetworkFailure(fetchError) && !handledAccessError && !options.suppressErrorToast) {
                 toast.add({
                     title: t('api.connectionErrorTitle'),
                     description: t('api.connectionErrorDescription'),

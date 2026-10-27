@@ -569,6 +569,7 @@ function onTabChange(value: string) {
             :job="model"
             :job-no="jobNo"
             :editable="canEdit"
+            @update:job="patchJob"
           />
           <FreightJobFinance
             v-else-if="activeTab === 'finance'"
@@ -579,7 +580,6 @@ function onTabChange(value: string) {
             :supplier-costs="supplierCosts"
             :receivables="receivables"
             :editable="canEdit"
-            @update:job="patchJob"
           />
           <FreightJobFiles
             v-else-if="activeTab === 'files'"

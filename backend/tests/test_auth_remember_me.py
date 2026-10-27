@@ -28,7 +28,9 @@ AUTH_COOKIES = (
 def _set_cookies(response) -> SimpleCookie:
     jar = SimpleCookie()
     for header in response.headers.get_list("set-cookie"):
-        jar.load(header)
+        parsed = SimpleCookie()
+        parsed.load(header)
+        jar.update(parsed)
     return jar
 
 
@@ -66,7 +68,7 @@ async def test_login_without_remember_me_sets_browser_session_cookies(client, se
         assert morsel is not None
         assert not morsel["max-age"]
         assert not morsel["expires"]
-        assert morsel["path"] == "/"
+        assert morsel["path"] == (settings.api_v1_prefix if name == settings.refresh_cookie_name else "/")
         assert morsel["samesite"].lower() == "lax"
 
     assert cookies[settings.access_cookie_name]["httponly"] is True
@@ -75,7 +77,7 @@ async def test_login_without_remember_me_sets_browser_session_cookies(client, se
 
     row = await _only_session(session_factory)
     assert not row.remember_me
-    expected = datetime.now(UTC) + timedelta(hours=settings.session_refresh_token_expire_hours)
+    expected = datetime.now(UTC) + timedelta(minutes=settings.session_absolute_timeout_minutes)
     assert abs((_as_utc(row.expires_at) - expected).total_seconds()) < 60
 
 
@@ -84,12 +86,12 @@ async def test_login_with_remember_me_sets_persistent_cookies(client, session_fa
     cookies = _set_cookies(response)
 
     assert int(cookies[settings.access_cookie_name]["max-age"]) == settings.access_token_expire_minutes * 60
-    assert int(cookies[settings.refresh_cookie_name]["max-age"]) == settings.refresh_token_expire_days * 86400
-    assert int(cookies[settings.csrf_cookie_name]["max-age"]) == settings.refresh_token_expire_days * 86400
+    assert int(cookies[settings.refresh_cookie_name]["max-age"]) <= settings.session_absolute_timeout_minutes * 60
+    assert int(cookies[settings.csrf_cookie_name]["max-age"]) <= settings.session_absolute_timeout_minutes * 60
 
     row = await _only_session(session_factory)
     assert row.remember_me
-    expected = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
+    expected = datetime.now(UTC) + timedelta(minutes=settings.session_absolute_timeout_minutes)
     assert abs((_as_utc(row.expires_at) - expected).total_seconds()) < 60
 
 
@@ -101,22 +103,24 @@ async def test_login_omitting_remember_me_defaults_to_session_cookies(client):
 
 async def test_browser_restart_with_remember_me_restores_session(client):
     response = await _login(client, remember_me=True)
-    refresh_token = response.json()["data"]["refresh_token"]
+    refresh_token = _set_cookies(response)[settings.refresh_cookie_name].value
     cookies = _set_cookies(response)
-    assert int(cookies[settings.refresh_cookie_name]["max-age"]) == settings.refresh_token_expire_days * 86400
+    assert int(cookies[settings.refresh_cookie_name]["max-age"]) <= settings.session_absolute_timeout_minutes * 60
 
     async with _restarted_client() as fresh_client:
-        restored = await fresh_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+        fresh_client.cookies.set(settings.refresh_cookie_name, refresh_token, path=settings.api_v1_prefix)
+        fresh_client.cookies.set(settings.csrf_cookie_name, cookies[settings.csrf_cookie_name].value)
+        restored = await fresh_client.post("/api/v1/auth/refresh", json={}, headers={settings.csrf_header_name: cookies[settings.csrf_cookie_name].value})
         assert restored.status_code == 200, restored.text
         restored_cookies = _set_cookies(restored)
-        assert int(restored_cookies[settings.refresh_cookie_name]["max-age"]) == (
-            settings.refresh_token_expire_days * 86400
+        assert 0 < int(restored_cookies[settings.refresh_cookie_name]["max-age"]) <= (
+            settings.session_absolute_timeout_minutes * 60
         )
 
 
 async def test_refresh_rotation_preserves_remember_me_and_absolute_expiry(client, session_factory):
     response = await _login(client, remember_me=True)
-    original_refresh = response.json()["data"]["refresh_token"]
+    original_refresh = _set_cookies(response)[settings.refresh_cookie_name].value
     csrf_token = client.cookies.get(settings.csrf_cookie_name)
     original_expiry = _as_utc((await _only_session(session_factory)).expires_at)
 
@@ -127,14 +131,14 @@ async def test_refresh_rotation_preserves_remember_me_and_absolute_expiry(client
     )
     assert rotated.status_code == 200, rotated.text
     rotated_cookies = _set_cookies(rotated)
-    assert int(rotated_cookies[settings.refresh_cookie_name]["max-age"]) == settings.refresh_token_expire_days * 86400
-    assert rotated.json()["data"]["refresh_token"] != original_refresh
+    assert int(rotated_cookies[settings.refresh_cookie_name]["max-age"]) <= settings.session_absolute_timeout_minutes * 60
+    assert rotated_cookies[settings.refresh_cookie_name].value != original_refresh
 
     async with session_factory() as session:
         rows = (await session.execute(select(UserSession).order_by(UserSession.id))).scalars().all()
-    assert len(rows) == 2
-    old_row, new_row = rows
-    assert old_row.revoked_at is not None
+    assert len(rows) == 1
+    new_row = rows[0]
+    assert new_row.revoked_at is None
     assert new_row.remember_me
     assert abs((_as_utc(new_row.expires_at) - original_expiry).total_seconds()) < 1
 
@@ -155,15 +159,16 @@ async def test_refresh_without_remember_me_keeps_session_cookies_and_expiry(clie
 
     async with session_factory() as session:
         rows = (await session.execute(select(UserSession).order_by(UserSession.id))).scalars().all()
-    old_row, new_row = rows
-    assert old_row.revoked_at is not None
+    assert len(rows) == 1
+    new_row = rows[0]
+    assert new_row.revoked_at is None
     assert not new_row.remember_me
     assert abs((_as_utc(new_row.expires_at) - original_expiry).total_seconds()) < 1
 
 
-async def test_rotated_refresh_token_cannot_be_reused(client):
+async def test_rotated_refresh_token_cannot_be_reused(client, session_factory):
     response = await _login(client, remember_me=True)
-    original_refresh = response.json()["data"]["refresh_token"]
+    original_refresh = _set_cookies(response)[settings.refresh_cookie_name].value
     csrf_token = client.cookies.get(settings.csrf_cookie_name)
 
     rotated = await client.post(
@@ -173,23 +178,33 @@ async def test_rotated_refresh_token_cannot_be_reused(client):
     )
     assert rotated.status_code == 200, rotated.text
 
-    client.cookies.clear()
-    reused = await client.post("/api/v1/auth/refresh", json={"refresh_token": original_refresh})
-    assert reused.status_code == 401
-    assert reused.json()["code"] == "AUTH_REQUIRED"
+    # An overlap is rejected without destroying the winning tab's cookies.
+    client.cookies.set(settings.refresh_cookie_name, original_refresh, domain="testserver.local", path=settings.api_v1_prefix)
+    client.cookies.set(settings.csrf_cookie_name, csrf_token, domain="testserver.local", path="/")
+    reused = await client.post("/api/v1/auth/refresh", json={}, headers={settings.csrf_header_name: csrf_token})
+    assert reused.status_code == 409
+    assert reused.json()["code"] == "REFRESH_CONFLICT"
+    from app.modules.auth.models import UsedRefreshToken
+    async with session_factory() as session:
+        used = (await session.execute(select(UsedRefreshToken))).scalar_one()
+        used.used_at = datetime.now(UTC) - timedelta(seconds=10)
+        await session.commit()
+    replayed = await client.post("/api/v1/auth/refresh", json={}, headers={settings.csrf_header_name: csrf_token})
+    assert replayed.status_code == 401
+    assert replayed.json()["code"] == "SESSION_REVOKED"
+    assert (await _only_session(session_factory)).revoked_at is not None
 
 
 async def test_expired_refresh_session_is_rejected(client, session_factory):
-    response = await _login(client, remember_me=True)
-    refresh_token = response.json()["data"]["refresh_token"]
+    await _login(client, remember_me=True)
 
     async with session_factory() as session:
         row = (await session.execute(select(UserSession))).scalars().one()
         row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
         await session.commit()
 
-    client.cookies.clear()
-    expired = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    csrf = client.cookies.get(settings.csrf_cookie_name)
+    expired = await client.post("/api/v1/auth/refresh", json={}, headers={settings.csrf_header_name: csrf})
     assert expired.status_code == 401
     assert "expired" in expired.json()["message"].lower()
 
@@ -204,7 +219,7 @@ async def test_cookie_refresh_still_requires_csrf_token(client):
 
 async def test_logout_revokes_refresh_session_and_clears_cookies(client, session_factory):
     response = await _login(client, remember_me=True)
-    refresh_token = response.json()["data"]["refresh_token"]
+    refresh_token = _set_cookies(response)[settings.refresh_cookie_name].value
     csrf_token = client.cookies.get(settings.csrf_cookie_name)
 
     logout = await client.post("/api/v1/auth/logout", headers={settings.csrf_header_name: csrf_token or ""})
@@ -218,7 +233,11 @@ async def test_logout_revokes_refresh_session_and_clears_cookies(client, session
     assert (await _only_session(session_factory)).revoked_at is not None
 
     client.cookies.clear()
-    rejected = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    client.cookies.set(settings.refresh_cookie_name, refresh_token, path=settings.api_v1_prefix)
+    from app.core.security import create_csrf_token
+    csrf = create_csrf_token(refresh_token)
+    client.cookies.set(settings.csrf_cookie_name, csrf)
+    rejected = await client.post("/api/v1/auth/refresh", json={}, headers={settings.csrf_header_name: csrf})
     assert rejected.status_code == 401
 
 

@@ -111,10 +111,40 @@ Never run destructive migration operations without an approved backup and migrat
 
 ### Current chain and rollback boundary
 
-- Current Alembic head: `c3d4e5f6a7b8` (Places removal). The schema has 65
-  tables.
+- Current Alembic head: `f6a7b8c9d0e1` (document_types soft-delete attribution:
+  the `DocumentType` model carries `SoftDeleteMixin`, and the revision adds the
+  `deleted_by_user_id` column and soft-delete indexes the creating migration
+  omitted). Below it: `b2c3d4e5f6a7b8` (durable Excel import sessions:
+  `import_sessions` holds a validated, not-yet-committed preview so a
+  confirmation survives a backend restart). Below it: `46ce79ab12df` and
+  `35bd68fa01ce` (Telegram identities and durable delivery), then
+  `24ac57ef90bd` (stable sessions and consumed refresh credentials), then
+  `12ab34cd56ef` (import history: one row per confirmed or failed Excel import
+  batch), then `f0b1c2d3e4f5`
+  (document types: a new administrator-managed `document_types` master seeded
+  with the ten canonical accounting behaviours; a custom type must reference
+  one of them, so a new label never invents a posting rule), then `e9a0b1c2d3e4`
+  (attachment note: a nullable free-text note on `attachments`, edited through
+  `PATCH /api/v1/attachments/{id}`), then `d8f9a0b1c2d3` (pending service-order
+  containers: the number column becomes nullable so a row expanded from a
+  quotation requirement exists before the box is collected; the unique
+  constraint still covers every real number), then the quotation trace
+  (`c7e8f9a0b1c2`) and the display-order migration (`b6d7e8f9a0b1`).
+  The schema has 76 tables plus 8 reporting views.
 - The backend container runs `alembic upgrade head` on start. In a controlled
   deployment, run it as a separate migration step before switching traffic.
+- The shared Excel Import & Export endpoints accept only `.xlsx`, capped at
+  10 MB / 2 000 rows per workbook, refuse formula cells and stale template
+  versions, and rate-limit per user and per action (60 s window): 20 template
+  downloads, 10 validation uploads, 10 confirmations, 20 exports, 60 history
+  reads. Archive expansion is capped separately (100 MB uncompressed, 2 000
+  entries, 100× compression ratio) so a crafted workbook cannot exhaust the
+  4 GB server; the declared `Content-Length` is refused before the body is
+  buffered.
+  The confirmation token binds the uploading user, module, checksum, mode and
+  validated preview and is single-use. Formula-injection prefixes (`=+-@`,
+  including behind leading whitespace) are escaped on export; secret values are
+  never exported or logged.
 - Every new revision must be additive and must have a working `downgrade()`.
   The migration is reviewed against a production-size copy; locks, duration,
   foreign keys, indexes, and journal constraints are checked before apply.
@@ -150,6 +180,15 @@ Never run destructive migration operations without an approved backup and migrat
 - A closed period rejects posting.
 - Attachment upload and download work for an authorized user.
 - A user without the required permission is denied.
+- Maintenance mode blocks ordinary API access (`503 MAINTENANCE_MODE`) while an administrator can
+  still sign in and reach the settings endpoint to disable it.
+- Read-only mode rejects writes (`409 READ_ONLY_MODE`) and leaves reads available.
+- Access JWT expiry triggers silent renewal while the session remains valid.
+  `security.sessionTimeoutMinutes` is an idle deadline since explicit user-driven
+  API activity; `security.sessionAbsoluteMinutes` is a ceiling from login.
+  Refresh and passive polling extend neither deadline.
+- Expired passwords and a global require-password-change policy block everything except the
+  change-password, profile, refresh and logout routes.
 
 ## 10. Finance Safety Verification
 
@@ -474,10 +513,62 @@ each exception as soon as its upstream dependency publishes a fixed release.
 ## 17. Security Architecture
 
 - TLS terminates at nginx for all external traffic; HTTP redirects to HTTPS.
-- Passwords are Argon2id hashes and are never readable through any API.
-- Access tokens are short-lived JWTs (default 24 hours); refresh tokens rotate and
-  the previous token is revoked. The browser receives HttpOnly cookies and a
-  signed double-submit CSRF token.
+- Passwords are Argon2id hashes and are never readable through any API. Every
+  new password is validated before hashing by one rule
+  (`core/security.py::validate_password_strength`): at least `PASSWORD_MIN_LENGTH`
+  characters (floor 8, enforced at startup), at least one uppercase letter, one
+  lowercase letter, one number and one special character, plus the common-password
+  denylist. First-run setup, forgot-password reset, self-service change,
+  administrator reset and user creation all call it; the UI mirrors the same rule
+  with a live checklist and refuses submission until it passes. Login never applies
+  the policy, so an account whose legacy password predates it can still sign in and
+  change it. There is no configurable complexity setting to weaken.
+- Access tokens are session-bound JWTs (default 15 minutes), with signature,
+  expiration, issuer and audience validation. Stable sessions and consumed
+  refresh hashes live in PostgreSQL; no cache, worker or additional service is
+  needed for rotation. Defaults are 480 minutes idle and 1440 minutes absolute.
+  Settings → Security overrides these using `accessTokenMinutes` (1–30),
+  `sessionTimeoutMinutes` (1–1440), and `sessionAbsoluteMinutes` (15–10080).
+  Existing configured idle values are preserved; missing values use validated
+  environment defaults. Remember me changes cookie persistence, never the
+  server deadlines. Legacy refresh-day/hour environment values no longer
+  control new sessions.
+- Production refresh cookies use `__Secure-refresh_token`, Secure, HttpOnly,
+  SameSite=Lax, host-only and Path=/api/v1. Access and signed CSRF cookies retain
+  their `__Host-` names and Path=/. The readable CSRF cookie is not a credential.
+  Refresh/logout validate Origin and signed double-submit CSRF even with bearer
+  headers. Configure explicit HTTPS CORS origins and the existing trusted proxy
+  termination; cookie auth requires `credentials: include`. Keep clocks synced.
+
+### Session migration and rollback
+
+`24ac57ef90bd` adds nullable `user_sessions.last_activity_at`, backfills it from
+`created_at`, and adds `used_refresh_tokens`. It preserves all user, permission
+and business rows. The unpublished import-jobs revision was assigned the unique
+ID `12ab34cd56ef` because its original ID collided with the released backup
+revision; no released revision was edited. Reconcile that unpublished identity
+before releasing any installation that has already manually stamped it.
+
+Existing non-revoked refresh hashes remain exchangeable without decoding the
+legacy JWT refresh format. On first refresh the row receives an opaque token;
+the old production `__Host-refresh_token` cookie is exchanged and cleared.
+Legacy access JWTs without the new claims must renew; legacy bearer-only clients
+without a refresh cookie must sign in once. No blanket user/session reset runs.
+Legacy sessions remain subject to their existing `expires_at` and the configured
+idle/absolute policy, so expired sessions cannot be resurrected.
+
+Back up and restore-test before production migration. Apply backend then frontend
+together, validate cookies over the real HTTPS proxy, and check a reload and
+unsaved Service Order save. New opaque refresh tokens cannot be consumed by old
+backend images: rollback to `12ab34cd56ef` preserves accounts/business rows but
+requires sign-in for those sessions. Downgrade intentionally removes consumed
+hash history. Keep signing/CSRF keys stable across ordinary restarts.
+
+The replay policy rejects overlapping stale credentials for five seconds with
+409 and no replacement. Later reuse revokes the whole stable session and audits
+the event. Consumed hashes remain until their session is deleted; for this small
+deployment, monitor retention and purge expired session families only through a
+separately reviewed maintenance operation.
 - Permission checks are enforced by `require_permission(...)` on the API; the UI
   only hides what the API would already refuse.
 - Retrievable integration secrets, such as customs-account passwords, use Fernet

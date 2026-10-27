@@ -1,5 +1,6 @@
 import type { RecordStatusPolicy, RecordStatusTransition } from '~/types/status'
 import { STATUS_ACTION_META, type StatusActionMeta } from '~/config/status-actions'
+import type { FreightModule } from '~/config/freight-modules'
 
 export type { StatusActionColor, StatusActionMeta } from '~/config/status-actions'
 
@@ -30,4 +31,21 @@ export function statusTransitionsFor(
 ): RecordStatusTransition[] {
   if (!policy) return []
   return policy.transitions[normalizeRecordStatus(current)] || []
+}
+
+/**
+ * Whether a module can own a record status policy at all.
+ *
+ * Historical and derived collections (audit logs, the archive, reports, the AR/AP
+ * views) are read-only and have no lifecycle, and a module that exposes no
+ * `status` value has nothing to transition. Asking the API for their policy only
+ * produces a 404, so the shared status manager must not ask. The backend stays
+ * authoritative: a module that passes this check is still offered only the
+ * transitions its policy actually returns.
+ */
+export function supportsStatusPolicy(
+  module: Pick<FreightModule, 'readOnly' | 'columns' | 'fields'>,
+): boolean {
+  if (module.readOnly) return false
+  return [...(module.columns ?? []), ...(module.fields ?? [])].some(field => field.key === 'status')
 }

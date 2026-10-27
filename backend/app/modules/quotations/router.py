@@ -104,6 +104,16 @@ async def create_revision(
     return {"data": record}
 
 
+@router.post("/quotations/from-service-order/{identifier}", status_code=status.HTTP_201_CREATED)
+async def create_quotation_from_service_order(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("quotation.revise")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Re-quotation: a new draft offer copied from an existing service order."""
+    return {"data": await service.create_quotation_from_service_order(session, context, identifier)}
+
+
 @router.get("/quotations/{quotation_id}/revisions")
 async def list_revisions(
     quotation_id: EntityId,
@@ -213,7 +223,7 @@ async def convert_revision(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     before = await service.revision_status(session, revision_id)
-    record = await service.convert_revision(session, context, revision_id)
+    record = await service.convert_revision(session, context, revision_id, idempotency_key)
     await _record_revision_status_change(
         session, context, revision_id, before, record, "QUOTATION_CONVERTED", "convert",
     )

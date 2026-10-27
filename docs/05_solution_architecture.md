@@ -44,6 +44,12 @@ password-reset tokens, and the login/refresh/logout and profile flows. It also
 owns the users/roles/permissions administration endpoints. It does not own
 business records.
 
+Authentication uses one stable `user_sessions` row per login and indexed
+`used_refresh_tokens` hashes for rotation/replay detection. Access JWTs carry
+the session ID; one joined user/session lookup enforces account state, token
+version, revocation and idle/absolute deadlines on every protected request.
+Silent refresh never extends activity or the original absolute lifetime.
+
 ### Reference data — `master_data`
 
 Owns the administrator-managed party-role and place-role vocabularies, business
@@ -467,7 +473,7 @@ effective permission set before the router calls a service.
 - Number allocation uses row locks (`with_for_update`) plus unique constraints.
 - Positive/negative invariants not expressible as constraints are enforced in
   services (for example, journal balance before posting).
-- The schema has 65 tables and the current Alembic head is `c3d4e5f6a7b8`.
+- The schema has 70 tables and the current Alembic head is `24ac57ef90bd`.
   `docs/06_database_design.sql` is the single generated reference: DDL, indexes,
   constraints, and a `COMMENT ON` description for every table and column.
   Relationships are summarised in `docs/04_functional_design.md` section 17.
@@ -516,12 +522,12 @@ acceptable.
 
 ## Appendix A - Tables by module
 
-The schema has 65 tables. Column definitions for every table are in
+The schema has 70 tables. Column definitions for every table are in
 `docs/06_database_design.sql`; relations are in `docs/04_functional_design.md` §17.
 
 | Module | Tables |
 |---|---|
-| auth | `users`, `user_credentials`, `user_sessions`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `password_reset_tokens` |
+| auth | `users`, `user_credentials`, `user_sessions`, `used_refresh_tokens`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `password_reset_tokens` |
 | quotations | `quotations`, `quotation_revisions`, `quotation_revision_places`, `quotation_revision_containers`, `quotation_revision_lines`, `quotation_conversions` |
 | operations | `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links` |
 | finance | `chart_of_accounts`, `financial_accounts`, `accounting_periods`, `document_sequences`, `financial_documents`, `financial_document_lines`, `financial_document_sources`, `financial_document_allocations`, `posting_rules`, `journal_entries`, `journal_entry_lines`, `financial_document_postings` |

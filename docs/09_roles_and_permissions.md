@@ -80,7 +80,7 @@ These gate API endpoints. Every code below is enforced server-side.
 | posting_rule.manage | posting_rule | manage |
 | customs_credential.retrieve | customs_credential | retrieve |
 | attachment.read | attachment | read |
-| attachment.upload | attachment | upload |
+| attachment.upload | attachment | upload / edit note |
 | attachment.delete | attachment | delete |
 | audit_log.read | audit_log | read |
 | archive.view | archive | view |
@@ -96,6 +96,12 @@ for the ledger accounts, `posting_rule.manage`, `configuration.manage` for the
 sequences, `accounting_period.close` for closing/reopening, `service_order.update`
 for the order lifecycle, `user.manage` / `role.manage` — and the policy endpoint
 returns only the transitions the caller may perform.
+
+The shared Excel Import & Export endpoints follow the same rule: template download
+and export need the module's view permission, while import validate/preview/commit
+and the error report need the module's manage permission (`master.reference.view` /
+`master.reference.manage` for the Master Data lists). Import history is readable by
+holders of the module's view permission. No import is authorized by view alone.
 
 ### 2.2 Page and configuration permissions
 
@@ -678,8 +684,13 @@ those users after deployment.
   passwords set `must_change_password`, revoke existing sessions, and restrict the
   next token to `auth/change-password`, `auth/logout`, `auth/refresh`, and
   `auth/me` until the password is replaced.
-- Refresh tokens rotate; the previous token is revoked. Browser cookie sessions
-  use HttpOnly cookies plus the CSRF double-submit token.
+- Refresh tokens rotate on a stable PostgreSQL session; consumed hashes detect
+  replay and revoke that session. Browser cookie sessions use HttpOnly cookies,
+  signed double-submit CSRF and trusted Origin validation. Every protected
+  request checks the JWT session ID, idle/absolute deadlines, account status
+  and token version, so logout immediately denies its existing access tokens.
+  Refresh and identity endpoints require a valid session rather than a role
+  permission; existing business endpoints retain their permission dependencies.
 - Permission changes take effect for new requests. Revoking a session or changing
   a password invalidates the old access path immediately; the frontend refreshes
   `/auth/me` after a permission-sensitive operation.

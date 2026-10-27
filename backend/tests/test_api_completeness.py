@@ -17,17 +17,19 @@ async def test_settings_app_info_and_app_config_roundtrip(client):
     updated = await client.patch(
         "/api/v1/settings/app-config",
         headers=headers,
-        json={"general": {"maxUploadSizeMb": 123}, "localization": {"currency": "KHR"}},
+        json={"general": {"maxUploadSizeMb": 80}, "localization": {"currency": "KHR"}},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["data"]["general"]["maxUploadSizeMb"] == 123
+    assert updated.json()["data"]["general"]["maxUploadSizeMb"] == 80
 
     reloaded = await client.get("/api/v1/settings/app-config", headers=headers)
     assert reloaded.status_code == 200
     data = reloaded.json()["data"]
-    assert data["general"]["maxUploadSizeMb"] == 123
+    assert data["general"]["maxUploadSizeMb"] == 80
     assert data["localization"]["currency"] == "KHR"
-    assert data["system"]["environment"] == "production"
+    from app.core.config import settings as app_settings
+
+    assert data["system"]["environment"] == app_settings.environment
 
     reset = await client.post("/api/v1/settings/app-info/reset", headers=headers)
     assert reset.status_code == 200

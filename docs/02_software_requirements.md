@@ -163,7 +163,7 @@ The platform is single-tenant. Every request is authorized against an authentica
 
 **FR-010** The system shall authenticate users using username or email and password.
 
-**FR-011** The system shall store application passwords only as one-way password hashes.
+**FR-011** The system shall store application passwords only as one-way password hashes. Every new password (first-run setup, reset, change, administrator reset, user creation) shall contain at least 8 characters, at least one uppercase letter, one lowercase letter, one number and one special character; one server-side rule shall enforce it, mirrored by the UI, and it shall never be applied to an existing password at login.
 
 **FR-012** The system shall support logout and session revocation.
 

@@ -31,7 +31,8 @@ export function useAuth() {
     const data = payloadOf(response)
     auth.setTokens(
       typeof data.access_token === 'string' ? data.access_token : null,
-      typeof data.refresh_token === 'string' ? data.refresh_token : null,
+      null,
+      Number(data.expires_at) || (Date.now() / 1000 + Number(data.expires_in || 900)),
     )
     return { data: { user: data.user as AuthUser } }
   }
@@ -39,6 +40,14 @@ export function useAuth() {
   async function requestPasswordReset(email: string) {
     await api.post(ApiV1Endpoints.AUTH_FORGOT_PASSWORD, { email }, inlineErrors)
     return { data: { sent: true } }
+  }
+
+  async function verifyPasswordResetToken(token: string) {
+    await api.post(ApiV1Endpoints.AUTH_RESET_VERIFY, { token }, inlineErrors)
+  }
+
+  async function resetPasswordWithToken(token: string, password: string, passwordConfirmation: string) {
+    await api.post(ApiV1Endpoints.AUTH_RESET_PASSWORD, { token, password, password_confirmation: passwordConfirmation }, inlineErrors)
   }
 
   async function verifyPasswordResetCode(email: string, code: string) {
@@ -94,6 +103,8 @@ export function useAuth() {
   return {
     loginWithCredentials,
     requestPasswordReset,
+    verifyPasswordResetToken,
+    resetPasswordWithToken,
     verifyPasswordResetCode,
     resendPasswordResetCode,
     resetPasswordWithCode,

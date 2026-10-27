@@ -115,6 +115,7 @@ DOCUMENT_WRITE_SCHEMA = RecordSchema(
     (
         FieldSpec("documentNo", max_length=50, aliases=("document_no", "debitNoteNo", "debit_note_no")),
         FieldSpec("documentType", max_length=32, aliases=("document_type",)),
+        FieldSpec("documentTypeId", kind="reference", aliases=("document_type_id",)),
         FieldSpec("date", kind="date"),
         FieldSpec("documentDate", kind="date", aliases=("document_date",)),
         FieldSpec("postingDate", kind="date", aliases=("posting_date",)),

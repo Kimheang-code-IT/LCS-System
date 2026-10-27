@@ -30,6 +30,11 @@ export type ValidationCode =
   | 'allowed'
   | 'balanced'
   | 'commonPassword'
+  | 'passwordMinLength'
+  | 'passwordUppercase'
+  | 'passwordLowercase'
+  | 'passwordNumber'
+  | 'passwordSpecial'
   | 'custom'
 
 export type ValidationIssue = {
@@ -87,16 +92,43 @@ const URL_PATTERN = /^(https?:\/\/)[^\s.]+\.[^\s]{2,}$/i
  * extension forms alike.
  */
 const PHONE_PATTERN = /^\+?[\d(][\d\s().-]{4,20}$/
-const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?)?$/
+// Mirrors the backend `_DATETIME_PATTERN` in app/core/validation.py, so a stored
+// tz-aware timestamp (`…T00:00:00+00:00`, fractional seconds, `Z`) round-trips
+// without a false "invalid date" on save.
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/
 
 /**
  * Password policy, mirrored from the backend's `PASSWORD_MIN_LENGTH` /
- * `PASSWORD_MAX_LENGTH` (defaults 8 and 128). The backend is authoritative and
- * re-validates every password it is given; this exists so a weak one is refused
- * before the round trip rather than after it.
+ * `PASSWORD_MAX_LENGTH` (defaults 8 and 128) and the character classes
+ * `app/core/security.py::validate_password_strength` requires. The backend is
+ * authoritative and re-validates every password it is given; this exists so a
+ * weak one is refused before the round trip rather than after it.
  */
 export const PASSWORD_MIN_LENGTH = 8
 export const PASSWORD_MAX_LENGTH = 128
+
+/** One boolean per approved requirement; also drives the live checklist. */
+export type PasswordRequirements = {
+  minLength: boolean
+  maxLength: boolean
+  uppercase: boolean
+  lowercase: boolean
+  number: boolean
+  special: boolean
+}
+
+/** The five requirements a user must satisfy, in display order. */
+export function passwordRequirements(value: string): PasswordRequirements {
+  const password = String(value ?? '')
+  return {
+    minLength: password.length >= PASSWORD_MIN_LENGTH,
+    maxLength: password.length <= PASSWORD_MAX_LENGTH,
+    uppercase: /[A-Z]/.test(password),
+    lowercase: /[a-z]/.test(password),
+    number: /[0-9]/.test(password),
+    special: /[^A-Za-z0-9]/.test(password),
+  }
+}
 
 /**
  * Values the backend refuses outright (`validate_password_strength`). Kept in
@@ -116,15 +148,20 @@ const COMMON_PASSWORDS = new Set([
 /** Check a password against the shared policy; returns the first problem found. */
 export function validatePasswordStrength(value: string): ValidationIssue | null {
   const password = String(value ?? '')
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    return { code: 'minLength', params: { minLength: PASSWORD_MIN_LENGTH } }
+  const checks = passwordRequirements(password)
+  if (!checks.minLength) {
+    return { code: 'passwordMinLength', params: { minLength: PASSWORD_MIN_LENGTH } }
   }
-  if (password.length > PASSWORD_MAX_LENGTH) {
+  if (!checks.maxLength) {
     return { code: 'maxLength', params: { maxLength: PASSWORD_MAX_LENGTH } }
   }
   if (COMMON_PASSWORDS.has(password.trim().toLowerCase())) {
     return { code: 'commonPassword' }
   }
+  if (!checks.uppercase) return { code: 'passwordUppercase' }
+  if (!checks.lowercase) return { code: 'passwordLowercase' }
+  if (!checks.number) return { code: 'passwordNumber' }
+  if (!checks.special) return { code: 'passwordSpecial' }
   return null
 }
 
@@ -134,18 +171,33 @@ export function validatePasswordStrength(value: string): ValidationIssue | null 
  * Built from `crypto.getRandomValues`, never `Math.random`: a generated
  * credential that can be predicted is worse than no generator at all. The
  * alphabet omits characters that are easily confused when a password is read
- * aloud or copied by hand (I/l/1, O/0).
+ * aloud or copied by hand (I/l/1, O/0). One uppercase, one lowercase and one
+ * digit are placed explicitly, because drawing the body at random could miss a
+ * class the policy requires.
  */
 export function generateStrongPassword(length = 16): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const lower = 'abcdefghijkmnopqrstuvwxyz'
+  const digits = '23456789'
+  const alphabet = `${upper}${lower}${digits}`
   const symbols = '!@#$%^&*-_=+'
-  const bytes = new Uint8Array(length)
+  const size = Math.max(length, 6)
+  const bytes = new Uint8Array(size + 8)
   crypto.getRandomValues(bytes)
-  const last = bytes[length - 1]!
-  const body = Array.from(bytes.slice(0, length - 1), byte => alphabet[byte % alphabet.length]).join('')
-  // Keep the symbol away from the end, so copying by hand cannot pick up a
-  // trailing space that is not part of the password.
-  return `${body.slice(0, -1)}${symbols[last % symbols.length]}${body.slice(-1)}`
+  const pick = (source: string, index: number) => source[bytes[index]! % source.length]!
+
+  const body = Array.from({ length: size - 1 }, (_, index) => pick(alphabet, index))
+  // The class-guaranteeing characters sit in three distinct random body slots;
+  // the last body slot stays alphanumeric so the symbol is never the final
+  // character.
+  const span = size - 2
+  const offset = bytes[size]! % span
+  const slots = [offset, (offset + 1) % span, (offset + 2) % span]
+  body[slots[0]!] = pick(upper, size + 1)
+  body[slots[1]!] = pick(lower, size + 2)
+  body[slots[2]!] = pick(digits, size + 3)
+  const symbol = symbols[bytes[size + 4]! % symbols.length]!
+  return `${body.slice(0, -1).join('')}${symbol}${body.at(-1)}`
 }
 
 /** Treat `undefined`, `null`, `''` and `[]` as "no value"; `0`/`false` are values. */
@@ -275,6 +327,15 @@ export function issueFromBackendMessage(raw: string): ValidationIssue | null {
   if (/valid (?:number|decimal|float)/i.test(text)) return { code: 'number' }
   if (/valid boolean/i.test(text)) return { code: 'boolean' }
   if (/valid date/i.test(text)) return { code: 'date' }
+  // Backend password sentences are worded exactly like `validation.password*`,
+  // so a server refusal reads the same as the local rule that mirrors it.
+  if (/at least one uppercase letter/i.test(text)) return { code: 'passwordUppercase' }
+  if (/at least one lowercase letter/i.test(text)) return { code: 'passwordLowercase' }
+  if (/at least one number/i.test(text)) return { code: 'passwordNumber' }
+  if (/at least one special character/i.test(text)) return { code: 'passwordSpecial' }
+  if (/too common/i.test(text)) return { code: 'commonPassword' }
+  const passwordMin = text.match(/contain at least (\d+) characters?/i)
+  if (passwordMin) return { code: 'passwordMinLength', params: { minLength: Number(passwordMin[1]) } }
   const minLength = text.match(/at least (\d+) characters?/i)
   if (minLength) return { code: 'minLength', params: { min: Number(minLength[1]) } }
   const maxLength = text.match(/at most (\d+) characters?/i)

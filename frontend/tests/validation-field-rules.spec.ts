@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isBlank, validateFieldValue } from '../app/utils/validation/field-rules'
+import { isoZoneSuffix } from '../app/utils/date-picker'
 import {
   failuresToMap,
   inferColumnRule,
@@ -58,6 +59,18 @@ describe('field rules', () => {
     expect(validateFieldValue('2026-12-31T09:30', { date: true })).toBeNull()
   })
 
+  it('accepts a stored tz-aware datetime like the backend does', () => {
+    // Dates loaded from timestamptz columns carry a zone offset; they must
+    // round-trip through edit/save without a false validation error.
+    expect(validateFieldValue('2026-10-28T00:00:00+00:00', { date: true })).toBeNull()
+    expect(validateFieldValue('2026-10-28T00:00:00+07:00', { date: true })).toBeNull()
+    expect(validateFieldValue('2026-10-28T00:00:00.123456Z', { date: true })).toBeNull()
+    expect(validateFieldValue('28/10/2026 00:00', { date: true })).toEqual({ code: 'date' })
+    expect(isoZoneSuffix('2026-10-28T00:00:00+07:00')).toBe('+07:00')
+    expect(isoZoneSuffix('2026-10-28T00:00:00Z')).toBe('Z')
+    expect(isoZoneSuffix('2026-10-28T00:00')).toBe('')
+  })
+
   it('enforces quantity and exchange-rate positivity', () => {
     expect(validateFieldValue(0, { positive: true })).toEqual({ code: 'positive' })
     expect(validateFieldValue(-1, { positive: true })).toEqual({ code: 'positive' })
@@ -71,9 +84,10 @@ describe('field rules', () => {
   })
 
   it('applies the shared password policy', () => {
-    expect(validateFieldValue('short', { password: true })).toMatchObject({ code: 'minLength' })
+    expect(validateFieldValue('short', { password: true })).toMatchObject({ code: 'passwordMinLength' })
     expect(validateFieldValue('password123', { password: true })).toEqual({ code: 'commonPassword' })
     expect(validateFieldValue('Passw0rd!', { password: true })).toBeNull()
+    expect(validateFieldValue('passw0rd!', { password: true })).toEqual({ code: 'passwordUppercase' })
   })
 })
 

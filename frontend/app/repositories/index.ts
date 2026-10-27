@@ -29,6 +29,11 @@ import type { FreightModule } from '~/config/freight-modules'
 import type { ModuleRepository } from '~/repositories/contracts/module'
 import type { ArchiveRepository } from '~/repositories/contracts/archive'
 import { createHttpArchiveRepository } from '~/repositories/http/archive'
+import { createHttpTelegramRepository } from '~/repositories/http/telegram'
+
+export function useTelegramRepository() {
+  return createHttpTelegramRepository()
+}
 
 let initialized = false
 let appInfoRepo: AppInfoRepository

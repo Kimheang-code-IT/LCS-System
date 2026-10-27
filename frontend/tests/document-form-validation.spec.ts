@@ -154,11 +154,13 @@ describe('quotation form (/quotations)', () => {
   it('locates an invalid quotation line by row and column', () => {
     const rows = [
       { containerType: '40HC', transportBy: 'Sea', quantity: 2, unitPrice: 100, lineTotal: 200 },
-      { containerType: '', transportBy: 'Sea', quantity: 1, unitPrice: 20, lineTotal: 20 },
+      // A container is optional for a charge; the charge basis is not.
+      { containerType: '', transportBy: '', quantity: 1, unitPrice: 20, lineTotal: 20 },
     ]
     const keys = validateTableRows({ table: pricing, rows, label }).map(failure => failure.key)
 
-    expect(keys).toContain('pricingLines.1.containerType')
+    expect(keys).toContain('pricingLines.1.transportBy')
+    expect(keys).not.toContain('pricingLines.1.containerType')
     // The valid first row is untouched: no error points at it.
     expect(keys.some(key => key.startsWith('pricingLines.0.'))).toBe(false)
   })
@@ -173,10 +175,10 @@ describe('quotation form (/quotations)', () => {
     expect(keys.some(key => key.startsWith('places.0.'))).toBe(false)
   })
 
-  it('requires the place role but leaves the free-text location optional', () => {
+  it('requires both the place role and a location on a route stop', () => {
     const rows = [{ placeRoleId: '' }]
     expect(validateTableRows({ table: places, rows, label }).map(f => f.key))
-      .toEqual(['places.0.placeRoleId'])
+      .toEqual(['places.0.placeRoleId', 'places.0.place'])
   })
 
   it('keeps row identifiers stable so a reorder cannot move an error onto a valid row', () => {

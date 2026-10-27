@@ -57,6 +57,8 @@ _COLLECTION_PAGE_PREFIX: dict[str, str] = {
     "containerTypes": "master.container_types",
     "transportTypes": "master.transport_types",
     "transportAssets": "master.transport_assets",
+    "transportAssetIdentityTypes": "master.transport_assets",
+    "capacityUnits": "master.transport_assets",
     "feeTypes": "master.fee_types",
     "currencies": "master.currencies",
     "currencyRates": "master.currencies",
@@ -142,7 +144,7 @@ def _register(collection: str) -> None:
         session: AsyncSession = Depends(get_session),
     ) -> dict:
         _collection_guard(context, collection, "create")
-        return {"data": await service.create_reference(session, collection, payload)}
+        return {"data": await service.create_reference(session, collection, payload, context)}
 
     async def get_item(
         item_id: str,
@@ -185,7 +187,7 @@ def _register(collection: str) -> None:
     router.add_api_route(f"/{collection}", bulk_delete, methods=["DELETE"], name=f"delete_{collection}")
     router.add_api_route(f"/{collection}/bulk-delete", bulk_delete, methods=["POST"], name=f"bulk_delete_{collection}")
     router.add_api_route(f"/{collection}/{{item_id}}", get_item, methods=["GET"], name=f"get_{collection}")
-    router.add_api_route(f"/{collection}/{{item_id}}", update_item, methods=["PUT"], name=f"update_{collection}")
+    router.add_api_route(f"/{collection}/{{item_id}}", update_item, methods=["PUT", "PATCH"], name=f"update_{collection}")
     router.add_api_route(f"/{collection}/{{item_id}}", delete_item, methods=["DELETE"], name=f"delete_{collection}")
 
 
@@ -246,7 +248,7 @@ def _register_generic(collection: str) -> None:
     router.add_api_route(f"/{collection}", create_item, methods=["POST"], status_code=status.HTTP_201_CREATED, name=f"create_{collection}")
     router.add_api_route(f"/{collection}", delete_item, methods=["DELETE"], name=f"delete_{collection}")
     router.add_api_route(f"/{collection}/{{item_id}}", get_item, methods=["GET"], name=f"get_{collection}")
-    router.add_api_route(f"/{collection}/{{item_id}}", update_item, methods=["PUT"], name=f"update_{collection}")
+    router.add_api_route(f"/{collection}/{{item_id}}", update_item, methods=["PUT", "PATCH"], name=f"update_{collection}")
 
 
 @router.get("/ui-schemas/{page:path}")
@@ -472,6 +474,17 @@ async def delete_component_attribute(
 ) -> dict:
     _config_manage_guard(context, "delete")
     return {"data": await component_config_service.delete_attribute(session, context, attribute_id)}
+
+
+@router.post("/component-attributes/reorder")
+async def reorder_component_attributes(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(get_current_context),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    _config_manage_guard(context, "update")
+    ordered = validate_id_list({"ids": payload.get("orderedIds") or payload.get("ids") or []})
+    return {"data": await component_config_service.reorder_attributes(session, context, ordered)}
 
 
 # --- Component groups --------------------------------------------------------

@@ -4,6 +4,7 @@ export type ComponentDataType =
   | 'text'
   | 'textarea'
   | 'number'
+  | 'integer'
   | 'decimal'
   | 'money'
   | 'currency'
@@ -51,6 +52,7 @@ export interface ComponentAttribute {
   width?: string | null
   options?: Array<string | { label: string, value: string }>
   validationRules?: Record<string, unknown>
+  displayOrder?: number
   status: string
   createdAt?: string | null
   updatedAt?: string | null
@@ -237,6 +239,7 @@ export interface ConfigurationVersion {
   origin?: 'PUBLISH' | 'ROLLBACK'
   status: 'DRAFT' | 'PUBLISHED' | 'RETIRED'
   changeNote?: string | null
+  createdBy?: string | null
   publishedAt?: string | null
   publishedByUserId?: string | null
   publishedBy?: string | null
@@ -332,6 +335,7 @@ export const COMPONENT_DATA_TYPES: ComponentDataType[] = [
   'text',
   'textarea',
   'number',
+  'integer',
   'decimal',
   'money',
   'currency',

@@ -4,7 +4,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache, deletion
@@ -20,12 +20,10 @@ from app.core.permissions import (
     ROLE_DEFINITIONS,
     SOURCE_PERMISSIONS,
 )
-from app.core.redis import safe_delete, safe_get, safe_set
+from app.core.redis import safe_delete
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_token,
-    generate_reset_code,
     hash_password,
     hash_token,
     validate_password_strength,
@@ -38,6 +36,7 @@ from app.modules.auth.models import (
     Permission,
     Role,
     RolePermission,
+    UsedRefreshToken,
     User,
     UserCredential,
     UserRoleAssignment,
@@ -139,12 +138,6 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _refresh_session_lifetime(remember_me: bool) -> timedelta:
-    if remember_me:
-        return timedelta(days=settings.refresh_token_expire_days)
-    return timedelta(hours=settings.session_refresh_token_expire_hours)
-
-
 def _assert_can_manage_platform_admin(context: RequestContext | None, role_code: str | None) -> None:
     """Only a platform administrator may touch the super-admin role."""
     if role_code == PLATFORM_ADMIN_ROLE and not (context and context.is_platform_admin):
@@ -193,6 +186,9 @@ async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
     for record in records:
         record.revoked_at = now
     user.token_version = int(user.token_version or 0) + 1
+    from app.modules.telegram.models import TelegramPairing
+
+    await session.execute(delete(TelegramPairing).where(TelegramPairing.user_id == user.id))
     await safe_delete(f"revoked:{user.id}")
 
 
@@ -236,9 +232,13 @@ async def get_user(session: AsyncSession, user_id: int) -> User:
 
 
 async def authenticate(session: AsyncSession, login: str, password: str) -> User:
+    from app.modules.audit.service import write_audit
+
     user = await get_user_by_login(session, login)
     if user is None:
         verify_password_or_dummy(password, None)
+        await write_audit(session, None, event_type="LOGIN_FAILED", entity_type="user", entity_id=0, action="login", result="REJECTED")
+        await session.commit()
         raise AuthRequired("Invalid username or password.")
     credential = await AuthRepository(session).credential_for_user(user.id)
     now = datetime.now(UTC)
@@ -254,6 +254,8 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
             if credential.failed_attempt_count >= max_attempts:
                 credential.locked_until = now + timedelta(minutes=lockout_minutes)
                 credential.failed_attempt_count = 0
+                await write_audit(session, None, event_type="ACCOUNT_LOCKED", entity_type="user", entity_id=user.id, action="lock", result="REJECTED")
+            await write_audit(session, None, event_type="LOGIN_FAILED", entity_type="user", entity_id=user.id, action="login", result="REJECTED")
             await session.commit()
         raise AuthRequired("Invalid username or password.")
     if str(user.status or "").upper() not in {"ACTIVE"}:
@@ -380,171 +382,212 @@ def build_auth_user(ctx: RequestContext, role_label: str, *, must_change_passwor
     }
 
 
-async def create_session(
-    session: AsyncSession,
-    user: User,
-    *,
-    ip: str | None,
-    user_agent: str | None,
-    remember_me: bool = False,
-) -> tuple[str, str]:
+async def _session_access(session: AsyncSession, user: User, record: UserSession) -> str:
+    from app.modules.settings.service import get_access_policy
+
+    policy = await get_access_policy(session)
+    return create_access_token(
+        user.id, int(user.token_version or 0), session_id=record.id,
+        lifetime_minutes=policy["accessTokenMinutes"],
+        must_change_password=await must_change_password(session, user.id),
+    )
+
+
+async def validate_session(session: AsyncSession, record: UserSession | None, user_id: int) -> UserSession:
+    from app.modules.settings.service import get_access_policy
+
+    if record is None or record.user_id != user_id or record.revoked_at is not None:
+        raise AuthRequired("Session has been revoked. Please sign in again.", code="SESSION_REVOKED")
+    policy = await get_access_policy(session)
     now = datetime.now(UTC)
-    lifetime = _refresh_session_lifetime(remember_me)
-    refresh = create_refresh_token(user.id, expires_delta=lifetime)
+    absolute = min(_as_utc(record.expires_at), _as_utc(record.created_at) + timedelta(minutes=policy["sessionAbsoluteMinutes"]))
+    activity = _as_utc(record.last_activity_at or record.created_at)
+    if now >= absolute or now >= activity + timedelta(minutes=policy["sessionTimeoutMinutes"]):
+        raise AuthRequired("Session has expired. Please sign in again.", code="SESSION_EXPIRED")
+    return record
+
+
+async def create_session(
+    session: AsyncSession, user: User, *, ip: str | None, user_agent: str | None, remember_me: bool = False,
+) -> tuple[str, str]:
+    from app.modules.settings.service import get_access_policy
+
+    now = datetime.now(UTC)
+    policy = await get_access_policy(session)
+    refresh = create_refresh_token(user.id)
     record = UserSession(
-        user_id=user.id,
-        refresh_token_hash=hash_token(refresh),
-        ip_address=ip,
-        user_agent=user_agent,
-        expires_at=now + lifetime,
-        remember_me=remember_me,
+        user_id=user.id, refresh_token_hash=hash_token(refresh),
+        expires_at=now + timedelta(minutes=policy["sessionAbsoluteMinutes"]),
+        created_at=now, last_activity_at=now, remember_me=remember_me,
     )
     session.add(record)
     await session.flush()
-    access = create_access_token(
-        user.id,
-        int(user.token_version or 0),
-        must_change_password=await must_change_password(session, user.id),
-    )
+    access = await _session_access(session, user, record)
     user.last_login_at = now
     await session.commit()
     return access, refresh
 
 
+async def _refresh_record(session: AsyncSession, token: str) -> tuple[UserSession | None, UsedRefreshToken | None]:
+    token_hash = hash_token(token)
+    # History is immutable. Lock the stable session before inspecting its current
+    # hash again: a waiter must observe the winning rotation after the lock.
+    record = await session.scalar(select(UserSession).where(UserSession.refresh_token_hash == token_hash).with_for_update())
+    if record is not None:
+        return record, None
+    used = await session.get(UsedRefreshToken, token_hash)
+    if used is None:
+        return None, None
+    record = await session.scalar(select(UserSession).where(UserSession.id == used.session_id).with_for_update())
+    return record, used
+
+
 async def rotate_refresh_token(
-    session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None
+    session: AsyncSession, refresh_token: str, *, ip: str | None, user_agent: str | None,
 ) -> tuple[User, str, str, bool]:
-    """Rotate a refresh token and return ``(user, access, refresh, remember_me)``.
-
-    The replacement session inherits the original absolute ``expires_at`` so
-    rotation never extends the server-side session lifetime.
-    """
-    try:
-        payload = decode_token(refresh_token)
-    except Exception as exc:  # noqa: BLE001
-        raise AuthRequired("Invalid refresh token.") from exc
-    if payload.get("type") != "refresh":
-        raise AuthRequired("Invalid token type.")
-    token_hash = hash_token(refresh_token)
-    record = await AuthRepository(session).session_by_refresh_hash(token_hash)
-    if record is None or record.revoked_at is not None:
-        raise AuthRequired("Session is no longer valid.")
+    record, used = await _refresh_record(session, refresh_token)
+    if record is None:
+        raise AuthRequired("Invalid refresh token.", code="SESSION_INVALID")
     now = datetime.now(UTC)
-    expires_at = _as_utc(record.expires_at)
-    if expires_at <= now:
-        raise AuthRequired("Session has expired.")
+    if used is not None:
+        if record.revoked_at is None and now - _as_utc(used.used_at) <= timedelta(seconds=5):
+            # An overlapping request receives no credential and cannot rotate.
+            # No cookies are changed; its tab can retry using the winning cookie.
+            raise Conflict("REFRESH_CONFLICT", "Another request renewed this session. Retry using the current cookie.")
+        if record.revoked_at is None:
+            from app.modules.audit.service import write_audit
+
+            record.revoked_at = now
+            await write_audit(session, None, event_type="REFRESH_REPLAY", entity_type="user_session",
+                              entity_id=record.id, action="revoke", reason="Consumed refresh credential reused")
+            await session.commit()
+        raise AuthRequired("Session revoked after refresh-token reuse.", code="SESSION_REVOKED")
     user = await session.get(User, record.user_id)
-    if user is None:
-        raise AuthRequired("User not found.")
-    record.revoked_at = now
+    if user is None or str(user.status).upper() != "ACTIVE":
+        raise AuthRequired("This account is not active.", code="SESSION_REVOKED")
+    await validate_session(session, record, user.id)
+    session.add(UsedRefreshToken(token_hash=record.refresh_token_hash, session_id=record.id, used_at=now))
+    new_refresh = create_refresh_token(user.id)
+    record.refresh_token_hash = hash_token(new_refresh)
     record.last_used_at = now
-    remember_me = bool(record.remember_me)
-    new_refresh = create_refresh_token(user.id, expires_delta=expires_at - now)
-    # Rotation issues a brand-new session row. Reusing the now-revoked row would
-    # make the fresh token fail the revoked check on the very next refresh.
-    session.add(
-        UserSession(
-            user_id=user.id,
-            refresh_token_hash=hash_token(new_refresh),
-            ip_address=ip,
-            user_agent=user_agent,
-            expires_at=expires_at,
-            remember_me=remember_me,
-        )
-    )
+    access = await _session_access(session, user, record)
     await session.commit()
-    # Carries the "must change" claim too: refreshing must not be a way to
-    # escape the forced change.
-    access = create_access_token(
-        user.id,
-        int(user.token_version or 0),
-        must_change_password=await must_change_password(session, user.id),
-    )
-    return user, access, new_refresh, remember_me
+    return user, access, new_refresh, bool(record.remember_me)
 
 
-async def revoke_session(session: AsyncSession, user_id: int | None, refresh_token: str | None) -> int | None:
-    """Revoke the session identified by ``refresh_token`` (or every active
-    session of ``user_id``). Returns the owner id when one was resolved."""
+async def revoke_session(session: AsyncSession, user_id: int | None, refresh_token: str | None, *, session_id: int | None = None) -> int | None:
     now = datetime.now(UTC)
     if refresh_token:
-        token_hash = hash_token(refresh_token)
-        record = await AuthRepository(session).session_by_refresh_hash(token_hash)
+        record, _ = await _refresh_record(session, refresh_token)
         if record is not None:
             record.revoked_at = now
             user_id = record.user_id
         await session.commit()
-        if user_id is not None:
-            await safe_delete(f"revoked:{user_id}")
         return user_id
     if user_id is None:
         return None
+    if session_id is not None:
+        record = await session.scalar(select(UserSession).where(UserSession.id == session_id).with_for_update())
+        if record is not None and record.user_id == user_id:
+            record.revoked_at = now
+            await session.commit()
+        return user_id
     records = await AuthRepository(session).active_sessions(user_id)
     for record in records:
         record.revoked_at = now
     await session.commit()
-    await safe_delete(f"revoked:{user_id}")
     return user_id
 
 
 async def request_password_reset(session: AsyncSession, email: str) -> None:
-    user = await AuthRepository(session).user_by_email(email)
-    if user is None:
+    import secrets
+
+    from app.modules.telegram import service as telegram
+    from app.modules.telegram.models import TelegramLink
+    from app.modules.telegram.outbox import enqueue_private, policy
+
+    value = await telegram.config(session)
+    if not value.get("enabled") or not policy(value, "recovery")["enabled"]:
         return
-    code = generate_reset_code()
-    session.add(
-        PasswordResetToken(
-            user_id=user.id,
-            email=email,
-            code_hash=hash_token(code),
-            expires_at=datetime.now(UTC) + timedelta(minutes=settings.password_reset_code_expire_minutes),
-        )
-    )
+    try:
+        telegram.trusted_origin()
+    except ValidationFailed:
+        return
+    user = await AuthRepository(session).user_by_login(email.strip())
+    if user is None or user.status.upper() != "ACTIVE":
+        return
+    # Serialize issuance and consumption per account, including simultaneous requests.
+    user = (await session.execute(select(User).where(User.id == user.id).with_for_update())).scalar_one()
+    link = await session.get(TelegramLink, user.id)
+    if not link or link.blocked_at or link.bot_id != value.get("botId"):
+        return
+    now = datetime.now(UTC)
+    recent = await session.scalar(select(PasswordResetToken.id).where(PasswordResetToken.user_id == user.id, PasswordResetToken.created_at > now - timedelta(minutes=policy(value, "recovery")["cooldownMinutes"])))
+    if recent:
+        return
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=now))
+    token = secrets.token_urlsafe(32)
+    record = PasswordResetToken(user_id=user.id, email=user.email, code_hash=hash_token(token), expires_at=now + timedelta(minutes=15))
+    session.add(record)
+    await session.flush()
+    await enqueue_private(session, user.id, "PASSWORD_RESET_REQUESTED", token=token, reset_id=record.id)
     await session.commit()
-    await safe_set(f"reset:{email}", code, ex=settings.password_reset_code_expire_minutes * 60)
 
 
 async def verify_reset_code(session: AsyncSession, email: str, code: str) -> bool:
-    record = (
-        await session.execute(
-            select(PasswordResetToken)
-            .where(PasswordResetToken.email == email, PasswordResetToken.used_at.is_(None))
-            .order_by(PasswordResetToken.id.desc())
-        )
-    ).scalars().first()
-    if record is not None and record.expires_at >= datetime.now(UTC) and record.code_hash == hash_token(code):
-        return True
-    cached = await safe_get(f"reset:{email}")
-    return cached is not None and cached == code
+    # email is retained as a compatibility argument; identity is derived only from the token.
+    if not 40 <= len(code) <= 128:
+        return False
+    record = await session.scalar(select(PasswordResetToken.id).where(PasswordResetToken.code_hash == hash_token(code), PasswordResetToken.used_at.is_(None), PasswordResetToken.expires_at > datetime.now(UTC)))
+    return record is not None
 
 
 async def reset_password(session: AsyncSession, email: str, code: str, password: str) -> None:
+    from app.modules.audit.service import write_audit
+    from app.modules.telegram import service as telegram
+    from app.modules.telegram.models import TelegramLink
+    from app.modules.telegram.outbox import enqueue_private, policy
+
     password_errors = validate_password_strength(password)
     if password_errors:
         raise ValidationFailed(password_errors[0], {"password": password_errors[0]})
-    if not await verify_reset_code(session, email, code):
-        raise Conflict("INVALID_RESET_CODE", "The reset code is invalid or has expired.")
-    user = await AuthRepository(session).user_by_email(email)
-    if user is None:
-        raise NotFound("User not found.")
+    if not 40 <= len(code) <= 128:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    record = (await session.execute(select(PasswordResetToken).where(PasswordResetToken.code_hash == hash_token(code)))).scalar_one_or_none()
+    if record is None:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    user = (await session.execute(select(User).where(User.id == record.user_id).with_for_update())).scalar_one_or_none()
+    if user is None or user.status.upper() != "ACTIVE":
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    value = await telegram.config(session)
+    link = await session.get(TelegramLink, user.id)
+    if not value.get("enabled") or not policy(value, "recovery")["enabled"] or not link or link.blocked_at or link.bot_id != value.get("botId"):
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
+    now = datetime.now(UTC)
+    # Atomic conditional consumption is required even when the caller preverified the link.
+    consumed = await session.execute(update(PasswordResetToken).where(PasswordResetToken.id == record.id, PasswordResetToken.used_at.is_(None), PasswordResetToken.expires_at > now).values(used_at=now).returning(PasswordResetToken.id).execution_options(synchronize_session=False))
+    if consumed.scalar_one_or_none() is None:
+        raise Conflict("INVALID_RESET_CODE", "The recovery link is invalid or has expired.")
     credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None:
-        session.add(UserCredential(user_id=user.id, password_hash=hash_password(password), password_changed_at=datetime.now(UTC)))
+        credential = UserCredential(user_id=user.id, password_hash=hash_password(password))
+        session.add(credential)
     else:
         credential.password_hash = hash_password(password)
-        credential.password_changed_at = datetime.now(UTC)
-    records = (
-        await session.execute(select(PasswordResetToken).where(PasswordResetToken.email == email, PasswordResetToken.used_at.is_(None)))
-    ).scalars().all()
-    for record in records:
-        record.used_at = datetime.now(UTC)
-    # A password reset invalidates every existing session for the account.
+    credential.password_changed_at = now
+    credential.must_change_password = False
+    credential.failed_attempt_count = 0
+    credential.locked_until = None
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=now))
     await _revoke_all_sessions(session, user)
+    await enqueue_private(session, user.id, "PASSWORD_RESET_COMPLETED")
+    await write_audit(session, None, event_type="PASSWORD_RESET_COMPLETED", entity_type="user", entity_id=user.id, action="reset_password")
     await session.commit()
-    await safe_delete(f"reset:{email}")
 
 
 async def change_password(session: AsyncSession, user: User, current_password: str, new_password: str) -> None:
+    from app.modules.telegram.outbox import enqueue_private
+
     credential = await AuthRepository(session).credential_for_user(user.id)
     if credential is None or not verify_password(current_password, credential.password_hash):
         raise AuthRequired("Current password is incorrect.")
@@ -559,6 +602,8 @@ async def change_password(session: AsyncSession, user: User, current_password: s
     credential.must_change_password = False
     # Changing the password signs out every device, including the current one.
     await _revoke_all_sessions(session, user)
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=datetime.now(UTC)))
+    await enqueue_private(session, user.id, "PASSWORD_CHANGED")
     await session.commit()
 
 
@@ -601,6 +646,10 @@ async def set_user_password(
     credential.failed_attempt_count = 0
     credential.locked_until = None
     await _revoke_all_sessions(session, user)
+    from app.modules.telegram.outbox import enqueue_private
+
+    await session.execute(update(PasswordResetToken).where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None)).values(used_at=datetime.now(UTC)))
+    await enqueue_private(session, user.id, "PASSWORD_CHANGED")
     await session.commit()
     return user
 
@@ -611,11 +660,19 @@ async def force_logout_user(session: AsyncSession, user_id: int) -> None:
     if user is None:
         raise NotFound("User not found.")
     await _revoke_all_sessions(session, user)
+    from app.modules.telegram.outbox import enqueue_private
+
+    await enqueue_private(session, user.id, "SESSIONS_REVOKED")
     await session.commit()
 
 
 async def list_users(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
     rows = await AuthRepository(session).users_with_role_codes(page)
+    from app.core.users import creator_names_from_audit
+
+    creators = await creator_names_from_audit(
+        session, "user", "USER_CREATED", (user.id for user, _assignments in rows)
+    )
     output = []
     for user, assignments in rows:
         output.append(
@@ -627,6 +684,9 @@ async def list_users(session: AsyncSession, page: PageParams | None = None) -> l
                 "displayName": user.display_name,
                 "status": user.status,
                 "roles": list(assignments),
+                "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
+                "createdBy": creators.get(user.id),
+                "createdAt": user.created_at.isoformat() if user.created_at else None,
                 "isProtectedSystemAccount": _is_protected_system_admin(user),
             }
         )
@@ -922,6 +982,11 @@ async def list_roles(
     session: AsyncSession, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
 ) -> dict:
     roles, total = await AuthRepository(session).roles_with_permissions(page, q=q, status=status)
+    from app.core.users import creator_names_from_audit
+
+    creators = await creator_names_from_audit(
+        session, "role", "ROLE_CREATED", (role.id for role, _perms in roles)
+    )
     output = []
     for role, perms in roles:
         user_count = int(
@@ -946,6 +1011,8 @@ async def list_roles(
                 "permissions": list(perms),
                 "permissionCount": len(perms),
                 "userCount": user_count,
+                "createdBy": creators.get(role.id),
+                "createdAt": role.created_at.isoformat() if role.created_at else None,
             }
         )
     effective_page = page or PageParams(page=1, page_size=max(total, 1))

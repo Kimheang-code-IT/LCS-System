@@ -85,6 +85,10 @@ export function useComponentConfig() {
     })
   }
 
+  async function reorderAttributes(orderedIds: string[]) {
+    return withSaving(async () => { attributes.value = await componentConfig.reorderAttributes(orderedIds) })
+  }
+
   // --- Groups ---------------------------------------------------------------
   async function loadGroups(includeArchived = true) {
     return run(async () => { groups.value = await componentConfig.listGroups(includeArchived) })
@@ -327,6 +331,7 @@ export function useComponentConfig() {
     createAttribute,
     updateAttribute,
     deleteAttribute,
+    reorderAttributes,
     loadGroups,
     createGroup,
     updateGroup,

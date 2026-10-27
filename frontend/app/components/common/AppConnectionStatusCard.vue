@@ -25,6 +25,7 @@ const statusMeta = computed(() => {
     not_tested: { color: 'neutral', icon: 'i-lucide-circle-dashed', labelKey: 'lcs.connection.notTested' },
     testing: { color: 'primary', icon: 'i-lucide-loader-circle', labelKey: 'lcs.connection.testing' },
     connected: { color: 'success', icon: 'i-lucide-circle-check', labelKey: 'lcs.connection.connected' },
+    not_verified: { color: 'warning', icon: 'i-lucide-circle-help', labelKey: 'lcs.connection.notVerified' },
     failed: { color: 'error', icon: 'i-lucide-circle-x', labelKey: 'lcs.connection.failed' },
     disabled: { color: 'warning', icon: 'i-lucide-ban', labelKey: 'lcs.connection.disabled' },
   }

@@ -83,7 +83,10 @@ describe('toast notification policy', () => {
     // handler must not also notify for it.
     expect(source).toContain('isInlineValidationStatus')
     expect(source).toMatch(/isInlineValidationStatus\(response\.status\)/)
-    expect(source).toMatch(/isInlineValidationStatus\(fetchError\.status/)
+    // An HTTP error answer (404, 500, …) is not a transport failure: only a
+    // request with no status at all may raise the connection toast.
+    expect(source).toMatch(/isNetworkFailure\(fetchError\)/)
+    expect(source).not.toMatch(/connectionErrorTitle[\s\S]{0,200}fetchError\.status/)
   })
 })
 

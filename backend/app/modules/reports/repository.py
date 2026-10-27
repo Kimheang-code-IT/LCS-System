@@ -199,10 +199,13 @@ class ReportRepository:
         stmt = (
             select(
                 JournalEntryLine.id,
+                JournalEntry.id.label("journal_id"),
                 JournalEntry.posting_date,
                 JournalEntry.entry_no,
                 JournalEntry.description.label("journal_description"),
+                FinancialDocument.id.label("source_document_id"),
                 FinancialDocument.document_no.label("source_document_no"),
+                ChartOfAccount.id.label("account_id"),
                 ChartOfAccount.account_code,
                 ChartOfAccount.account_name,
                 ChartOfAccount.account_type,

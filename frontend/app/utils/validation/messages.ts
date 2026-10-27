@@ -32,6 +32,11 @@ export const ISSUE_KEYS: Record<string, string> = {
   allowed: 'validation.allowed',
   balanced: 'validation.balanced',
   commonPassword: 'validation.commonPassword',
+  passwordMinLength: 'validation.passwordMinLength',
+  passwordUppercase: 'validation.passwordUppercase',
+  passwordLowercase: 'validation.passwordLowercase',
+  passwordNumber: 'validation.passwordNumber',
+  passwordSpecial: 'validation.passwordSpecial',
 }
 
 /**

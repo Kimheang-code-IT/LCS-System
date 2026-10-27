@@ -120,12 +120,19 @@ async def resolve_route_stops(
         elif str(role.status or "").upper() != "ACTIVE" and stored_role_id != role.id:
             errors[f"{field}.{index}.placeRoleId"] = "This place role is inactive."
 
+        # A stop must say where it happens; a role without a location cannot be
+        # printed as a route. Historical rows stay readable, but editing one now
+        # asks for the missing location.
+        place = str(item.get("place") or "").strip()
+        if not place:
+            errors[f"{field}.{index}.place"] = "Required."
+
         resolved.append(
             {
                 "row_id": row_id,
                 "place_role_id": role.id if role is not None else None,
                 "place_role": (role.name if role is not None else str(item.get("placeRole") or ""))[:32],
-                "place": str(item.get("place") or "")[:500],
+                "place": place[:500],
                 "planned_at": item.get("planned"),
                 "actual_at": item.get("actual"),
                 "notes": item.get("notes"),

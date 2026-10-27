@@ -44,6 +44,7 @@ from app.modules.master_data.models import (
     TradeDirection,
     TransportType,
 )
+from app.modules.master_data.service import seed_capacity_units, seed_transport_asset_identity_types
 
 DEMO_USERS = [
     ("ADMIN-001", "admin", "admin@example.test", "Demo Administrator", "PLATFORM_ADMIN", "ADMIN"),
@@ -200,6 +201,12 @@ async def seed_demo_data(session: AsyncSession) -> None:
 
     for code, name in [("TRUCK", "Truck"), ("VESSEL", "Vessel"), ("AIR", "Air"), ("RAIL", "Rail"), ("MULTIMODAL", "Multimodal")]:
         await _get_or_create(session, TransportType, {"name": name}, code=code)
+
+    # The transport-asset identity vocabulary (License Plate, IMO Number, …) is
+    # master data; seed it here so the rows link to the types above.
+    await seed_transport_asset_identity_types(session, (await session.execute(select(TransportType))).scalars().all())
+    # Capacity units (KG, CBM, Pallets, ...) back the capacity select the same way.
+    await seed_capacity_units(session)
 
     for code, name, size, kind, iso_code, length in [
         ("20DV", "20-foot Dry Van", "20FT", "DRY", "22G1", 20),

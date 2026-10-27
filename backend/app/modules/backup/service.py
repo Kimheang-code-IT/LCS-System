@@ -95,7 +95,7 @@ async def _store_backup_status(session: AsyncSession, *, status: str, message: s
 def _excluded_tables() -> set[str]:
     """Engine-internal tables that are never mirrored: the migration marker and
     the backup bookkeeping tables themselves (which would grow without bound)."""
-    return {"alembic_version"}
+    return {"alembic_version", "notification_outbox", "notification_incidents", "telegram_pairings", "telegram_updates", "telegram_links"}
 
 
 def build_client(config: dict[str, Any]) -> GoogleSheetsClient:
@@ -324,6 +324,7 @@ async def _execute_run(run_id: int) -> None:
             config = await _load_backup_config(session)
             client = build_client(config) if sheets_configured(config) else None
             r2_storage = build_r2_storage(config) if r2_configured(config) else None
+            run.detail = {"destination_type": "R2 and Sheets" if client and r2_storage else "R2" if r2_storage else "Sheets", "failure_stage": "table snapshot"}
             if client is None and r2_storage is None:
                 raise BackupConfigurationError("Backup is not configured. Configure Cloudflare R2 or Google Sheets.")
         except BackupConfigurationError as exc:
@@ -331,6 +332,7 @@ async def _execute_run(run_id: int) -> None:
             run.message = str(exc)
             run.finished_at = utcnow()
             run.duration_ms = 0
+            run.detail = {"failure_stage": "configuration"}
             await _log(session, run.id, "error", str(exc))
             await session.commit()
             await _store_backup_status(session, status="failed", message=str(exc), when=utcnow().isoformat())
@@ -356,6 +358,7 @@ async def _execute_run(run_id: int) -> None:
                 counters.tables_processed += 1
 
             if r2_storage is not None:
+                run.detail = {**(run.detail or {}), "failure_stage": "R2 upload"}
                 object_key = await _upload_r2_snapshot(session, r2_storage, run, config)
                 await _log(session, run.id, "info", f"Cloudflare R2 snapshot stored at '{object_key}'.")
                 await session.commit()
@@ -514,6 +517,9 @@ async def _upload_r2_snapshot(
     key = "/".join(part for part in (prefix, created_at.strftime("%Y/%m/%d"), name) if part)
     try:
         await asyncio.to_thread(storage.put, key, payload, "application/gzip")
+        if not await asyncio.to_thread(storage.exists, key):
+            raise BackupStorageError("Cloudflare R2 uploaded object could not be verified.")
+        run.detail = {**(run.detail or {}), "size_bytes": len(payload), "upload_verified": True}
     except Exception as exc:  # noqa: BLE001 - external SDK errors are intentionally sanitized
         raise BackupStorageError("Cloudflare R2 backup upload failed. Verify the endpoint and bucket permissions.") from exc
     return key

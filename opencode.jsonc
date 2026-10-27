@@ -12,6 +12,36 @@
   // change it with `/ponytail lite|full|ultra|off`.
   "plugins": ["@dietrichgebert/ponytail@5.3.2"],
 
+  // Browser automation for local UI checks and E2E debugging only.
+  // Headless Chromium with an in-memory profile (no cookies persisted to disk)
+  // and navigation restricted to the local development stack. The server is
+  // registered here, not globally, so other projects do not pay its tool cost.
+  // One-time browser install for this exact MCP version:
+  //   npx -y @playwright/mcp@0.0.83 install-browser chrome-for-testing
+  // Localhost-only origins are a guardrail, not a security boundary: the test
+  // account must still be a dedicated non-production user.
+  "mcp": {
+    "servers": {
+      "playwright": {
+        "type": "local",
+        "enabled": true,
+        "command": [
+          "npx",
+          "-y",
+          "@playwright/mcp@0.0.83",
+          "--browser",
+          "chromium",
+          "--headless",
+          "--isolated",
+          "--output-dir",
+          ".playwright-mcp",
+          "--allowed-origins",
+          "http://localhost;http://localhost:8000;http://127.0.0.1;http://127.0.0.1:8000"
+        ]
+      }
+    }
+  },
+
   // Ordered rules; the LAST matching rule wins. `/permissions` in the TUI shows
   // what is currently in force.
   "permissions": [

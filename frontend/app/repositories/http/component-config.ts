@@ -34,6 +34,11 @@ export function createHttpComponentConfigRepository(): ComponentConfigRepository
       unwrapApiData(await api.patch<ApiResponse<ComponentAttribute>>(ApiV1Endpoints.COMPONENT_ATTRIBUTE(id), input)),
     deleteAttribute: async id =>
       unwrapApiData(await api.delete<ApiResponse<{ archived: boolean, id: string }>>(ApiV1Endpoints.COMPONENT_ATTRIBUTE(id))),
+    reorderAttributes: async orderedIds =>
+      asArray(unwrapApiData(await api.post<ApiResponse<ComponentAttribute[]>>(
+        ApiV1Endpoints.COMPONENT_ATTRIBUTES_REORDER,
+        { orderedIds },
+      ))),
 
     listGroups: async includeArchived =>
       asArray(unwrapApiData(await api.get<ApiResponse<ComponentGroup[]>>(ApiV1Endpoints.COMPONENT_GROUPS, { query: { include_archived: includeArchived, page_size: 200 } }))),

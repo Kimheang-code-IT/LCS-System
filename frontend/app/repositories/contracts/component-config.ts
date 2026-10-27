@@ -33,6 +33,7 @@ export interface ComponentConfigRepository {
   createAttribute: (input: ComponentAttributeInput) => Promise<ComponentAttribute>
   updateAttribute: (id: string, input: Partial<ComponentAttributeInput>) => Promise<ComponentAttribute>
   deleteAttribute: (id: string) => Promise<{ archived: boolean, id: string }>
+  reorderAttributes: (orderedIds: string[]) => Promise<ComponentAttribute[]>
 
   listGroups: (includeArchived?: boolean) => Promise<ComponentGroup[]>
   createGroup: (input: ComponentGroupInput) => Promise<ComponentGroup>

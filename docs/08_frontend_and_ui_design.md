@@ -16,7 +16,10 @@ frontend has no mock data layer: every business read and write goes through
 
 - `layouts/default.vue` mounts the sidebar (`useMenu`), the header
   (`LayoutAppHeader` + `LayoutAppHeaderPageActions`), the global search entry
-  point, and the content area.
+  point, and the content area. Every header action button — Save, New/Create and
+  the document workflow buttons (Submit, Send, Accept…) — renders through the
+  shared `CommonAppDocumentActionButton`, so one style rule
+  (`utils/layout/document-action-button.ts`) governs every page.
 - `layouts/auth.vue` is the unauthenticated shell; `layouts/print.vue` removes
   application chrome from print routes.
 - `middleware/auth.global.ts` enforces session state, first-run setup, forced
@@ -86,6 +89,9 @@ frontend has no mock data layer: every business read and write goes through
 | `/master-data/fee-types/:id` | `app/pages/master-data/fee-types/[id].vue` | `freight.pages.feeTypes` | `master.reference.view` |
 | `/master-data/fee-types` | `app/pages/master-data/fee-types/index.vue` | `freight.pages.feeTypes` | `master.reference.view` |
 | `/master-data/fee-types/new` | `app/pages/master-data/fee-types/new.vue` | `freight.pages.feeTypes` | `master.reference.view` |
+| `/master-data/document-types/:id` | `app/pages/master-data/document-types/[id].vue` | `freight.pages.documentTypes` | `master.reference.view` |
+| `/master-data/document-types` | `app/pages/master-data/document-types/index.vue` | `freight.pages.documentTypes` | `master.reference.view` |
+| `/master-data/document-types/new` | `app/pages/master-data/document-types/new.vue` | `freight.pages.documentTypes` | `master.reference.view` |
 | `/master-data/party-roles/:id` | `app/pages/master-data/party-roles/[id].vue` | `freight.pages.partyRoles` | `master.party_roles.view` |
 | `/master-data/party-roles` | `app/pages/master-data/party-roles/index.vue` | `freight.pages.partyRoles` | `master.party_roles.view` |
 | `/master-data/party-roles/new` | `app/pages/master-data/party-roles/new.vue` | `freight.pages.partyRoles` | `master.party_roles.view` |
@@ -126,6 +132,24 @@ Most list/detail screens reuse two generic views:
   `DocumentView.vue`) for document modules, driven by
   `app/config/freight-modules.ts`.
 
+The Quotation list is a `WorkspaceView` over nine business columns: Quotation
+No., SO No., Business Party, Revision (`R01`), Trade Direction, Grand Total,
+Status, Created By and Created At. The Quotation number opens the document, the
+SO number opens the linked order, and both the company-name column and the filter
+are labelled **Business Party** while the printed company name stays a separate
+field. Created By is the author of the first revision, so a later editor never
+takes over attribution.
+
+The Service Order list shows SO No., Quotation No., Business Party, Trade
+Direction, Containers, Total Charges, Status, Created By and Created At. The SO
+number stays the `jobNo` data key and opens the service-order detail page; the
+Quotation column is the source quotation number and id returned read-only by the
+list API, so both numbers are clickable next to each other.
+
+The Service Charge and Financial Document lists end with Created By then Created
+At. All four lists resolve creator names in one batched query per page; a missing
+user row shows `—` rather than a fabricated name.
+
 `app/config/lcs-reference-modules.ts` describes each reference collection:
 columns, form fields, filters, title field, icon, group, permission, and whether
 create is allowed. `app/utils/freight/page-access.ts` derives the visible menu
@@ -154,11 +178,44 @@ The Business Parties form loads active Party Roles from the database and stores 
 - The selector offers active roles for new assignments; inactive roles remain
   readable on existing parties.
 
-Quotation pricing lines take their **By** options from Master Data → Transport
-Types. The select offers active types keyed by id, so renaming a type updates the
-label without rewriting quotation history. An inactive type, or a legacy line
-that stored the type name, stays readable on the quotation but is not offered for
-new lines.
+Quotations use five tabs on the existing document page: Overview, Route, Pricing,
+Files and Revisions. No separate quotation page was added.
+
+- **Overview** distinguishes the linked **Business Party** from the printable
+  **Company name**. Business Party, Trade Direction and Quotation Date are
+  required; Valid Until may not precede the Quotation Date. Currency and Trade
+  Direction options come from active Master Data.
+- **Route** is the shared route-stop table: Place Role from the active Place Roles
+  master, a required free-text location, planned date/time, Notes, add/remove and
+  move buttons. The server renumbers the submitted order and persists planned
+  dates.
+- **Pricing** renames the former **By** column to **Charge Basis** (active
+  Transport Types keyed by id). Fee Type comes from the Fee Types master, the
+  Container Type is optional, and Quantity must be greater than zero. Line and
+  grand totals are recalculated on both sides; the backend is authoritative and
+  rounds each amount half-up to two decimals before saving. A line's discount
+  amount and tax rate live in **Additional Details** in the row menu, not as
+  permanent columns.
+- **Files** uploads through the attachment API (size and configured extension
+  allow-list checked in the browser, content checked again on the server), shows
+  an upload state and page-level errors, and stores the returned file row on the
+  quotation. The **Note** column is edited directly in its cell (up to 1000
+  characters) and saved on leave through the attachment API. Removing a row
+  detaches it from the quotation; the stored object is
+  deleted only when the user has `attachment.delete`. Downloads use the stored
+  URL/storage key and the server's `attachment.read` guard.
+- **Revisions** lists revision number (`R01`, `R02`), status, grand total,
+  creator and creation time, newest first, with a row actions menu for **View**
+  and no add-row control. Editing a
+  sent/accepted revision clones it instead of overwriting; the dirty marker
+  blocks Send/Accept until Save, and Create Revision is offered only for a
+  persisted quotation.
+
+A **service order** offers **Create re-quotation** in its header for anyone with
+`quotation.revise`. It confirms, creates a new draft quotation from the order's
+customer, direction, route, containers and priced lines, then navigates to that
+quotation. The order is left untouched, and the button is hidden on an unsaved
+order; the endpoint refuses the call without the permission regardless.
 
 ## 5. Dynamic Service-Order Tabs and Versioning
 
@@ -167,14 +224,23 @@ Service-order tabs are database-configured. `useComponentTabs` and
 the published configuration version the order was captured under.
 
 - Configuration is edited in `/configuration/{component-tabs,component-groups,component-attributes}`.
+- The Component Attributes screen is still one inline-editable grid. Its columns are
+  reorder, `code`, `label`, `dataType`, `choices`, `master data`, `rules`, required
+  and help text. `code` is the stable key and is unique; `choices` holds static
+  select options (`A, B` or `Label|VALUE`); `master data` names the database source
+  for a `reference`; `rules` holds `min`, `max`, `minLength`, `maxLength`,
+  `pattern` and the `email`/`url`/`integer`/`nonNegative`/`positive` flags as
+  `key=value` pairs. A new row keeps its typed values when validation fails.
+- Row move buttons persist catalog order through
+  `POST /component-attributes/reorder`; group membership order remains separate.
 - A published version is a snapshot. Orders keep their captured version, so a
   later configuration change does not rewrite historical orders.
 - `configuration-versions` supports publish, activate, compare, preview,
   rollback, retire, and activation history.
 - Attributes carry type, required/repeatable flags, reference source, display
   order, validation rules, and trade-direction filtering.
-- The dynamic field renderer supports text, number, decimal, date, select,
-  multi-select, boolean, textarea, reference, and repeatable table rows.
+- The dynamic field renderer supports text, number, integer, decimal, date,
+  select, multi-select, boolean, textarea, reference, and repeatable table rows.
 
 ## 6. Record Status
 
@@ -187,6 +253,13 @@ status from every compiled form.
   Status**. `useRecordStatus()` fetches the backend policy and renders only the
   transitions that are legal from the current status and permitted for the
   caller.
+- The policy is requested only where a lifecycle can exist:
+  `supportsStatusPolicy()` skips read-only collections (Audit Logs, Archive,
+  Reports, AR/AP views) and any module without a `status` value. A `404` from
+  `/{collection}/status-policy` means "no lifecycle" and is an expected answer,
+  never a user-visible error.
+- Identifier columns (for example the Audit Logs **Record** field) render as
+  integer labels; only amount/price keys go through the money formatter.
 - Plain activate/deactivate transitions use
   `POST /{collection}/{item_id}/status`. Workflow transitions use the endpoint
   that owns them (`utils/freight/status-commands.ts`), so posting, reversal,
@@ -224,6 +297,13 @@ One shared pipeline covers every form; no page implements its own.
   password policy, cross-field date order, and admin-managed
   `validationRules`. Validation runs on blur and again on submit; editing a field
   clears only its own message.
+- Password policy is one shared rule: `validatePasswordStrength` (mirroring
+  `validate_password_strength`) plus `passwordRequirements`. Every new-password
+  form (`/auth/setup`, `/auth/change-password`, `/auth/reset-password`, the profile
+  dialog, the administrator password dialog and the create-user form) renders
+  `CommonAppPasswordRequirements` under the input and disables submission until all
+  five requirements pass and the confirmation matches. The login form does not
+  apply it.
 - Frontend validation is a convenience. The API validates every write again in
   `backend/app/core/validation.py` and the module schemas; an API client cannot
   bypass it.
@@ -238,8 +318,27 @@ One shared pipeline covers every form; no page implements its own.
   `app/utils/constants/api-endpoints.ts`, and
   `app/utils/api/freight-remote.ts` (`REMOTE_ENDPOINTS`).
 - `useApi()` is the central fetch client: auth header/cookies, CSRF header,
-  query compaction, 401 refresh-and-retry, error normalisation, and success
+  query compaction, eligible expired-token refresh-and-retry, error normalisation, and success
   toasts. It does not toast validation or business refusals.
+- The auth store owns one generation-guarded renewal promise. Route middleware
+  awaits restoration before deciding on a login redirect. Timers use server
+  expiration metadata (up to 90 seconds early, scaled for short tokens), run
+  only for a visible recently active tab, and recover on focus/interaction.
+  Web Locks serialize refresh/logout across tabs; BroadcastChannel and a
+  storage event carry only non-secret renewal/logout metadata. A waiting tab
+  verifies identity through shared HttpOnly cookies instead of rotating again.
+  Cross-account changes lock the original draft until its account signs in.
+- Access tokens returned in bearer mode live only in memory; old browser-stored
+  credentials are removed. The production cookie mode keeps both credentials
+  HttpOnly. Refresh tokens never enter JavaScript state. No financial draft is
+  persisted for renewal. JSON requests retry once; uploads, binary bodies and
+  streams require explicit resubmission. Temporary renewal failures preserve
+  state with two bounded retries and a persistent retry message. Genuine
+  expiry locks protected actions and shows a sign-in link in a new tab,
+  preserving the current form. Sign-in to the same account restores access
+  without automatic submission. Logout invalidates pending responses, waits
+  for its in-flight cookie response, revokes the server session, and clears
+  frontend state only after server confirmation (or an already-invalid 401).
 - `useReferenceOptions()` loads dynamic options (Party Roles, Place Roles, trade
   directions, fee types, currencies, and other references) and caches them by
   collection and status filter. It never hardcodes a role option array.
@@ -276,8 +375,34 @@ One shared pipeline covers every form; no page implements its own.
 - Print output is deliberately bilingual English + Khmer for the Cambodian tax
   invoice, independent of the UI locale, through
   `composables/print/usePrintBilingual.ts`.
+- Service-charge printing reuses `buildChargePrintViewModel`. Each fee line has
+  **Print Invoice** in its row menu (`?line`/`?lineId`, the id wins) and the
+  table header has **Print All**; on the Service Order's Service Charge tab that
+  header button prints every charge of the order as one read-only statement
+  (`?statementOrder`), fetching the charges through the read API. A draft charge
+  keeps its watermark and is never presented as an issued customer invoice.
+  Printing never issues, posts or creates a document.
 - Dates, numbers, and money use the shared formatters in
   `app/utils/format/`; money is never formatted through a binary float.
+
+### Excel Import & Export actions (`app/components/excel/ImportExportDialog.vue`)
+
+Eligible list pages (the backend catalog `GET /api/v1/excel/modules` is the single
+source of support) offer **Export** and **Import** as items in the page-header
+**⋯** menu — not as buttons above the table. The header keeps its primary
+**New/Create** button for the modules that allow creating a record. Export needs
+the module's view permission; import validate/commit need its manage permission
+and are refused (`403`) otherwise.
+A view-only caller therefore sees Export only. Export sends the selected rows,
+or every filtered row when nothing is selected — never just the current table
+page. Choosing Import opens the shared dialog, which drives the workflow:
+download template → pick mode (Create Only default) → upload `.xlsx` → backend
+validate & preview (read-only table: Excel row no., identifier, action, status,
+error details, with summary counts) → confirm (single-use server session;
+commit-time revalidation, atomic all-or-nothing) → result with a downloadable
+XLSX error report and the five most recent imports for that module.
+Import/Export items are **hidden** for modules the catalog does not list;
+validation errors render in the dialog, never as toasts.
 
 ## 11. Accessibility and Responsive Behaviour
 
@@ -297,15 +422,17 @@ One shared pipeline covers every form; no page implements its own.
 
 ## 12. Frontend Tests and Known Gaps
 
-Frontend tests are plain Vitest (`environment: node`, alias `~ -> app`); only
-`tests/**/*.spec.ts` run and there is no browser suite. They cover validation
-rules, notification policy, i18n parity, reference options, form metadata,
-formatting, page access, permissions, and contract constants. The full strategy
-and commands are in `docs/10_testing_and_quality.md`.
+Frontend unit tests are plain Vitest (`environment: node`, alias `~ -> app`); only
+`tests/**/*.spec.ts` run. They cover validation rules, notification policy, i18n parity,
+reference options, form metadata, formatting, page access, permissions, and contract
+constants. A separate Playwright Test suite lives in `e2e/` and runs with `pnpm test:e2e`
+against the compose stack (`frontend/playwright.config.ts`). The full strategy and
+commands are in `docs/10_testing_and_quality.md`.
 
 Known gaps:
 
-- No Playwright/Cypress browser suite; drag-and-drop, focus order, and responsive
-  layout are verified manually.
+- The Playwright suite is read-only and covers startup, the anonymous auth guard and login
+  validation; authenticated CRUD journeys are skipped without `E2E_USERNAME`/`E2E_PASSWORD`.
+  Drag-and-drop, focus order, and responsive layout are still verified manually.
 - Some screens are metadata-driven and have no page-specific component test.
 - Report rendering is checked at the repository/format layer, not pixel by pixel.

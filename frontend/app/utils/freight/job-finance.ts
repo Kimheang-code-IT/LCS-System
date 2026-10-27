@@ -118,3 +118,28 @@ export function jobFinanceLineTotals(lines: JobFinanceLine[]) {
     [JOB_FINANCE_LINE_KIND.document]: total(JOB_FINANCE_LINE_KIND.document),
   }
 }
+
+/** Headline figures for the Finance tab: charges, expenses, invoices and the margin. */
+export function jobFinanceSummary(lines: JobFinanceLine[]) {
+  const totals = jobFinanceLineTotals(lines)
+  const charge = totals[JOB_FINANCE_LINE_KIND.charge]
+  const expense = totals[JOB_FINANCE_LINE_KIND.expense]
+  return {
+    charge,
+    expense,
+    invoice: totals[JOB_FINANCE_LINE_KIND.document],
+    profit: Math.round((charge - expense) * 100) / 100,
+  }
+}
+
+/**
+ * The grid edits one Amount for expenses; storage still keeps quantity × unit
+ * price, so an amount typed on a row becomes quantity 1 × that amount.
+ */
+export function expenseRowWithAmount(row: JobFinanceLine): JobFinanceLine {
+  return normalizeJobFinanceExpense({
+    ...row,
+    quantity: 1,
+    unitPrice: Number(row.amount || 0),
+  })
+}

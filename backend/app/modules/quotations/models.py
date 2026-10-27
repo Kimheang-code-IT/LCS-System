@@ -21,6 +21,11 @@ class Quotation(PKMixin, TimestampMixin, Base):
     trade_direction_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("trade_directions.id"), nullable=False)
     current_revision_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="DRAFT", index=True)
+    #: Set when the quotation was raised from an existing service order
+    #: (re-quotation). The order is read only; this column is the trace back.
+    source_service_order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("service_orders.id", ondelete="SET NULL"), index=True
+    )
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
 
 

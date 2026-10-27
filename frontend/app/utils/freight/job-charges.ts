@@ -42,6 +42,7 @@ export function serviceChargeToRow(charge: FreightRecord): ServiceChargeRow {
   const line = firstFeeLine(charge as ServiceChargeRow)
   return {
     id: String(charge.id ?? ''),
+    feeType: String(line.feeType || ''),
     description: String(line.description || charge.chargeNo || ''),
     documentDate: String(charge.documentDate || charge.date || ''),
     documentType: String(charge.documentType || 'SERVICE_NOTE'),
@@ -69,10 +70,12 @@ export function serviceChargePayload(row: ServiceChargeRow, currency: string) {
     documentDate: String(row.documentDate || new Date().toISOString().slice(0, 10)),
     currency,
     lines: [{
+      feeType: row.feeType,
       description,
       quantity: amounts.quantity,
       unitPrice: amounts.unitPrice,
       discount: amounts.discount,
+      taxRate: amounts.taxRate,
       taxAmount: amounts.taxAmount,
     }],
   }
@@ -84,19 +87,51 @@ export function serviceChargeIsCreatable(row: ServiceChargeRow): boolean {
 }
 
 export function serviceChargeColumns(): FreightLineColumn[] {
+  // Review-first grid: date, document type, tax, status and invoice stay on the
+  // charge detail page and in the payload, not in the every-day list. The row
+  // menu owns open / print / delete so the grid stays narrow.
   return [
+    { key: 'feeType', label: 'Fee Type', labelKm: 'ប្រភេទថ្លៃ', labelKey: 'freight.ui.feeTypeCol', type: 'select' },
     { key: 'description', label: 'Description', labelKm: 'បរិយាយ', required: true },
-    { key: 'documentDate', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', labelKey: 'freight.ui.cols.date', type: 'date' },
-    { key: 'documentType', label: 'Type', labelKm: 'ប្រភេទ', labelKey: 'freight.ui.cols.documentType', type: 'text', computed: true },
     { key: 'quantity', label: 'Qty', labelKm: 'ចំនួន', labelKey: 'freight.ui.qty', type: 'number' },
     { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកត្តរ', labelKey: 'freight.ui.unitPriceCol', type: 'number' },
-    { key: 'taxRate', label: 'Tax %', labelKm: 'ពន្ធ %', labelKey: 'freight.ui.taxCol', type: 'number' },
-    { key: 'total', label: 'Total', labelKm: 'សរុប', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
-    { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព', labelKey: 'freight.ui.cols.status', type: 'text', computed: true },
-    { key: 'invoiceNo', label: 'Invoice', labelKm: 'វិក្កយបត្រ', labelKey: 'freight.ui.cols.invoice', type: 'text', computed: true },
-    { key: '_print', label: '', type: 'action', action: 'print' },
-    { key: '_delete', label: '', type: 'delete' },
+    { key: 'total', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
   ]
+}
+
+/** Sheet totals. Line-level adjustments win; otherwise the sheet discount/rate applies. */
+export function serviceChargeTotals(
+  rows: ServiceChargeRow[],
+  vatRate: unknown,
+  discount: unknown = 0,
+) {
+  const subtotal = rows.reduce(
+    (sum, row) => sum + (Number(row.quantity || 0) * Number(row.unitPrice || 0)),
+    0,
+  )
+  const lineDiscount = rows.reduce((sum, row) => sum + (Number(row.discountAmount ?? row.discount) || 0), 0)
+  const lineTax = rows.reduce((sum, row) => sum + (Number(row.taxAmount) || 0), 0)
+  const hasLineAdjustments = lineDiscount > 0 || lineTax > 0
+  if (hasLineAdjustments) {
+    return {
+      vatRate: 0,
+      subtotal: Number(subtotal.toFixed(2)),
+      discount: Number(lineDiscount.toFixed(2)),
+      vat: Number(lineTax.toFixed(2)),
+      total: Number((subtotal - lineDiscount + lineTax).toFixed(2)),
+    }
+  }
+  const discountAmount = Math.max(0, Number(discount) || 0)
+  const taxable = Math.max(0, subtotal - discountAmount)
+  const rate = Number(vatRate) || 0
+  const vat = taxable * rate / 100
+  return {
+    vatRate: rate,
+    subtotal: Number(subtotal.toFixed(2)),
+    discount: Number(discountAmount.toFixed(2)),
+    vat: Number(vat.toFixed(2)),
+    total: Number((taxable + vat).toFixed(2)),
+  }
 }
 
 /** Grid rows carry the live amount so the total column is not stale mid-edit. */
@@ -114,5 +149,6 @@ export function serviceChargeTable(): FreightTable {
     columns: serviceChargeColumns(),
     addLabelKey: 'freight.ui.addCharge',
     computeRow: computeServiceChargeLine,
+    lineDetails: true,
   }
 }

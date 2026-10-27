@@ -41,6 +41,8 @@ export function createHttpQuotationRepository(): QuotationRepository {
     cancel: async (revisionId, reason, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_CANCEL(revisionId), { reason }, withIdempotency(key))),
     createRevision: async quotationId => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId), {})),
+    createFromServiceOrder: async serviceOrderId =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_FROM_SERVICE_ORDER(serviceOrderId), {})),
     listRevisions: async (quotationId) => {
       const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId)))
       return Array.isArray(data) ? data : []
@@ -58,6 +60,8 @@ export function createHttpJobRepository(): JobRepository {
     save: async record => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER(record.id), record)),
     addActualContainer: async (serviceOrderId, payload) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_CONTAINERS(serviceOrderId), payload)),
+    deleteActualContainers: async (serviceOrderId, ids) =>
+      unwrapApiData(await api.delete<ApiResponse<{ removed: number }>>(ApiV1Endpoints.SERVICE_ORDER_CONTAINERS(serviceOrderId), { body: { ids } })),
     finish: async (id, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_FINISH(id), {}, withIdempotency(key))),
   }
@@ -145,7 +149,30 @@ export function createHttpAttachmentRepository(): AttachmentRepository {
     listForRecord: async (module, recordNo) =>
       unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.ATTACHMENTS, { query: { module, record_no: recordNo } })),
     presign: async fileName =>
-      unwrapApiData(await api.post<ApiResponse<{ upload_url: string, file_name: string }>>(ApiV1Endpoints.ATTACHMENTS_PRESIGN, { file_name: fileName })),
+      unwrapApiData(await api.post<ApiResponse<{ upload_url: string, file_name: string }>>(
+        ApiV1Endpoints.ATTACHMENTS_PRESIGN,
+        { fileName, mimeType: '' },
+      )),
+    upload: async (file, context) => {
+      const body = new FormData()
+      body.append('file', file)
+      if (context?.module) body.append('module', context.module)
+      if (context?.recordNo) body.append('record_no', context.recordNo)
+      if (context?.note) body.append('note', context.note)
+      return unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.ATTACHMENTS_UPLOAD, body))
+    },
+    updateNote: async (id, note) =>
+      unwrapApiData(await api.patch<ApiResponse<FreightRecord>>(
+        ApiV1Endpoints.ATTACHMENTS_ITEM(id),
+        { note },
+      )),
+    remove: async (ids) => {
+      const result = unwrapApiData(await api.request<ApiResponse<{ removed: number }>>(
+        ApiV1Endpoints.ATTACHMENTS,
+        { method: 'DELETE', body: { ids } },
+      ))
+      return Number(result?.removed || 0)
+    },
   }
 }
 

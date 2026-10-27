@@ -43,7 +43,9 @@ async def test_reset_preserves_protected_admin_and_clears_business_data(client):
 
     app_config = await client.get("/api/v1/settings/app-config", headers=preserved_headers)
     assert app_config.status_code == 200, app_config.text
-    assert app_config.json()["data"]["system"]["environment"] == "production"
+    from app.core.config import settings as app_settings
+
+    assert app_config.json()["data"]["system"]["environment"] == app_settings.environment
 
     audit = await client.get("/api/v1/audit-events", headers=preserved_headers)
     assert any(row["action"] == "reset_business_data" for row in audit.json()["data"]["items"])

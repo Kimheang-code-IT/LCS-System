@@ -6,6 +6,7 @@ import { ULink } from '#components'
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { formatFreightCell, formatMoney, freightStatusBadge, labeledStatusOptions } from '~/composables/freight/useFreight'
+import { formatNumber } from '~/utils/format/format-service'
 import type { FreightRecord } from '~/types/record'
 import { ACTIVE_STATUS, CONTAINER_STATUSES } from '~/config/freight-options'
 import { downloadCsv } from '~/utils/export/csv'
@@ -189,7 +190,31 @@ const columns=computed<TableColumn<FreightRecord>[]>(()=>{
   const list=report.value.columns.map(column=>{
     const label = columnLabel(column)
     const kind: ListSortKind = column.numeric ? 'number' : listSortKindFor(column.key)
-    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:true,meta:{sortKind:kind,...(column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:{})},cell:({row}:{row:{original:FreightRecord}})=>{if(column.status)return freightStatusBadge(row.original[column.key],column.key);if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)}}
+    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:true,meta:{sortKind:kind,...(column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:{})},cell:({row}:{row:{original:FreightRecord}})=>{
+      if(column.status)return freightStatusBadge(row.original[column.key],column.key)
+      if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}
+      if(column.key==='quotationNo'){
+        const quotationId=String(row.original.quotationId||'').trim()
+        const text=String(row.original.quotationNo||'').trim()||'—'
+        if(quotationId&&auth.canAccessPage('sales.quotations.view'))return h(ULink,{to:`/quotations/${quotationId}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>text)
+        return h('span',{class:'text-default'},text)
+      }
+      const linkTargets:Record<string,{id:unknown,permission:string,prefix:string}> = {
+        invoiceNo:{id:row.original.id,permission:'finance.financial_documents.view',prefix:'/finance/documents/'},
+        journalNo:{id:row.original.journalId,permission:'finance.journal_entries.view',prefix:'/finance/journals/'},
+        sourceDocument:{id:row.original.sourceDocumentId,permission:'finance.financial_documents.view',prefix:'/finance/documents/'},
+        accountCode:{id:row.original.accountId,permission:'finance.chart_of_accounts.view',prefix:'/finance/chart-of-accounts/'},
+      }
+      const target=linkTargets[column.key]
+      if(target){
+        const id=String(target.id||'').trim()
+        const text=String(row.original[column.key]||'').trim()||'—'
+        if(id&&auth.canAccessPage(target.permission))return h(ULink,{to:`${target.prefix}${id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>text)
+        return h('span',{class:'text-default'},text)
+      }
+      if(column.integer)return formatNumber(row.original[column.key],{maximumFractionDigits:0,minimumFractionDigits:0})
+      return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)
+    }}
   })
   return [
     listTableSelectColumn<FreightRecord>(t),

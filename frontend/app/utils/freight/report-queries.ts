@@ -84,6 +84,7 @@ export function buildTrialBalanceReportRows(postedLines: FreightRecord[]) {
       id: key,
       accountCode: key,
       accountName: line.accountName,
+      accountId: line.accountId,
       openingDebit: 0,
       openingCredit: 0,
       periodDebit: 0,

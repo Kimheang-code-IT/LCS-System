@@ -42,6 +42,9 @@ coverage/
 
 .vercel
 .playwright-cli/
+.playwright-mcp/
+test-results/
+playwright-report/
 tmp/
 
 # Local reference artifacts (not app assets)

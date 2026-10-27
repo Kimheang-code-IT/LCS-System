@@ -24,6 +24,7 @@ from __future__ import annotations
 # --------------------------------------------------------------------------
 
 MODULE_TITLES: dict[str, str] = {
+    "app.modules.telegram.models": "Telegram Notifications and Verified Identities",
     "app.modules.archive.models": "Archive & Retention",
     "app.modules.audit.models": "Audit Trail",
     "app.modules.auth.models": "Authentication & Access Control",
@@ -40,6 +41,11 @@ MODULE_TITLES: dict[str, str] = {
 # --------------------------------------------------------------------------
 
 TABLE_DESCRIPTIONS: dict[str, str] = {
+    "telegram_links": "Private Telegram numeric identities verified by an authenticated, password-authorized pairing challenge. One identity per LCS user; never a group recovery destination.",
+    "telegram_pairings": "Hash-only, ten-minute single-use challenges. Group candidates additionally require confirmation by the originating authenticated administrator.",
+    "telegram_updates": "Telegram update receipts for idempotent webhook processing. No raw incoming message or challenge is retained.",
+    "notification_outbox": "Durable notification delivery and sanitized history. Claims use leases and PostgreSQL row locks. Recovery ciphertext expires before its token and is purged after delivery or expiry.",
+    "notification_incidents": "Runtime incident duration, cooldown and recovery state, plus the committed audit-event scan cursor. No credentials or message bodies.",
     # -- master data ------------------------------------------------------
     "place_roles": (
         "Administrator-managed vocabulary of roles a route stop can play (Pickup, Origin,\n"
@@ -90,6 +96,16 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "transport_assets": (
         "Physical transport asset (truck, vessel, aircraft) owned or operated by a business\n"
         "party and assigned to a movement leg."
+    ),
+    "transport_asset_identity_types": (
+        "Administrator-managed vocabulary for transport_assets.identity_type. Each row is one\n"
+        "dropdown option, optionally narrowed to a single transport type and carrying the\n"
+        "Identity field's label, placeholder and validation pattern."
+    ),
+    "capacity_units": (
+        "Administrator-managed unit list for transport_assets.capacity_unit (KG, CBM,\n"
+        "Pallets, ...). Replaces the free-text input so every asset reports capacity the\n"
+        "same way; archives preserve units an asset still references."
     ),
     "customer_customs_accounts": (
         "Credentials for a customer's portal on an external customs/declaration system,\n"
@@ -186,6 +202,21 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "PostgreSQL."
     ),
     "attachment_links": "Polymorphic link attaching a stored file to any business record.",
+    "document_types": (
+        "Administrator-managed classification of documents. accounting_behavior is the only\n"
+        "value accounting code reads; canonical system rows point at themselves and a custom\n"
+        "type may only reference one of the canonical behaviours, so a new label never invents\n"
+        "a posting rule."
+    ),
+    "import_jobs": (
+        "Excel import history: one row per confirmed (or failed) import batch, with counts\n"
+        "and a short error summary. Workbook contents are never stored."
+    ),
+    "import_sessions": (
+        "Durable pending import preview: a validated workbook held until its owner\n"
+        "confirms, cancels or the TTL expires. Claimed atomically at commit (single\n"
+        "use); expired rows are purged on the next upload."
+    ),
     # -- finance ----------------------------------------------------------
     "chart_of_accounts": (
         "Chart of accounts. A self-referencing tree of general-ledger accounts; is_postable\n"
@@ -244,9 +275,10 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "there is at most one credential row per user."
     ),
     "user_sessions": (
-        "A refresh-token session, one row per issued refresh token. The token itself is\n"
+        "A stable server-side session, one row per login. The token itself is\n"
         "stored only as a SHA-256 hash, so a database leak cannot be replayed."
     ),
+    "used_refresh_tokens": "Consumed refresh-token hashes associated with their stable session, retained for replay detection.",
     "roles": (
         "Named role bundling a set of permissions. The catalog is code-defined in\n"
         "app/core/permissions.py and synchronised on startup; administrators grant these\n"
@@ -386,6 +418,55 @@ def describe_column(table_name: str, column_name: str) -> str | None:
 # --------------------------------------------------------------------------
 
 COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
+    "telegram_links": {
+        "user_id": "Owning LCS user, cascading on account deletion.",
+        "telegram_user_id": "Unique verified numeric Telegram user identity; usernames are display data only.",
+        "bot_id": "Numeric bot identity that accepted the private pairing.",
+        "chat_id": "Verified private chat ID; constrained to equal the numeric Telegram user identity.",
+        "display_name": "Optional Telegram username or display name for the owning user's profile.",
+        "verified_at": "Time the single-use private pairing was accepted.",
+        "blocked_at": "Time Telegram refused delivery because the bot or destination was blocked.",
+    },
+    "telegram_pairings": {
+        "token_hash": "SHA-256 digest of the random pairing challenge; raw challenges are never stored.",
+        "user_id": "Authenticated LCS user who generated and may confirm this challenge.",
+        "kind": "PRIVATE for personal linking or GROUP for administrator destination verification.",
+        "bot_id": "Verified bot identity for which this challenge was issued.",
+        "expires_at": "Ten-minute challenge deadline.",
+        "used_at": "Time the Telegram command consumed the challenge; prevents reuse.",
+        "candidate_id": "Numeric private group ID verified by bot access and administrator membership checks.",
+        "candidate_name": "Display title of the verified group candidate, awaiting LCS administrator confirmation.",
+    },
+    "telegram_updates": {
+        "update_id": "Telegram's unique update number; primary key deduplicates repeated webhook deliveries.",
+        "received_at": "Receipt timestamp; receipts older than seven days are purged.",
+    },
+    "notification_outbox": {
+        "event_type": "Controlled event code from a private security, audit, backup or runtime producer.",
+        "category": "security, backup, system, private or recovery; recovery can only target PRIVATE.",
+        "severity": "INFO, WARNING or CRITICAL for category policy filtering.",
+        "destination_type": "PRIVATE verified user chat or confirmed ADMIN group.",
+        "destination_reference": "Numeric chat snapshot; eligibility is checked again before sending.",
+        "payload": "Controlled safe text and internal eligibility references; never a raw reset token or URL.",
+        "sensitive_payload": "Encrypted transient recovery message. Purged on delivery, terminal failure or twelve-minute expiry.",
+        "status": "PENDING, PROCESSING, SENT, FAILED or CANCELLED.",
+        "attempts": "Claim attempts, including recovered leases, bounded by max_attempts.",
+        "max_attempts": "Maximum automatic delivery attempts, clamped to one through five.",
+        "next_attempt_at": "Earliest retry, respecting exponential backoff and Telegram retry_after.",
+        "expires_at": "Delivery deadline; recovery expires three minutes before the reset token.",
+        "claim_token": "Random lease ownership marker; prevents a stale worker from sending a reclaimed row.",
+        "locked_until": "Two-minute claim lease; expired processing rows may be recovered after restart.",
+        "sent_at": "Time Telegram accepted sendMessage; does not prove the recipient read it.",
+        "last_error": "Sanitized error code only; no raw Telegram response or HTTP URL.",
+        "deduplication_key": "Unique bounded event reference preventing duplicate enqueueing.",
+    },
+    "notification_incidents": {
+        "key": "Stable metric name, or audit_cursor for committed audit scanning.",
+        "first_seen_at": "Incident start used to require sustained measurements and identify recovery.",
+        "last_sent_at": "Last queued incident alert, enforcing its configured cooldown.",
+        "state": "PENDING, ACTIVE or RESOLVED incident lifecycle.",
+        "measured_value": "Latest integral metric, or last scanned audit-event ID for audit_cursor.",
+    },
     # -- users ------------------------------------------------------------
     "users": {
         "user_code": "Stable business identifier for the user (e.g. EMP-0001). Unique and never reused.",
@@ -444,6 +525,11 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "the account is not locked."
         ),
     },
+    "used_refresh_tokens": {
+        "token_hash": "SHA-256 hash of a consumed refresh credential; never the raw credential.",
+        "session_id": "Owning stable session and token family; cascades on session deletion.",
+        "used_at": "Rotation timestamp used to reject overlap and detect later replay.",
+    },
     # -- user_sessions ----------------------------------------------------
     "user_sessions": {
         "user_id": "Session owner.",
@@ -454,12 +540,13 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "device_name": "Friendly device or browser label shown in the user's active-session list.",
         "ip_address": "IP address the session was created from, retained for audit and anomaly detection.",
         "user_agent": "Raw User-Agent header captured at sign-in.",
-        "last_used_at": "Timestamp of the most recent request authenticated by this session.",
+        "last_used_at": "Timestamp of the most recent successful refresh; does not extend idle time.",
+        "last_activity_at": "Throttled timestamp of explicit authenticated user activity, excluding refresh and passive polling.",
         "expires_at": "Hard expiry enforced by the server; the session is invalid after this instant.",
         "revoked_at": "Set when the session is logged out or revoked. NULL while the session is valid.",
         "remember_me": (
-            "TRUE for \"Remember me\" sessions: a persistent cookie plus the full configured\n"
-            "lifetime, instead of a browser-session cookie with a short deadline."
+            "TRUE selects persistent cookies; FALSE selects browser-session cookies. Both modes\n"
+            "obey the same finite idle and absolute security policy."
         ),
     },
     # -- roles / permissions ---------------------------------------------
@@ -587,10 +674,26 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "asset_code": "Fleet or internal asset number (e.g. VH-118).",
         "transport_type_id": "Transport mode this asset belongs to.",
         "identity": "Registration number, IMO number or tail number identifying the asset.",
-        "identity_type": "What identity represents: License Plate, IMO Number, Flight Number or Other.",
+        "identity_type": "Identity kind as stored: matches a transport_asset_identity_types row.",
         "owner_party_id": "Business party that owns the asset.",
         "operator_party_id": "Business party that operates the asset; may differ from the owner.",
+        "asset_name": "Display name of the asset, if any.",
+        "capacity_value": "Optional capacity (e.g. payload or passenger count); must come with a capacity_unit.",
+        "capacity_unit": "Unit that gives capacity_value its meaning (e.g. KG, CBM, PAL), from capacity_units.",
         "description": "Free-text notes about the asset.",
+        "status": "Record status (ACTIVE, INACTIVE, MAINTENANCE).",
+    },
+    "transport_asset_identity_types": {
+        "name": "Option stored verbatim in transport_assets.identity_type. Unique among non-archived rows.",
+        "transport_type_id": "Transport type this option is offered for; NULL means every type.",
+        "identity_label": "Header label the Identity input shows when this option is selected.",
+        "identity_placeholder": "Placeholder text shown inside the Identity input for this option.",
+        "validation_pattern": "Python re pattern the identity value must match (e.g. ^\\d{7}$ for IMO).",
+        "status": "Record status (ACTIVE, INACTIVE).",
+    },
+    "capacity_units": {
+        "code": "Unit code stored in transport_assets.capacity_unit. Unique among non-archived rows.",
+        "name": "Human-readable unit name shown in the capacity select.",
         "status": "Record status (ACTIVE, INACTIVE).",
     },
     "customer_customs_accounts": {
@@ -626,7 +729,10 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "Admin-managed Khmer label. This is user-defined data, not a parallel copy of\n"
             "label — copy shipped in code is resolved through the i18n bundles instead."
         ),
-        "data_type": "Storage and logic type: text, number, date, boolean, select, reference.",
+        "data_type": (
+            "Storage and logic type: text, textarea, number, integer, decimal, money,\n"
+            "currency, date, datetime, select, multi_select, checkbox, boolean, reference."
+        ),
         "input_type": "UI widget override, used when it differs from the widget implied by data_type.",
         "reference_type": (
             "Master-data collection a reference-type attribute points at, for example\n"
@@ -638,6 +744,10 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "width": "Rendered column width hint for table-mode groups.",
         "options": "JSON array of selectable values for a select-type attribute.",
         "validation_rules": "JSON object of validation rules (min, max, pattern, required, ...).",
+        "display_order": (
+            "Order of this attribute in the global Component Attributes catalog. Group\n"
+            "membership order is a separate value on component_group_attributes."
+        ),
         "status": "Record status (ACTIVE, INACTIVE).",
     },
     "component_groups": {
@@ -711,6 +821,10 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         ),
         "status": (
             "Quotation lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, CONVERTED)."
+        ),
+        "source_service_order_id": (
+            "Service order this quotation was re-quoted from. NULL for a quotation created from\n"
+            "scratch. The order is never modified by the re-quotation."
         ),
         "data": "JSONB payload for module-specific fields not covered by dedicated columns.",
     },
@@ -991,6 +1105,7 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "checksum": "Digest used to detect duplicates and corruption.",
         "storage_provider": "Storage backend holding the object: local or minio.",
         "document_version": "Version number, incremented when several revisions of one document are stored.",
+        "note": "Optional operator note describing the file; display only, never used for access control.",
         "uploaded_at": "Timestamp the object was written to storage.",
         "is_deleted": (
             "Soft-delete marker for this metadata row. The stored object is removed separately,\n"
@@ -1334,6 +1449,53 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         ),
         "description": "Free-text notes about where and how this currency is used.",
         "status": "Lifecycle state. ACTIVE currencies may be selected on new documents.",
+    },
+    "document_types": {
+        "code": (
+            "Stable unique code, stored upper-case (e.g. TAX_INVOICE). Canonical rows use the\n"
+            "accounting-behaviour code; custom types get their own. Unique among non-archived rows."
+        ),
+        "name": "Human-readable type name shown on selectors and printed documents.",
+        "category": "Grouping for the master list: FINANCE, OPERATIONS, CUSTOMS or SUPPORTING.",
+        "description": "Free-text notes about when to use this type.",
+        "accounting_behavior": (
+            "Canonical posting behaviour the type resolves to (e.g. CUSTOMER_INVOICE). The only\n"
+            "value accounting code reads; a custom row must reference one of the canonical\n"
+            "behaviours, and canonical rows point at themselves."
+        ),
+        "posting_required": "True when documents of this type must pass through the posting workflow.",
+        "available_in": (
+            "JSON list of areas where this type may be selected: financial_documents,\n"
+            "service_order_finance, posting_rules, operations_documents, attachments."
+        ),
+        "status": "Lifecycle state. ACTIVE types may be selected on new documents.",
+    },
+    "import_jobs": {
+        "module": "Import & Export module key (e.g. feeTypes).",
+        "file_name": "Name of the uploaded workbook; contents are not retained.",
+        "mode": "Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.",
+        "status": "VALIDATED, COMPLETED, FAILED or CANCELLED.",
+        "template_version": "Template version the batch validated against.",
+        "total_rows": "Data rows found in the workbook.",
+        "created_count": "Rows created by the import.",
+        "updated_count": "Rows updated by the import.",
+        "skipped_count": "Duplicate rows skipped by Create Only.",
+        "failed_count": "Rows that failed validation at commit time.",
+        "error_summary": "Short per-row error text from a failed batch; no workbook data.",
+        "started_by_user_id": "User who confirmed the import (audit attribution).",
+        "completed_at": "When the batch committed or failed.",
+    },
+    "import_sessions": {
+        "token": "Opaque single-use confirmation token. Unique; deleted at claim.",
+        "user_id": "Owner of the session; only this user may preview, confirm or cancel.",
+        "module": "Import & Export module key.",
+        "mode": "Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.",
+        "file_name": "Name of the uploaded workbook.",
+        "checksum": "SHA-256 of the uploaded bytes, binding the preview to the file.",
+        "template_version": "Template version the batch validated against.",
+        "rows_data": "Parsed workbook rows (JSON). Deleted when the session is claimed.",
+        "preview_data": "Validated per-row preview (JSON). Deleted when the session is claimed.",
+        "expires_at": "Absolute TTL; expired rows are treated as gone and purged lazily.",
     },
     # -- currency rates ----------------------------------------------------
     "currency_rates": {

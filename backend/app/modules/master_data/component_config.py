@@ -8,6 +8,7 @@ requires a schema migration: attributes/options/validation live as JSON.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import func, select
@@ -39,6 +40,7 @@ DATA_TYPES = (
     "text",
     "textarea",
     "number",
+    "integer",
     "decimal",
     "money",
     "currency",
@@ -50,7 +52,11 @@ DATA_TYPES = (
     "boolean",
     "reference",
 )
+SELECT_DATA_TYPES = ("select", "multi_select")
 RENDER_MODES = ("table", "form")
+# Codes are lower-case and stable because they are the JSON key saved rows use.
+_CODE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_NUMERIC_RULE_KEYS = ("min", "max", "minLength", "maxLength")
 
 # Per-tab-assignment layout. ``displayMode`` decides which renderers participate,
 # ``dataCardinality`` limits how many rows the group may hold.
@@ -84,6 +90,123 @@ def _validate_data_type(value: Any) -> str:
     if data_type not in DATA_TYPES:
         raise ValidationFailed(f"Unsupported attribute type: {data_type}", {"dataType": "Unsupported"})
     return data_type
+
+
+def _validated_code(value: Any) -> str:
+    code = _normalize_code(value)
+    if not code:
+        raise ValidationFailed("An attribute code is required.", {"code": "Required"})
+    if len(code) > 64:
+        raise ValidationFailed("The attribute code is too long.", {"code": "At most 64 characters"})
+    if not _CODE_PATTERN.match(code):
+        raise ValidationFailed(
+            "The attribute code may contain lower-case letters, digits and hyphens only.",
+            {"code": "Invalid format"},
+        )
+    return code
+
+
+def _derived_code(label: str) -> str:
+    """Turn a label into a code when the request did not supply one.
+
+    The pre-existing grid derived its code from the label, so dropping that
+    convenience would break API callers that only send a label. Explicit codes
+    are stricter; only the derived path silently removes punctuation.
+    """
+    code = re.sub(r"[^a-z0-9]+", "-", label.strip().lower()).strip("-")
+    if not code:
+        raise ValidationFailed("An attribute code or label is required.", {"code": "Required"})
+    return code[:64].rstrip("-")
+
+
+def _option_texts(options: Any) -> list[str]:
+    if not isinstance(options, list):
+        return []
+    values: list[str] = []
+    for option in options:
+        candidate = option.get("value", option.get("label")) if isinstance(option, dict) else option
+        values.append("" if candidate is None else str(candidate).strip())
+    return values
+
+
+def _validate_attribute_config(
+    attribute: ComponentAttribute,
+    *,
+    type_settings: bool = True,
+    rules_changed: bool = True,
+) -> None:
+    """Reject a configuration the runtime form could not render or validate.
+
+    Existing rows are checked on their *merged* state, so a partial PATCH cannot
+    leave a select with no option or a reference with no source behind. The two
+    switches keep a legacy row editable: a column set that violates today's rule
+    is only refused when this request touches that part of it.
+    """
+    if type_settings and attribute.reference_type is not None and attribute.reference_type not in REFERENCE_TYPES:
+        raise ValidationFailed("Choose a valid Master Data source.", {"referenceType": "Unsupported"})
+    if type_settings and attribute.data_type == "reference" and attribute.reference_type not in REFERENCE_TYPES:
+        raise ValidationFailed("A reference attribute needs a Master Data source.", {"referenceType": "Required"})
+
+    option_values = _option_texts(attribute.options)
+    if type_settings and any(value == "" for value in option_values):
+        raise ValidationFailed("Options cannot be blank.", {"options": "Blank option"})
+    if type_settings and len(option_values) != len(set(option_values)):
+        raise ValidationFailed("Options must be unique.", {"options": "Duplicate option"})
+    if type_settings and attribute.data_type in SELECT_DATA_TYPES and not option_values:
+        raise ValidationFailed("A select attribute needs at least one option.", {"options": "Required"})
+
+    rules = attribute.validation_rules
+    if rules is None:
+        return
+    if not isinstance(rules, dict):
+        raise ValidationFailed("Validation rules must be an object.", {"validationRules": "Must be an object"})
+    if not rules_changed:
+        return
+
+    numbers: dict[str, float] = {}
+    for key in _NUMERIC_RULE_KEYS:
+        raw = rules.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            number = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed(
+                f'Rule "{key}" must be a number.',
+                {"validationRules": f'"{key}" must be a number'},
+            ) from exc
+        if number < 0:
+            raise ValidationFailed(
+                f'Rule "{key}" cannot be negative.',
+                {"validationRules": f'"{key}" cannot be negative'},
+            )
+        if key in {"minLength", "maxLength"} and not number.is_integer():
+            raise ValidationFailed(
+                f'Rule "{key}" must be a whole number.',
+                {"validationRules": f'"{key}" must be a whole number'},
+            )
+        numbers[key] = number
+    if "min" in numbers and "max" in numbers and numbers["min"] > numbers["max"]:
+        raise ValidationFailed("The minimum cannot exceed the maximum.", {"validationRules": "min is greater than max"})
+    if (
+        "minLength" in numbers
+        and "maxLength" in numbers
+        and numbers["minLength"] > numbers["maxLength"]
+    ):
+        raise ValidationFailed(
+            "The minimum length cannot exceed the maximum length.",
+            {"validationRules": "minLength is greater than maxLength"},
+        )
+
+    pattern = rules.get("pattern")
+    if pattern not in (None, ""):
+        try:
+            re.compile(str(pattern))
+        except re.error as exc:
+            raise ValidationFailed(
+                "The pattern is not a valid regular expression.",
+                {"validationRules": "Invalid pattern"},
+            ) from exc
 
 
 # --- Group layout ------------------------------------------------------------
@@ -222,6 +345,7 @@ def attribute_payload(attribute: ComponentAttribute) -> dict[str, Any]:
         "width": attribute.width,
         "options": attribute.options or [],
         "validationRules": attribute.validation_rules or {},
+        "displayOrder": attribute.display_order,
         "status": attribute.status,
         "createdAt": attribute.created_at.isoformat() if attribute.created_at else None,
         "updatedAt": attribute.updated_at.isoformat() if attribute.updated_at else None,
@@ -237,7 +361,15 @@ async def list_attributes(
     total = await count_query(session, stmt)
     rows = (
         await session.execute(
-            stmt.order_by(*list_sort_orders(ComponentAttribute, page, ComponentAttribute.label, ComponentAttribute.id))
+            stmt.order_by(
+                *list_sort_orders(
+                    ComponentAttribute,
+                    page,
+                    ComponentAttribute.display_order,
+                    ComponentAttribute.label,
+                    ComponentAttribute.id,
+                )
+            )
             .limit(page.page_size)
             .offset(page.offset)
         )
@@ -263,35 +395,35 @@ async def create_attribute(session: AsyncSession, context: RequestContext, data:
     label = str(data.get("label") or "").strip()
     if not label:
         raise ValidationFailed("Label is required.", {"label": "Required"})
-    code = _normalize_code(data.get("code") or label)
-    if not code:
-        raise ValidationFailed("An attribute code or label is required.", {"label": "Required"})
-    if len(code) > 64:
-        raise ValidationFailed("The attribute code is too long.", {"label": "At most 64 characters"})
+    raw_code = str(data.get("code") or "").strip()
+    code = _validated_code(raw_code) if raw_code else _derived_code(label)
     exists = (
         await session.execute(select(ComponentAttribute).where(ComponentAttribute.code == code))
     ).scalars().first()
     if exists is not None:
         raise Conflict("DUPLICATE_ATTRIBUTE_CODE", "An attribute with this code already exists.", {"code": "Already in use"})
     data_type = _validate_data_type(data.get("dataType") or data.get("data_type"))
-    reference_type = data.get("referenceType")
-    if data_type == "reference" and reference_type not in REFERENCE_TYPES:
-        raise ValidationFailed("A valid reference type is required.", {"referenceType": "Required"})
+    display_order = data.get("displayOrder")
+    if display_order is None:
+        highest = await session.scalar(select(func.max(ComponentAttribute.display_order)))
+        display_order = int(highest or 0) + 1 if highest is not None else 0
     attribute = ComponentAttribute(
         code=code,
         label=label,
         label_km=data.get("labelKm"),
         data_type=data_type,
         input_type=data.get("inputType"),
-        reference_type=reference_type if data_type == "reference" else None,
+        reference_type=data.get("referenceType"),
         is_required=_bool(data.get("isRequired"), False),
         default_value=data.get("defaultValue"),
         placeholder=_optional_text(data.get("placeholder")),
         width=data.get("width"),
         options=jsonable(data.get("options") or []),
         validation_rules=jsonable(data.get("validationRules") or {}),
+        display_order=int(display_order),
         status=str(data.get("status") or "ACTIVE"),
     )
+    _validate_attribute_config(attribute)
     session.add(attribute)
     await session.commit()
     return attribute_payload(attribute)
@@ -318,8 +450,8 @@ async def _attribute_row_references(session: AsyncSession, attribute_id: int) ->
 
 
 async def _rename_attribute(session: AsyncSession, attribute: ComponentAttribute, raw_code: Any) -> None:
-    code = _normalize_code(raw_code)
-    if not code or code == attribute.code:
+    code = _validated_code(raw_code)
+    if code == attribute.code:
         return
     duplicate = (
         await session.execute(
@@ -353,10 +485,8 @@ async def update_attribute(session: AsyncSession, context: RequestContext, attri
         attribute.data_type = _validate_data_type(data["dataType"])
     if data.get("inputType") is not None:
         attribute.input_type = data.get("inputType")
-    if data.get("referenceType") is not None:
+    if "referenceType" in data:
         attribute.reference_type = data.get("referenceType")
-    if attribute.data_type == "reference" and attribute.reference_type not in REFERENCE_TYPES:
-        raise ValidationFailed("A valid reference type is required.", {"referenceType": "Required"})
     if data.get("isRequired") is not None:
         attribute.is_required = _bool(data["isRequired"], attribute.is_required)
     if data.get("defaultValue") is not None:
@@ -369,10 +499,42 @@ async def update_attribute(session: AsyncSession, context: RequestContext, attri
         attribute.options = jsonable(data["options"])
     if data.get("validationRules") is not None:
         attribute.validation_rules = jsonable(data["validationRules"])
+    if data.get("displayOrder") is not None:
+        attribute.display_order = int(data["displayOrder"])
     if data.get("status") is not None:
         attribute.status = str(data["status"])
+    _validate_attribute_config(
+        attribute,
+        type_settings=any(key in data for key in ("dataType", "options", "referenceType")),
+        rules_changed="validationRules" in data,
+    )
     await session.commit()
     return attribute_payload(attribute)
+
+
+async def _attribute_in_published_snapshot(session: AsyncSession, attribute_id: int) -> bool:
+    """Whether a published configuration snapshot still renders this attribute.
+
+    Publishing copies the attribute into ``config_snapshot``; the live row can
+    therefore be removed without breaking history. The requirement is stronger:
+    a referenced attribute is retired (INACTIVE), never hard-deleted, so the
+    catalog cannot lose a field an audit trail points at.
+    """
+    from app.modules.master_data.models import ConfigurationVersion
+
+    snapshots = (
+        await session.execute(
+            select(ConfigurationVersion.config_snapshot).where(ConfigurationVersion.published_at.is_not(None))
+        )
+    ).scalars().all()
+    target = str(attribute_id)
+    for snapshot in snapshots:
+        for tab in (snapshot or {}).get("tabs") or []:
+            for group in tab.get("groups") or []:
+                for attribute in group.get("attributes") or []:
+                    if str(attribute.get("id")) == target:
+                        return True
+    return False
 
 
 async def delete_attribute(session: AsyncSession, context: RequestContext, attribute_id: int) -> dict[str, Any]:
@@ -388,9 +550,35 @@ async def delete_attribute(session: AsyncSession, context: RequestContext, attri
         attribute.status = "INACTIVE"
         await session.commit()
         return {"archived": True, "id": str(attribute.id)}
+    if await _attribute_in_published_snapshot(session, attribute.id):
+        attribute.status = "INACTIVE"
+        await session.commit()
+        return {"archived": True, "id": str(attribute.id)}
     await session.delete(attribute)
     await session.commit()
     return {"archived": False, "id": str(attribute_id)}
+
+
+async def reorder_attributes(session: AsyncSession, context: RequestContext, ordered_ids: list[int]) -> list[dict]:
+    """Persist the catalog order. The caller sends every id once, in new order."""
+    if not ordered_ids or len(set(ordered_ids)) != len(ordered_ids):
+        raise ValidationFailed(
+            "Every attribute id must appear exactly once.",
+            {"orderedIds": "Invalid order"},
+        )
+    attributes = (
+        await session.execute(select(ComponentAttribute).where(ComponentAttribute.id.in_(ordered_ids)))
+    ).scalars().all()
+    by_id = {attribute.id: attribute for attribute in attributes}
+    if len(by_id) != len(ordered_ids):
+        raise ValidationFailed(
+            "Every attribute id must appear exactly once.",
+            {"orderedIds": "Unknown attribute"},
+        )
+    for position, attribute_id in enumerate(ordered_ids):
+        by_id[attribute_id].display_order = position
+    await session.commit()
+    return [attribute_payload(by_id[attribute_id]) for attribute_id in ordered_ids]
 
 
 # --- Groups ------------------------------------------------------------------

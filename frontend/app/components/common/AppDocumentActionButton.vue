@@ -27,7 +27,6 @@ const ui = computed(() => documentActionButtonUi(props.color))
 <template>
   <UButton
     v-bind="ui"
-    size="sm"
     class="rounded-md"
     :icon="icon"
     :label="label"

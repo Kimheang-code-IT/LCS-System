@@ -13,11 +13,13 @@ import app.modules.audit.models  # noqa: F401
 # Import every model module so Base.metadata is complete.
 import app.modules.auth.models  # noqa: F401
 import app.modules.backup.models  # noqa: F401
+import app.modules.excel_io.models  # noqa: F401
 import app.modules.finance.models  # noqa: F401
 import app.modules.master_data.models  # noqa: F401
 import app.modules.operations.models  # noqa: F401
 import app.modules.quotations.models  # noqa: F401
 import app.modules.settings.models  # noqa: F401
+import app.modules.telegram.models  # noqa: F401
 from alembic import context
 from app.core.config import settings
 from app.core.database import Base

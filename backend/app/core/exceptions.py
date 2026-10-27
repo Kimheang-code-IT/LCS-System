@@ -37,8 +37,8 @@ class DomainError(HTTPException):
 
 
 class AuthRequired(DomainError):
-    def __init__(self, message: str = "Authentication required.") -> None:
-        super().__init__("AUTH_REQUIRED", message, status_code=status.HTTP_401_UNAUTHORIZED)
+    def __init__(self, message: str = "Authentication required.", *, code: str = "AUTH_REQUIRED") -> None:
+        super().__init__(code, message, status_code=status.HTTP_401_UNAUTHORIZED)
 
 
 class AccessDenied(DomainError):

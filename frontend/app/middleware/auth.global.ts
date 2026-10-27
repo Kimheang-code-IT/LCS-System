@@ -19,7 +19,11 @@ const FORCED_PASSWORD_PATH = '/auth/change-password'
 
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
-  if (import.meta.client) auth.hydrateClient()
+  if (import.meta.client) {
+    auth.hydrateClient()
+    await auth.restoreSession()
+    if (auth.isLoggedIn) await auth.refreshSession()
+  }
   const routePath = normalizeRoutePath(to.path)
 
   const publicPaths = [
@@ -52,6 +56,10 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
     return navigateTo(auth.isLoggedIn ? '/' : '/auth/login', { replace: true })
   }
 
+  // Recovery is authorized only by its single-use token, independently of any
+  // existing browser session. An already signed-in user may open their link.
+  if (routePath === '/auth/reset-password') return
+
   if (!auth.isLoggedIn && !isPublicPage) {
     return navigateTo({
       path: '/auth/login',
@@ -79,7 +87,7 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
   // Role and permission changes are authoritative immediately on the API.
   // Refresh the lightweight identity snapshot during navigation so menus and
   // route guards converge without requiring the user to sign out.
-  if (import.meta.client && auth.isLoggedIn) await auth.refreshSession()
+
 
   // The route map is authoritative; page meta is only a fallback for screens
   // outside it. Legacy codes stay accepted while old sessions age out.

@@ -34,6 +34,7 @@ def _registry() -> dict[str, ArchiveAdapter]:
     # Local import avoids coupling model import order to the archive module.
     from app.modules.master_data.models import (
         BusinessParty,
+        CapacityUnit,
         ContainerType,
         Currency,
         FeeType,
@@ -41,6 +42,7 @@ def _registry() -> dict[str, ArchiveAdapter]:
         PlaceRole,
         TradeDirection,
         TransportAsset,
+        TransportAssetIdentityType,
         TransportType,
     )
 
@@ -51,6 +53,8 @@ def _registry() -> dict[str, ArchiveAdapter]:
         ArchiveAdapter("tradeDirections", TradeDirection, "name", "Trade Direction"),
         ArchiveAdapter("containerTypes", ContainerType, "name", "Container Type"),
         ArchiveAdapter("transportTypes", TransportType, "name", "Transport Type"),
+        ArchiveAdapter("transportAssetIdentityTypes", TransportAssetIdentityType, "name", "Identity Type"),
+        ArchiveAdapter("capacityUnits", CapacityUnit, "code", "Capacity Unit"),
         ArchiveAdapter("transportAssets", TransportAsset, "identity", "Transport Asset"),
         ArchiveAdapter("feeTypes", FeeType, "name", "Fee Type"),
         ArchiveAdapter("currencies", Currency, "name", "Currency"),

@@ -1,5 +1,4 @@
 import type { FreightRecord } from '~/types/record'
-
 export type ReferenceOptionSource = {
   /** Freight store collection (also a Master Data page). */
   collection: string
@@ -44,22 +43,35 @@ const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
   // master. The location is free text, so no separate Places collection exists.
   // Inactive roles are not offered for new selections; a saved id stays readable.
   placeRoleId: { collection: 'placeRoles', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
+  // Central Document Types master: the value stays a stable code (the canonical
+  // code, or a custom type's own code) and the label is the master's name. New
+  // document types appear in every module that uses this key without a deploy.
+  documentType: { collection: 'documentTypes', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
+  documentTypeId: { collection: 'documentTypes', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
   containerType: { collection: 'containerTypes', valueField: 'code', labelField: 'name' },
   transportType: { collection: 'transportTypes', valueField: 'name', labelField: 'name' },
+  // What an asset's `identity` holds. The vocabulary lives in its own Master
+  // Data collection (`transportAssetIdentityTypes`), seeded by the backend
+  // migration and edited by an administrator like Party/Place Roles; the asset
+  // form narrows it by transport type with the field's `referenceFilter`.
+  identityType: { collection: 'transportAssetIdentityTypes', valueField: 'name', labelField: 'name', statuses: ['ACTIVE'] },
+  // The unit of an asset's optional capacity: a small list (`capacityUnits`).
+  // Storing the code keeps the display ("24,500 KG") identical everywhere.
+  capacityUnit: { collection: 'capacityUnits', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
   // Quotation pricing stores the Transport Type id, so renaming a master record
   // changes the label without rewriting history. Inactive types are hidden from
   // new lines; `referenceItemForValue` keeps a saved one readable.
   transportBy: { collection: 'transportTypes', valueField: 'id', labelField: 'name', statuses: ['ACTIVE'] },
-  feeType: { collection: 'feeTypes', valueField: 'name', labelField: 'name' },
-  direction: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
-  tradeDirection: { collection: 'tradeDirections', valueField: 'name', labelField: 'name' },
-  currency: { collection: 'currencies', valueField: 'code', labelField: 'name' },
+  feeType: { collection: 'feeTypes', valueField: 'name', labelField: 'name', statuses: ['ACTIVE'] },
+  direction: { collection: 'tradeDirections', valueField: 'name', labelField: 'name', statuses: ['ACTIVE'] },
+  tradeDirection: { collection: 'tradeDirections', valueField: 'name', labelField: 'name', statuses: ['ACTIVE'] },
+  currency: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
   // The rate store's two sides, both from the currency master.
-  fromCurrencyCode: { collection: 'currencies', valueField: 'code', labelField: 'name' },
-  toCurrencyCode: { collection: 'currencies', valueField: 'code', labelField: 'name' },
-  currency20: { collection: 'currencies', valueField: 'code', labelField: 'name' },
-  currency40: { collection: 'currencies', valueField: 'code', labelField: 'name' },
-  currency45: { collection: 'currencies', valueField: 'code', labelField: 'name' },
+  fromCurrencyCode: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
+  toCurrencyCode: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
+  currency20: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
+  currency40: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
+  currency45: { collection: 'currencies', valueField: 'code', labelField: 'name', statuses: ['ACTIVE'] },
   // Posting rules store an account *code*, and only a postable leaf account can
   // receive a journal line - offering header accounts would only produce a
   // validation failure at posting time.
@@ -127,5 +139,64 @@ export function referenceItemForValue(
   return {
     label: String(record[labelField] ?? record.name ?? record.code ?? current).trim() || current,
     value: current,
+  }
+}
+
+// --- Transport asset identity hooks -------------------------------------------
+// The asset form reads its identity vocabulary straight from the
+// `transportAssetIdentityTypes` master, so these helpers (used as `FreightField`
+// hooks and by the client-side rules) follow the same *name* the backend accepts.
+
+/** The identity-type row a record selected, for label/placeholder/pattern hooks. */
+export function identityTypeRowOf(record: Record<string, unknown>): FreightRecord | undefined {
+  const name = String(record.identityType || '').trim()
+  if (!name) return undefined
+  // Called during render, so the pinia instance is active.
+  return useFreightStore().list('transportAssetIdentityTypes').find(row =>
+    String(row.name || '').trim().toLowerCase() === name.toLowerCase(),
+  )
+}
+
+/** Offers only the identity types that apply to the asset's transport type. */
+export function identityTypeOptionsFor(
+  record: Record<string, unknown> | undefined,
+  records: FreightRecord[],
+): FreightRecord[] {
+  const transportType = String(record?.transportType || '').trim().toLowerCase()
+  if (!transportType) return records
+  return records.filter((row) => {
+    const applies = String(row.transportType || '').trim().toLowerCase()
+    return !applies || applies === transportType
+  })
+}
+
+/** `FreightField.labelFor` — the chosen row's field label (falls back on ''). */
+export function identityLabelFor(record: Record<string, unknown>): string {
+  return String(identityTypeRowOf(record)?.identityLabel || '').trim()
+}
+
+/** `FreightField.placeholderFor` — e.g. "Enter the 7-digit IMO number". */
+export function identityPlaceholderFor(record: Record<string, unknown>): string {
+  return String(identityTypeRowOf(record)?.identityPlaceholder || '').trim()
+}
+
+/**
+ * The identity value must match the chosen row's pattern (`validation_pattern`),
+ * which seeds the "is this a real IMO number" rules as admin-editable data.
+ * Returns false only for a value the row refuses; a blank value or an
+ * unparseable pattern leaves validation to the backend.
+ */
+export function matchesIdentityPattern(pattern: unknown, value: unknown): boolean {
+  const source = String(pattern || '').trim()
+  const target = String(value || '').trim()
+  if (!source || !target) return true
+  try {
+    // Full-match like the backend `re.fullmatch`, even when the admin pattern
+    // omits the ^…$ anchors; otherwise the browser precheck passes values the
+    // server refuses.
+    return new RegExp(`^(?:${source})$`).test(target)
+  }
+  catch {
+    return true
   }
 }

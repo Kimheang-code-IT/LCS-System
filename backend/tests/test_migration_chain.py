@@ -26,6 +26,8 @@ VERSIONS = BACKEND_ROOT / "alembic" / "versions"
 # 59-table design lacked, plus the later posting-rules revision. None may drop or
 # narrow anything pre-existing.
 ADDITIVE_REVISIONS = (
+    "35bd68fa01ce",  # verified Telegram identities and single-use challenges
+    "46ce79ab12df",  # durable notification outbox and monitoring incident state
     "b3c4d5e6f7a8",  # currencies + currency_rates
     "c4d5e6f7a8b9",  # app_settings
     "d5e6f7a8b9c0",  # configuration_versions
@@ -38,6 +40,11 @@ ADDITIVE_REVISIONS = (
     "b8d9e0f1a2b3",  # dynamic place roles + structured route stops
     "f2c3d4e5f6a7",  # draft configuration versions: editable until published
     "a9b8c7d6e5f4",  # dynamic party roles + business-party role assignments
+    "e1f2a3b4c5d6",  # transport-asset identity vocabulary + capacity columns
+    "f5a6b7c8d9e0",  # capacity-unit master
+    "b6d7e8f9a0b1",  # component attribute catalog display order
+    "c7e8f9a0b1c2",  # quotation source service order (re-quotation trace)
+    "f6a7b8c9d0e1",  # document_types soft-delete attribution column + indexes
 )
 
 # The one approved destructive revision: the Places master is removed after its
@@ -54,6 +61,7 @@ def _revision_files() -> dict[str, Path]:
         text = path.read_text(encoding="utf-8")
         match = re.search(r'^revision:\s*str\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
         if match:
+            assert match.group(1) not in files, f"Duplicate revision identity: {match.group(1)}"
             files[match.group(1)] = path
     return files
 
@@ -111,7 +119,7 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["c3d4e5f6a7b8"], (
+    assert heads == ["f6a7b8c9d0e1"], (
         "the head changed; update docs/11_deployment_and_security.md and the deployed "
         f"revision expectation (found {heads})"
     )
@@ -245,3 +253,60 @@ def test_every_model_module_is_imported_by_the_migration_environment():
         "app.modules.settings.models",
     ):
         assert f"import {module}" in env, f"alembic/env.py does not import {module}"
+
+
+def _migrated_columns() -> dict[str, set[str]]:
+    """Columns each table gains across the whole chain (create_table + add_column)."""
+    columns: dict[str, set[str]] = {}
+    for path in sorted(VERSIONS.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        # Tuple assignments (for example SOFT_DELETE_TABLES) that add_column loops over.
+        tuples = {
+            name: set(re.findall(r'"([a-z_]+)"', body))
+            for name, body in re.findall(r"^(\w+)\s*=\s*\((.*?)\)$", text, re.MULTILINE | re.DOTALL)
+        }
+        for match in re.finditer(r'op\.create_table\(\s*"([^"]+)"(.*?)\n    \)', text, re.DOTALL):
+            table, body = match.group(1), match.group(2)
+            columns.setdefault(table, set()).update(re.findall(r'sa\.Column\("([^"]+)"', body))
+        for match in re.finditer(r'op\.add_column\("([^"]+)",\s*sa\.Column\("([^"]+)"', text):
+            columns.setdefault(match.group(1), set()).add(match.group(2))
+        for match in re.finditer(r'op\.add_column\((\w+)\s*,\s*sa\.Column\("([^"]+)"', text):
+            # The table argument may be a loop variable ("for table in SOFT_DELETE_TABLES").
+            loops = dict(re.findall(r"for (\w+) in (?:reversed\()?(\w+)\)?", text))
+            for table in tuples.get(loops.get(match.group(1), match.group(1)), set()):
+                columns.setdefault(table, set()).add(match.group(2))
+    return columns
+
+
+def test_every_soft_delete_column_exists_in_the_migrated_schema():
+    """Regression: document_types shipped with deleted_at but not deleted_by_user_id.
+
+    The DocumentType model carries SoftDeleteMixin, so every ORM select read the
+    missing column and 500'd on a migrated database (the Audit Logs page loads
+    document types and broke even though /audit-events itself answered fine).
+    Tests build the schema with ``create_all`` and never see this drift, so the
+    chain is checked statically here.
+    """
+    import app.modules.archive.models  # noqa: F401
+    import app.modules.auth.models  # noqa: F401
+    import app.modules.backup.models  # noqa: F401
+    import app.modules.finance.models  # noqa: F401
+    import app.modules.master_data.models  # noqa: F401
+    import app.modules.operations.models  # noqa: F401
+    import app.modules.quotations.models  # noqa: F401
+    import app.modules.settings.models  # noqa: F401
+    from app.core.database import Base
+
+    migrated = _migrated_columns()
+    soft_delete_tables = [
+        name
+        for name, table in Base.metadata.tables.items()
+        if {"deleted_at", "deleted_by_user_id"} <= {column.name for column in table.columns}
+    ]
+    assert soft_delete_tables, "no soft-delete models found; the detection itself broke"
+    for table in sorted(soft_delete_tables):
+        missing = {"deleted_at", "deleted_by_user_id"} - migrated.get(table, set())
+        assert not missing, (
+            f"the migration chain never creates {table}.{sorted(missing)[0]}; "
+            "the ORM model would fail every query against a migrated database"
+        )

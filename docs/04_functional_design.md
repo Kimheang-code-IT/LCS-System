@@ -210,7 +210,8 @@ valid workflow action once the draft is saved.
 
 1. Authorize `quotation.convert`.
 2. Lock the accepted revision.
-3. Reject if a conversion already exists with `DUPLICATE_CONVERSION`.
+3. Reject if a conversion already exists with `DUPLICATE_CONVERSION`; a replay
+   carrying the same `Idempotency-Key` returns the original conversion instead.
 4. Create the service-order header and number.
 5. Copy customer, direction, currency, route stops, containers, and pricing snapshots.
 6. Resolve the current component configuration for the direction.
@@ -221,6 +222,22 @@ valid workflow action once the draft is saved.
 The conversion response keeps the quotation `id` and adds `serviceOrderId` /
 `serviceOrderNo`; clients navigate using `serviceOrderId`.
 
+### 6.6 Re-quotation from a service order
+
+1. Authorize `quotation.revise`.
+2. Resolve the service order by id or number.
+3. Read — never modify — its customer, trade direction, currency, route stops,
+   container requirements and priced lines.
+4. Create a **new** quotation with its own number and a `DRAFT` revision 1 whose
+   totals are recomputed from the copied lines.
+5. Record `source_service_order_id` on the new quotation.
+
+The order, its confirmed prices and the quotation it was converted from stay
+byte-identical; a re-quote is a fresh commercial offer, not a revision of the
+original. Updating an existing order's pricing from a re-quotation is **not**
+automated: it remains an explicit operational decision outside this workflow.
+Multiple re-quotations may exist for one order; each is an independent draft.
+
 ## 7. Service-Order Use Cases
 
 ### 7.1 Add actual container
@@ -229,7 +246,14 @@ The conversion response keeps the quotation `id` and adds `serviceOrderId` /
 2. Verify the container requirement belongs to the same order.
 3. Verify container number uniqueness.
 4. Validate type, seal, and weights.
-5. Create the actual container.
+5. Create the actual container, or update the prepared row when its id is sent.
+
+Conversion prepares one unnumbered row per required unit. A prepared row may be
+saved without a number; once a number is supplied it updates that row rather
+than creating another. A container referenced by a container-payment row cannot
+be deleted (`409 CONTAINER_IN_USE`). Container payments expand per actual
+container only when the pricing line names a `containerType`; a line without
+one stays a single shipment charge.
 
 ### 7.2 Add component
 

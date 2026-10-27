@@ -39,6 +39,8 @@ describe('place roles master data', () => {
       'sortOrder',
       'description',
       'status',
+      'createdBy',
+      'createdAt',
     ])
   })
 
@@ -55,8 +57,7 @@ describe('route tables use the same dynamic selection logic', () => {
     const place = routeTable(quotation).columns.find(item => item.key === 'place')
     expect(role).toMatchObject({ type: 'select', required: true })
     expect(role?.options).toBeUndefined()
-    expect(place).toMatchObject({ type: 'text' })
-    expect(place?.required).toBeUndefined()
+    expect(place).toMatchObject({ type: 'text', required: true })
     expect(QUOTATION_ROUTE_TABLE).toBe(routeTable(quotation))
   })
 

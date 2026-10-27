@@ -48,14 +48,113 @@ async def _service_order(client, headers) -> str:
     return converted.json()["data"]["serviceOrderId"]
 
 
-async def _upload(client, headers, name: str = "document.png") -> dict:
+async def _upload(client, headers, name: str = "document.png", note: str | None = None) -> dict:
+    data = {"note": note} if note is not None else None
     response = await client.post(
         "/api/v1/attachments/upload",
         headers=headers,
+        data=data,
         files={"file": (name, _PNG, "image/png")},
     )
     assert response.status_code == 201, response.text
     return response.json()["data"]
+
+
+async def test_an_upload_note_is_saved_listed_and_editable(client):
+    headers = await login(client)
+    attachment = await _upload(client, headers, note="  Signed copy  ")
+    assert attachment["note"] == "Signed copy", "surrounding whitespace is trimmed"
+
+    listed = await client.get(
+        "/api/v1/attachments",
+        headers=headers,
+        params={"module": "jobs", "record_no": "0"},
+    )
+    assert listed.status_code == 200, listed.text
+
+    edited = await client.patch(
+        f"/api/v1/attachments/{attachment['id']}",
+        headers=headers,
+        json={"note": "Checked against the booking"},
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["data"]["note"] == "Checked against the booking"
+
+    cleared = await client.patch(
+        f"/api/v1/attachments/{attachment['id']}", headers=headers, json={"note": "   "}
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["data"]["note"] is None, "an empty note is stored as NULL"
+
+
+async def test_an_attachment_note_longer_than_the_limit_is_refused(client):
+    headers = await login(client)
+    attachment = await _upload(client, headers)
+    too_long = await client.patch(
+        f"/api/v1/attachments/{attachment['id']}",
+        headers=headers,
+        json={"note": "x" * 1001},
+    )
+    assert too_long.status_code == 422, too_long.text
+
+
+async def test_editing_an_attachment_note_requires_upload_permission(client):
+    headers = await login(client)
+    attachment = await _upload(client, headers, note="Original")
+
+    created = await client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "username": "note.auditor",
+            "displayName": "Note Auditor",
+            "email": "note.auditor@example.com",
+            "password": "Passw0rd!",
+            "status": "Active",
+            "role": "AUDITOR",
+        },
+    )
+    assert created.status_code == 201, created.text
+    auditor = await login(client, "note.auditor")
+
+    blocked = await client.patch(
+        f"/api/v1/attachments/{attachment['id']}", headers=auditor, json={"note": "Not allowed"}
+    )
+    assert blocked.status_code == 403, blocked.text
+
+
+async def test_an_upload_can_be_linked_to_its_quotation_and_listed(client):
+    headers = await login(client)
+    parties = await client.get("/api/v1/businessParties", headers=headers, params={"page_size": 200})
+    party_id = parties.json()["data"]["items"][0]["id"]
+    quotation = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customerPartyId": party_id,
+            "direction": "Import",
+            "currency": "USD",
+        },
+    )
+    assert quotation.status_code == 201, quotation.text
+    quotation_id = quotation.json()["data"]["id"]
+
+    uploaded = await client.post(
+        "/api/v1/attachments/upload",
+        headers=headers,
+        data={"module": "quotations", "record_no": quotation_id},
+        files={"file": ("quote.png", _PNG, "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    listed = await client.get(
+        "/api/v1/attachments",
+        headers=headers,
+        params={"module": "quotations", "record_no": quotation_id},
+    )
+    assert listed.status_code == 200, listed.text
+    assert [row["id"] for row in listed.json()["data"]] == [uploaded.json()["data"]["id"]]
 
 
 async def test_uploaded_attachment_can_be_deleted_and_stops_being_served(client):

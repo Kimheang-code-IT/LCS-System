@@ -68,8 +68,14 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   containerTypes: reference('containerTypes'),
   transportTypes: reference('transportTypes'),
   transportAssets: reference('transportAssets'),
+  // The vocabulary behind the asset form's Identity Type (see reference-options.ts).
+  transportAssetIdentityTypes: reference('transportAssetIdentityTypes'),
+  // The unit list behind the asset form's Capacity Unit select.
+  capacityUnits: reference('capacityUnits'),
   feeTypes: reference('feeTypes'),
   currencies: reference('currencies'),
+  // The central Document Types master behind finance selectors (reference-options.ts).
+  documentTypes: reference('documentTypes'),
   // The approved rate store a document resolves its exchange rate from.
   currencyRates: reference('currencyRates'),
   // Legacy collection aliases still referenced by print/container components.

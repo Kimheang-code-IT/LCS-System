@@ -113,6 +113,11 @@ class ComponentAttributeBase(BaseModel):
         max_length=20,
         validation_alias=AliasChoices("status"),
     )
+    displayOrder: int | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("displayOrder", "display_order"),
+    )
 
     @field_validator("label")
     @classmethod

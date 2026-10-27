@@ -174,6 +174,29 @@ class FeeType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 
+class DocumentType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """Administrator-managed classification of documents.
+
+    ``accounting_behavior`` is the only value accounting code reads. Canonical
+    system rows point at themselves; a custom type may only reference one of the
+    supported canonical behaviours, so a new label never invents a posting rule.
+    """
+
+    __tablename__ = "document_types"
+    __table_args__ = (active_unique_index("uq_document_types_code_active", "code"),)
+
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="FINANCE")
+    description: Mapped[str | None] = mapped_column(Text)
+    accounting_behavior: Mapped[str] = mapped_column(String(64), nullable=False)
+    posting_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    available_in: Mapped[list[str]] = mapped_column(JSONType, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    updated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+
+
 class BusinessParty(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "business_parties"
     __table_args__ = (
@@ -230,6 +253,48 @@ class BusinessPartyRole(PKMixin, Base):
     )
 
 
+class TransportAssetIdentityType(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """An administrator-managed option for ``transport_assets.identity_type``.
+
+    Identity types were a hardcoded dropdown; like party roles they are master
+    data now, so an organisation can add, rename, deactivate or delete an option
+    without a deploy. ``transport_type_id`` narrows an option to one transport
+    type — a rail vehicle number makes no sense on a truck — and ``NULL`` means
+    the identity type fits every transport type (e.g. Other). The identity-label,
+    placeholder and pattern columns drive how the Identity input presents and
+    validates itself when this type is selected.
+    """
+
+    __tablename__ = "transport_asset_identity_types"
+    __table_args__ = (active_unique_index("uq_transport_asset_identity_types_name_active", "name"),)
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    transport_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_types.id"))
+    identity_label: Mapped[str | None] = mapped_column(String(128))
+    identity_placeholder: Mapped[str | None] = mapped_column(String(128))
+    #: Python ``re`` pattern the identity value must match, validated server and
+    #: client side (e.g. ``^\\d{7}$`` for an IMO number). Empty accepts anything.
+    validation_pattern: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class CapacityUnit(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """An administrator-managed option for ``transport_assets.capacity_unit``.
+
+    Capacity units were a free-text input; like the identity vocabulary they are
+    master data now, so every asset reports capacity the same way ("24,500 KG")
+    and an organisation can add, rename, deactivate or delete a unit without a
+    deploy. ``code`` is what the capacity select stores and displays.
+    """
+
+    __tablename__ = "capacity_units"
+    __table_args__ = (active_unique_index("uq_capacity_units_code_active", "code"),)
+
+    code: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
 class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "transport_assets"
     __table_args__ = (
@@ -243,6 +308,9 @@ class TransportAsset(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     identity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="License Plate")
     owner_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
     operator_party_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("business_parties.id"))
+    asset_name: Mapped[str | None] = mapped_column(String(255))
+    capacity_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
+    capacity_unit: Mapped[str | None] = mapped_column(String(32))
     description: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
@@ -329,6 +397,10 @@ class ComponentAttribute(PKMixin, TimestampMixin, Base):
     width: Mapped[str | None] = mapped_column(String(16))
     options: Mapped[list[Any]] = mapped_column(JSONType, nullable=False, default=list)
     validation_rules: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    # Catalog order. Membership order inside a group stays on
+    # component_group_attributes.display_order; this is the order the attribute
+    # list itself is presented in.
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
 

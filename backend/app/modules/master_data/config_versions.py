@@ -121,6 +121,9 @@ def serialize(
         "origin": version.origin,
         "status": version.status,
         "changeNote": version.change_note,
+        # Versions are only created by a publish or rollback action, so the
+        # acting user is also the creator; Published By keeps the publish record.
+        "createdBy": published_by,
         "publishedAt": version.published_at.isoformat() if version.published_at else None,
         "publishedByUserId": str(version.published_by_user_id) if version.published_by_user_id else None,
         "publishedBy": published_by,

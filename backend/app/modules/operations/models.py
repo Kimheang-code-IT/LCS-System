@@ -83,7 +83,10 @@ class ServiceOrderContainer(PKMixin, TimestampMixin, Base):
     service_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_orders.id", ondelete="CASCADE"), nullable=False, index=True)
     container_requirement_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_order_container_requirements.id"))
     container_type_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("container_types.id"), nullable=False)
-    container_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    # A container prepared from a quotation requirement exists before anyone knows
+    # its number: NULL means "pending". The unique constraint still covers real
+    # numbers (PostgreSQL treats NULLs as distinct), so no fake identifier is stored.
+    container_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     seal_serial: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="EXPECTED")
     net_weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
@@ -225,6 +228,7 @@ class Attachment(PKMixin, Base):
     checksum: Mapped[str | None] = mapped_column(String(128))
     storage_provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     document_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    note: Mapped[str | None] = mapped_column(String(1000))
     uploaded_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()

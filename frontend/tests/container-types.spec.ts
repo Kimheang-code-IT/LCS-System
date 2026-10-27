@@ -52,11 +52,21 @@ describe('container types module', () => {
     }
   })
 
-  it('shows the width and height in the list so saved values are visible', () => {
+  it('shows the compact list columns, keeping dimensions in the detail form', () => {
     const columns = containerTypes.columns.map(column => column.key)
-    expect(columns).toContain('widthMeters')
-    expect(columns).toContain('heightMeters')
-    expect(columns).toContain('maxGrossWeightKg')
+    expect(columns).toEqual([
+      'code',
+      'name',
+      'size',
+      'isoCode',
+      'maxGrossWeightKg',
+      'status',
+      'createdBy',
+      'createdAt',
+    ])
+    // Width/height remain editable on the record even though the list is compact.
+    expect(byKey.widthMeters).toBeDefined()
+    expect(byKey.heightMeters).toBeDefined()
   })
 })
 

@@ -5,6 +5,8 @@ import { useSetup } from '~/composables/auth/useSetup'
 import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { apiErrorDetails } from '~/utils/freight/errors'
+import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
+import { strongPasswordSchema } from '~/utils/validation/password-schema'
 
 definePageMeta({
   layout: 'auth',
@@ -21,7 +23,25 @@ const setupForm = useTemplateRef<{
     setErrors: (errors: { name: string, message: string }[]) => void
     clear: () => void
   }
+  /** Exposed by UAuthForm; the source of truth for the live checklist and gate. */
+  state?: { name: string, email: string, password: string, passwordConfirmation: string }
 }>('setupForm')
+
+/** UAuthForm types field-slot props as `{}`; this reads the state safely. */
+function slotPassword(slot: unknown): string {
+  const state = (slot as { state?: { password?: string } }).state
+  return String(state?.password ?? '')
+}
+
+/** Enter, or the submit button, is refused until every rule and the match pass. */
+const passwordsValid = computed(() => {
+  const state = setupForm.value?.state
+  return Boolean(
+    state
+    && !validatePasswordStrength(state.password)
+    && state.password === state.passwordConfirmation,
+  )
+})
 
 /** Errors are placed on the field they belong to, or just above the submit button. */
 function clearErrors() {
@@ -52,8 +72,13 @@ usePageSeo({
 const schema = computed(() => z.object({
   name: z.string().min(1, { error: t('pages.setup.nameRequired') }),
   email: z.email({ error: t('pages.auth.emailRequired') }),
-  password: z.string().min(8, { error: t('pages.setup.passwordMin') }).max(20, { error: t('pages.setup.passwordMax') }),
-  passwordConfirmation: z.string().min(8, { error: t('pages.setup.passwordMin') }).max(20, { error: t('pages.setup.passwordMax') }),
+  password: strongPasswordSchema(t, t('pages.setup.password'), t('pages.setup.passwordMax')),
+  passwordConfirmation: z.string()
+    .min(1, { error: t('validation.required', { field: t('pages.setup.confirmPassword') }) })
+    .max(PASSWORD_MAX_LENGTH, { error: t('pages.setup.passwordMax') }),
+}).refine(data => data.password === data.passwordConfirmation, {
+  message: t('validation.passwordMismatch'),
+  path: ['passwordConfirmation'],
 }))
 
 const fields = computed<AuthFormField[]>(() => [
@@ -103,13 +128,13 @@ type Schema = {
 }
 
 async function onSubmit(payload: FormSubmitEvent<Schema>) {
-  if (submitting.value) return
+  if (submitting.value || !passwordsValid.value) return
   const data = payload.data
 
   clearErrors()
   if (data.password !== data.passwordConfirmation) {
     setupForm.value?.formRef?.setErrors([
-      { name: 'passwordConfirmation', message: t('pages.setup.passwordMismatch') },
+      { name: 'passwordConfirmation', message: t('validation.passwordMismatch') },
     ])
     return
   }
@@ -159,9 +184,13 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
         label: t('pages.setup.submit'),
         class: 'w-full h-10! text-lg font-normal',
         loading: submitting,
+        disabled: !passwordsValid || submitting,
       }"
       @submit="onSubmit"
     >
+      <template #password-help="slot">
+        <CommonAppPasswordRequirements :value="slotPassword(slot)" />
+      </template>
       <template #leading>
         <img src="/logo.png" alt="Logo" class="mx-auto h-16 w-auto">
       </template>

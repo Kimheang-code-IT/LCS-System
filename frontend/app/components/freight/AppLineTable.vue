@@ -5,12 +5,16 @@ import { CommonAppReferenceSelect, CommonAppInputDate, UButton, UCheckbox, UDrop
 import type { FreightLineColumn, FreightTable } from '~/config/freight-modules'
 import { FREIGHT_LINE_UTILITY_COLUMN_TYPES } from '~/config/freight-modules'
 import { useFreightLabel } from '~/composables/freight/useFreight'
+import { useLcsRepositories } from '~/repositories'
+import { hasSourcePermission } from '~/utils/freight/permissions'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { DatePickerGranularity } from '~/utils/date-picker'
 import { fileTableRowBy, fileTableRowCreated, fileTableRowName, filePreviewHref, revokeFilePreview, useFileAttachments } from '~/utils/freight/attachments'
 import { fileTypeIcon } from '~/utils/file-icon'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
-import { isMoneyColumnKey, isRowControlColumn, lineTableColumnCellClass, lineTableColumnMetrics, lineTableNumericColumnKeys, sharedRowControls } from '~/utils/table/line-table-columns'
+import { isMoneyColumnKey, lineTableColumnCellClass, lineTableColumnMetrics, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
+import { applyLineAdjustments, lineSubtotal } from '~/utils/table/line-adjustments'
 import { referenceItemForValue, referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
 const props = withDefaults(defineProps<{
@@ -96,7 +100,42 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 const { fieldLabel, tableTitle } = useFreightLabel()
-const { inputRef, openPicker, rowsFromInput, rejected } = useFileAttachments()
+const {
+  inputRef,
+  openPicker,
+  rowsFromInput,
+  rejected,
+  uploading,
+  removeUploaded,
+} = useFileAttachments({ upload: () => props.table.upload })
+
+const auth = useAuthStore()
+const canEditFileNote = computed(() => hasSourcePermission(auth.user, 'attachment.upload'))
+/** Note value when a file row's cell gained focus, keyed by attachment id. */
+const noteAtFocus = new Map<string, string>()
+
+/** Per-line discount / tax dialog, opened from the row menu. */
+const detailsOpen = ref(false)
+const detailsIndex = ref(-1)
+const detailsRow = computed(() => rows.value[detailsIndex.value] || {})
+const detailsSubtotal = computed(() => lineSubtotal(detailsRow.value))
+
+function openLineDetails(index: number) {
+  const row = rows.value[index]
+  if (!row || props.disabled || rowLocked(row)) return
+  detailsIndex.value = index
+  detailsOpen.value = true
+}
+
+function saveLineDetails(values: { discount: number, taxRate: number }) {
+  const index = detailsIndex.value
+  const row = rows.value[index]
+  if (!row) return
+  const adjusted = applyLineAdjustments(row, values)
+  const derived = props.table.computeRow?.({ row: adjusted, rows: rows.value, index }) || {}
+  const next = { ...adjusted, ...derived }
+  rows.value = rows.value.map((item, i) => i === index ? next : item)
+}
 
 const TableButton = UButton as Component
 const TableCheckbox = UCheckbox as Component
@@ -107,32 +146,14 @@ const TableInputNumber = UInputNumber as Component
 const TableMenu = UDropdownMenu as Component
 const TableReferenceSelect = CommonAppReferenceSelect as Component
 
-/**
- * Row note being edited, if any. A note is edited in a dialog rather than a cell
- * so the prose is readable and the column can stay icon-sized.
- */
-const noteDialog = ref<{ open: boolean, index: number, key: string }>({ open: false, index: -1, key: '' })
-
-function openNoteDialog(index: number, key: string) {
-  noteDialog.value = { open: true, index, key }
-}
-
-function saveNote(value: string) {
-  updateCell(noteDialog.value.index, noteDialog.value.key, value)
-}
-
 const isFileTable = computed(() => props.table.kind === 'files')
 const hasDeleteColumn = computed(() => props.table.columns.some(column => column.type === 'delete'))
+const hasReorderColumn = computed(() => props.table.columns.some(column => column.type === 'reorder'))
+const hasActionColumn = computed(() => props.table.columns.some(column => column.type === 'action'))
 
-/** Row controls: the note and delete icons, whether or not they share a cell. */
-const rowControlColumns = computed(() => props.table.columns.filter(isRowControlColumn))
-
-/** Note and delete share one cell; `folded` holds the keys that render inside it. */
-const sharedRowControlState = computed(() => sharedRowControls(props.table.columns))
-
-/** The icons one cell renders: the whole group on the host column, itself otherwise. */
-function rowIconGroup(column: FreightLineColumn) {
-  return column.key === sharedRowControlState.value.host ? rowControlColumns.value : [column]
+/** Utility columns never render as cells; their commands live in the row menu. */
+function isMenuOnlyColumn(column: FreightLineColumn) {
+  return column.type === 'delete' || column.type === 'reorder' || column.type === 'action'
 }
 
 const cellSize = 'sm' as const
@@ -426,8 +447,8 @@ function addRow() {
   rows.value = [...rows.value, { ...blank, ...seeded }]
 }
 
-function onFilesChosen(event: Event) {
-  const added = rowsFromInput(event)
+async function onFilesChosen(event: Event) {
+  const added = await rowsFromInput(event)
   if (added.length) rows.value = [...rows.value, ...added]
 }
 
@@ -452,76 +473,42 @@ function fileNameCell(row: Record<string, unknown>) {
   ])
 }
 
-function removeRow(index: number) {
+async function removeRow(index: number) {
   const row = rows.value[index]
+  if (row && isFileTable.value) await removeUploaded(row)
   if (row) revokeFilePreview(row)
   rows.value = rows.value.filter((_, i) => i !== index)
 }
 
-function reorderCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
-  const move = (direction: -1 | 1) => {
-    const target = index + direction
-    if (target < 0 || target >= rows.value.length) return
-    const next = [...rows.value]
-    const [moved] = next.splice(index, 1)
-    next.splice(target, 0, moved!)
-    rows.value = next
-    props.onReorder?.(next)
+/**
+ * Persist a file note as soon as the cell is left. The file itself is never
+ * touched; a pending (not yet saved) upload keeps the note in its row and the
+ * document save stores it. `previous` is captured on focus so an unchanged cell
+ * does not send a write.
+ */
+async function persistFileNote(index: number, value: string, previous?: string) {
+  const row = rows.value[index]
+  const id = String(row?.id || '')
+  if (!id || previous === value) return
+  try {
+    const updated = await useLcsRepositories().attachments.updateNote(id, value)
+    const note = String((updated as Record<string, unknown>).note || '')
+    rows.value = rows.value.map((item, i) => i === index ? { ...item, note } : item)
   }
-  return h('div', { class: 'flex items-center gap-0.5' }, [
-    h(TableButton, {
-      'icon': 'i-lucide-arrow-up',
-      'color': 'neutral',
-      'variant': 'ghost',
-      'size': 'xs',
-      'square': true,
-      'disabled': disabled || index === 0,
-      'aria-label': t('actions.moveUp'),
-      'title': t('actions.moveUp'),
-      'onClick': () => move(-1),
-    }),
-    h(TableButton, {
-      'icon': 'i-lucide-arrow-down',
-      'color': 'neutral',
-      'variant': 'ghost',
-      'size': 'xs',
-      'square': true,
-      'disabled': disabled || index === rows.value.length - 1,
-      'aria-label': t('actions.moveDown'),
-      'title': t('actions.moveDown'),
-      'onClick': () => move(1),
-    }),
-  ])
+  catch (error) {
+    rejected.value = [apiErrorMessage(error, t('api.somethingWentWrong'))]
+  }
 }
 
-/** The note icon: filled when the row has prose, opening the shared note dialog. */
-function noteCell(column: FreightLineColumn, row: Record<string, unknown>, index: number, disabled: boolean) {
-  const hasNote = String(row[column.key] ?? '').trim().length > 0
-  return cellWithError(index, column.key, (extra: Record<string, unknown>) => h(TableButton, {
-    'icon': hasNote ? 'i-lucide-sticky-note' : 'i-lucide-sticky-note-plus',
-    'color': hasNote ? 'primary' : 'neutral',
-    'variant': 'ghost',
-    'size': 'xs',
-    'square': true,
-    'disabled': disabled || column.computed,
-    'aria-label': fieldLabel(column),
-    'title': hasNote ? String(row[column.key]) : fieldLabel(column),
-    'onClick': () => openNoteDialog(index, column.key),
-    ...extra,
-  }))
-}
-
-function deleteCellButton(index: number, disabled: boolean) {
-  return h(TableButton, {
-    icon: 'i-lucide-trash-2',
-    color: 'error',
-    variant: 'ghost',
-    size: 'xs',
-    square: true,
-    disabled,
-    'aria-label': t('actions.delete'),
-    onClick: () => removeRow(index),
-  })
+/** Move a row one position up/down for the row menu; shared by every table. */
+function moveRow(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= rows.value.length) return
+  const next = [...rows.value]
+  const [moved] = next.splice(index, 1)
+  next.splice(target, 0, moved!)
+  rows.value = next
+  props.onReorder?.(next)
 }
 
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
@@ -533,7 +520,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       enableSorting: false,
       meta: iconOnlyColumnMeta,
     },
-    ...props.table.columns.filter(column => !sharedRowControlState.value.folded.has(column.key)).map(column => ({
+    ...props.table.columns.filter(column => !isMenuOnlyColumn(column)).map(column => ({
       accessorKey: column.key,
       header: () => columnHeader(column),
       enableSorting: false,
@@ -542,40 +529,11 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         const index = Number(row.original._rowIndex || 0)
         const disabled = rowLocked(row.original)
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
-        if (column.type === 'delete' || column.type === 'note') {
-          const group = rowIconGroup(column)
-          if (group.length === 1) {
-            return group[0]!.type === 'note'
-              ? noteCell(column, row.original, index, disabled)
-              : deleteCellButton(index, disabled)
-          }
-          // Note and delete share one column: both are one-icon row controls, and
-          // two 50px columns per row is more chrome than the icons deserve.
-          return h('div', { class: 'flex items-center justify-end gap-0.5' }, group.map(item => item.type === 'note'
-            ? noteCell(item, row.original, index, disabled)
-            : deleteCellButton(index, disabled)))
-        }
-        if (column.type === 'reorder') {
-          return reorderCell(column, row.original, index, disabled)
-        }
-        if (column.type === 'action') {
-          const action = props.rowActions?.(column.action || column.key, row.original)
-          if (!action) return null
-          return h(TableButton, {
-            'icon': action.icon,
-            'color': action.color || 'neutral',
-            'variant': 'ghost',
-            'size': 'xs',
-            'square': true,
-            'aria-label': action.label,
-            'title': action.label,
-            'onClick': action.onSelect,
-          })
-        }
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
           return tagCell(inlineNumberFieldsCell(column, row.original, index, disabled), index, column.key)
         }
-        if (disabled || column.computed || isFileTable.value) {
+        const fileNote = isFileTable.value && column.key === 'note'
+        if (disabled || column.computed || (isFileTable.value && !fileNote)) {
           return tagCell(inlineMoneyCell(column, row.original, index, disabled), index, column.key)
         }
         if (column.type === 'checkbox') {
@@ -632,10 +590,19 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         }
         const dateGranularity = lineDateGranularity(column)
         if (dateGranularity) {
+          const dateDisabled = disabled || column.computed
+          const dateValue = String(row.original[column.key] ?? '')
+          // A read-only cell shows the same placeholder as a text column rather
+          // than an empty disabled input.
+          if (dateDisabled && !dateValue) {
+            return h('span', {
+              class: [columnCellClass(column), 'block truncate text-sm text-muted'],
+            }, '—')
+          }
           return cellWithError(index, column.key, extra => h(TableDate, {
-            'modelValue': String(row.original[column.key] ?? ''),
+            'modelValue': dateValue,
             'granularity': dateGranularity,
-            'disabled': disabled || column.computed,
+            'disabled': dateDisabled,
             'size': cellSize,
             'class': `w-full ${columnCellClass(column)}`,
             'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
@@ -645,19 +612,32 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         }
         return cellWithError(index, column.key, extra => h(TableInput, {
           'modelValue': String(row.original[column.key] ?? ''),
-          'disabled': disabled || column.computed,
+          'disabled': disabled || column.computed || (fileNote && !canEditFileNote.value),
+          'maxlength': column.rule?.maxLength,
           'size': cellSize,
           'class': `w-full ${columnCellClass(column)}`,
           'ui': cellInputUi,
           'onUpdate:modelValue': (value: string) => updateCell(index, column.key, value),
-          'onBlur': () => cellBlur(index, column.key),
+          'onFocus': () => {
+            if (fileNote) noteAtFocus.set(String(row.original.id || ''), String(row.original[column.key] ?? ''))
+          },
+          'onBlur': (event: FocusEvent) => {
+            cellBlur(index, column.key)
+            if (fileNote) {
+              const id = String(row.original.id || '')
+              const previous = noteAtFocus.get(id)
+              noteAtFocus.delete(id)
+              void persistFileNote(index, (event.target as HTMLInputElement | null)?.value ?? '', previous)
+            }
+          },
           'onKeydown': (event: KeyboardEvent) => cellKeydown(event),
           ...extra,
         }))
       },
     })),
   ]
-  if (!hasDeleteColumn.value && (!props.disabled || props.rowDisabled || props.extraRowMenuItems || props.rowInlineActions)) {
+  if (hasDeleteColumn.value || hasReorderColumn.value || hasActionColumn.value
+    || props.extraRowMenuItems || props.rowActions || props.rowInlineActions || isFileTable.value) {
     cols.push({
       id: 'actions',
       header: () => h(
@@ -682,7 +662,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             onClick: item.onSelect,
           }),
         )
-        const menuItems: Array<Array<{ label: string, icon: string, color?: 'error', onSelect: () => void }>> = [[]]
+        const menuItems: Array<Array<{ label: string, icon: string, color?: 'error', disabled?: boolean, onSelect?: () => void }>> = [[]]
         const actions = menuItems[0]!
         for (const item of props.extraRowMenuItems?.(row.original) || []) {
           actions.push({
@@ -690,6 +670,23 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             icon: item.icon || 'i-lucide-file',
             ...(item.color === 'error' ? { color: 'error' as const } : {}),
             onSelect: item.onSelect,
+          })
+        }
+        for (const column of props.table.columns.filter(item => item.type === 'action')) {
+          const action = props.rowActions?.(column.action || column.key, row.original)
+          if (!action) continue
+          actions.push({
+            label: action.label,
+            icon: action.icon,
+            ...(action.color === 'error' ? { color: 'error' as const } : {}),
+            onSelect: action.onSelect,
+          })
+        }
+        if (props.table.lineDetails && !props.disabled && !rowLocked(row.original)) {
+          actions.push({
+            label: t('freight.ui.additionalDetails'),
+            icon: 'i-lucide-sliders-horizontal',
+            onSelect: () => openLineDetails(index),
           })
         }
         if (isFileTable.value && filePreviewHref(row.original)) {
@@ -702,13 +699,26 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             },
           })
         }
-        // A host that supplies its own inline actions owns the row controls;
-        // adding the generic Delete again would duplicate them.
-        if (!inlineButtons.length && !rowLocked(row.original)) {
+        if (hasReorderColumn.value) {
+          actions.push({
+            label: t('actions.moveUp'),
+            icon: 'i-lucide-arrow-up',
+            disabled: rowLocked(row.original) || index === 0,
+            onSelect: () => moveRow(index, -1),
+          })
+          actions.push({
+            label: t('actions.moveDown'),
+            icon: 'i-lucide-arrow-down',
+            disabled: rowLocked(row.original) || index === rows.value.length - 1,
+            onSelect: () => moveRow(index, 1),
+          })
+        }
+        if (hasDeleteColumn.value && !inlineButtons.length) {
           actions.push({
             label: t('actions.delete'),
             icon: 'i-lucide-trash-2',
             color: 'error',
+            disabled: rowLocked(row.original),
             onSelect: () => removeRow(index),
           })
         }
@@ -772,7 +782,10 @@ v-if="!disabled && !table.hideAddRow"
 color="neutral"
 variant="soft"
           :icon="isFileTable ? 'i-lucide-upload' : 'i-lucide-plus'"
-          :label="table.addLabelKey && te(table.addLabelKey) ? t(table.addLabelKey) : (table.addLabel || t('freight.ui.addRow'))"
+          :label="isFileTable && uploading
+            ? t('freight.ui.uploading')
+            : (table.addLabelKey && te(table.addLabelKey) ? t(table.addLabelKey) : (table.addLabel || t('freight.ui.addRow')))"
+          :loading="isFileTable && uploading"
           @click="addRow" />
       </div>
     </div>
@@ -782,7 +795,16 @@ ref="inputRef"
 type="file"
 multiple
 class="hidden"
+:disabled="uploading"
 @change="onFilesChosen">
+    <FreightAppLineDetailsDialog
+      v-if="table.lineDetails"
+      v-model:open="detailsOpen"
+      :max-discount="detailsSubtotal"
+      :discount="Number(detailsRow.discountAmount ?? detailsRow.discount) || 0"
+      :tax-rate="Number(detailsRow.taxRate) || 0"
+      :disabled="disabled"
+      @save="saveLineDetails" />
     <CommonAppFormErrorSummary
       v-if="rejected.length"
       :form-errors="rejected"
@@ -796,10 +818,5 @@ class="hidden"
         :class="['freight-table w-full min-w-max', compact ? 'freight-table-compact' : '']"
 :ui="tableUi" />
     </div>
-    <TableAppRowNoteDialog
-      v-model:open="noteDialog.open"
-      :model-value="String(rows[noteDialog.index]?.[noteDialog.key] ?? '')"
-      :disabled="disabled"
-      @save="saveNote" />
   </section>
 </template>

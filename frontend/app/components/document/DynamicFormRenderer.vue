@@ -94,7 +94,7 @@ function setValue(attribute: ComponentTabAttribute, value: unknown) {
           @update:model-value="setValue(attribute, $event)"
         />
         <UInputNumber
-          v-else-if="['number', 'decimal', 'money'].includes(attribute.fieldType)"
+          v-else-if="['number', 'integer', 'decimal', 'money'].includes(attribute.fieldType)"
           :model-value="Number(valueOf(attribute) ?? 0)"
           :disabled="!editable"
           :step-snapping="false"

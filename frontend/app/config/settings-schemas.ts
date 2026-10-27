@@ -39,7 +39,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             type: 'select',
             options: [
               { label: 'Table', value: 'table' },
-              { label: 'Kanban', value: 'kanban' },
             ],
           },
           { key: 'general.maxUploadSizeMb', labelKey: 'lcs.config.maxFileSizeMb', type: 'number' },
@@ -141,9 +140,9 @@ export const appConfigTabs: DocumentTabSchema[] = [
         titleKey: 'lcs.settings.tabs.telegram',
         fields: [
           { key: 'telegram.enabled', labelKey: 'lcs.settings.enableTelegram', type: 'boolean' },
-          { key: 'telegram.botDisplayName', labelKey: 'lcs.settings.botDisplayName', type: 'text' },
+          { key: 'telegram.botDisplayName', labelKey: 'lcs.settings.botDisplayName', type: 'text', readOnly: true },
           { key: 'telegram.botToken', labelKey: 'lcs.settings.botToken', type: 'secret' },
-          { key: 'telegram.botUsername', labelKey: 'lcs.settings.botUsername', type: 'text' },
+          { key: 'telegram.botUsername', labelKey: 'lcs.settings.botUsername', type: 'text', readOnly: true },
           {
             key: 'telegram.messageLanguage',
             labelKey: 'lcs.settings.messageLanguage',
@@ -151,12 +150,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             options: LANGUAGE_OPTIONS,
           },
           { key: 'telegram.includeOrganization', labelKey: 'lcs.settings.includeOrganization', type: 'boolean' },
-          {
-            key: 'telegram.destinations',
-            labelKey: 'lcs.settings.destinations',
-            type: 'telegram-destinations',
-            colSpan: 2,
-          },
           { key: '__telegramConnection', labelKey: 'lcs.connection.title', type: 'connection-status', colSpan: 2 },
         ],
       },
@@ -193,6 +186,8 @@ export const appConfigTabs: DocumentTabSchema[] = [
         titleKey: 'lcs.settings.tabs.security',
         fields: [
           { key: 'security.sessionTimeoutMinutes', labelKey: 'lcs.settings.sessionTimeout', type: 'number' },
+          { key: 'security.accessTokenMinutes', labelKey: 'lcs.settings.accessTokenMinutes', type: 'number' },
+          { key: 'security.sessionAbsoluteMinutes', labelKey: 'lcs.settings.sessionAbsoluteMinutes', type: 'number' },
           { key: 'security.maxLoginAttempts', labelKey: 'lcs.settings.maxLoginAttempts', type: 'number' },
           { key: 'security.accountLockMinutes', labelKey: 'lcs.settings.accountLockMinutes', type: 'number' },
           { key: 'security.passwordExpiryDays', labelKey: 'lcs.settings.passwordExpiryDays', type: 'number' },

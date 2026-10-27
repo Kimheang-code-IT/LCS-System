@@ -185,7 +185,9 @@ CREATE TABLE component_attributes (
     -- copy of label — copy shipped in code is resolved through the i18n
     -- bundles instead.
     label_km VARCHAR(255),
-    -- Storage and logic type: text, number, date, boolean, select, reference.
+    -- Storage and logic type: text, textarea, number, integer, decimal,
+    -- money, currency, date, datetime, select, multi_select, checkbox,
+    -- boolean, reference.
     data_type VARCHAR(32) NOT NULL,
     -- UI widget override, used when it differs from the widget implied by
     -- data_type.
@@ -205,6 +207,10 @@ CREATE TABLE component_attributes (
     options JSONB NOT NULL,
     -- JSON object of validation rules (min, max, pattern, required, ...).
     validation_rules JSONB NOT NULL,
+    -- Order of this attribute in the global Component Attributes catalog.
+    -- Group membership order is a separate value on
+    -- component_group_attributes.
+    display_order INTEGER DEFAULT '0' NOT NULL,
     -- Record status (ACTIVE, INACTIVE).
     status VARCHAR(20) NOT NULL,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
@@ -223,7 +229,7 @@ COMMENT ON TABLE component_attributes IS 'Reusable dynamic-form attribute (field
 COMMENT ON COLUMN component_attributes.code IS 'Attribute code. Also the JSON key under which the value is stored in service_order_component_rows.values, so changing it orphans existing values.';
 COMMENT ON COLUMN component_attributes.label IS 'English label rendered in the UI.';
 COMMENT ON COLUMN component_attributes.label_km IS 'Admin-managed Khmer label. This is user-defined data, not a parallel copy of label — copy shipped in code is resolved through the i18n bundles instead.';
-COMMENT ON COLUMN component_attributes.data_type IS 'Storage and logic type: text, number, date, boolean, select, reference.';
+COMMENT ON COLUMN component_attributes.data_type IS 'Storage and logic type: text, textarea, number, integer, decimal, money, currency, date, datetime, select, multi_select, checkbox, boolean, reference.';
 COMMENT ON COLUMN component_attributes.input_type IS 'UI widget override, used when it differs from the widget implied by data_type.';
 COMMENT ON COLUMN component_attributes.reference_type IS 'Master-data collection a reference-type attribute points at, for example business_parties or container_types.';
 COMMENT ON COLUMN component_attributes.is_required IS 'Default required flag. An individual component group may override it.';
@@ -232,6 +238,7 @@ COMMENT ON COLUMN component_attributes.placeholder IS 'Hint shown inside the emp
 COMMENT ON COLUMN component_attributes.width IS 'Rendered column width hint for table-mode groups.';
 COMMENT ON COLUMN component_attributes.options IS 'JSON array of selectable values for a select-type attribute.';
 COMMENT ON COLUMN component_attributes.validation_rules IS 'JSON object of validation rules (min, max, pattern, required, ...).';
+COMMENT ON COLUMN component_attributes.display_order IS 'Order of this attribute in the global Component Attributes catalog. Group membership order is a separate value on component_group_attributes.';
 COMMENT ON COLUMN component_attributes.status IS 'Record status (ACTIVE, INACTIVE).';
 COMMENT ON COLUMN component_attributes.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 COMMENT ON COLUMN component_attributes.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
@@ -338,6 +345,126 @@ COMMENT ON COLUMN document_sequences.created_at IS 'Row creation timestamp (UTC,
 COMMENT ON COLUMN document_sequences.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
+-- Table: notification_incidents
+-- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
+-- Runtime incident duration, cooldown and recovery state, plus the committed
+-- audit-event scan cursor. No credentials or message bodies.
+-- --------------------------------------------------------------------------
+CREATE TABLE notification_incidents (
+    -- Stable metric name, or audit_cursor for committed audit scanning.
+    key VARCHAR(120) NOT NULL,
+    -- Incident start used to require sustained measurements and identify
+    -- recovery.
+    first_seen_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Last queued incident alert, enforcing its configured cooldown.
+    last_sent_at TIMESTAMP WITH TIME ZONE,
+    -- PENDING, ACTIVE or RESOLVED incident lifecycle.
+    state VARCHAR(16) NOT NULL,
+    -- Latest integral metric, or last scanned audit-event ID for
+    -- audit_cursor.
+    measured_value INTEGER NOT NULL,
+    CONSTRAINT pk_notification_incidents PRIMARY KEY (key)
+);
+
+COMMENT ON TABLE notification_incidents IS 'Runtime incident duration, cooldown and recovery state, plus the committed audit-event scan cursor. No credentials or message bodies.';
+COMMENT ON COLUMN notification_incidents.key IS 'Stable metric name, or audit_cursor for committed audit scanning.';
+COMMENT ON COLUMN notification_incidents.first_seen_at IS 'Incident start used to require sustained measurements and identify recovery.';
+COMMENT ON COLUMN notification_incidents.last_sent_at IS 'Last queued incident alert, enforcing its configured cooldown.';
+COMMENT ON COLUMN notification_incidents.state IS 'PENDING, ACTIVE or RESOLVED incident lifecycle.';
+COMMENT ON COLUMN notification_incidents.measured_value IS 'Latest integral metric, or last scanned audit-event ID for audit_cursor.';
+
+-- --------------------------------------------------------------------------
+-- Table: notification_outbox
+-- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
+-- Durable notification delivery and sanitized history. Claims use leases and
+-- PostgreSQL row locks. Recovery ciphertext expires before its token and is
+-- purged after delivery or expiry.
+-- --------------------------------------------------------------------------
+CREATE TABLE notification_outbox (
+    -- Controlled event code from a private security, audit, backup or runtime
+    -- producer.
+    event_type VARCHAR(80) NOT NULL,
+    -- security, backup, system, private or recovery; recovery can only target
+    -- PRIVATE.
+    category VARCHAR(24) NOT NULL,
+    -- INFO, WARNING or CRITICAL for category policy filtering.
+    severity VARCHAR(16) NOT NULL,
+    -- PRIVATE verified user chat or confirmed ADMIN group.
+    destination_type VARCHAR(16) NOT NULL,
+    -- Numeric chat snapshot; eligibility is checked again before sending.
+    destination_reference BIGINT NOT NULL,
+    -- Controlled safe text and internal eligibility references; never a raw
+    -- reset token or URL.
+    payload JSONB NOT NULL,
+    -- Encrypted transient recovery message. Purged on delivery, terminal
+    -- failure or twelve-minute expiry.
+    sensitive_payload TEXT,
+    -- PENDING, PROCESSING, SENT, FAILED or CANCELLED.
+    status VARCHAR(16) NOT NULL,
+    -- Claim attempts, including recovered leases, bounded by max_attempts.
+    attempts INTEGER NOT NULL,
+    -- Maximum automatic delivery attempts, clamped to one through five.
+    max_attempts INTEGER NOT NULL,
+    -- Earliest retry, respecting exponential backoff and Telegram
+    -- retry_after.
+    next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Delivery deadline; recovery expires three minutes before the reset
+    -- token.
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Random lease ownership marker; prevents a stale worker from sending a
+    -- reclaimed row.
+    claim_token VARCHAR(64),
+    -- Two-minute claim lease; expired processing rows may be recovered after
+    -- restart.
+    locked_until TIMESTAMP WITH TIME ZONE,
+    -- Time Telegram accepted sendMessage; does not prove the recipient read
+    -- it.
+    sent_at TIMESTAMP WITH TIME ZONE,
+    -- Sanitized error code only; no raw Telegram response or HTTP URL.
+    last_error VARCHAR(64),
+    -- Unique bounded event reference preventing duplicate enqueueing.
+    deduplication_key VARCHAR(200) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_notification_outbox PRIMARY KEY (id),
+    CONSTRAINT ck_notification_outbox_notification_destination CHECK (destination_type IN ('PRIVATE', 'ADMIN')),
+    CONSTRAINT ck_notification_outbox_recovery_private_only CHECK (category <> 'recovery' OR destination_type = 'PRIVATE'),
+    CONSTRAINT ck_notification_outbox_secret_private_only CHECK (sensitive_payload IS NULL OR (category = 'recovery' AND destination_type = 'PRIVATE')),
+    CONSTRAINT ck_notification_outbox_notification_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'CANCELLED')),
+    CONSTRAINT uq_notification_outbox_deduplication_key UNIQUE (deduplication_key)
+);
+CREATE INDEX ix_notification_due ON notification_outbox (status, next_attempt_at);
+CREATE INDEX ix_notification_history ON notification_outbox (created_at);
+
+COMMENT ON TABLE notification_outbox IS 'Durable notification delivery and sanitized history. Claims use leases and PostgreSQL row locks. Recovery ciphertext expires before its token and is purged after delivery or expiry.';
+COMMENT ON COLUMN notification_outbox.event_type IS 'Controlled event code from a private security, audit, backup or runtime producer.';
+COMMENT ON COLUMN notification_outbox.category IS 'security, backup, system, private or recovery; recovery can only target PRIVATE.';
+COMMENT ON COLUMN notification_outbox.severity IS 'INFO, WARNING or CRITICAL for category policy filtering.';
+COMMENT ON COLUMN notification_outbox.destination_type IS 'PRIVATE verified user chat or confirmed ADMIN group.';
+COMMENT ON COLUMN notification_outbox.destination_reference IS 'Numeric chat snapshot; eligibility is checked again before sending.';
+COMMENT ON COLUMN notification_outbox.payload IS 'Controlled safe text and internal eligibility references; never a raw reset token or URL.';
+COMMENT ON COLUMN notification_outbox.sensitive_payload IS 'Encrypted transient recovery message. Purged on delivery, terminal failure or twelve-minute expiry.';
+COMMENT ON COLUMN notification_outbox.status IS 'PENDING, PROCESSING, SENT, FAILED or CANCELLED.';
+COMMENT ON COLUMN notification_outbox.attempts IS 'Claim attempts, including recovered leases, bounded by max_attempts.';
+COMMENT ON COLUMN notification_outbox.max_attempts IS 'Maximum automatic delivery attempts, clamped to one through five.';
+COMMENT ON COLUMN notification_outbox.next_attempt_at IS 'Earliest retry, respecting exponential backoff and Telegram retry_after.';
+COMMENT ON COLUMN notification_outbox.expires_at IS 'Delivery deadline; recovery expires three minutes before the reset token.';
+COMMENT ON COLUMN notification_outbox.claim_token IS 'Random lease ownership marker; prevents a stale worker from sending a reclaimed row.';
+COMMENT ON COLUMN notification_outbox.locked_until IS 'Two-minute claim lease; expired processing rows may be recovered after restart.';
+COMMENT ON COLUMN notification_outbox.sent_at IS 'Time Telegram accepted sendMessage; does not prove the recipient read it.';
+COMMENT ON COLUMN notification_outbox.last_error IS 'Sanitized error code only; no raw Telegram response or HTTP URL.';
+COMMENT ON COLUMN notification_outbox.deduplication_key IS 'Unique bounded event reference preventing duplicate enqueueing.';
+COMMENT ON COLUMN notification_outbox.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN notification_outbox.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN notification_outbox.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
 -- Table: permissions
 -- Module: Authentication & Access Control  [app.modules.auth.models]
 -- Atomic capability in the code-defined permission catalog (for example
@@ -372,6 +499,150 @@ COMMENT ON COLUMN permissions.resource IS 'Resource segment of the code — the 
 COMMENT ON COLUMN permissions.action IS 'Action segment of the code (create, read, update, delete, approve, export, print, reset, restore, manage...).';
 COMMENT ON COLUMN permissions.description IS 'Explanation of what the action allows.';
 COMMENT ON COLUMN permissions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: quotation_revisions
+-- Module: Quotations  [app.modules.quotations.models]
+-- One version of a quotation's commercial terms. Editing an issued quotation
+-- creates a new revision instead of mutating this row, so what the customer
+-- accepted is always recoverable.
+-- --------------------------------------------------------------------------
+CREATE TABLE quotation_revisions (
+    -- Quotation this revision belongs to. CASCADE on quotation deletion.
+    quotation_id BIGINT NOT NULL,
+    -- Sequential revision number within the quotation, 1-based. Unique per
+    -- quotation together with quotation_id.
+    revision_no INTEGER NOT NULL,
+    -- Revision lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED,
+    -- SUPERSEDED, CONVERTED).
+    status VARCHAR(20) NOT NULL,
+    -- Date printed on the quotation.
+    quotation_date DATE NOT NULL,
+    -- Last date the offer is honoured. Past this date the revision is treated
+    -- as EXPIRED.
+    valid_until DATE,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Short summary of the quotation.
+    description TEXT,
+    -- Terms and conditions printed with the quotation.
+    notes TEXT,
+    -- Sum of line subtotals before discount and tax.
+    subtotal_amount NUMERIC(19, 4) NOT NULL,
+    -- Total discount applied across all lines.
+    discount_amount NUMERIC(19, 4) NOT NULL,
+    -- Total tax (VAT) charged across all lines.
+    tax_amount NUMERIC(19, 4) NOT NULL,
+    -- Payable total: subtotal minus discount plus tax.
+    total_amount NUMERIC(19, 4) NOT NULL,
+    -- Identifier of the user who created this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    created_by_user_id BIGINT,
+    -- Timestamp this revision was sent to the customer.
+    sent_at TIMESTAMP WITH TIME ZONE,
+    -- Timestamp the customer accepted this revision. The acceptance locks the
+    -- commercial terms; further changes require a new revision.
+    accepted_at TIMESTAMP WITH TIME ZONE,
+    -- Timestamp the customer rejected this revision.
+    rejected_at TIMESTAMP WITH TIME ZONE,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_quotation_revisions PRIMARY KEY (id),
+    CONSTRAINT uq_quotation_revisions_no UNIQUE (quotation_id, revision_no),
+    CONSTRAINT fk_quotation_revisions_quotation_id_quotations FOREIGN KEY(quotation_id) REFERENCES quotations (id) ON DELETE CASCADE,
+    CONSTRAINT fk_quotation_revisions_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+);
+CREATE INDEX ix_quotation_revisions_quotation_id ON quotation_revisions (quotation_id);
+CREATE INDEX ix_quotation_revisions_status ON quotation_revisions (status);
+
+COMMENT ON TABLE quotation_revisions IS 'One version of a quotation''s commercial terms. Editing an issued quotation creates a new revision instead of mutating this row, so what the customer accepted is always recoverable.';
+COMMENT ON COLUMN quotation_revisions.quotation_id IS 'Quotation this revision belongs to. CASCADE on quotation deletion.';
+COMMENT ON COLUMN quotation_revisions.revision_no IS 'Sequential revision number within the quotation, 1-based. Unique per quotation together with quotation_id.';
+COMMENT ON COLUMN quotation_revisions.status IS 'Revision lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, SUPERSEDED, CONVERTED).';
+COMMENT ON COLUMN quotation_revisions.quotation_date IS 'Date printed on the quotation.';
+COMMENT ON COLUMN quotation_revisions.valid_until IS 'Last date the offer is honoured. Past this date the revision is treated as EXPIRED.';
+COMMENT ON COLUMN quotation_revisions.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN quotation_revisions.description IS 'Short summary of the quotation.';
+COMMENT ON COLUMN quotation_revisions.notes IS 'Terms and conditions printed with the quotation.';
+COMMENT ON COLUMN quotation_revisions.subtotal_amount IS 'Sum of line subtotals before discount and tax.';
+COMMENT ON COLUMN quotation_revisions.discount_amount IS 'Total discount applied across all lines.';
+COMMENT ON COLUMN quotation_revisions.tax_amount IS 'Total tax (VAT) charged across all lines.';
+COMMENT ON COLUMN quotation_revisions.total_amount IS 'Payable total: subtotal minus discount plus tax.';
+COMMENT ON COLUMN quotation_revisions.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN quotation_revisions.sent_at IS 'Timestamp this revision was sent to the customer.';
+COMMENT ON COLUMN quotation_revisions.accepted_at IS 'Timestamp the customer accepted this revision. The acceptance locks the commercial terms; further changes require a new revision.';
+COMMENT ON COLUMN quotation_revisions.rejected_at IS 'Timestamp the customer rejected this revision.';
+COMMENT ON COLUMN quotation_revisions.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN quotation_revisions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN quotation_revisions.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN quotation_revisions.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: quotations
+-- Module: Quotations  [app.modules.quotations.models]
+-- Quotation header. Holds the customer, trade direction and a pointer to the
+-- current revision; all commercial detail lives in the revisions so history
+-- is never overwritten.
+-- --------------------------------------------------------------------------
+CREATE TABLE quotations (
+    -- Human-facing quotation number, allocated from document_sequences.
+    -- Unique.
+    quotation_no VARCHAR(50) NOT NULL,
+    -- Business party the quotation is issued to.
+    customer_party_id BIGINT NOT NULL,
+    -- Trade direction the quotation covers.
+    trade_direction_id BIGINT NOT NULL,
+    -- Revision number currently treated as the live offer. Revisions are
+    -- never deleted, so superseded numbers stay reachable for audit.
+    current_revision_no INTEGER NOT NULL,
+    -- Quotation lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED,
+    -- CONVERTED).
+    status VARCHAR(20) NOT NULL,
+    -- Service order this quotation was re-quoted from. NULL for a quotation
+    -- created from scratch. The order is never modified by the re-quotation.
+    source_service_order_id BIGINT,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_quotations PRIMARY KEY (id),
+    CONSTRAINT uq_quotations_no UNIQUE (quotation_no),
+    CONSTRAINT fk_quotations_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_quotations_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id),
+    CONSTRAINT fk_quotations_source_service_order_id_service_orders FOREIGN KEY(source_service_order_id) REFERENCES service_orders (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_quotations_source_service_order_id ON quotations (source_service_order_id);
+CREATE INDEX ix_quotations_status ON quotations (status);
+
+COMMENT ON TABLE quotations IS 'Quotation header. Holds the customer, trade direction and a pointer to the current revision; all commercial detail lives in the revisions so history is never overwritten.';
+COMMENT ON COLUMN quotations.quotation_no IS 'Human-facing quotation number, allocated from document_sequences. Unique.';
+COMMENT ON COLUMN quotations.customer_party_id IS 'Business party the quotation is issued to.';
+COMMENT ON COLUMN quotations.trade_direction_id IS 'Trade direction the quotation covers.';
+COMMENT ON COLUMN quotations.current_revision_no IS 'Revision number currently treated as the live offer. Revisions are never deleted, so superseded numbers stay reachable for audit.';
+COMMENT ON COLUMN quotations.status IS 'Quotation lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, CONVERTED).';
+COMMENT ON COLUMN quotations.source_service_order_id IS 'Service order this quotation was re-quoted from. NULL for a quotation created from scratch. The order is never modified by the re-quotation.';
+COMMENT ON COLUMN quotations.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN quotations.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN quotations.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN quotations.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: roles
@@ -415,6 +686,95 @@ COMMENT ON COLUMN roles.status IS 'Role lifecycle state (ACTIVE, INACTIVE). An i
 COMMENT ON COLUMN roles.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 COMMENT ON COLUMN roles.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
 COMMENT ON COLUMN roles.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_orders
+-- Module: Service Operations  [app.modules.operations.models]
+-- Service order header — the operational job opened for a customer.
+-- Containers, routing, movements, milestones, pricing and charges all hang
+-- off this row.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_orders (
+    -- Human-facing order number allocated from document_sequences. Unique.
+    service_order_no VARCHAR(50) NOT NULL,
+    -- Quotation revision this order was converted from. NULL for orders
+    -- entered directly.
+    quotation_revision_id BIGINT,
+    -- Business party the job is performed for.
+    customer_party_id BIGINT NOT NULL,
+    -- Trade direction the job covers.
+    trade_direction_id BIGINT NOT NULL,
+    -- Order lifecycle state (DRAFT, CONFIRMED, IN_PROGRESS, COMPLETED,
+    -- CANCELLED). Indexed because the order list filters on it.
+    status VARCHAR(20) NOT NULL,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Short summary of the job.
+    description TEXT,
+    -- Identifier of the user who created this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    created_by_user_id BIGINT,
+    -- Published configuration version this order was created under. Pins the
+    -- order to the dynamic form it was filled in, so publishing a new
+    -- configuration cannot re-interpret its saved component rows.
+    configuration_version_id BIGINT,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_orders PRIMARY KEY (id),
+    CONSTRAINT uq_service_orders_no UNIQUE (service_order_no),
+    CONSTRAINT fk_service_orders_quotation_revision_id_quotation_revisions FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id),
+    CONSTRAINT fk_service_orders_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_service_orders_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id),
+    CONSTRAINT fk_service_orders_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id),
+    CONSTRAINT fk_service_orders_configuration_version_id_configuratio_6d1e FOREIGN KEY(configuration_version_id) REFERENCES configuration_versions (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_service_orders_status ON service_orders (status);
+
+COMMENT ON TABLE service_orders IS 'Service order header — the operational job opened for a customer. Containers, routing, movements, milestones, pricing and charges all hang off this row.';
+COMMENT ON COLUMN service_orders.service_order_no IS 'Human-facing order number allocated from document_sequences. Unique.';
+COMMENT ON COLUMN service_orders.quotation_revision_id IS 'Quotation revision this order was converted from. NULL for orders entered directly.';
+COMMENT ON COLUMN service_orders.customer_party_id IS 'Business party the job is performed for.';
+COMMENT ON COLUMN service_orders.trade_direction_id IS 'Trade direction the job covers.';
+COMMENT ON COLUMN service_orders.status IS 'Order lifecycle state (DRAFT, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED). Indexed because the order list filters on it.';
+COMMENT ON COLUMN service_orders.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN service_orders.description IS 'Short summary of the job.';
+COMMENT ON COLUMN service_orders.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN service_orders.configuration_version_id IS 'Published configuration version this order was created under. Pins the order to the dynamic form it was filled in, so publishing a new configuration cannot re-interpret its saved component rows.';
+COMMENT ON COLUMN service_orders.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN service_orders.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_orders.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_orders.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: telegram_updates
+-- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
+-- Telegram update receipts for idempotent webhook processing. No raw incoming
+-- message or challenge is retained.
+-- --------------------------------------------------------------------------
+CREATE TABLE telegram_updates (
+    -- Telegram's unique update number; primary key deduplicates repeated
+    -- webhook deliveries.
+    update_id BIGSERIAL NOT NULL,
+    -- Receipt timestamp; receipts older than seven days are purged.
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT pk_telegram_updates PRIMARY KEY (update_id)
+);
+CREATE INDEX ix_telegram_updates_received_at ON telegram_updates (received_at);
+
+COMMENT ON TABLE telegram_updates IS 'Telegram update receipts for idempotent webhook processing. No raw incoming message or challenge is retained.';
+COMMENT ON COLUMN telegram_updates.update_id IS 'Telegram''s unique update number; primary key deduplicates repeated webhook deliveries.';
+COMMENT ON COLUMN telegram_updates.received_at IS 'Receipt timestamp; receipts older than seven days are purged.';
 
 -- --------------------------------------------------------------------------
 -- Table: users
@@ -677,6 +1037,9 @@ CREATE TABLE attachments (
     -- Version number, incremented when several revisions of one document are
     -- stored.
     document_version INTEGER NOT NULL,
+    -- Optional operator note describing the file; display only, never used
+    -- for access control.
+    note VARCHAR(1000),
     -- Identifier of the user who uploaded this record. NULL when the action
     -- was performed by the system, or set to NULL by ON DELETE SET NULL once
     -- the user is removed.
@@ -701,6 +1064,7 @@ COMMENT ON COLUMN attachments.file_size_bytes IS 'Size of the stored object in b
 COMMENT ON COLUMN attachments.checksum IS 'Digest used to detect duplicates and corruption.';
 COMMENT ON COLUMN attachments.storage_provider IS 'Storage backend holding the object: local or minio.';
 COMMENT ON COLUMN attachments.document_version IS 'Version number, incremented when several revisions of one document are stored.';
+COMMENT ON COLUMN attachments.note IS 'Optional operator note describing the file; display only, never used for access control.';
 COMMENT ON COLUMN attachments.uploaded_by_user_id IS 'Identifier of the user who uploaded this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 COMMENT ON COLUMN attachments.uploaded_at IS 'Timestamp the object was written to storage.';
 COMMENT ON COLUMN attachments.is_deleted IS 'Soft-delete marker for this metadata row. The stored object is removed separately, so the row remains as a tombstone.';
@@ -921,6 +1285,53 @@ COMMENT ON COLUMN business_parties.created_at IS 'Row creation timestamp (UTC, t
 COMMENT ON COLUMN business_parties.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 COMMENT ON COLUMN business_parties.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
 COMMENT ON COLUMN business_parties.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+
+-- --------------------------------------------------------------------------
+-- Table: capacity_units
+-- Module: Master Data  [app.modules.master_data.models]
+-- Administrator-managed unit list for transport_assets.capacity_unit (KG,
+-- CBM, Pallets, ...). Replaces the free-text input so every asset reports
+-- capacity the same way; archives preserve units an asset still references.
+-- --------------------------------------------------------------------------
+CREATE TABLE capacity_units (
+    -- Unit code stored in transport_assets.capacity_unit. Unique among
+    -- non-archived rows.
+    code VARCHAR(32) NOT NULL,
+    -- Human-readable unit name shown in the capacity select.
+    name VARCHAR(64) NOT NULL,
+    -- Record status (ACTIVE, INACTIVE).
+    status VARCHAR(20) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
+    -- is excluded from listings and uniqueness checks but stays in place.
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    -- Identifier of the user who archived this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    deleted_by_user_id BIGINT,
+    CONSTRAINT pk_capacity_units PRIMARY KEY (id),
+    CONSTRAINT fk_capacity_units_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_capacity_units_deleted_at ON capacity_units (deleted_at);
+CREATE INDEX ix_capacity_units_deleted_by_user_id ON capacity_units (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_capacity_units_code_active ON capacity_units (code) WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE capacity_units IS 'Administrator-managed unit list for transport_assets.capacity_unit (KG, CBM, Pallets, ...). Replaces the free-text input so every asset reports capacity the same way; archives preserve units an asset still references.';
+COMMENT ON COLUMN capacity_units.code IS 'Unit code stored in transport_assets.capacity_unit. Unique among non-archived rows.';
+COMMENT ON COLUMN capacity_units.name IS 'Human-readable unit name shown in the capacity select.';
+COMMENT ON COLUMN capacity_units.status IS 'Record status (ACTIVE, INACTIVE).';
+COMMENT ON COLUMN capacity_units.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN capacity_units.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN capacity_units.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON COLUMN capacity_units.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
+COMMENT ON COLUMN capacity_units.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 
 -- --------------------------------------------------------------------------
 -- Table: component_group_attributes
@@ -1257,6 +1668,89 @@ COMMENT ON COLUMN currency_rates.deleted_at IS 'Soft-deletion timestamp. A non-N
 COMMENT ON COLUMN currency_rates.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 
 -- --------------------------------------------------------------------------
+-- Table: document_types
+-- Module: Master Data  [app.modules.master_data.models]
+-- Administrator-managed classification of documents. accounting_behavior is
+-- the only value accounting code reads; canonical system rows point at
+-- themselves and a custom type may only reference one of the canonical
+-- behaviours, so a new label never invents a posting rule.
+-- --------------------------------------------------------------------------
+CREATE TABLE document_types (
+    -- Stable unique code, stored upper-case (e.g. TAX_INVOICE). Canonical
+    -- rows use the accounting-behaviour code; custom types get their own.
+    -- Unique among non-archived rows.
+    code VARCHAR(64) NOT NULL,
+    -- Human-readable type name shown on selectors and printed documents.
+    name VARCHAR(255) NOT NULL,
+    -- Grouping for the master list: FINANCE, OPERATIONS, CUSTOMS or
+    -- SUPPORTING.
+    category VARCHAR(32) NOT NULL,
+    -- Free-text notes about when to use this type.
+    description TEXT,
+    -- Canonical posting behaviour the type resolves to (e.g.
+    -- CUSTOMER_INVOICE). The only value accounting code reads; a custom row
+    -- must reference one of the canonical behaviours, and canonical rows
+    -- point at themselves.
+    accounting_behavior VARCHAR(64) NOT NULL,
+    -- True when documents of this type must pass through the posting
+    -- workflow.
+    posting_required BOOLEAN NOT NULL,
+    -- JSON list of areas where this type may be selected:
+    -- financial_documents, service_order_finance, posting_rules,
+    -- operations_documents, attachments.
+    available_in JSONB NOT NULL,
+    -- Lifecycle state. ACTIVE types may be selected on new documents.
+    status VARCHAR(20) NOT NULL,
+    -- Identifier of the user who created this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    created_by_user_id BIGINT,
+    -- Identifier of the user who last updated this record. NULL when the
+    -- action was performed by the system, or set to NULL by ON DELETE SET
+    -- NULL once the user is removed.
+    updated_by_user_id BIGINT,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
+    -- is excluded from listings and uniqueness checks but stays in place.
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    -- Identifier of the user who archived this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    deleted_by_user_id BIGINT,
+    CONSTRAINT pk_document_types PRIMARY KEY (id),
+    CONSTRAINT fk_document_types_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id),
+    CONSTRAINT fk_document_types_updated_by_user_id_users FOREIGN KEY(updated_by_user_id) REFERENCES users (id),
+    CONSTRAINT fk_document_types_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_document_types_deleted_at ON document_types (deleted_at);
+CREATE INDEX ix_document_types_deleted_by_user_id ON document_types (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_document_types_code_active ON document_types (code) WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE document_types IS 'Administrator-managed classification of documents. accounting_behavior is the only value accounting code reads; canonical system rows point at themselves and a custom type may only reference one of the canonical behaviours, so a new label never invents a posting rule.';
+COMMENT ON COLUMN document_types.code IS 'Stable unique code, stored upper-case (e.g. TAX_INVOICE). Canonical rows use the accounting-behaviour code; custom types get their own. Unique among non-archived rows.';
+COMMENT ON COLUMN document_types.name IS 'Human-readable type name shown on selectors and printed documents.';
+COMMENT ON COLUMN document_types.category IS 'Grouping for the master list: FINANCE, OPERATIONS, CUSTOMS or SUPPORTING.';
+COMMENT ON COLUMN document_types.description IS 'Free-text notes about when to use this type.';
+COMMENT ON COLUMN document_types.accounting_behavior IS 'Canonical posting behaviour the type resolves to (e.g. CUSTOMER_INVOICE). The only value accounting code reads; a custom row must reference one of the canonical behaviours, and canonical rows point at themselves.';
+COMMENT ON COLUMN document_types.posting_required IS 'True when documents of this type must pass through the posting workflow.';
+COMMENT ON COLUMN document_types.available_in IS 'JSON list of areas where this type may be selected: financial_documents, service_order_finance, posting_rules, operations_documents, attachments.';
+COMMENT ON COLUMN document_types.status IS 'Lifecycle state. ACTIVE types may be selected on new documents.';
+COMMENT ON COLUMN document_types.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN document_types.updated_by_user_id IS 'Identifier of the user who last updated this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN document_types.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN document_types.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN document_types.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON COLUMN document_types.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
+COMMENT ON COLUMN document_types.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+
+-- --------------------------------------------------------------------------
 -- Table: fee_types
 -- Module: Master Data  [app.modules.master_data.models]
 -- Catalogue of chargeable services (freight, handling, THC, duty, delivery)
@@ -1353,6 +1847,125 @@ COMMENT ON COLUMN financial_accounts.status IS 'Record status (ACTIVE, INACTIVE)
 COMMENT ON COLUMN financial_accounts.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 COMMENT ON COLUMN financial_accounts.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
 COMMENT ON COLUMN financial_accounts.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: import_jobs
+-- Module: app.modules.excel_io.models  [app.modules.excel_io.models]
+-- Excel import history: one row per confirmed (or failed) import batch, with
+-- counts and a short error summary. Workbook contents are never stored.
+-- --------------------------------------------------------------------------
+CREATE TABLE import_jobs (
+    -- Import & Export module key (e.g. feeTypes).
+    module VARCHAR(64) NOT NULL,
+    -- Name of the uploaded workbook; contents are not retained.
+    file_name VARCHAR(255) NOT NULL,
+    -- Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.
+    mode VARCHAR(20) NOT NULL,
+    -- VALIDATED, COMPLETED, FAILED or CANCELLED.
+    status VARCHAR(20) NOT NULL,
+    -- Template version the batch validated against.
+    template_version INTEGER NOT NULL,
+    -- Data rows found in the workbook.
+    total_rows INTEGER NOT NULL,
+    -- Rows created by the import.
+    created_count INTEGER NOT NULL,
+    -- Rows updated by the import.
+    updated_count INTEGER NOT NULL,
+    -- Duplicate rows skipped by Create Only.
+    skipped_count INTEGER NOT NULL,
+    -- Rows that failed validation at commit time.
+    failed_count INTEGER NOT NULL,
+    -- Short per-row error text from a failed batch; no workbook data.
+    error_summary TEXT,
+    -- User who confirmed the import (audit attribution).
+    started_by_user_id BIGINT,
+    -- When the batch committed or failed.
+    completed_at TIMESTAMP WITH TIME ZONE,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_import_jobs PRIMARY KEY (id),
+    CONSTRAINT fk_import_jobs_started_by_user_id_users FOREIGN KEY(started_by_user_id) REFERENCES users (id)
+);
+
+COMMENT ON TABLE import_jobs IS 'Excel import history: one row per confirmed (or failed) import batch, with counts and a short error summary. Workbook contents are never stored.';
+COMMENT ON COLUMN import_jobs.module IS 'Import & Export module key (e.g. feeTypes).';
+COMMENT ON COLUMN import_jobs.file_name IS 'Name of the uploaded workbook; contents are not retained.';
+COMMENT ON COLUMN import_jobs.mode IS 'Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.';
+COMMENT ON COLUMN import_jobs.status IS 'VALIDATED, COMPLETED, FAILED or CANCELLED.';
+COMMENT ON COLUMN import_jobs.template_version IS 'Template version the batch validated against.';
+COMMENT ON COLUMN import_jobs.total_rows IS 'Data rows found in the workbook.';
+COMMENT ON COLUMN import_jobs.created_count IS 'Rows created by the import.';
+COMMENT ON COLUMN import_jobs.updated_count IS 'Rows updated by the import.';
+COMMENT ON COLUMN import_jobs.skipped_count IS 'Duplicate rows skipped by Create Only.';
+COMMENT ON COLUMN import_jobs.failed_count IS 'Rows that failed validation at commit time.';
+COMMENT ON COLUMN import_jobs.error_summary IS 'Short per-row error text from a failed batch; no workbook data.';
+COMMENT ON COLUMN import_jobs.started_by_user_id IS 'User who confirmed the import (audit attribution).';
+COMMENT ON COLUMN import_jobs.completed_at IS 'When the batch committed or failed.';
+COMMENT ON COLUMN import_jobs.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN import_jobs.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN import_jobs.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: import_sessions
+-- Module: app.modules.excel_io.models  [app.modules.excel_io.models]
+-- Durable pending import preview: a validated workbook held until its owner
+-- confirms, cancels or the TTL expires. Claimed atomically at commit (single
+-- use); expired rows are purged on the next upload.
+-- --------------------------------------------------------------------------
+CREATE TABLE import_sessions (
+    -- Opaque single-use confirmation token. Unique; deleted at claim.
+    token VARCHAR(64) NOT NULL,
+    -- Owner of the session; only this user may preview, confirm or cancel.
+    user_id BIGINT NOT NULL,
+    -- Import & Export module key.
+    module VARCHAR(64) NOT NULL,
+    -- Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.
+    mode VARCHAR(20) NOT NULL,
+    -- Name of the uploaded workbook.
+    file_name VARCHAR(255) NOT NULL,
+    -- SHA-256 of the uploaded bytes, binding the preview to the file.
+    checksum VARCHAR(64) NOT NULL,
+    -- Template version the batch validated against.
+    template_version INTEGER NOT NULL,
+    -- Parsed workbook rows (JSON). Deleted when the session is claimed.
+    rows_data JSON NOT NULL,
+    -- Validated per-row preview (JSON). Deleted when the session is claimed.
+    preview_data JSON NOT NULL,
+    -- Absolute TTL; expired rows are treated as gone and purged lazily.
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_import_sessions PRIMARY KEY (id),
+    CONSTRAINT uq_import_sessions_token UNIQUE (token),
+    CONSTRAINT fk_import_sessions_user_id_users FOREIGN KEY(user_id) REFERENCES users (id)
+);
+
+COMMENT ON TABLE import_sessions IS 'Durable pending import preview: a validated workbook held until its owner confirms, cancels or the TTL expires. Claimed atomically at commit (single use); expired rows are purged on the next upload.';
+COMMENT ON COLUMN import_sessions.token IS 'Opaque single-use confirmation token. Unique; deleted at claim.';
+COMMENT ON COLUMN import_sessions.user_id IS 'Owner of the session; only this user may preview, confirm or cancel.';
+COMMENT ON COLUMN import_sessions.module IS 'Import & Export module key.';
+COMMENT ON COLUMN import_sessions.mode IS 'Import mode: CREATE_ONLY, CREATE_AND_UPDATE or VALIDATE_ONLY.';
+COMMENT ON COLUMN import_sessions.file_name IS 'Name of the uploaded workbook.';
+COMMENT ON COLUMN import_sessions.checksum IS 'SHA-256 of the uploaded bytes, binding the preview to the file.';
+COMMENT ON COLUMN import_sessions.template_version IS 'Template version the batch validated against.';
+COMMENT ON COLUMN import_sessions.rows_data IS 'Parsed workbook rows (JSON). Deleted when the session is claimed.';
+COMMENT ON COLUMN import_sessions.preview_data IS 'Validated per-row preview (JSON). Deleted when the session is claimed.';
+COMMENT ON COLUMN import_sessions.expires_at IS 'Absolute TTL; expired rows are treated as gone and purged lazily.';
+COMMENT ON COLUMN import_sessions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN import_sessions.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN import_sessions.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: module_records
@@ -1554,6 +2167,50 @@ COMMENT ON COLUMN place_roles.deleted_at IS 'Soft-deletion timestamp. A non-NULL
 COMMENT ON COLUMN place_roles.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 
 -- --------------------------------------------------------------------------
+-- Table: quotation_conversions
+-- Module: Quotations  [app.modules.quotations.models]
+-- Record of a quotation revision being converted into a service order. Both
+-- unique constraints make conversion idempotent — a revision yields at most
+-- one service order and an order originates from at most one revision.
+-- --------------------------------------------------------------------------
+CREATE TABLE quotation_conversions (
+    -- Revision that was converted. UNIQUE, so a revision can produce at most
+    -- one service order.
+    quotation_revision_id BIGINT NOT NULL,
+    -- Service order created from the revision. UNIQUE, so an order originates
+    -- from at most one revision.
+    service_order_id BIGINT NOT NULL,
+    -- Identifier of the user who converted this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    converted_by_user_id BIGINT,
+    -- Timestamp the conversion was performed.
+    converted_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Free-text notes recorded at conversion time.
+    notes TEXT,
+    -- Client-supplied key that makes a repeated conversion request a no-op.
+    -- UNIQUE.
+    idempotency_key VARCHAR(128),
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_quotation_conversions PRIMARY KEY (id),
+    CONSTRAINT uq_quotation_conversions_quotation_revision_id UNIQUE (quotation_revision_id),
+    CONSTRAINT fk_quotation_conversions_quotation_revision_id_quotatio_6c51 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id),
+    CONSTRAINT uq_quotation_conversions_service_order_id UNIQUE (service_order_id),
+    CONSTRAINT fk_quotation_conversions_converted_by_user_id_users FOREIGN KEY(converted_by_user_id) REFERENCES users (id),
+    CONSTRAINT uq_quotation_conversions_idempotency_key UNIQUE (idempotency_key)
+);
+
+COMMENT ON TABLE quotation_conversions IS 'Record of a quotation revision being converted into a service order. Both unique constraints make conversion idempotent — a revision yields at most one service order and an order originates from at most one revision.';
+COMMENT ON COLUMN quotation_conversions.quotation_revision_id IS 'Revision that was converted. UNIQUE, so a revision can produce at most one service order.';
+COMMENT ON COLUMN quotation_conversions.service_order_id IS 'Service order created from the revision. UNIQUE, so an order originates from at most one revision.';
+COMMENT ON COLUMN quotation_conversions.converted_by_user_id IS 'Identifier of the user who converted this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN quotation_conversions.converted_at IS 'Timestamp the conversion was performed.';
+COMMENT ON COLUMN quotation_conversions.notes IS 'Free-text notes recorded at conversion time.';
+COMMENT ON COLUMN quotation_conversions.idempotency_key IS 'Client-supplied key that makes a repeated conversion request a no-op. UNIQUE.';
+COMMENT ON COLUMN quotation_conversions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
 -- Table: role_permissions
 -- Module: Authentication & Access Control  [app.modules.auth.models]
 -- Join row granting one permission to one role. The composite primary key
@@ -1572,6 +2229,263 @@ CREATE TABLE role_permissions (
 COMMENT ON TABLE role_permissions IS 'Join row granting one permission to one role. The composite primary key makes a duplicate grant impossible.';
 COMMENT ON COLUMN role_permissions.role_id IS 'Role that receives the grant.';
 COMMENT ON COLUMN role_permissions.permission_id IS 'Permission being granted to the role.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_charges
+-- Module: Service Operations  [app.modules.operations.models]
+-- Customer-facing invoice or service note raised from a service order.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_charges (
+    -- Service order the charge belongs to. CASCADE on order deletion.
+    service_order_id BIGINT NOT NULL,
+    -- Document number allocated from document_sequences. UNIQUE across all
+    -- charges.
+    charge_no VARCHAR(50) NOT NULL,
+    -- Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE,
+    -- CREDIT_NOTE).
+    document_type VARCHAR(32) NOT NULL,
+    -- Date printed on the document.
+    document_date DATE NOT NULL,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed
+    -- because the charges list filters on it.
+    status VARCHAR(20) NOT NULL,
+    -- Sum of line amounts before discount and tax.
+    subtotal_amount NUMERIC(19, 4) NOT NULL,
+    -- Total discount applied across all charge lines.
+    discount_amount NUMERIC(19, 4) NOT NULL,
+    -- Total tax (VAT) charged across all charge lines.
+    tax_amount NUMERIC(19, 4) NOT NULL,
+    -- Payable total: subtotal minus discount plus tax.
+    total_amount NUMERIC(19, 4) NOT NULL,
+    -- Free-text remark printed at the foot of the document.
+    remark TEXT,
+    -- Identifier of the user who created this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    created_by_user_id BIGINT,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_order_charges PRIMARY KEY (id),
+    CONSTRAINT uq_service_order_charges_no UNIQUE (charge_no),
+    CONSTRAINT fk_service_order_charges_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
+    CONSTRAINT fk_service_order_charges_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+);
+CREATE INDEX ix_service_order_charges_service_order_id ON service_order_charges (service_order_id);
+CREATE INDEX ix_service_order_charges_status ON service_order_charges (status);
+
+COMMENT ON TABLE service_order_charges IS 'Customer-facing invoice or service note raised from a service order.';
+COMMENT ON COLUMN service_order_charges.service_order_id IS 'Service order the charge belongs to. CASCADE on order deletion.';
+COMMENT ON COLUMN service_order_charges.charge_no IS 'Document number allocated from document_sequences. UNIQUE across all charges.';
+COMMENT ON COLUMN service_order_charges.document_type IS 'Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE, CREDIT_NOTE).';
+COMMENT ON COLUMN service_order_charges.document_date IS 'Date printed on the document.';
+COMMENT ON COLUMN service_order_charges.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN service_order_charges.status IS 'Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed because the charges list filters on it.';
+COMMENT ON COLUMN service_order_charges.subtotal_amount IS 'Sum of line amounts before discount and tax.';
+COMMENT ON COLUMN service_order_charges.discount_amount IS 'Total discount applied across all charge lines.';
+COMMENT ON COLUMN service_order_charges.tax_amount IS 'Total tax (VAT) charged across all charge lines.';
+COMMENT ON COLUMN service_order_charges.total_amount IS 'Payable total: subtotal minus discount plus tax.';
+COMMENT ON COLUMN service_order_charges.remark IS 'Free-text remark printed at the foot of the document.';
+COMMENT ON COLUMN service_order_charges.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN service_order_charges.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN service_order_charges.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_order_charges.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_order_charges.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_milestones
+-- Module: Service Operations  [app.modules.operations.models]
+-- Checkpoint on a service order's timeline (booking confirmed, gate-in,
+-- loaded, arrived).
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_milestones (
+    -- Service order the milestone belongs to. CASCADE on order deletion.
+    service_order_id BIGINT NOT NULL,
+    -- Stable machine code for the checkpoint (e.g. GATE_IN), used to drive
+    -- progress reporting.
+    milestone_code VARCHAR(64) NOT NULL,
+    -- Display name of the checkpoint as printed on the order.
+    milestone_name VARCHAR(255) NOT NULL,
+    -- Order of this checkpoint along the timeline.
+    sequence_no INTEGER NOT NULL,
+    -- Scheduled time of the checkpoint (UTC, timezone-aware).
+    planned_at TIMESTAMP WITH TIME ZONE,
+    -- Recorded time the checkpoint was reached.
+    actual_at TIMESTAMP WITH TIME ZONE,
+    -- Checkpoint state (PENDING, DONE, MISSED, SKIPPED).
+    status VARCHAR(20) NOT NULL,
+    -- Free-text notes about the checkpoint.
+    notes TEXT,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_order_milestones PRIMARY KEY (id),
+    CONSTRAINT fk_service_order_milestones_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_service_order_milestones_service_order_id ON service_order_milestones (service_order_id);
+
+COMMENT ON TABLE service_order_milestones IS 'Checkpoint on a service order''s timeline (booking confirmed, gate-in, loaded, arrived).';
+COMMENT ON COLUMN service_order_milestones.service_order_id IS 'Service order the milestone belongs to. CASCADE on order deletion.';
+COMMENT ON COLUMN service_order_milestones.milestone_code IS 'Stable machine code for the checkpoint (e.g. GATE_IN), used to drive progress reporting.';
+COMMENT ON COLUMN service_order_milestones.milestone_name IS 'Display name of the checkpoint as printed on the order.';
+COMMENT ON COLUMN service_order_milestones.sequence_no IS 'Order of this checkpoint along the timeline.';
+COMMENT ON COLUMN service_order_milestones.planned_at IS 'Scheduled time of the checkpoint (UTC, timezone-aware).';
+COMMENT ON COLUMN service_order_milestones.actual_at IS 'Recorded time the checkpoint was reached.';
+COMMENT ON COLUMN service_order_milestones.status IS 'Checkpoint state (PENDING, DONE, MISSED, SKIPPED).';
+COMMENT ON COLUMN service_order_milestones.notes IS 'Free-text notes about the checkpoint.';
+COMMENT ON COLUMN service_order_milestones.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN service_order_milestones.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_order_milestones.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_order_milestones.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_pricing
+-- Module: Service Operations  [app.modules.operations.models]
+-- Pricing summary of a service order. Exactly one row per order, enforced by
+-- the unique constraint on service_order_id.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_pricing (
+    -- Service order this summary belongs to. UNIQUE, so an order always has
+    -- exactly one pricing summary.
+    service_order_id BIGINT NOT NULL,
+    -- Sum of line subtotals before discount and tax.
+    subtotal_amount NUMERIC(19, 4) NOT NULL,
+    -- Total discount applied across all pricing lines.
+    discount_amount NUMERIC(19, 4) NOT NULL,
+    -- Total tax (VAT) charged across all pricing lines.
+    tax_amount NUMERIC(19, 4) NOT NULL,
+    -- Payable total: subtotal minus discount plus tax.
+    total_amount NUMERIC(19, 4) NOT NULL,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_order_pricing PRIMARY KEY (id),
+    CONSTRAINT uq_service_order_pricing_service_order_id UNIQUE (service_order_id),
+    CONSTRAINT fk_service_order_pricing_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE
+);
+
+COMMENT ON TABLE service_order_pricing IS 'Pricing summary of a service order. Exactly one row per order, enforced by the unique constraint on service_order_id.';
+COMMENT ON COLUMN service_order_pricing.service_order_id IS 'Service order this summary belongs to. UNIQUE, so an order always has exactly one pricing summary.';
+COMMENT ON COLUMN service_order_pricing.subtotal_amount IS 'Sum of line subtotals before discount and tax.';
+COMMENT ON COLUMN service_order_pricing.discount_amount IS 'Total discount applied across all pricing lines.';
+COMMENT ON COLUMN service_order_pricing.tax_amount IS 'Total tax (VAT) charged across all pricing lines.';
+COMMENT ON COLUMN service_order_pricing.total_amount IS 'Payable total: subtotal minus discount plus tax.';
+COMMENT ON COLUMN service_order_pricing.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN service_order_pricing.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_order_pricing.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_order_pricing.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: telegram_links
+-- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
+-- Private Telegram numeric identities verified by an authenticated,
+-- password-authorized pairing challenge. One identity per LCS user; never a
+-- group recovery destination.
+-- --------------------------------------------------------------------------
+CREATE TABLE telegram_links (
+    -- Owning LCS user, cascading on account deletion.
+    user_id BIGINT NOT NULL,
+    -- Unique verified numeric Telegram user identity; usernames are display
+    -- data only.
+    telegram_user_id BIGINT NOT NULL,
+    -- Numeric bot identity that accepted the private pairing.
+    bot_id BIGINT NOT NULL,
+    -- Verified private chat ID; constrained to equal the numeric Telegram
+    -- user identity.
+    chat_id BIGINT NOT NULL,
+    -- Optional Telegram username or display name for the owning user's
+    -- profile.
+    display_name VARCHAR(255) NOT NULL,
+    -- Time the single-use private pairing was accepted.
+    verified_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Time Telegram refused delivery because the bot or destination was
+    -- blocked.
+    blocked_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT pk_telegram_links PRIMARY KEY (user_id),
+    CONSTRAINT ck_telegram_links_private_identity CHECK (chat_id = telegram_user_id AND telegram_user_id > 0),
+    CONSTRAINT fk_telegram_links_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT uq_telegram_links_telegram_user_id UNIQUE (telegram_user_id)
+);
+
+COMMENT ON TABLE telegram_links IS 'Private Telegram numeric identities verified by an authenticated, password-authorized pairing challenge. One identity per LCS user; never a group recovery destination.';
+COMMENT ON COLUMN telegram_links.user_id IS 'Owning LCS user, cascading on account deletion.';
+COMMENT ON COLUMN telegram_links.telegram_user_id IS 'Unique verified numeric Telegram user identity; usernames are display data only.';
+COMMENT ON COLUMN telegram_links.bot_id IS 'Numeric bot identity that accepted the private pairing.';
+COMMENT ON COLUMN telegram_links.chat_id IS 'Verified private chat ID; constrained to equal the numeric Telegram user identity.';
+COMMENT ON COLUMN telegram_links.display_name IS 'Optional Telegram username or display name for the owning user''s profile.';
+COMMENT ON COLUMN telegram_links.verified_at IS 'Time the single-use private pairing was accepted.';
+COMMENT ON COLUMN telegram_links.blocked_at IS 'Time Telegram refused delivery because the bot or destination was blocked.';
+
+-- --------------------------------------------------------------------------
+-- Table: telegram_pairings
+-- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
+-- Hash-only, ten-minute single-use challenges. Group candidates additionally
+-- require confirmation by the originating authenticated administrator.
+-- --------------------------------------------------------------------------
+CREATE TABLE telegram_pairings (
+    -- SHA-256 digest of the random pairing challenge; raw challenges are
+    -- never stored.
+    token_hash VARCHAR(64) NOT NULL,
+    -- Authenticated LCS user who generated and may confirm this challenge.
+    user_id BIGINT NOT NULL,
+    -- PRIVATE for personal linking or GROUP for administrator destination
+    -- verification.
+    kind VARCHAR(16) NOT NULL,
+    -- Verified bot identity for which this challenge was issued.
+    bot_id BIGINT NOT NULL,
+    -- Ten-minute challenge deadline.
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Time the Telegram command consumed the challenge; prevents reuse.
+    used_at TIMESTAMP WITH TIME ZONE,
+    -- Numeric private group ID verified by bot access and administrator
+    -- membership checks.
+    candidate_id BIGINT,
+    -- Display title of the verified group candidate, awaiting LCS
+    -- administrator confirmation.
+    candidate_name VARCHAR(255),
+    CONSTRAINT pk_telegram_pairings PRIMARY KEY (token_hash),
+    CONSTRAINT ck_telegram_pairings_pairing_kind CHECK (kind IN ('PRIVATE', 'GROUP')),
+    CONSTRAINT uq_telegram_pairing_owner_kind UNIQUE (user_id, kind),
+    CONSTRAINT fk_telegram_pairings_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_telegram_pairings_user_id ON telegram_pairings (user_id);
+
+COMMENT ON TABLE telegram_pairings IS 'Hash-only, ten-minute single-use challenges. Group candidates additionally require confirmation by the originating authenticated administrator.';
+COMMENT ON COLUMN telegram_pairings.token_hash IS 'SHA-256 digest of the random pairing challenge; raw challenges are never stored.';
+COMMENT ON COLUMN telegram_pairings.user_id IS 'Authenticated LCS user who generated and may confirm this challenge.';
+COMMENT ON COLUMN telegram_pairings.kind IS 'PRIVATE for personal linking or GROUP for administrator destination verification.';
+COMMENT ON COLUMN telegram_pairings.bot_id IS 'Verified bot identity for which this challenge was issued.';
+COMMENT ON COLUMN telegram_pairings.expires_at IS 'Ten-minute challenge deadline.';
+COMMENT ON COLUMN telegram_pairings.used_at IS 'Time the Telegram command consumed the challenge; prevents reuse.';
+COMMENT ON COLUMN telegram_pairings.candidate_id IS 'Numeric private group ID verified by bot access and administrator membership checks.';
+COMMENT ON COLUMN telegram_pairings.candidate_name IS 'Display title of the verified group candidate, awaiting LCS administrator confirmation.';
 
 -- --------------------------------------------------------------------------
 -- Table: trade_directions
@@ -1772,8 +2686,8 @@ COMMENT ON COLUMN user_role_assignments.updated_at IS 'Last modification timesta
 -- --------------------------------------------------------------------------
 -- Table: user_sessions
 -- Module: Authentication & Access Control  [app.modules.auth.models]
--- A refresh-token session, one row per issued refresh token. The token itself
--- is stored only as a SHA-256 hash, so a database leak cannot be replayed.
+-- A stable server-side session, one row per login. The token itself is stored
+-- only as a SHA-256 hash, so a database leak cannot be replayed.
 -- --------------------------------------------------------------------------
 CREATE TABLE user_sessions (
     -- Session owner.
@@ -1789,17 +2703,20 @@ CREATE TABLE user_sessions (
     ip_address VARCHAR(64),
     -- Raw User-Agent header captured at sign-in.
     user_agent TEXT,
-    -- Timestamp of the most recent request authenticated by this session.
+    -- Timestamp of the most recent successful refresh; does not extend idle
+    -- time.
     last_used_at TIMESTAMP WITH TIME ZONE,
+    -- Throttled timestamp of explicit authenticated user activity, excluding
+    -- refresh and passive polling.
+    last_activity_at TIMESTAMP WITH TIME ZONE,
     -- Hard expiry enforced by the server; the session is invalid after this
     -- instant.
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     -- Set when the session is logged out or revoked. NULL while the session
     -- is valid.
     revoked_at TIMESTAMP WITH TIME ZONE,
-    -- TRUE for "Remember me" sessions: a persistent cookie plus the full
-    -- configured lifetime, instead of a browser-session cookie with a short
-    -- deadline.
+    -- TRUE selects persistent cookies; FALSE selects browser-session cookies.
+    -- Both modes obey the same finite idle and absolute security policy.
     remember_me BOOLEAN DEFAULT false NOT NULL,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
     id BIGSERIAL NOT NULL,
@@ -1815,16 +2732,17 @@ CREATE TABLE user_sessions (
 );
 CREATE INDEX ix_user_sessions_user_id ON user_sessions (user_id);
 
-COMMENT ON TABLE user_sessions IS 'A refresh-token session, one row per issued refresh token. The token itself is stored only as a SHA-256 hash, so a database leak cannot be replayed.';
+COMMENT ON TABLE user_sessions IS 'A stable server-side session, one row per login. The token itself is stored only as a SHA-256 hash, so a database leak cannot be replayed.';
 COMMENT ON COLUMN user_sessions.user_id IS 'Session owner.';
 COMMENT ON COLUMN user_sessions.refresh_token_hash IS 'SHA-256 hash of the refresh token. Unique. Token rotation replaces this value, so a stolen copy of the old token is rejected after first use.';
 COMMENT ON COLUMN user_sessions.device_name IS 'Friendly device or browser label shown in the user''s active-session list.';
 COMMENT ON COLUMN user_sessions.ip_address IS 'IP address the session was created from, retained for audit and anomaly detection.';
 COMMENT ON COLUMN user_sessions.user_agent IS 'Raw User-Agent header captured at sign-in.';
-COMMENT ON COLUMN user_sessions.last_used_at IS 'Timestamp of the most recent request authenticated by this session.';
+COMMENT ON COLUMN user_sessions.last_used_at IS 'Timestamp of the most recent successful refresh; does not extend idle time.';
+COMMENT ON COLUMN user_sessions.last_activity_at IS 'Throttled timestamp of explicit authenticated user activity, excluding refresh and passive polling.';
 COMMENT ON COLUMN user_sessions.expires_at IS 'Hard expiry enforced by the server; the session is invalid after this instant.';
 COMMENT ON COLUMN user_sessions.revoked_at IS 'Set when the session is logged out or revoked. NULL while the session is valid.';
-COMMENT ON COLUMN user_sessions.remember_me IS 'TRUE for "Remember me" sessions: a persistent cookie plus the full configured lifetime, instead of a browser-session cookie with a short deadline.';
+COMMENT ON COLUMN user_sessions.remember_me IS 'TRUE selects persistent cookies; FALSE selects browser-session cookies. Both modes obey the same finite idle and absolute security policy.';
 COMMENT ON COLUMN user_sessions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 COMMENT ON COLUMN user_sessions.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
 COMMENT ON COLUMN user_sessions.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
@@ -2096,527 +3014,6 @@ COMMENT ON COLUMN customer_customs_accounts.created_at IS 'Row creation timestam
 COMMENT ON COLUMN customer_customs_accounts.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
--- Table: posting_rules
--- Module: Double-Entry Finance  [app.modules.finance.models]
--- Rule mapping a document type and fee type to the debit and credit
--- general-ledger accounts applied when a document is posted.
--- --------------------------------------------------------------------------
-CREATE TABLE posting_rules (
-    -- Document type the rule applies to.
-    document_type VARCHAR(32) NOT NULL,
-    -- Fee type the rule applies to. NULL makes it the fallback rule for the
-    -- whole document type.
-    fee_type_id BIGINT,
-    -- General-ledger account debited when a matching document is posted.
-    debit_account_id BIGINT NOT NULL,
-    -- General-ledger account credited when a matching document is posted.
-    credit_account_id BIGINT NOT NULL,
-    -- General-ledger account that accumulates the tax charged. NULL when no
-    -- tax is posted.
-    tax_account_id BIGINT,
-    -- Record status (ACTIVE, INACTIVE).
-    status VARCHAR(20) NOT NULL,
-    -- Orders rules that match the same document and fee type. The resolver
-    -- takes the highest; two rules sharing the top priority are an ambiguity
-    -- error rather than an arbitrary winner. Defaults to 0.
-    priority INTEGER NOT NULL,
-    -- Administrator's note about why this rule exists.
-    description TEXT,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_posting_rules PRIMARY KEY (id),
-    CONSTRAINT fk_posting_rules_fee_type_id_fee_types FOREIGN KEY(fee_type_id) REFERENCES fee_types (id),
-    CONSTRAINT fk_posting_rules_debit_account_id_chart_of_accounts FOREIGN KEY(debit_account_id) REFERENCES chart_of_accounts (id),
-    CONSTRAINT fk_posting_rules_credit_account_id_chart_of_accounts FOREIGN KEY(credit_account_id) REFERENCES chart_of_accounts (id),
-    CONSTRAINT fk_posting_rules_tax_account_id_chart_of_accounts FOREIGN KEY(tax_account_id) REFERENCES chart_of_accounts (id)
-);
-CREATE INDEX ix_posting_rules_resolution ON posting_rules (document_type, status, priority);
-CREATE UNIQUE INDEX uq_posting_rules_active_priority ON posting_rules (document_type, coalesce(fee_type_id, 0), priority) WHERE status = 'ACTIVE';
-
-COMMENT ON TABLE posting_rules IS 'Rule mapping a document type and fee type to the debit and credit general-ledger accounts applied when a document is posted.';
-COMMENT ON COLUMN posting_rules.document_type IS 'Document type the rule applies to.';
-COMMENT ON COLUMN posting_rules.fee_type_id IS 'Fee type the rule applies to. NULL makes it the fallback rule for the whole document type.';
-COMMENT ON COLUMN posting_rules.debit_account_id IS 'General-ledger account debited when a matching document is posted.';
-COMMENT ON COLUMN posting_rules.credit_account_id IS 'General-ledger account credited when a matching document is posted.';
-COMMENT ON COLUMN posting_rules.tax_account_id IS 'General-ledger account that accumulates the tax charged. NULL when no tax is posted.';
-COMMENT ON COLUMN posting_rules.status IS 'Record status (ACTIVE, INACTIVE).';
-COMMENT ON COLUMN posting_rules.priority IS 'Orders rules that match the same document and fee type. The resolver takes the highest; two rules sharing the top priority are an ambiguity error rather than an arbitrary winner. Defaults to 0.';
-COMMENT ON COLUMN posting_rules.description IS 'Administrator''s note about why this rule exists.';
-COMMENT ON COLUMN posting_rules.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN posting_rules.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN posting_rules.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: quotations
--- Module: Quotations  [app.modules.quotations.models]
--- Quotation header. Holds the customer, trade direction and a pointer to the
--- current revision; all commercial detail lives in the revisions so history
--- is never overwritten.
--- --------------------------------------------------------------------------
-CREATE TABLE quotations (
-    -- Human-facing quotation number, allocated from document_sequences.
-    -- Unique.
-    quotation_no VARCHAR(50) NOT NULL,
-    -- Business party the quotation is issued to.
-    customer_party_id BIGINT NOT NULL,
-    -- Trade direction the quotation covers.
-    trade_direction_id BIGINT NOT NULL,
-    -- Revision number currently treated as the live offer. Revisions are
-    -- never deleted, so superseded numbers stay reachable for audit.
-    current_revision_no INTEGER NOT NULL,
-    -- Quotation lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED,
-    -- CONVERTED).
-    status VARCHAR(20) NOT NULL,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_quotations PRIMARY KEY (id),
-    CONSTRAINT uq_quotations_no UNIQUE (quotation_no),
-    CONSTRAINT fk_quotations_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id),
-    CONSTRAINT fk_quotations_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id)
-);
-CREATE INDEX ix_quotations_status ON quotations (status);
-
-COMMENT ON TABLE quotations IS 'Quotation header. Holds the customer, trade direction and a pointer to the current revision; all commercial detail lives in the revisions so history is never overwritten.';
-COMMENT ON COLUMN quotations.quotation_no IS 'Human-facing quotation number, allocated from document_sequences. Unique.';
-COMMENT ON COLUMN quotations.customer_party_id IS 'Business party the quotation is issued to.';
-COMMENT ON COLUMN quotations.trade_direction_id IS 'Trade direction the quotation covers.';
-COMMENT ON COLUMN quotations.current_revision_no IS 'Revision number currently treated as the live offer. Revisions are never deleted, so superseded numbers stay reachable for audit.';
-COMMENT ON COLUMN quotations.status IS 'Quotation lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, CONVERTED).';
-COMMENT ON COLUMN quotations.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN quotations.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN quotations.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN quotations.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: transport_assets
--- Module: Master Data  [app.modules.master_data.models]
--- Physical transport asset (truck, vessel, aircraft) owned or operated by a
--- business party and assigned to a movement leg.
--- --------------------------------------------------------------------------
-CREATE TABLE transport_assets (
-    -- Fleet or internal asset number (e.g. VH-118).
-    asset_code VARCHAR(50) NOT NULL,
-    -- Transport mode this asset belongs to.
-    transport_type_id BIGINT NOT NULL,
-    -- Registration number, IMO number or tail number identifying the asset.
-    identity VARCHAR(128) NOT NULL,
-    -- What identity represents: License Plate, IMO Number, Flight Number or
-    -- Other.
-    identity_type VARCHAR(64) NOT NULL,
-    -- Business party that owns the asset.
-    owner_party_id BIGINT,
-    -- Business party that operates the asset; may differ from the owner.
-    operator_party_id BIGINT,
-    -- Free-text notes about the asset.
-    description TEXT,
-    -- Record status (ACTIVE, INACTIVE).
-    status VARCHAR(20) NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
-    -- is excluded from listings and uniqueness checks but stays in place.
-    deleted_at TIMESTAMP WITH TIME ZONE,
-    -- Identifier of the user who archived this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    deleted_by_user_id BIGINT,
-    CONSTRAINT pk_transport_assets PRIMARY KEY (id),
-    CONSTRAINT fk_transport_assets_transport_type_id_transport_types FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
-    CONSTRAINT fk_transport_assets_owner_party_id_business_parties FOREIGN KEY(owner_party_id) REFERENCES business_parties (id),
-    CONSTRAINT fk_transport_assets_operator_party_id_business_parties FOREIGN KEY(operator_party_id) REFERENCES business_parties (id),
-    CONSTRAINT fk_transport_assets_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
-);
-CREATE INDEX ix_transport_assets_deleted_at ON transport_assets (deleted_at);
-CREATE INDEX ix_transport_assets_deleted_by_user_id ON transport_assets (deleted_by_user_id);
-CREATE UNIQUE INDEX uq_transport_assets_asset_code_active ON transport_assets (asset_code) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX uq_transport_assets_type_identity_active ON transport_assets (transport_type_id, identity) WHERE deleted_at IS NULL;
-
-COMMENT ON TABLE transport_assets IS 'Physical transport asset (truck, vessel, aircraft) owned or operated by a business party and assigned to a movement leg.';
-COMMENT ON COLUMN transport_assets.asset_code IS 'Fleet or internal asset number (e.g. VH-118).';
-COMMENT ON COLUMN transport_assets.transport_type_id IS 'Transport mode this asset belongs to.';
-COMMENT ON COLUMN transport_assets.identity IS 'Registration number, IMO number or tail number identifying the asset.';
-COMMENT ON COLUMN transport_assets.identity_type IS 'What identity represents: License Plate, IMO Number, Flight Number or Other.';
-COMMENT ON COLUMN transport_assets.owner_party_id IS 'Business party that owns the asset.';
-COMMENT ON COLUMN transport_assets.operator_party_id IS 'Business party that operates the asset; may differ from the owner.';
-COMMENT ON COLUMN transport_assets.description IS 'Free-text notes about the asset.';
-COMMENT ON COLUMN transport_assets.status IS 'Record status (ACTIVE, INACTIVE).';
-COMMENT ON COLUMN transport_assets.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN transport_assets.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN transport_assets.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-COMMENT ON COLUMN transport_assets.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
-COMMENT ON COLUMN transport_assets.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-
--- --------------------------------------------------------------------------
--- Table: component_tab_groups
--- Module: Master Data  [app.modules.master_data.models]
--- Membership of a component group in a component tab, including the display
--- layout for that assignment (mode, cardinality, form columns,
--- title/read-only/collapse flags).
--- --------------------------------------------------------------------------
-CREATE TABLE component_tab_groups (
-    -- Component tab the group belongs to. CASCADE on tab deletion.
-    tab_id BIGINT NOT NULL,
-    -- Component group shown on the tab. CASCADE on group deletion.
-    group_id BIGINT NOT NULL,
-    -- Sort position within its group or list. Lower values are rendered
-    -- first; ties are broken by code.
-    display_order INTEGER NOT NULL,
-    -- How this group renders in this tab: form_only, table_only or
-    -- form_and_table. NULL inherits component_groups.render_mode.
-    display_mode VARCHAR(20),
-    -- Whether the group holds a single record or multiple records in this
-    -- tab. NULL inherits component_groups.render_mode.
-    data_cardinality VARCHAR(20),
-    -- Number of form columns (1-4) for form layouts. NULL inherits the
-    -- default of 3.
-    form_columns INTEGER,
-    -- Whether the group heading is rendered. NULL defaults to TRUE.
-    show_group_title BOOLEAN,
-    -- FALSE renders the group read-only and makes the save endpoint refuse
-    -- writes. NULL defaults to TRUE.
-    editable BOOLEAN,
-    -- Whether the group can be collapsed by the user. NULL defaults to FALSE.
-    collapsible BOOLEAN,
-    -- Initial expanded state of a collapsible group. NULL defaults to TRUE.
-    default_expanded BOOLEAN,
-    -- Record status (ACTIVE, INACTIVE).
-    status VARCHAR(20) NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_component_tab_groups PRIMARY KEY (id),
-    CONSTRAINT uq_component_tab_groups_tab_group UNIQUE (tab_id, group_id),
-    CONSTRAINT ck_component_tab_groups_display_mode CHECK (display_mode IS NULL OR display_mode IN ('form_only', 'table_only', 'form_and_table')),
-    CONSTRAINT ck_component_tab_groups_data_cardinality CHECK (data_cardinality IS NULL OR data_cardinality IN ('single', 'multiple')),
-    CONSTRAINT ck_component_tab_groups_form_columns CHECK (form_columns IS NULL OR (form_columns BETWEEN 1 AND 4)),
-    CONSTRAINT fk_component_tab_groups_tab_id_component_tabs FOREIGN KEY(tab_id) REFERENCES component_tabs (id) ON DELETE CASCADE,
-    CONSTRAINT fk_component_tab_groups_group_id_component_groups FOREIGN KEY(group_id) REFERENCES component_groups (id) ON DELETE CASCADE
-);
-CREATE INDEX ix_component_tab_groups_group_id ON component_tab_groups (group_id);
-CREATE INDEX ix_component_tab_groups_tab_id ON component_tab_groups (tab_id);
-
-COMMENT ON TABLE component_tab_groups IS 'Membership of a component group in a component tab, including the display layout for that assignment (mode, cardinality, form columns, title/read-only/collapse flags).';
-COMMENT ON COLUMN component_tab_groups.tab_id IS 'Component tab the group belongs to. CASCADE on tab deletion.';
-COMMENT ON COLUMN component_tab_groups.group_id IS 'Component group shown on the tab. CASCADE on group deletion.';
-COMMENT ON COLUMN component_tab_groups.display_order IS 'Sort position within its group or list. Lower values are rendered first; ties are broken by code.';
-COMMENT ON COLUMN component_tab_groups.display_mode IS 'How this group renders in this tab: form_only, table_only or form_and_table. NULL inherits component_groups.render_mode.';
-COMMENT ON COLUMN component_tab_groups.data_cardinality IS 'Whether the group holds a single record or multiple records in this tab. NULL inherits component_groups.render_mode.';
-COMMENT ON COLUMN component_tab_groups.form_columns IS 'Number of form columns (1-4) for form layouts. NULL inherits the default of 3.';
-COMMENT ON COLUMN component_tab_groups.show_group_title IS 'Whether the group heading is rendered. NULL defaults to TRUE.';
-COMMENT ON COLUMN component_tab_groups.editable IS 'FALSE renders the group read-only and makes the save endpoint refuse writes. NULL defaults to TRUE.';
-COMMENT ON COLUMN component_tab_groups.collapsible IS 'Whether the group can be collapsed by the user. NULL defaults to FALSE.';
-COMMENT ON COLUMN component_tab_groups.default_expanded IS 'Initial expanded state of a collapsible group. NULL defaults to TRUE.';
-COMMENT ON COLUMN component_tab_groups.status IS 'Record status (ACTIVE, INACTIVE).';
-COMMENT ON COLUMN component_tab_groups.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN component_tab_groups.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN component_tab_groups.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: quotation_revisions
--- Module: Quotations  [app.modules.quotations.models]
--- One version of a quotation's commercial terms. Editing an issued quotation
--- creates a new revision instead of mutating this row, so what the customer
--- accepted is always recoverable.
--- --------------------------------------------------------------------------
-CREATE TABLE quotation_revisions (
-    -- Quotation this revision belongs to. CASCADE on quotation deletion.
-    quotation_id BIGINT NOT NULL,
-    -- Sequential revision number within the quotation, 1-based. Unique per
-    -- quotation together with quotation_id.
-    revision_no INTEGER NOT NULL,
-    -- Revision lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED,
-    -- SUPERSEDED, CONVERTED).
-    status VARCHAR(20) NOT NULL,
-    -- Date printed on the quotation.
-    quotation_date DATE NOT NULL,
-    -- Last date the offer is honoured. Past this date the revision is treated
-    -- as EXPIRED.
-    valid_until DATE,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
-    -- Short summary of the quotation.
-    description TEXT,
-    -- Terms and conditions printed with the quotation.
-    notes TEXT,
-    -- Sum of line subtotals before discount and tax.
-    subtotal_amount NUMERIC(19, 4) NOT NULL,
-    -- Total discount applied across all lines.
-    discount_amount NUMERIC(19, 4) NOT NULL,
-    -- Total tax (VAT) charged across all lines.
-    tax_amount NUMERIC(19, 4) NOT NULL,
-    -- Payable total: subtotal minus discount plus tax.
-    total_amount NUMERIC(19, 4) NOT NULL,
-    -- Identifier of the user who created this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    created_by_user_id BIGINT,
-    -- Timestamp this revision was sent to the customer.
-    sent_at TIMESTAMP WITH TIME ZONE,
-    -- Timestamp the customer accepted this revision. The acceptance locks the
-    -- commercial terms; further changes require a new revision.
-    accepted_at TIMESTAMP WITH TIME ZONE,
-    -- Timestamp the customer rejected this revision.
-    rejected_at TIMESTAMP WITH TIME ZONE,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_quotation_revisions PRIMARY KEY (id),
-    CONSTRAINT uq_quotation_revisions_no UNIQUE (quotation_id, revision_no),
-    CONSTRAINT fk_quotation_revisions_quotation_id_quotations FOREIGN KEY(quotation_id) REFERENCES quotations (id) ON DELETE CASCADE,
-    CONSTRAINT fk_quotation_revisions_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
-);
-CREATE INDEX ix_quotation_revisions_quotation_id ON quotation_revisions (quotation_id);
-CREATE INDEX ix_quotation_revisions_status ON quotation_revisions (status);
-
-COMMENT ON TABLE quotation_revisions IS 'One version of a quotation''s commercial terms. Editing an issued quotation creates a new revision instead of mutating this row, so what the customer accepted is always recoverable.';
-COMMENT ON COLUMN quotation_revisions.quotation_id IS 'Quotation this revision belongs to. CASCADE on quotation deletion.';
-COMMENT ON COLUMN quotation_revisions.revision_no IS 'Sequential revision number within the quotation, 1-based. Unique per quotation together with quotation_id.';
-COMMENT ON COLUMN quotation_revisions.status IS 'Revision lifecycle state (DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED, SUPERSEDED, CONVERTED).';
-COMMENT ON COLUMN quotation_revisions.quotation_date IS 'Date printed on the quotation.';
-COMMENT ON COLUMN quotation_revisions.valid_until IS 'Last date the offer is honoured. Past this date the revision is treated as EXPIRED.';
-COMMENT ON COLUMN quotation_revisions.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN quotation_revisions.description IS 'Short summary of the quotation.';
-COMMENT ON COLUMN quotation_revisions.notes IS 'Terms and conditions printed with the quotation.';
-COMMENT ON COLUMN quotation_revisions.subtotal_amount IS 'Sum of line subtotals before discount and tax.';
-COMMENT ON COLUMN quotation_revisions.discount_amount IS 'Total discount applied across all lines.';
-COMMENT ON COLUMN quotation_revisions.tax_amount IS 'Total tax (VAT) charged across all lines.';
-COMMENT ON COLUMN quotation_revisions.total_amount IS 'Payable total: subtotal minus discount plus tax.';
-COMMENT ON COLUMN quotation_revisions.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN quotation_revisions.sent_at IS 'Timestamp this revision was sent to the customer.';
-COMMENT ON COLUMN quotation_revisions.accepted_at IS 'Timestamp the customer accepted this revision. The acceptance locks the commercial terms; further changes require a new revision.';
-COMMENT ON COLUMN quotation_revisions.rejected_at IS 'Timestamp the customer rejected this revision.';
-COMMENT ON COLUMN quotation_revisions.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN quotation_revisions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN quotation_revisions.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN quotation_revisions.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: quotation_conversions
--- Module: Quotations  [app.modules.quotations.models]
--- Record of a quotation revision being converted into a service order. Both
--- unique constraints make conversion idempotent — a revision yields at most
--- one service order and an order originates from at most one revision.
--- --------------------------------------------------------------------------
-CREATE TABLE quotation_conversions (
-    -- Revision that was converted. UNIQUE, so a revision can produce at most
-    -- one service order.
-    quotation_revision_id BIGINT NOT NULL,
-    -- Service order created from the revision. UNIQUE, so an order originates
-    -- from at most one revision.
-    service_order_id BIGINT NOT NULL,
-    -- Identifier of the user who converted this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    converted_by_user_id BIGINT,
-    -- Timestamp the conversion was performed.
-    converted_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Free-text notes recorded at conversion time.
-    notes TEXT,
-    -- Client-supplied key that makes a repeated conversion request a no-op.
-    -- UNIQUE.
-    idempotency_key VARCHAR(128),
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_quotation_conversions PRIMARY KEY (id),
-    CONSTRAINT uq_quotation_conversions_quotation_revision_id UNIQUE (quotation_revision_id),
-    CONSTRAINT fk_quotation_conversions_quotation_revision_id_quotatio_6c51 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id),
-    CONSTRAINT uq_quotation_conversions_service_order_id UNIQUE (service_order_id),
-    CONSTRAINT fk_quotation_conversions_converted_by_user_id_users FOREIGN KEY(converted_by_user_id) REFERENCES users (id),
-    CONSTRAINT uq_quotation_conversions_idempotency_key UNIQUE (idempotency_key)
-);
-
-COMMENT ON TABLE quotation_conversions IS 'Record of a quotation revision being converted into a service order. Both unique constraints make conversion idempotent — a revision yields at most one service order and an order originates from at most one revision.';
-COMMENT ON COLUMN quotation_conversions.quotation_revision_id IS 'Revision that was converted. UNIQUE, so a revision can produce at most one service order.';
-COMMENT ON COLUMN quotation_conversions.service_order_id IS 'Service order created from the revision. UNIQUE, so an order originates from at most one revision.';
-COMMENT ON COLUMN quotation_conversions.converted_by_user_id IS 'Identifier of the user who converted this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN quotation_conversions.converted_at IS 'Timestamp the conversion was performed.';
-COMMENT ON COLUMN quotation_conversions.notes IS 'Free-text notes recorded at conversion time.';
-COMMENT ON COLUMN quotation_conversions.idempotency_key IS 'Client-supplied key that makes a repeated conversion request a no-op. UNIQUE.';
-COMMENT ON COLUMN quotation_conversions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: quotation_revision_containers
--- Module: Quotations  [app.modules.quotations.models]
--- Container requirement line of a quotation revision.
--- --------------------------------------------------------------------------
-CREATE TABLE quotation_revision_containers (
-    -- Revision the requirement belongs to. CASCADE on revision deletion.
-    quotation_revision_id BIGINT NOT NULL,
-    -- Container type being quoted.
-    container_type_id BIGINT NOT NULL,
-    -- Number of containers of this type quoted (NUMERIC(12,3)).
-    quantity NUMERIC(12, 3) NOT NULL,
-    -- Quoted gross weight per container in kilograms.
-    gross_weight_kg NUMERIC(12, 3),
-    -- Short description of the container requirement.
-    description TEXT,
-    -- Free-text remarks shown on the quotation.
-    remarks TEXT,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_quotation_revision_containers PRIMARY KEY (id),
-    CONSTRAINT fk_quotation_revision_containers_quotation_revision_id__e5b2 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
-    CONSTRAINT fk_quotation_revision_containers_container_type_id_cont_3afe FOREIGN KEY(container_type_id) REFERENCES container_types (id)
-);
-CREATE INDEX ix_quotation_revision_containers_quotation_revision_id ON quotation_revision_containers (quotation_revision_id);
-
-COMMENT ON TABLE quotation_revision_containers IS 'Container requirement line of a quotation revision.';
-COMMENT ON COLUMN quotation_revision_containers.quotation_revision_id IS 'Revision the requirement belongs to. CASCADE on revision deletion.';
-COMMENT ON COLUMN quotation_revision_containers.container_type_id IS 'Container type being quoted.';
-COMMENT ON COLUMN quotation_revision_containers.quantity IS 'Number of containers of this type quoted (NUMERIC(12,3)).';
-COMMENT ON COLUMN quotation_revision_containers.gross_weight_kg IS 'Quoted gross weight per container in kilograms.';
-COMMENT ON COLUMN quotation_revision_containers.description IS 'Short description of the container requirement.';
-COMMENT ON COLUMN quotation_revision_containers.remarks IS 'Free-text remarks shown on the quotation.';
-COMMENT ON COLUMN quotation_revision_containers.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: quotation_revision_places
--- Module: Quotations  [app.modules.quotations.models]
--- Routing stop of a quotation revision (origin, destination, pickup,
--- delivery).
--- --------------------------------------------------------------------------
-CREATE TABLE quotation_revision_places (
-    -- Revision the routing stop belongs to. CASCADE on revision deletion.
-    quotation_revision_id BIGINT NOT NULL,
-    -- Configured Place Role the stop plays. SET NULL only if the role row is
-    -- purged; the place_role text snapshot keeps the historical label.
-    place_role_id BIGINT,
-    -- Text snapshot of the role (the role name at save time). Preserved so a
-    -- route still prints after the role is renamed or deactivated.
-    place_role VARCHAR(32) NOT NULL,
-    -- Position of this stop within the route. Unique per revision; the server
-    -- renumbers from the submitted row order.
-    sequence_no INTEGER NOT NULL,
-    -- Planned date/time for the stop.
-    planned_at TIMESTAMP WITH TIME ZONE,
-    -- Free-text location typed for the stop, kept for printing and history.
-    free_text TEXT,
-    -- Free-text notes about this stop.
-    notes TEXT,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_quotation_revision_places PRIMARY KEY (id),
-    CONSTRAINT uq_quotation_revision_places_sequence UNIQUE (quotation_revision_id, sequence_no),
-    CONSTRAINT fk_quotation_revision_places_quotation_revision_id_quot_f0f2 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
-    CONSTRAINT fk_quotation_revision_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL
-);
-CREATE INDEX ix_quotation_revision_places_quotation_revision_id ON quotation_revision_places (quotation_revision_id);
-
-COMMENT ON TABLE quotation_revision_places IS 'Routing stop of a quotation revision (origin, destination, pickup, delivery).';
-COMMENT ON COLUMN quotation_revision_places.quotation_revision_id IS 'Revision the routing stop belongs to. CASCADE on revision deletion.';
-COMMENT ON COLUMN quotation_revision_places.place_role_id IS 'Configured Place Role the stop plays. SET NULL only if the role row is purged; the place_role text snapshot keeps the historical label.';
-COMMENT ON COLUMN quotation_revision_places.place_role IS 'Text snapshot of the role (the role name at save time). Preserved so a route still prints after the role is renamed or deactivated.';
-COMMENT ON COLUMN quotation_revision_places.sequence_no IS 'Position of this stop within the route. Unique per revision; the server renumbers from the submitted row order.';
-COMMENT ON COLUMN quotation_revision_places.planned_at IS 'Planned date/time for the stop.';
-COMMENT ON COLUMN quotation_revision_places.free_text IS 'Free-text location typed for the stop, kept for printing and history.';
-COMMENT ON COLUMN quotation_revision_places.notes IS 'Free-text notes about this stop.';
-COMMENT ON COLUMN quotation_revision_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: service_orders
--- Module: Service Operations  [app.modules.operations.models]
--- Service order header — the operational job opened for a customer.
--- Containers, routing, movements, milestones, pricing and charges all hang
--- off this row.
--- --------------------------------------------------------------------------
-CREATE TABLE service_orders (
-    -- Human-facing order number allocated from document_sequences. Unique.
-    service_order_no VARCHAR(50) NOT NULL,
-    -- Quotation revision this order was converted from. NULL for orders
-    -- entered directly.
-    quotation_revision_id BIGINT,
-    -- Business party the job is performed for.
-    customer_party_id BIGINT NOT NULL,
-    -- Trade direction the job covers.
-    trade_direction_id BIGINT NOT NULL,
-    -- Order lifecycle state (DRAFT, CONFIRMED, IN_PROGRESS, COMPLETED,
-    -- CANCELLED). Indexed because the order list filters on it.
-    status VARCHAR(20) NOT NULL,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
-    -- Short summary of the job.
-    description TEXT,
-    -- Identifier of the user who created this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    created_by_user_id BIGINT,
-    -- Published configuration version this order was created under. Pins the
-    -- order to the dynamic form it was filled in, so publishing a new
-    -- configuration cannot re-interpret its saved component rows.
-    configuration_version_id BIGINT,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_orders PRIMARY KEY (id),
-    CONSTRAINT uq_service_orders_no UNIQUE (service_order_no),
-    CONSTRAINT fk_service_orders_quotation_revision_id_quotation_revisions FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id),
-    CONSTRAINT fk_service_orders_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id),
-    CONSTRAINT fk_service_orders_trade_direction_id_trade_directions FOREIGN KEY(trade_direction_id) REFERENCES trade_directions (id),
-    CONSTRAINT fk_service_orders_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id),
-    CONSTRAINT fk_service_orders_configuration_version_id_configuratio_6d1e FOREIGN KEY(configuration_version_id) REFERENCES configuration_versions (id) ON DELETE SET NULL
-);
-CREATE INDEX ix_service_orders_status ON service_orders (status);
-
-COMMENT ON TABLE service_orders IS 'Service order header — the operational job opened for a customer. Containers, routing, movements, milestones, pricing and charges all hang off this row.';
-COMMENT ON COLUMN service_orders.service_order_no IS 'Human-facing order number allocated from document_sequences. Unique.';
-COMMENT ON COLUMN service_orders.quotation_revision_id IS 'Quotation revision this order was converted from. NULL for orders entered directly.';
-COMMENT ON COLUMN service_orders.customer_party_id IS 'Business party the job is performed for.';
-COMMENT ON COLUMN service_orders.trade_direction_id IS 'Trade direction the job covers.';
-COMMENT ON COLUMN service_orders.status IS 'Order lifecycle state (DRAFT, CONFIRMED, IN_PROGRESS, COMPLETED, CANCELLED). Indexed because the order list filters on it.';
-COMMENT ON COLUMN service_orders.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN service_orders.description IS 'Short summary of the job.';
-COMMENT ON COLUMN service_orders.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN service_orders.configuration_version_id IS 'Published configuration version this order was created under. Pins the order to the dynamic form it was filled in, so publishing a new configuration cannot re-interpret its saved component rows.';
-COMMENT ON COLUMN service_orders.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN service_orders.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_orders.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_orders.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
 -- Table: financial_documents
 -- Module: Double-Entry Finance  [app.modules.finance.models]
 -- Financial document header (tax invoice, proforma, credit note, receipt,
@@ -2760,108 +3157,32 @@ COMMENT ON COLUMN financial_documents.created_at IS 'Row creation timestamp (UTC
 COMMENT ON COLUMN financial_documents.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
--- Table: quotation_revision_lines
--- Module: Quotations  [app.modules.quotations.models]
--- Chargeable price line of a quotation revision.
+-- Table: posting_rules
+-- Module: Double-Entry Finance  [app.modules.finance.models]
+-- Rule mapping a document type and fee type to the debit and credit
+-- general-ledger accounts applied when a document is posted.
 -- --------------------------------------------------------------------------
-CREATE TABLE quotation_revision_lines (
-    -- Revision the price line belongs to. CASCADE on revision deletion.
-    quotation_revision_id BIGINT NOT NULL,
-    -- Sequential line number within the parent document, 1-based and
-    -- displayed in order.
-    line_no INTEGER NOT NULL,
-    -- Catalogue fee this line prices.
-    fee_type_id BIGINT,
-    -- Container requirement this line prices. Set for per-container charges,
-    -- NULL for document-level charges.
-    container_requirement_id BIGINT,
-    -- Description printed on the quotation for this line.
-    service_description TEXT NOT NULL,
-    -- Billed quantity (NUMERIC(12,3)).
-    quantity NUMERIC(12, 3) NOT NULL,
-    -- Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG,
-    -- PERCENT).
-    unit_code VARCHAR(32),
-    -- Price per unit in currency_code, before discount and tax.
-    unit_price NUMERIC(19, 4) NOT NULL,
-    -- Discount applied to the line as a rate (NUMERIC(7,4); 0.0500 means 5%).
-    discount_rate NUMERIC(7, 4) NOT NULL,
-    -- Tax/VAT rate applied to the line (NUMERIC(7,4); 0.1000 means 10%).
-    tax_rate NUMERIC(7, 4) NOT NULL,
-    -- quantity multiplied by unit_price, before discount and tax.
-    line_subtotal NUMERIC(19, 4) NOT NULL,
-    -- Absolute discount deducted from line_subtotal.
-    line_discount NUMERIC(19, 4) NOT NULL,
-    -- Absolute tax charged on the discounted amount.
-    line_tax NUMERIC(19, 4) NOT NULL,
-    -- Final payable amount for this line.
-    line_total NUMERIC(19, 4) NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_quotation_revision_lines PRIMARY KEY (id),
-    CONSTRAINT uq_quotation_revision_lines_no UNIQUE (quotation_revision_id, line_no),
-    CONSTRAINT fk_quotation_revision_lines_quotation_revision_id_quota_6e8c FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
-    CONSTRAINT fk_quotation_revision_lines_fee_type_id_fee_types FOREIGN KEY(fee_type_id) REFERENCES fee_types (id),
-    CONSTRAINT fk_quotation_revision_lines_container_requirement_id_qu_27b0 FOREIGN KEY(container_requirement_id) REFERENCES quotation_revision_containers (id)
-);
-CREATE INDEX ix_quotation_revision_lines_quotation_revision_id ON quotation_revision_lines (quotation_revision_id);
-
-COMMENT ON TABLE quotation_revision_lines IS 'Chargeable price line of a quotation revision.';
-COMMENT ON COLUMN quotation_revision_lines.quotation_revision_id IS 'Revision the price line belongs to. CASCADE on revision deletion.';
-COMMENT ON COLUMN quotation_revision_lines.line_no IS 'Sequential line number within the parent document, 1-based and displayed in order.';
-COMMENT ON COLUMN quotation_revision_lines.fee_type_id IS 'Catalogue fee this line prices.';
-COMMENT ON COLUMN quotation_revision_lines.container_requirement_id IS 'Container requirement this line prices. Set for per-container charges, NULL for document-level charges.';
-COMMENT ON COLUMN quotation_revision_lines.service_description IS 'Description printed on the quotation for this line.';
-COMMENT ON COLUMN quotation_revision_lines.quantity IS 'Billed quantity (NUMERIC(12,3)).';
-COMMENT ON COLUMN quotation_revision_lines.unit_code IS 'Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG, PERCENT).';
-COMMENT ON COLUMN quotation_revision_lines.unit_price IS 'Price per unit in currency_code, before discount and tax.';
-COMMENT ON COLUMN quotation_revision_lines.discount_rate IS 'Discount applied to the line as a rate (NUMERIC(7,4); 0.0500 means 5%).';
-COMMENT ON COLUMN quotation_revision_lines.tax_rate IS 'Tax/VAT rate applied to the line (NUMERIC(7,4); 0.1000 means 10%).';
-COMMENT ON COLUMN quotation_revision_lines.line_subtotal IS 'quantity multiplied by unit_price, before discount and tax.';
-COMMENT ON COLUMN quotation_revision_lines.line_discount IS 'Absolute discount deducted from line_subtotal.';
-COMMENT ON COLUMN quotation_revision_lines.line_tax IS 'Absolute tax charged on the discounted amount.';
-COMMENT ON COLUMN quotation_revision_lines.line_total IS 'Final payable amount for this line.';
-COMMENT ON COLUMN quotation_revision_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: service_order_charges
--- Module: Service Operations  [app.modules.operations.models]
--- Customer-facing invoice or service note raised from a service order.
--- --------------------------------------------------------------------------
-CREATE TABLE service_order_charges (
-    -- Service order the charge belongs to. CASCADE on order deletion.
-    service_order_id BIGINT NOT NULL,
-    -- Document number allocated from document_sequences. UNIQUE across all
-    -- charges.
-    charge_no VARCHAR(50) NOT NULL,
-    -- Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE,
-    -- CREDIT_NOTE).
+CREATE TABLE posting_rules (
+    -- Document type the rule applies to.
     document_type VARCHAR(32) NOT NULL,
-    -- Date printed on the document.
-    document_date DATE NOT NULL,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
-    -- Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed
-    -- because the charges list filters on it.
+    -- Fee type the rule applies to. NULL makes it the fallback rule for the
+    -- whole document type.
+    fee_type_id BIGINT,
+    -- General-ledger account debited when a matching document is posted.
+    debit_account_id BIGINT NOT NULL,
+    -- General-ledger account credited when a matching document is posted.
+    credit_account_id BIGINT NOT NULL,
+    -- General-ledger account that accumulates the tax charged. NULL when no
+    -- tax is posted.
+    tax_account_id BIGINT,
+    -- Record status (ACTIVE, INACTIVE).
     status VARCHAR(20) NOT NULL,
-    -- Sum of line amounts before discount and tax.
-    subtotal_amount NUMERIC(19, 4) NOT NULL,
-    -- Total discount applied across all charge lines.
-    discount_amount NUMERIC(19, 4) NOT NULL,
-    -- Total tax (VAT) charged across all charge lines.
-    tax_amount NUMERIC(19, 4) NOT NULL,
-    -- Payable total: subtotal minus discount plus tax.
-    total_amount NUMERIC(19, 4) NOT NULL,
-    -- Free-text remark printed at the foot of the document.
-    remark TEXT,
-    -- Identifier of the user who created this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    created_by_user_id BIGINT,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
+    -- Orders rules that match the same document and fee type. The resolver
+    -- takes the highest; two rules sharing the top priority are an ambiguity
+    -- error rather than an arbitrary winner. Defaults to 0.
+    priority INTEGER NOT NULL,
+    -- Administrator's note about why this rule exists.
+    description TEXT,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
     id BIGSERIAL NOT NULL,
     -- Row creation timestamp (UTC, timezone-aware). Written once; server
@@ -2870,31 +3191,105 @@ CREATE TABLE service_order_charges (
     -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
     -- application on every update.
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_order_charges PRIMARY KEY (id),
-    CONSTRAINT uq_service_order_charges_no UNIQUE (charge_no),
-    CONSTRAINT fk_service_order_charges_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
-    CONSTRAINT fk_service_order_charges_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+    CONSTRAINT pk_posting_rules PRIMARY KEY (id),
+    CONSTRAINT fk_posting_rules_fee_type_id_fee_types FOREIGN KEY(fee_type_id) REFERENCES fee_types (id),
+    CONSTRAINT fk_posting_rules_debit_account_id_chart_of_accounts FOREIGN KEY(debit_account_id) REFERENCES chart_of_accounts (id),
+    CONSTRAINT fk_posting_rules_credit_account_id_chart_of_accounts FOREIGN KEY(credit_account_id) REFERENCES chart_of_accounts (id),
+    CONSTRAINT fk_posting_rules_tax_account_id_chart_of_accounts FOREIGN KEY(tax_account_id) REFERENCES chart_of_accounts (id)
 );
-CREATE INDEX ix_service_order_charges_service_order_id ON service_order_charges (service_order_id);
-CREATE INDEX ix_service_order_charges_status ON service_order_charges (status);
+CREATE INDEX ix_posting_rules_resolution ON posting_rules (document_type, status, priority);
+CREATE UNIQUE INDEX uq_posting_rules_active_priority ON posting_rules (document_type, coalesce(fee_type_id, 0), priority) WHERE status = 'ACTIVE';
 
-COMMENT ON TABLE service_order_charges IS 'Customer-facing invoice or service note raised from a service order.';
-COMMENT ON COLUMN service_order_charges.service_order_id IS 'Service order the charge belongs to. CASCADE on order deletion.';
-COMMENT ON COLUMN service_order_charges.charge_no IS 'Document number allocated from document_sequences. UNIQUE across all charges.';
-COMMENT ON COLUMN service_order_charges.document_type IS 'Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE, CREDIT_NOTE).';
-COMMENT ON COLUMN service_order_charges.document_date IS 'Date printed on the document.';
-COMMENT ON COLUMN service_order_charges.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN service_order_charges.status IS 'Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed because the charges list filters on it.';
-COMMENT ON COLUMN service_order_charges.subtotal_amount IS 'Sum of line amounts before discount and tax.';
-COMMENT ON COLUMN service_order_charges.discount_amount IS 'Total discount applied across all charge lines.';
-COMMENT ON COLUMN service_order_charges.tax_amount IS 'Total tax (VAT) charged across all charge lines.';
-COMMENT ON COLUMN service_order_charges.total_amount IS 'Payable total: subtotal minus discount plus tax.';
-COMMENT ON COLUMN service_order_charges.remark IS 'Free-text remark printed at the foot of the document.';
-COMMENT ON COLUMN service_order_charges.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN service_order_charges.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN service_order_charges.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_order_charges.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_order_charges.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON TABLE posting_rules IS 'Rule mapping a document type and fee type to the debit and credit general-ledger accounts applied when a document is posted.';
+COMMENT ON COLUMN posting_rules.document_type IS 'Document type the rule applies to.';
+COMMENT ON COLUMN posting_rules.fee_type_id IS 'Fee type the rule applies to. NULL makes it the fallback rule for the whole document type.';
+COMMENT ON COLUMN posting_rules.debit_account_id IS 'General-ledger account debited when a matching document is posted.';
+COMMENT ON COLUMN posting_rules.credit_account_id IS 'General-ledger account credited when a matching document is posted.';
+COMMENT ON COLUMN posting_rules.tax_account_id IS 'General-ledger account that accumulates the tax charged. NULL when no tax is posted.';
+COMMENT ON COLUMN posting_rules.status IS 'Record status (ACTIVE, INACTIVE).';
+COMMENT ON COLUMN posting_rules.priority IS 'Orders rules that match the same document and fee type. The resolver takes the highest; two rules sharing the top priority are an ambiguity error rather than an arbitrary winner. Defaults to 0.';
+COMMENT ON COLUMN posting_rules.description IS 'Administrator''s note about why this rule exists.';
+COMMENT ON COLUMN posting_rules.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN posting_rules.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN posting_rules.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: quotation_revision_containers
+-- Module: Quotations  [app.modules.quotations.models]
+-- Container requirement line of a quotation revision.
+-- --------------------------------------------------------------------------
+CREATE TABLE quotation_revision_containers (
+    -- Revision the requirement belongs to. CASCADE on revision deletion.
+    quotation_revision_id BIGINT NOT NULL,
+    -- Container type being quoted.
+    container_type_id BIGINT NOT NULL,
+    -- Number of containers of this type quoted (NUMERIC(12,3)).
+    quantity NUMERIC(12, 3) NOT NULL,
+    -- Quoted gross weight per container in kilograms.
+    gross_weight_kg NUMERIC(12, 3),
+    -- Short description of the container requirement.
+    description TEXT,
+    -- Free-text remarks shown on the quotation.
+    remarks TEXT,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_quotation_revision_containers PRIMARY KEY (id),
+    CONSTRAINT fk_quotation_revision_containers_quotation_revision_id__e5b2 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
+    CONSTRAINT fk_quotation_revision_containers_container_type_id_cont_3afe FOREIGN KEY(container_type_id) REFERENCES container_types (id)
+);
+CREATE INDEX ix_quotation_revision_containers_quotation_revision_id ON quotation_revision_containers (quotation_revision_id);
+
+COMMENT ON TABLE quotation_revision_containers IS 'Container requirement line of a quotation revision.';
+COMMENT ON COLUMN quotation_revision_containers.quotation_revision_id IS 'Revision the requirement belongs to. CASCADE on revision deletion.';
+COMMENT ON COLUMN quotation_revision_containers.container_type_id IS 'Container type being quoted.';
+COMMENT ON COLUMN quotation_revision_containers.quantity IS 'Number of containers of this type quoted (NUMERIC(12,3)).';
+COMMENT ON COLUMN quotation_revision_containers.gross_weight_kg IS 'Quoted gross weight per container in kilograms.';
+COMMENT ON COLUMN quotation_revision_containers.description IS 'Short description of the container requirement.';
+COMMENT ON COLUMN quotation_revision_containers.remarks IS 'Free-text remarks shown on the quotation.';
+COMMENT ON COLUMN quotation_revision_containers.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: quotation_revision_places
+-- Module: Quotations  [app.modules.quotations.models]
+-- Routing stop of a quotation revision (origin, destination, pickup,
+-- delivery).
+-- --------------------------------------------------------------------------
+CREATE TABLE quotation_revision_places (
+    -- Revision the routing stop belongs to. CASCADE on revision deletion.
+    quotation_revision_id BIGINT NOT NULL,
+    -- Configured Place Role the stop plays. SET NULL only if the role row is
+    -- purged; the place_role text snapshot keeps the historical label.
+    place_role_id BIGINT,
+    -- Text snapshot of the role (the role name at save time). Preserved so a
+    -- route still prints after the role is renamed or deactivated.
+    place_role VARCHAR(32) NOT NULL,
+    -- Position of this stop within the route. Unique per revision; the server
+    -- renumbers from the submitted row order.
+    sequence_no INTEGER NOT NULL,
+    -- Planned date/time for the stop.
+    planned_at TIMESTAMP WITH TIME ZONE,
+    -- Free-text location typed for the stop, kept for printing and history.
+    free_text TEXT,
+    -- Free-text notes about this stop.
+    notes TEXT,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_quotation_revision_places PRIMARY KEY (id),
+    CONSTRAINT uq_quotation_revision_places_sequence UNIQUE (quotation_revision_id, sequence_no),
+    CONSTRAINT fk_quotation_revision_places_quotation_revision_id_quot_f0f2 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
+    CONSTRAINT fk_quotation_revision_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_quotation_revision_places_quotation_revision_id ON quotation_revision_places (quotation_revision_id);
+
+COMMENT ON TABLE quotation_revision_places IS 'Routing stop of a quotation revision (origin, destination, pickup, delivery).';
+COMMENT ON COLUMN quotation_revision_places.quotation_revision_id IS 'Revision the routing stop belongs to. CASCADE on revision deletion.';
+COMMENT ON COLUMN quotation_revision_places.place_role_id IS 'Configured Place Role the stop plays. SET NULL only if the role row is purged; the place_role text snapshot keeps the historical label.';
+COMMENT ON COLUMN quotation_revision_places.place_role IS 'Text snapshot of the role (the role name at save time). Preserved so a route still prints after the role is renamed or deactivated.';
+COMMENT ON COLUMN quotation_revision_places.sequence_no IS 'Position of this stop within the route. Unique per revision; the server renumbers from the submitted row order.';
+COMMENT ON COLUMN quotation_revision_places.planned_at IS 'Planned date/time for the stop.';
+COMMENT ON COLUMN quotation_revision_places.free_text IS 'Free-text location typed for the stop, kept for printing and history.';
+COMMENT ON COLUMN quotation_revision_places.notes IS 'Free-text notes about this stop.';
+COMMENT ON COLUMN quotation_revision_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
 -- Table: service_order_component_rows
@@ -2961,158 +3356,6 @@ COMMENT ON COLUMN service_order_component_rows.created_at IS 'Row creation times
 COMMENT ON COLUMN service_order_component_rows.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
--- Table: service_order_container_requirements
--- Module: Service Operations  [app.modules.operations.models]
--- Container the customer has booked, before actual units are assigned to the
--- job.
--- --------------------------------------------------------------------------
-CREATE TABLE service_order_container_requirements (
-    -- Service order the requirement belongs to. CASCADE on order deletion.
-    service_order_id BIGINT NOT NULL,
-    -- Quotation container requirement this line was converted from, or NULL
-    -- when it was added directly.
-    source_quotation_container_id BIGINT,
-    -- Container type being booked.
-    container_type_id BIGINT NOT NULL,
-    -- Number of containers of this type booked (NUMERIC(12,3)).
-    quantity NUMERIC(12, 3) NOT NULL,
-    -- Expected gross weight per container in kilograms.
-    gross_weight_kg NUMERIC(12, 3),
-    -- Short description of the requirement.
-    description TEXT,
-    -- Free-text remarks about the requirement.
-    remarks TEXT,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_service_order_container_requirements PRIMARY KEY (id),
-    CONSTRAINT fk_service_order_container_requirements_service_order_i_2728 FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
-    CONSTRAINT fk_service_order_container_requirements_source_quotatio_1946 FOREIGN KEY(source_quotation_container_id) REFERENCES quotation_revision_containers (id),
-    CONSTRAINT fk_service_order_container_requirements_container_type__3695 FOREIGN KEY(container_type_id) REFERENCES container_types (id)
-);
-CREATE INDEX ix_service_order_container_requirements_service_order_id ON service_order_container_requirements (service_order_id);
-
-COMMENT ON TABLE service_order_container_requirements IS 'Container the customer has booked, before actual units are assigned to the job.';
-COMMENT ON COLUMN service_order_container_requirements.service_order_id IS 'Service order the requirement belongs to. CASCADE on order deletion.';
-COMMENT ON COLUMN service_order_container_requirements.source_quotation_container_id IS 'Quotation container requirement this line was converted from, or NULL when it was added directly.';
-COMMENT ON COLUMN service_order_container_requirements.container_type_id IS 'Container type being booked.';
-COMMENT ON COLUMN service_order_container_requirements.quantity IS 'Number of containers of this type booked (NUMERIC(12,3)).';
-COMMENT ON COLUMN service_order_container_requirements.gross_weight_kg IS 'Expected gross weight per container in kilograms.';
-COMMENT ON COLUMN service_order_container_requirements.description IS 'Short description of the requirement.';
-COMMENT ON COLUMN service_order_container_requirements.remarks IS 'Free-text remarks about the requirement.';
-COMMENT ON COLUMN service_order_container_requirements.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: service_order_milestones
--- Module: Service Operations  [app.modules.operations.models]
--- Checkpoint on a service order's timeline (booking confirmed, gate-in,
--- loaded, arrived).
--- --------------------------------------------------------------------------
-CREATE TABLE service_order_milestones (
-    -- Service order the milestone belongs to. CASCADE on order deletion.
-    service_order_id BIGINT NOT NULL,
-    -- Stable machine code for the checkpoint (e.g. GATE_IN), used to drive
-    -- progress reporting.
-    milestone_code VARCHAR(64) NOT NULL,
-    -- Display name of the checkpoint as printed on the order.
-    milestone_name VARCHAR(255) NOT NULL,
-    -- Order of this checkpoint along the timeline.
-    sequence_no INTEGER NOT NULL,
-    -- Scheduled time of the checkpoint (UTC, timezone-aware).
-    planned_at TIMESTAMP WITH TIME ZONE,
-    -- Recorded time the checkpoint was reached.
-    actual_at TIMESTAMP WITH TIME ZONE,
-    -- Checkpoint state (PENDING, DONE, MISSED, SKIPPED).
-    status VARCHAR(20) NOT NULL,
-    -- Free-text notes about the checkpoint.
-    notes TEXT,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_order_milestones PRIMARY KEY (id),
-    CONSTRAINT fk_service_order_milestones_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE
-);
-CREATE INDEX ix_service_order_milestones_service_order_id ON service_order_milestones (service_order_id);
-
-COMMENT ON TABLE service_order_milestones IS 'Checkpoint on a service order''s timeline (booking confirmed, gate-in, loaded, arrived).';
-COMMENT ON COLUMN service_order_milestones.service_order_id IS 'Service order the milestone belongs to. CASCADE on order deletion.';
-COMMENT ON COLUMN service_order_milestones.milestone_code IS 'Stable machine code for the checkpoint (e.g. GATE_IN), used to drive progress reporting.';
-COMMENT ON COLUMN service_order_milestones.milestone_name IS 'Display name of the checkpoint as printed on the order.';
-COMMENT ON COLUMN service_order_milestones.sequence_no IS 'Order of this checkpoint along the timeline.';
-COMMENT ON COLUMN service_order_milestones.planned_at IS 'Scheduled time of the checkpoint (UTC, timezone-aware).';
-COMMENT ON COLUMN service_order_milestones.actual_at IS 'Recorded time the checkpoint was reached.';
-COMMENT ON COLUMN service_order_milestones.status IS 'Checkpoint state (PENDING, DONE, MISSED, SKIPPED).';
-COMMENT ON COLUMN service_order_milestones.notes IS 'Free-text notes about the checkpoint.';
-COMMENT ON COLUMN service_order_milestones.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN service_order_milestones.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_order_milestones.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_order_milestones.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: service_order_movements
--- Module: Service Operations  [app.modules.operations.models]
--- Planned versus actual movement leg of a service order.
--- --------------------------------------------------------------------------
-CREATE TABLE service_order_movements (
-    -- Service order the movement leg belongs to. CASCADE on order deletion.
-    service_order_id BIGINT NOT NULL,
-    -- Order of this leg along the shipment itinerary.
-    sequence_no INTEGER NOT NULL,
-    -- Mode of transport used for this leg.
-    transport_type_id BIGINT,
-    -- Specific vehicle, vessel or aircraft performing the leg.
-    transport_asset_id BIGINT,
-    -- Scheduled departure (UTC, timezone-aware).
-    planned_departure TIMESTAMP WITH TIME ZONE,
-    -- Recorded departure. NULL until the leg actually departs.
-    actual_departure TIMESTAMP WITH TIME ZONE,
-    -- Scheduled arrival (UTC, timezone-aware).
-    planned_arrival TIMESTAMP WITH TIME ZONE,
-    -- Recorded arrival. NULL until the leg actually arrives.
-    actual_arrival TIMESTAMP WITH TIME ZONE,
-    -- Movement lifecycle state (PLANNED, IN_TRANSIT, ARRIVED, CANCELLED).
-    status VARCHAR(32) NOT NULL,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_order_movements PRIMARY KEY (id),
-    CONSTRAINT fk_service_order_movements_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
-    CONSTRAINT fk_service_order_movements_transport_type_id_transport_types FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
-    CONSTRAINT fk_service_order_movements_transport_asset_id_transport_assets FOREIGN KEY(transport_asset_id) REFERENCES transport_assets (id)
-);
-CREATE INDEX ix_service_order_movements_service_order_id ON service_order_movements (service_order_id);
-
-COMMENT ON TABLE service_order_movements IS 'Planned versus actual movement leg of a service order.';
-COMMENT ON COLUMN service_order_movements.service_order_id IS 'Service order the movement leg belongs to. CASCADE on order deletion.';
-COMMENT ON COLUMN service_order_movements.sequence_no IS 'Order of this leg along the shipment itinerary.';
-COMMENT ON COLUMN service_order_movements.transport_type_id IS 'Mode of transport used for this leg.';
-COMMENT ON COLUMN service_order_movements.transport_asset_id IS 'Specific vehicle, vessel or aircraft performing the leg.';
-COMMENT ON COLUMN service_order_movements.planned_departure IS 'Scheduled departure (UTC, timezone-aware).';
-COMMENT ON COLUMN service_order_movements.actual_departure IS 'Recorded departure. NULL until the leg actually departs.';
-COMMENT ON COLUMN service_order_movements.planned_arrival IS 'Scheduled arrival (UTC, timezone-aware).';
-COMMENT ON COLUMN service_order_movements.actual_arrival IS 'Recorded arrival. NULL until the leg actually arrives.';
-COMMENT ON COLUMN service_order_movements.status IS 'Movement lifecycle state (PLANNED, IN_TRANSIT, ARRIVED, CANCELLED).';
-COMMENT ON COLUMN service_order_movements.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN service_order_movements.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_order_movements.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_order_movements.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
 -- Table: service_order_places
 -- Module: Service Operations  [app.modules.operations.models]
 -- Routing stop attached to a service order.
@@ -3162,26 +3405,27 @@ COMMENT ON COLUMN service_order_places.notes IS 'Free-text notes about this stop
 COMMENT ON COLUMN service_order_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
--- Table: service_order_pricing
--- Module: Service Operations  [app.modules.operations.models]
--- Pricing summary of a service order. Exactly one row per order, enforced by
--- the unique constraint on service_order_id.
+-- Table: transport_asset_identity_types
+-- Module: Master Data  [app.modules.master_data.models]
+-- Administrator-managed vocabulary for transport_assets.identity_type. Each
+-- row is one dropdown option, optionally narrowed to a single transport type
+-- and carrying the Identity field's label, placeholder and validation
+-- pattern.
 -- --------------------------------------------------------------------------
-CREATE TABLE service_order_pricing (
-    -- Service order this summary belongs to. UNIQUE, so an order always has
-    -- exactly one pricing summary.
-    service_order_id BIGINT NOT NULL,
-    -- Sum of line subtotals before discount and tax.
-    subtotal_amount NUMERIC(19, 4) NOT NULL,
-    -- Total discount applied across all pricing lines.
-    discount_amount NUMERIC(19, 4) NOT NULL,
-    -- Total tax (VAT) charged across all pricing lines.
-    tax_amount NUMERIC(19, 4) NOT NULL,
-    -- Payable total: subtotal minus discount plus tax.
-    total_amount NUMERIC(19, 4) NOT NULL,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
+CREATE TABLE transport_asset_identity_types (
+    -- Option stored verbatim in transport_assets.identity_type. Unique among
+    -- non-archived rows.
+    name VARCHAR(64) NOT NULL,
+    -- Transport type this option is offered for; NULL means every type.
+    transport_type_id BIGINT,
+    -- Header label the Identity input shows when this option is selected.
+    identity_label VARCHAR(128),
+    -- Placeholder text shown inside the Identity input for this option.
+    identity_placeholder VARCHAR(128),
+    -- Python re pattern the identity value must match (e.g. ^\d{7}$ for IMO).
+    validation_pattern VARCHAR(255),
+    -- Record status (ACTIVE, INACTIVE).
+    status VARCHAR(20) NOT NULL,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
     id BIGSERIAL NOT NULL,
     -- Row creation timestamp (UTC, timezone-aware). Written once; server
@@ -3190,21 +3434,202 @@ CREATE TABLE service_order_pricing (
     -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
     -- application on every update.
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_order_pricing PRIMARY KEY (id),
-    CONSTRAINT uq_service_order_pricing_service_order_id UNIQUE (service_order_id),
-    CONSTRAINT fk_service_order_pricing_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE
+    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
+    -- is excluded from listings and uniqueness checks but stays in place.
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    -- Identifier of the user who archived this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    deleted_by_user_id BIGINT,
+    CONSTRAINT pk_transport_asset_identity_types PRIMARY KEY (id),
+    CONSTRAINT fk_transport_asset_identity_types_transport_type_id_tra_9d1b FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
+    CONSTRAINT fk_transport_asset_identity_types_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
 );
+CREATE INDEX ix_transport_asset_identity_types_deleted_at ON transport_asset_identity_types (deleted_at);
+CREATE INDEX ix_transport_asset_identity_types_deleted_by_user_id ON transport_asset_identity_types (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_transport_asset_identity_types_name_active ON transport_asset_identity_types (name) WHERE deleted_at IS NULL;
 
-COMMENT ON TABLE service_order_pricing IS 'Pricing summary of a service order. Exactly one row per order, enforced by the unique constraint on service_order_id.';
-COMMENT ON COLUMN service_order_pricing.service_order_id IS 'Service order this summary belongs to. UNIQUE, so an order always has exactly one pricing summary.';
-COMMENT ON COLUMN service_order_pricing.subtotal_amount IS 'Sum of line subtotals before discount and tax.';
-COMMENT ON COLUMN service_order_pricing.discount_amount IS 'Total discount applied across all pricing lines.';
-COMMENT ON COLUMN service_order_pricing.tax_amount IS 'Total tax (VAT) charged across all pricing lines.';
-COMMENT ON COLUMN service_order_pricing.total_amount IS 'Payable total: subtotal minus discount plus tax.';
-COMMENT ON COLUMN service_order_pricing.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN service_order_pricing.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_order_pricing.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_order_pricing.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON TABLE transport_asset_identity_types IS 'Administrator-managed vocabulary for transport_assets.identity_type. Each row is one dropdown option, optionally narrowed to a single transport type and carrying the Identity field''s label, placeholder and validation pattern.';
+COMMENT ON COLUMN transport_asset_identity_types.name IS 'Option stored verbatim in transport_assets.identity_type. Unique among non-archived rows.';
+COMMENT ON COLUMN transport_asset_identity_types.transport_type_id IS 'Transport type this option is offered for; NULL means every type.';
+COMMENT ON COLUMN transport_asset_identity_types.identity_label IS 'Header label the Identity input shows when this option is selected.';
+COMMENT ON COLUMN transport_asset_identity_types.identity_placeholder IS 'Placeholder text shown inside the Identity input for this option.';
+COMMENT ON COLUMN transport_asset_identity_types.validation_pattern IS 'Python re pattern the identity value must match (e.g. ^\d{7}$ for IMO).';
+COMMENT ON COLUMN transport_asset_identity_types.status IS 'Record status (ACTIVE, INACTIVE).';
+COMMENT ON COLUMN transport_asset_identity_types.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN transport_asset_identity_types.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN transport_asset_identity_types.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON COLUMN transport_asset_identity_types.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
+COMMENT ON COLUMN transport_asset_identity_types.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+
+-- --------------------------------------------------------------------------
+-- Table: transport_assets
+-- Module: Master Data  [app.modules.master_data.models]
+-- Physical transport asset (truck, vessel, aircraft) owned or operated by a
+-- business party and assigned to a movement leg.
+-- --------------------------------------------------------------------------
+CREATE TABLE transport_assets (
+    -- Fleet or internal asset number (e.g. VH-118).
+    asset_code VARCHAR(50) NOT NULL,
+    -- Transport mode this asset belongs to.
+    transport_type_id BIGINT NOT NULL,
+    -- Registration number, IMO number or tail number identifying the asset.
+    identity VARCHAR(128) NOT NULL,
+    -- Identity kind as stored: matches a transport_asset_identity_types row.
+    identity_type VARCHAR(64) NOT NULL,
+    -- Business party that owns the asset.
+    owner_party_id BIGINT,
+    -- Business party that operates the asset; may differ from the owner.
+    operator_party_id BIGINT,
+    -- Display name of the asset, if any.
+    asset_name VARCHAR(255),
+    -- Optional capacity (e.g. payload or passenger count); must come with a
+    -- capacity_unit.
+    capacity_value NUMERIC(12, 3),
+    -- Unit that gives capacity_value its meaning (e.g. KG, CBM, PAL), from
+    -- capacity_units.
+    capacity_unit VARCHAR(32),
+    -- Free-text notes about the asset.
+    description TEXT,
+    -- Record status (ACTIVE, INACTIVE, MAINTENANCE).
+    status VARCHAR(20) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
+    -- is excluded from listings and uniqueness checks but stays in place.
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    -- Identifier of the user who archived this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    deleted_by_user_id BIGINT,
+    CONSTRAINT pk_transport_assets PRIMARY KEY (id),
+    CONSTRAINT fk_transport_assets_transport_type_id_transport_types FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
+    CONSTRAINT fk_transport_assets_owner_party_id_business_parties FOREIGN KEY(owner_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_transport_assets_operator_party_id_business_parties FOREIGN KEY(operator_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_transport_assets_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_transport_assets_deleted_at ON transport_assets (deleted_at);
+CREATE INDEX ix_transport_assets_deleted_by_user_id ON transport_assets (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_transport_assets_asset_code_active ON transport_assets (asset_code) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_transport_assets_type_identity_active ON transport_assets (transport_type_id, identity) WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE transport_assets IS 'Physical transport asset (truck, vessel, aircraft) owned or operated by a business party and assigned to a movement leg.';
+COMMENT ON COLUMN transport_assets.asset_code IS 'Fleet or internal asset number (e.g. VH-118).';
+COMMENT ON COLUMN transport_assets.transport_type_id IS 'Transport mode this asset belongs to.';
+COMMENT ON COLUMN transport_assets.identity IS 'Registration number, IMO number or tail number identifying the asset.';
+COMMENT ON COLUMN transport_assets.identity_type IS 'Identity kind as stored: matches a transport_asset_identity_types row.';
+COMMENT ON COLUMN transport_assets.owner_party_id IS 'Business party that owns the asset.';
+COMMENT ON COLUMN transport_assets.operator_party_id IS 'Business party that operates the asset; may differ from the owner.';
+COMMENT ON COLUMN transport_assets.asset_name IS 'Display name of the asset, if any.';
+COMMENT ON COLUMN transport_assets.capacity_value IS 'Optional capacity (e.g. payload or passenger count); must come with a capacity_unit.';
+COMMENT ON COLUMN transport_assets.capacity_unit IS 'Unit that gives capacity_value its meaning (e.g. KG, CBM, PAL), from capacity_units.';
+COMMENT ON COLUMN transport_assets.description IS 'Free-text notes about the asset.';
+COMMENT ON COLUMN transport_assets.status IS 'Record status (ACTIVE, INACTIVE, MAINTENANCE).';
+COMMENT ON COLUMN transport_assets.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN transport_assets.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN transport_assets.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON COLUMN transport_assets.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
+COMMENT ON COLUMN transport_assets.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+
+-- --------------------------------------------------------------------------
+-- Table: used_refresh_tokens
+-- Module: Authentication & Access Control  [app.modules.auth.models]
+-- Consumed refresh-token hashes associated with their stable session,
+-- retained for replay detection.
+-- --------------------------------------------------------------------------
+CREATE TABLE used_refresh_tokens (
+    -- SHA-256 hash of a consumed refresh credential; never the raw
+    -- credential.
+    token_hash VARCHAR(128) NOT NULL,
+    -- Owning stable session and token family; cascades on session deletion.
+    session_id BIGINT NOT NULL,
+    -- Rotation timestamp used to reject overlap and detect later replay.
+    used_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT pk_used_refresh_tokens PRIMARY KEY (token_hash),
+    CONSTRAINT fk_used_refresh_tokens_session_id_user_sessions FOREIGN KEY(session_id) REFERENCES user_sessions (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_used_refresh_tokens_session_id ON used_refresh_tokens (session_id);
+
+COMMENT ON TABLE used_refresh_tokens IS 'Consumed refresh-token hashes associated with their stable session, retained for replay detection.';
+COMMENT ON COLUMN used_refresh_tokens.token_hash IS 'SHA-256 hash of a consumed refresh credential; never the raw credential.';
+COMMENT ON COLUMN used_refresh_tokens.session_id IS 'Owning stable session and token family; cascades on session deletion.';
+COMMENT ON COLUMN used_refresh_tokens.used_at IS 'Rotation timestamp used to reject overlap and detect later replay.';
+
+-- --------------------------------------------------------------------------
+-- Table: component_tab_groups
+-- Module: Master Data  [app.modules.master_data.models]
+-- Membership of a component group in a component tab, including the display
+-- layout for that assignment (mode, cardinality, form columns,
+-- title/read-only/collapse flags).
+-- --------------------------------------------------------------------------
+CREATE TABLE component_tab_groups (
+    -- Component tab the group belongs to. CASCADE on tab deletion.
+    tab_id BIGINT NOT NULL,
+    -- Component group shown on the tab. CASCADE on group deletion.
+    group_id BIGINT NOT NULL,
+    -- Sort position within its group or list. Lower values are rendered
+    -- first; ties are broken by code.
+    display_order INTEGER NOT NULL,
+    -- How this group renders in this tab: form_only, table_only or
+    -- form_and_table. NULL inherits component_groups.render_mode.
+    display_mode VARCHAR(20),
+    -- Whether the group holds a single record or multiple records in this
+    -- tab. NULL inherits component_groups.render_mode.
+    data_cardinality VARCHAR(20),
+    -- Number of form columns (1-4) for form layouts. NULL inherits the
+    -- default of 3.
+    form_columns INTEGER,
+    -- Whether the group heading is rendered. NULL defaults to TRUE.
+    show_group_title BOOLEAN,
+    -- FALSE renders the group read-only and makes the save endpoint refuse
+    -- writes. NULL defaults to TRUE.
+    editable BOOLEAN,
+    -- Whether the group can be collapsed by the user. NULL defaults to FALSE.
+    collapsible BOOLEAN,
+    -- Initial expanded state of a collapsible group. NULL defaults to TRUE.
+    default_expanded BOOLEAN,
+    -- Record status (ACTIVE, INACTIVE).
+    status VARCHAR(20) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_component_tab_groups PRIMARY KEY (id),
+    CONSTRAINT uq_component_tab_groups_tab_group UNIQUE (tab_id, group_id),
+    CONSTRAINT ck_component_tab_groups_display_mode CHECK (display_mode IS NULL OR display_mode IN ('form_only', 'table_only', 'form_and_table')),
+    CONSTRAINT ck_component_tab_groups_data_cardinality CHECK (data_cardinality IS NULL OR data_cardinality IN ('single', 'multiple')),
+    CONSTRAINT ck_component_tab_groups_form_columns CHECK (form_columns IS NULL OR (form_columns BETWEEN 1 AND 4)),
+    CONSTRAINT fk_component_tab_groups_tab_id_component_tabs FOREIGN KEY(tab_id) REFERENCES component_tabs (id) ON DELETE CASCADE,
+    CONSTRAINT fk_component_tab_groups_group_id_component_groups FOREIGN KEY(group_id) REFERENCES component_groups (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_component_tab_groups_group_id ON component_tab_groups (group_id);
+CREATE INDEX ix_component_tab_groups_tab_id ON component_tab_groups (tab_id);
+
+COMMENT ON TABLE component_tab_groups IS 'Membership of a component group in a component tab, including the display layout for that assignment (mode, cardinality, form columns, title/read-only/collapse flags).';
+COMMENT ON COLUMN component_tab_groups.tab_id IS 'Component tab the group belongs to. CASCADE on tab deletion.';
+COMMENT ON COLUMN component_tab_groups.group_id IS 'Component group shown on the tab. CASCADE on group deletion.';
+COMMENT ON COLUMN component_tab_groups.display_order IS 'Sort position within its group or list. Lower values are rendered first; ties are broken by code.';
+COMMENT ON COLUMN component_tab_groups.display_mode IS 'How this group renders in this tab: form_only, table_only or form_and_table. NULL inherits component_groups.render_mode.';
+COMMENT ON COLUMN component_tab_groups.data_cardinality IS 'Whether the group holds a single record or multiple records in this tab. NULL inherits component_groups.render_mode.';
+COMMENT ON COLUMN component_tab_groups.form_columns IS 'Number of form columns (1-4) for form layouts. NULL inherits the default of 3.';
+COMMENT ON COLUMN component_tab_groups.show_group_title IS 'Whether the group heading is rendered. NULL defaults to TRUE.';
+COMMENT ON COLUMN component_tab_groups.editable IS 'FALSE renders the group read-only and makes the save endpoint refuse writes. NULL defaults to TRUE.';
+COMMENT ON COLUMN component_tab_groups.collapsible IS 'Whether the group can be collapsed by the user. NULL defaults to FALSE.';
+COMMENT ON COLUMN component_tab_groups.default_expanded IS 'Initial expanded state of a collapsible group. NULL defaults to TRUE.';
+COMMENT ON COLUMN component_tab_groups.status IS 'Record status (ACTIVE, INACTIVE).';
+COMMENT ON COLUMN component_tab_groups.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN component_tab_groups.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN component_tab_groups.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: financial_document_allocations
@@ -3383,6 +3808,266 @@ COMMENT ON COLUMN journal_entries.created_at IS 'Row creation timestamp (UTC, ti
 COMMENT ON COLUMN journal_entries.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
+-- Table: quotation_revision_lines
+-- Module: Quotations  [app.modules.quotations.models]
+-- Chargeable price line of a quotation revision.
+-- --------------------------------------------------------------------------
+CREATE TABLE quotation_revision_lines (
+    -- Revision the price line belongs to. CASCADE on revision deletion.
+    quotation_revision_id BIGINT NOT NULL,
+    -- Sequential line number within the parent document, 1-based and
+    -- displayed in order.
+    line_no INTEGER NOT NULL,
+    -- Catalogue fee this line prices.
+    fee_type_id BIGINT,
+    -- Container requirement this line prices. Set for per-container charges,
+    -- NULL for document-level charges.
+    container_requirement_id BIGINT,
+    -- Description printed on the quotation for this line.
+    service_description TEXT NOT NULL,
+    -- Billed quantity (NUMERIC(12,3)).
+    quantity NUMERIC(12, 3) NOT NULL,
+    -- Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG,
+    -- PERCENT).
+    unit_code VARCHAR(32),
+    -- Price per unit in currency_code, before discount and tax.
+    unit_price NUMERIC(19, 4) NOT NULL,
+    -- Discount applied to the line as a rate (NUMERIC(7,4); 0.0500 means 5%).
+    discount_rate NUMERIC(7, 4) NOT NULL,
+    -- Tax/VAT rate applied to the line (NUMERIC(7,4); 0.1000 means 10%).
+    tax_rate NUMERIC(7, 4) NOT NULL,
+    -- quantity multiplied by unit_price, before discount and tax.
+    line_subtotal NUMERIC(19, 4) NOT NULL,
+    -- Absolute discount deducted from line_subtotal.
+    line_discount NUMERIC(19, 4) NOT NULL,
+    -- Absolute tax charged on the discounted amount.
+    line_tax NUMERIC(19, 4) NOT NULL,
+    -- Final payable amount for this line.
+    line_total NUMERIC(19, 4) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_quotation_revision_lines PRIMARY KEY (id),
+    CONSTRAINT uq_quotation_revision_lines_no UNIQUE (quotation_revision_id, line_no),
+    CONSTRAINT fk_quotation_revision_lines_quotation_revision_id_quota_6e8c FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
+    CONSTRAINT fk_quotation_revision_lines_fee_type_id_fee_types FOREIGN KEY(fee_type_id) REFERENCES fee_types (id),
+    CONSTRAINT fk_quotation_revision_lines_container_requirement_id_qu_27b0 FOREIGN KEY(container_requirement_id) REFERENCES quotation_revision_containers (id)
+);
+CREATE INDEX ix_quotation_revision_lines_quotation_revision_id ON quotation_revision_lines (quotation_revision_id);
+
+COMMENT ON TABLE quotation_revision_lines IS 'Chargeable price line of a quotation revision.';
+COMMENT ON COLUMN quotation_revision_lines.quotation_revision_id IS 'Revision the price line belongs to. CASCADE on revision deletion.';
+COMMENT ON COLUMN quotation_revision_lines.line_no IS 'Sequential line number within the parent document, 1-based and displayed in order.';
+COMMENT ON COLUMN quotation_revision_lines.fee_type_id IS 'Catalogue fee this line prices.';
+COMMENT ON COLUMN quotation_revision_lines.container_requirement_id IS 'Container requirement this line prices. Set for per-container charges, NULL for document-level charges.';
+COMMENT ON COLUMN quotation_revision_lines.service_description IS 'Description printed on the quotation for this line.';
+COMMENT ON COLUMN quotation_revision_lines.quantity IS 'Billed quantity (NUMERIC(12,3)).';
+COMMENT ON COLUMN quotation_revision_lines.unit_code IS 'Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG, PERCENT).';
+COMMENT ON COLUMN quotation_revision_lines.unit_price IS 'Price per unit in currency_code, before discount and tax.';
+COMMENT ON COLUMN quotation_revision_lines.discount_rate IS 'Discount applied to the line as a rate (NUMERIC(7,4); 0.0500 means 5%).';
+COMMENT ON COLUMN quotation_revision_lines.tax_rate IS 'Tax/VAT rate applied to the line (NUMERIC(7,4); 0.1000 means 10%).';
+COMMENT ON COLUMN quotation_revision_lines.line_subtotal IS 'quantity multiplied by unit_price, before discount and tax.';
+COMMENT ON COLUMN quotation_revision_lines.line_discount IS 'Absolute discount deducted from line_subtotal.';
+COMMENT ON COLUMN quotation_revision_lines.line_tax IS 'Absolute tax charged on the discounted amount.';
+COMMENT ON COLUMN quotation_revision_lines.line_total IS 'Final payable amount for this line.';
+COMMENT ON COLUMN quotation_revision_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_container_requirements
+-- Module: Service Operations  [app.modules.operations.models]
+-- Container the customer has booked, before actual units are assigned to the
+-- job.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_container_requirements (
+    -- Service order the requirement belongs to. CASCADE on order deletion.
+    service_order_id BIGINT NOT NULL,
+    -- Quotation container requirement this line was converted from, or NULL
+    -- when it was added directly.
+    source_quotation_container_id BIGINT,
+    -- Container type being booked.
+    container_type_id BIGINT NOT NULL,
+    -- Number of containers of this type booked (NUMERIC(12,3)).
+    quantity NUMERIC(12, 3) NOT NULL,
+    -- Expected gross weight per container in kilograms.
+    gross_weight_kg NUMERIC(12, 3),
+    -- Short description of the requirement.
+    description TEXT,
+    -- Free-text remarks about the requirement.
+    remarks TEXT,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_service_order_container_requirements PRIMARY KEY (id),
+    CONSTRAINT fk_service_order_container_requirements_service_order_i_2728 FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
+    CONSTRAINT fk_service_order_container_requirements_source_quotatio_1946 FOREIGN KEY(source_quotation_container_id) REFERENCES quotation_revision_containers (id),
+    CONSTRAINT fk_service_order_container_requirements_container_type__3695 FOREIGN KEY(container_type_id) REFERENCES container_types (id)
+);
+CREATE INDEX ix_service_order_container_requirements_service_order_id ON service_order_container_requirements (service_order_id);
+
+COMMENT ON TABLE service_order_container_requirements IS 'Container the customer has booked, before actual units are assigned to the job.';
+COMMENT ON COLUMN service_order_container_requirements.service_order_id IS 'Service order the requirement belongs to. CASCADE on order deletion.';
+COMMENT ON COLUMN service_order_container_requirements.source_quotation_container_id IS 'Quotation container requirement this line was converted from, or NULL when it was added directly.';
+COMMENT ON COLUMN service_order_container_requirements.container_type_id IS 'Container type being booked.';
+COMMENT ON COLUMN service_order_container_requirements.quantity IS 'Number of containers of this type booked (NUMERIC(12,3)).';
+COMMENT ON COLUMN service_order_container_requirements.gross_weight_kg IS 'Expected gross weight per container in kilograms.';
+COMMENT ON COLUMN service_order_container_requirements.description IS 'Short description of the requirement.';
+COMMENT ON COLUMN service_order_container_requirements.remarks IS 'Free-text remarks about the requirement.';
+COMMENT ON COLUMN service_order_container_requirements.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_movements
+-- Module: Service Operations  [app.modules.operations.models]
+-- Planned versus actual movement leg of a service order.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_movements (
+    -- Service order the movement leg belongs to. CASCADE on order deletion.
+    service_order_id BIGINT NOT NULL,
+    -- Order of this leg along the shipment itinerary.
+    sequence_no INTEGER NOT NULL,
+    -- Mode of transport used for this leg.
+    transport_type_id BIGINT,
+    -- Specific vehicle, vessel or aircraft performing the leg.
+    transport_asset_id BIGINT,
+    -- Scheduled departure (UTC, timezone-aware).
+    planned_departure TIMESTAMP WITH TIME ZONE,
+    -- Recorded departure. NULL until the leg actually departs.
+    actual_departure TIMESTAMP WITH TIME ZONE,
+    -- Scheduled arrival (UTC, timezone-aware).
+    planned_arrival TIMESTAMP WITH TIME ZONE,
+    -- Recorded arrival. NULL until the leg actually arrives.
+    actual_arrival TIMESTAMP WITH TIME ZONE,
+    -- Movement lifecycle state (PLANNED, IN_TRANSIT, ARRIVED, CANCELLED).
+    status VARCHAR(32) NOT NULL,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_order_movements PRIMARY KEY (id),
+    CONSTRAINT fk_service_order_movements_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
+    CONSTRAINT fk_service_order_movements_transport_type_id_transport_types FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
+    CONSTRAINT fk_service_order_movements_transport_asset_id_transport_assets FOREIGN KEY(transport_asset_id) REFERENCES transport_assets (id)
+);
+CREATE INDEX ix_service_order_movements_service_order_id ON service_order_movements (service_order_id);
+
+COMMENT ON TABLE service_order_movements IS 'Planned versus actual movement leg of a service order.';
+COMMENT ON COLUMN service_order_movements.service_order_id IS 'Service order the movement leg belongs to. CASCADE on order deletion.';
+COMMENT ON COLUMN service_order_movements.sequence_no IS 'Order of this leg along the shipment itinerary.';
+COMMENT ON COLUMN service_order_movements.transport_type_id IS 'Mode of transport used for this leg.';
+COMMENT ON COLUMN service_order_movements.transport_asset_id IS 'Specific vehicle, vessel or aircraft performing the leg.';
+COMMENT ON COLUMN service_order_movements.planned_departure IS 'Scheduled departure (UTC, timezone-aware).';
+COMMENT ON COLUMN service_order_movements.actual_departure IS 'Recorded departure. NULL until the leg actually departs.';
+COMMENT ON COLUMN service_order_movements.planned_arrival IS 'Scheduled arrival (UTC, timezone-aware).';
+COMMENT ON COLUMN service_order_movements.actual_arrival IS 'Recorded arrival. NULL until the leg actually arrives.';
+COMMENT ON COLUMN service_order_movements.status IS 'Movement lifecycle state (PLANNED, IN_TRANSIT, ARRIVED, CANCELLED).';
+COMMENT ON COLUMN service_order_movements.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN service_order_movements.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_order_movements.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_order_movements.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
+-- Table: financial_document_postings
+-- Module: Double-Entry Finance  [app.modules.finance.models]
+-- Links a financial document to the journal entries it produced, so a
+-- reversal entry stays attached to the document it corrects.
+-- --------------------------------------------------------------------------
+CREATE TABLE financial_document_postings (
+    -- Document that produced the entry.
+    financial_document_id BIGINT NOT NULL,
+    -- Journal entry produced by posting the document.
+    journal_entry_id BIGINT NOT NULL,
+    -- Whether this is the ORIGINAL_POSTING, its REVERSAL, or an ADJUSTMENT.
+    posting_role VARCHAR(32) NOT NULL,
+    -- Timestamp the link was created.
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_financial_document_postings PRIMARY KEY (id),
+    CONSTRAINT uq_fin_doc_postings UNIQUE (financial_document_id, journal_entry_id),
+    CONSTRAINT fk_financial_document_postings_financial_document_id_fi_9505 FOREIGN KEY(financial_document_id) REFERENCES financial_documents (id),
+    CONSTRAINT fk_financial_document_postings_journal_entry_id_journal_entries FOREIGN KEY(journal_entry_id) REFERENCES journal_entries (id)
+);
+
+COMMENT ON TABLE financial_document_postings IS 'Links a financial document to the journal entries it produced, so a reversal entry stays attached to the document it corrects.';
+COMMENT ON COLUMN financial_document_postings.financial_document_id IS 'Document that produced the entry.';
+COMMENT ON COLUMN financial_document_postings.journal_entry_id IS 'Journal entry produced by posting the document.';
+COMMENT ON COLUMN financial_document_postings.posting_role IS 'Whether this is the ORIGINAL_POSTING, its REVERSAL, or an ADJUSTMENT.';
+COMMENT ON COLUMN financial_document_postings.created_at IS 'Timestamp the link was created.';
+COMMENT ON COLUMN financial_document_postings.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: journal_entry_lines
+-- Module: Double-Entry Finance  [app.modules.finance.models]
+-- Debit or credit line of a journal entry. Amounts are held both in the
+-- transaction currency and in the base currency, so the ledger stays balanced
+-- across currencies.
+-- --------------------------------------------------------------------------
+CREATE TABLE journal_entry_lines (
+    -- Journal entry the line belongs to. CASCADE on entry deletion.
+    journal_entry_id BIGINT NOT NULL,
+    -- Sequential line number within the parent document, 1-based and
+    -- displayed in order.
+    line_no INTEGER NOT NULL,
+    -- General-ledger account debited or credited. Must reference a postable
+    -- account.
+    account_id BIGINT NOT NULL,
+    -- Business party the line relates to, for party-level reporting.
+    party_id BIGINT,
+    -- Service order the line relates to, for operational reporting.
+    service_order_id BIGINT,
+    -- Financial document the line was generated from.
+    financial_document_id BIGINT,
+    -- Narrative printed on the line.
+    description TEXT,
+    -- Debit amount in currency_code. Zero on a pure credit line.
+    debit_amount NUMERIC(19, 4) NOT NULL,
+    -- Credit amount in currency_code. Zero on a pure debit line.
+    credit_amount NUMERIC(19, 4) NOT NULL,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Rate used to convert the amounts into the base currency.
+    exchange_rate NUMERIC(19, 8) NOT NULL,
+    -- debit_amount converted to the base currency. Summed for the trial
+    -- balance.
+    base_debit_amount NUMERIC(19, 4) NOT NULL,
+    -- credit_amount converted to the base currency. Summed for the trial
+    -- balance.
+    base_credit_amount NUMERIC(19, 4) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_journal_entry_lines PRIMARY KEY (id),
+    CONSTRAINT uq_journal_entry_lines_no UNIQUE (journal_entry_id, line_no),
+    CONSTRAINT fk_journal_entry_lines_journal_entry_id_journal_entries FOREIGN KEY(journal_entry_id) REFERENCES journal_entries (id) ON DELETE CASCADE,
+    CONSTRAINT fk_journal_entry_lines_account_id_chart_of_accounts FOREIGN KEY(account_id) REFERENCES chart_of_accounts (id),
+    CONSTRAINT fk_journal_entry_lines_party_id_business_parties FOREIGN KEY(party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_journal_entry_lines_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id),
+    CONSTRAINT fk_journal_entry_lines_financial_document_id_financial__f6c2 FOREIGN KEY(financial_document_id) REFERENCES financial_documents (id)
+);
+CREATE INDEX ix_journal_entry_lines_account_id ON journal_entry_lines (account_id);
+CREATE INDEX ix_journal_entry_lines_journal_entry_id ON journal_entry_lines (journal_entry_id);
+
+COMMENT ON TABLE journal_entry_lines IS 'Debit or credit line of a journal entry. Amounts are held both in the transaction currency and in the base currency, so the ledger stays balanced across currencies.';
+COMMENT ON COLUMN journal_entry_lines.journal_entry_id IS 'Journal entry the line belongs to. CASCADE on entry deletion.';
+COMMENT ON COLUMN journal_entry_lines.line_no IS 'Sequential line number within the parent document, 1-based and displayed in order.';
+COMMENT ON COLUMN journal_entry_lines.account_id IS 'General-ledger account debited or credited. Must reference a postable account.';
+COMMENT ON COLUMN journal_entry_lines.party_id IS 'Business party the line relates to, for party-level reporting.';
+COMMENT ON COLUMN journal_entry_lines.service_order_id IS 'Service order the line relates to, for operational reporting.';
+COMMENT ON COLUMN journal_entry_lines.financial_document_id IS 'Financial document the line was generated from.';
+COMMENT ON COLUMN journal_entry_lines.description IS 'Narrative printed on the line.';
+COMMENT ON COLUMN journal_entry_lines.debit_amount IS 'Debit amount in currency_code. Zero on a pure credit line.';
+COMMENT ON COLUMN journal_entry_lines.credit_amount IS 'Credit amount in currency_code. Zero on a pure debit line.';
+COMMENT ON COLUMN journal_entry_lines.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN journal_entry_lines.exchange_rate IS 'Rate used to convert the amounts into the base currency.';
+COMMENT ON COLUMN journal_entry_lines.base_debit_amount IS 'debit_amount converted to the base currency. Summed for the trial balance.';
+COMMENT ON COLUMN journal_entry_lines.base_credit_amount IS 'credit_amount converted to the base currency. Summed for the trial balance.';
+COMMENT ON COLUMN journal_entry_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
 -- Table: service_order_containers
 -- Module: Service Operations  [app.modules.operations.models]
 -- An actual physical container on the job, with its seal, weights and
@@ -3398,7 +4083,7 @@ CREATE TABLE service_order_containers (
     container_type_id BIGINT NOT NULL,
     -- ISO 6346 container number printed on the box. UNIQUE across the system,
     -- so a unit cannot be booked twice.
-    container_number VARCHAR(32) NOT NULL,
+    container_number VARCHAR(32),
     -- Seal number recorded at stuffing or gate-in.
     seal_serial VARCHAR(64),
     -- Container lifecycle state (EXPECTED, STUFFED, GATE_IN, GATE_OUT,
@@ -3569,104 +4254,6 @@ COMMENT ON COLUMN financial_document_lines.account_id IS 'General-ledger account
 COMMENT ON COLUMN financial_document_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
--- Table: financial_document_postings
--- Module: Double-Entry Finance  [app.modules.finance.models]
--- Links a financial document to the journal entries it produced, so a
--- reversal entry stays attached to the document it corrects.
--- --------------------------------------------------------------------------
-CREATE TABLE financial_document_postings (
-    -- Document that produced the entry.
-    financial_document_id BIGINT NOT NULL,
-    -- Journal entry produced by posting the document.
-    journal_entry_id BIGINT NOT NULL,
-    -- Whether this is the ORIGINAL_POSTING, its REVERSAL, or an ADJUSTMENT.
-    posting_role VARCHAR(32) NOT NULL,
-    -- Timestamp the link was created.
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_financial_document_postings PRIMARY KEY (id),
-    CONSTRAINT uq_fin_doc_postings UNIQUE (financial_document_id, journal_entry_id),
-    CONSTRAINT fk_financial_document_postings_financial_document_id_fi_9505 FOREIGN KEY(financial_document_id) REFERENCES financial_documents (id),
-    CONSTRAINT fk_financial_document_postings_journal_entry_id_journal_entries FOREIGN KEY(journal_entry_id) REFERENCES journal_entries (id)
-);
-
-COMMENT ON TABLE financial_document_postings IS 'Links a financial document to the journal entries it produced, so a reversal entry stays attached to the document it corrects.';
-COMMENT ON COLUMN financial_document_postings.financial_document_id IS 'Document that produced the entry.';
-COMMENT ON COLUMN financial_document_postings.journal_entry_id IS 'Journal entry produced by posting the document.';
-COMMENT ON COLUMN financial_document_postings.posting_role IS 'Whether this is the ORIGINAL_POSTING, its REVERSAL, or an ADJUSTMENT.';
-COMMENT ON COLUMN financial_document_postings.created_at IS 'Timestamp the link was created.';
-COMMENT ON COLUMN financial_document_postings.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: journal_entry_lines
--- Module: Double-Entry Finance  [app.modules.finance.models]
--- Debit or credit line of a journal entry. Amounts are held both in the
--- transaction currency and in the base currency, so the ledger stays balanced
--- across currencies.
--- --------------------------------------------------------------------------
-CREATE TABLE journal_entry_lines (
-    -- Journal entry the line belongs to. CASCADE on entry deletion.
-    journal_entry_id BIGINT NOT NULL,
-    -- Sequential line number within the parent document, 1-based and
-    -- displayed in order.
-    line_no INTEGER NOT NULL,
-    -- General-ledger account debited or credited. Must reference a postable
-    -- account.
-    account_id BIGINT NOT NULL,
-    -- Business party the line relates to, for party-level reporting.
-    party_id BIGINT,
-    -- Service order the line relates to, for operational reporting.
-    service_order_id BIGINT,
-    -- Financial document the line was generated from.
-    financial_document_id BIGINT,
-    -- Narrative printed on the line.
-    description TEXT,
-    -- Debit amount in currency_code. Zero on a pure credit line.
-    debit_amount NUMERIC(19, 4) NOT NULL,
-    -- Credit amount in currency_code. Zero on a pure debit line.
-    credit_amount NUMERIC(19, 4) NOT NULL,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
-    -- Rate used to convert the amounts into the base currency.
-    exchange_rate NUMERIC(19, 8) NOT NULL,
-    -- debit_amount converted to the base currency. Summed for the trial
-    -- balance.
-    base_debit_amount NUMERIC(19, 4) NOT NULL,
-    -- credit_amount converted to the base currency. Summed for the trial
-    -- balance.
-    base_credit_amount NUMERIC(19, 4) NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    CONSTRAINT pk_journal_entry_lines PRIMARY KEY (id),
-    CONSTRAINT uq_journal_entry_lines_no UNIQUE (journal_entry_id, line_no),
-    CONSTRAINT fk_journal_entry_lines_journal_entry_id_journal_entries FOREIGN KEY(journal_entry_id) REFERENCES journal_entries (id) ON DELETE CASCADE,
-    CONSTRAINT fk_journal_entry_lines_account_id_chart_of_accounts FOREIGN KEY(account_id) REFERENCES chart_of_accounts (id),
-    CONSTRAINT fk_journal_entry_lines_party_id_business_parties FOREIGN KEY(party_id) REFERENCES business_parties (id),
-    CONSTRAINT fk_journal_entry_lines_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id),
-    CONSTRAINT fk_journal_entry_lines_financial_document_id_financial__f6c2 FOREIGN KEY(financial_document_id) REFERENCES financial_documents (id)
-);
-CREATE INDEX ix_journal_entry_lines_account_id ON journal_entry_lines (account_id);
-CREATE INDEX ix_journal_entry_lines_journal_entry_id ON journal_entry_lines (journal_entry_id);
-
-COMMENT ON TABLE journal_entry_lines IS 'Debit or credit line of a journal entry. Amounts are held both in the transaction currency and in the base currency, so the ledger stays balanced across currencies.';
-COMMENT ON COLUMN journal_entry_lines.journal_entry_id IS 'Journal entry the line belongs to. CASCADE on entry deletion.';
-COMMENT ON COLUMN journal_entry_lines.line_no IS 'Sequential line number within the parent document, 1-based and displayed in order.';
-COMMENT ON COLUMN journal_entry_lines.account_id IS 'General-ledger account debited or credited. Must reference a postable account.';
-COMMENT ON COLUMN journal_entry_lines.party_id IS 'Business party the line relates to, for party-level reporting.';
-COMMENT ON COLUMN journal_entry_lines.service_order_id IS 'Service order the line relates to, for operational reporting.';
-COMMENT ON COLUMN journal_entry_lines.financial_document_id IS 'Financial document the line was generated from.';
-COMMENT ON COLUMN journal_entry_lines.description IS 'Narrative printed on the line.';
-COMMENT ON COLUMN journal_entry_lines.debit_amount IS 'Debit amount in currency_code. Zero on a pure credit line.';
-COMMENT ON COLUMN journal_entry_lines.credit_amount IS 'Credit amount in currency_code. Zero on a pure debit line.';
-COMMENT ON COLUMN journal_entry_lines.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN journal_entry_lines.exchange_rate IS 'Rate used to convert the amounts into the base currency.';
-COMMENT ON COLUMN journal_entry_lines.base_debit_amount IS 'debit_amount converted to the base currency. Summed for the trial balance.';
-COMMENT ON COLUMN journal_entry_lines.base_credit_amount IS 'credit_amount converted to the base currency. Summed for the trial balance.';
-COMMENT ON COLUMN journal_entry_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
 -- Table: service_order_charge_lines
 -- Module: Service Operations  [app.modules.operations.models]
 -- Chargeable line of a service order charge.
@@ -3725,5 +4312,5 @@ COMMENT ON COLUMN service_order_charge_lines.line_amount IS 'Final payable amoun
 COMMENT ON COLUMN service_order_charge_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- ==========================================================================
--- END OF SCHEMA - 65 tables
+-- END OF SCHEMA - 76 tables
 -- ==========================================================================

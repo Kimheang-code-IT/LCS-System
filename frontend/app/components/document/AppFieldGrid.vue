@@ -192,16 +192,17 @@ function spanClass(field: FreightField) {
           @update:model-value="updateField(field, $event)"
           @blur="emit('blur', field.key)"
         />
-        <UInput
-          v-else-if="field.type === 'password'"
-          type="password"
-          :model-value="String(model[field.key] ?? '')"
-          :disabled="disabled"
-          size="md"
-          class="w-full"
-          @update:model-value="updateField(field, $event)"
-          @blur="emit('blur', field.key)"
-        />
+        <div v-else-if="field.type === 'password'" class="space-y-2">
+          <UInput
+            type="password"
+            :model-value="String(model[field.key] ?? '')"
+            :disabled="disabled"
+            size="md"
+            class="w-full"
+            @update:model-value="updateField(field, $event)"
+            @blur="emit('blur', field.key)" />
+          <CommonAppPasswordRequirements :value="String(model[field.key] ?? '')" />
+        </div>
         <UInput
           v-else-if="field.type === 'file'"
           type="file"

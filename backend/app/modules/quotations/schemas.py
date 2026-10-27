@@ -81,6 +81,9 @@ PRICING_LINE_SCHEMA = RecordSchema(
         # the total from them), so they are not capped at 100.
         FieldSpec("discount", kind="decimal", minimum=0, aliases=("discountAmount", "discount_amount")),
         FieldSpec("tax", kind="decimal", minimum=0, aliases=("taxAmount", "tax_amount")),
+        # Optional per-line rate from the Additional Details dialog; when present
+        # the service derives the tax amount from it (0–100).
+        FieldSpec("taxRate", kind="decimal", minimum=0, maximum=100, aliases=("tax_rate",)),
         FieldSpec("unit", max_length=32, aliases=("unitCode", "unit_code")),
     ),
     readonly=("id", "lineNo", "line_no", "subtotal", "total", "amount", "createdAt", "updatedAt"),

@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import cache
 from app.core.database import Base
 from app.core.permissions import (
     BUILTIN_ROLE_CODES,
@@ -137,6 +138,9 @@ async def ensure_permission_catalog(
             await session.flush()
             session.add(UserRoleAssignment(user_id=protected_user.id, role_id=platform_role.id))
     await session.commit()
+    # New catalog entries or role mappings only reach cached identities after
+    # the 300s TTL otherwise; bump so a deploy takes effect immediately.
+    await cache.bump("auth")
 
 
 async def requires_setup(session: AsyncSession) -> bool:
@@ -238,6 +242,19 @@ async def provision_baseline(session: AsyncSession) -> None:
                     status="ACTIVE",
                 )
             )
+
+    # The transport-asset identity vocabulary (License Plate, IMO Number, …) was
+    # a hardcoded dropdown; it is seeded as configuration like the roles above.
+    # Transport types themselves are administrator data, so a fresh database
+    # seeds unlinked identity types (offered for every type) until the
+    # administrator links them from the Asset Identity Types master.
+    from app.modules.master_data.service import seed_capacity_units, seed_transport_asset_identity_types
+
+    await seed_transport_asset_identity_types(session)
+
+    # The capacity-unit list (KG, CBM, Pallets, …) backs the asset capacity
+    # select; seeded like the vocabulary above.
+    await seed_capacity_units(session)
 
     existing_settings = set((await session.execute(select(AppSetting.setting_key))).scalars().all())
     if APP_INFO_KEY not in existing_settings:
@@ -367,20 +384,24 @@ async def reset_all_data(session: AsyncSession) -> None:
     # Importing the model modules guarantees Base.metadata sees every table.
     import app.modules.archive.models  # noqa: F401
     import app.modules.audit.models  # noqa: F401
+    import app.modules.excel_io.models  # noqa: F401
     import app.modules.master_data.models  # noqa: F401
     import app.modules.operations.models  # noqa: F401
     import app.modules.quotations.models  # noqa: F401
     import app.modules.settings.models  # noqa: F401
+    import app.modules.telegram.models  # noqa: F401
 
     preserved_tables = {
         "users",
         "user_credentials",
+        "used_refresh_tokens",
         "user_sessions",
         "roles",
         "permissions",
         "role_permissions",
         "user_role_assignments",
         "audit_events",
+        "import_jobs",
     }
     # PostgreSQL guards make posted journals and their lines immutable and audit
     # events append-only. An administrative reset is the one operation allowed to

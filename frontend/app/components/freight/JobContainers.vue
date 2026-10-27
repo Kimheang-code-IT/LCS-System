@@ -6,7 +6,9 @@ import {
   JOB_CONTAINER_PAYMENT_TABLE,
 } from '~/config/job-workspace-forms'
 import { formatMoney } from '~/composables/freight/useFreight'
+import { useLcs } from '~/composables/freight/useLcs'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import { createClientId } from '~/utils/client-id'
 import { focusField } from '~/utils/validation/focus'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
@@ -17,10 +19,12 @@ import {
   jobContainerPaymentRows,
   jobContainerPaymentTotals,
   jobContainerRequirements,
+  normalizeActualContainer,
   persistableActuals,
   persistablePayments,
   persistableRequirements,
   requirementOptionLabel,
+  syncPaymentContainerReferences,
   withRequirementProgress,
   type ContainerRowIssue,
 } from '~/utils/freight/job-containers'
@@ -50,10 +54,13 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const route = useRoute()
 const store = useFreightStore()
+const lcs = useLcs()
 const { localization } = useAppLocalization()
 const requirementRows = ref<Array<Record<string, unknown>>>([])
 const actualRows = ref<Array<Record<string, unknown>>>([])
 const paymentRows = ref<Array<Record<string, unknown>>>([])
+/** Page-level refusal from the container API — never a toast. */
+const syncError = ref('')
 
 const totals = computed(() => jobContainerPaymentTotals(paymentRows.value, props.job.vatRate, props.job.discount))
 const currency = computed(() => String(props.job.currency || localization.value.currency))
@@ -136,6 +143,7 @@ function loadRows() {
     shipments: props.shipments,
     charges: props.charges,
     quotation: quotation.value,
+    actuals: actualRows.value,
   })
 }
 
@@ -156,9 +164,79 @@ function syncCollection(collection: string, rows: Array<Record<string, unknown>>
   }
 }
 
-function persist() {
+function serverContainerId(value: unknown) {
+  const id = String(value ?? '').trim()
+  return /^\d+$/.test(id) ? id : ''
+}
+
+/**
+ * Write prepared and numbered rows to the container API.
+ *
+ * A prepared row (`pending`, no number) already exists server-side and needs no
+ * write until a number is entered. Numbered rows are upserted, and rows the user
+ * removed are deleted — the backend refuses that deletion while a payment still
+ * references the container, and the row is restored on the next load.
+ */
+async function syncActualContainers(rows: Array<Record<string, unknown>>) {
+  const orderId = String(props.job.id || '')
+  if (props.isCreate || !orderId) return rows
+  const before = new Set(
+    (props.actualContainers || []).map(row => serverContainerId(row.id)).filter(Boolean),
+  )
+  const next = [...rows]
+  for (let index = 0; index < next.length; index += 1) {
+    const row = next[index]!
+    const id = serverContainerId(row.id)
+    const containerNo = String(row.containerNo || '').trim()
+    if (!containerNo) {
+      if (id) before.delete(id)
+      continue
+    }
+    const containerTypeId = Number(row.containerTypeId || 0)
+    const payload: Record<string, unknown> = {
+      containerNumber: containerNo,
+      containerTypeId: containerTypeId > 0 ? containerTypeId : undefined,
+      containerType: containerTypeId > 0 ? undefined : String(row.containerType || ''),
+      sealSerial: String(row.sealNo || ''),
+      status: String(row.status || 'Expected'),
+      netWeightKg: Number(row.netWeightKg || 0) || undefined,
+      grossWeightKg: Number(row.grossWeightKg || 0) || undefined,
+      containerRequirementId: String(row.containerRequirementId || '') || undefined,
+    }
+    if (id) payload.id = id
+    const saved = await lcs.jobs.addActualContainer(orderId, payload)
+    next[index] = {
+      ...row,
+      id: String(saved.id || row.id),
+      pending: false,
+      containerType: String(saved.containerType || row.containerType || ''),
+      containerTypeId: saved.containerTypeId ?? row.containerTypeId ?? '',
+    }
+    if (id) before.delete(id)
+  }
+  if (before.size) {
+    await lcs.jobs.deleteActualContainers(orderId, [...before])
+  }
+  return next
+}
+
+async function persist() {
+  syncError.value = ''
+  let actuals = persistableActuals(actualRows.value)
+  if (!props.isCreate && props.job.id) {
+    try {
+      actuals = await syncActualContainers(actuals)
+      // Keep the server-assigned ids so a second edit updates the same rows
+      // instead of creating duplicates.
+      actualRows.value = actuals.map(row => normalizeActualContainer(row))
+      paymentRows.value = syncPaymentContainerReferences(paymentRows.value, actuals)
+    }
+    catch (error) {
+      syncError.value = apiErrorMessage(error, t('freight.ui.saveFailed'))
+      return
+    }
+  }
   const requirements = persistableRequirements(requirementRows.value)
-  const actuals = persistableActuals(actualRows.value)
   const payments = persistablePayments(paymentRows.value)
   const nextTotals = jobContainerPaymentTotals(payments, props.job.vatRate, props.job.discount)
   const firstActual = actuals[0] || {}
@@ -208,7 +286,7 @@ function validateActualRows(rows: Array<Record<string, unknown>>) {
   return errors
 }
 
-function setActuals(value: Array<Record<string, unknown>>) {
+async function setActuals(value: Array<Record<string, unknown>>) {
   const next = withIds(value, 'ac').map((row) => {
     if (row.containerType || row.containerRequirementId) return row
     const open = firstOpenRequirement(requirementDisplayRows.value)
@@ -229,12 +307,12 @@ function setActuals(value: Array<Record<string, unknown>>) {
     return
   }
   actualRows.value = next
-  persist()
+  await persist()
 }
 
-function setPayments(value: Array<Record<string, unknown>>) {
+async function setPayments(value: Array<Record<string, unknown>>) {
   paymentRows.value = withIds(value, 'cp')
-  persist()
+  await persist()
 }
 
 function debitInvoicePrintRoute(containerIndex: number) {
@@ -261,8 +339,8 @@ function actualContainerPrintActions(row: Record<string, unknown>) {
     label: t('freight.print.job.printDebitInvoice'),
     icon: 'i-lucide-credit-card',
     color: 'primary' as const,
-    onSelect: () => {
-      persist()
+    onSelect: async () => {
+      await persist()
       void navigateTo(debitInvoicePrintRoute(index))
     },
   }]
@@ -279,8 +357,8 @@ function paymentRowAction(action: string, row: Record<string, unknown>) {
     label: t('freight.print.job.printPaymentInvoice'),
     icon: 'i-lucide-receipt-text',
     color: 'primary' as const,
-    onSelect: () => {
-      persist()
+    onSelect: async () => {
+      await persist()
       const { path, query } = buildPrintRoute({
         collection: 'jobs',
         recordId: String(props.job.id),
@@ -300,6 +378,7 @@ watch(() => props.job.id, loadRows, { immediate: true })
 
 <template>
   <div class="space-y-6">
+    <CommonAppFormErrorSummary v-if="syncError" :form-errors="[syncError]" />
     <FreightAppLineTable
       :table="actualTable"
       :model-value="actualRows"

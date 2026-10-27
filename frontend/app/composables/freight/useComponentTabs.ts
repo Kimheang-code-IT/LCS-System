@@ -105,7 +105,7 @@ export function useComponentTabs(
     const blank: FlatRow = {}
     for (const attribute of group.attributes) {
       if (attribute.fieldType === 'checkbox' || attribute.fieldType === 'boolean') blank[attribute.code] = false
-      else if (['number', 'decimal', 'money'].includes(attribute.fieldType)) blank[attribute.code] = attribute.defaultValue ?? 0
+      else if (['number', 'integer', 'decimal', 'money'].includes(attribute.fieldType)) blank[attribute.code] = attribute.defaultValue ?? 0
       else if (attribute.fieldType === 'multi_select') blank[attribute.code] = []
       else blank[attribute.code] = attribute.defaultValue ?? ''
     }
