@@ -57,8 +57,10 @@ unchecked, cookies are browser-session cookies and the server enforces
 `SESSION_REFRESH_TOKEN_EXPIRE_HOURS` (12 hours). Change the durations via the env
 vars without rebuilding.
 
-The backend container waits for PostgreSQL, Redis and MinIO to become healthy,
-then runs `alembic upgrade head`. **No data is seeded** — the database starts
+The **local development** backend container waits for PostgreSQL, Redis and MinIO
+to become healthy, then runs `alembic upgrade head`. Production images start
+Uvicorn only: the production workflow runs Alembic explicitly with the new image
+while the old stack is still serving. **No data is seeded** - the database starts
 empty, so the first login requires a user to be provisioned (see below).
 
 The frontend is a static SPA served by nginx, which also reverse-proxies `/api/`

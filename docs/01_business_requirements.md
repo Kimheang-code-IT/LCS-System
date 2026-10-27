@@ -61,8 +61,9 @@ and double-entry financial records for a single-tenant freight forwarder.
 - Master Data includes an administrator-managed Party Roles screen (`party_roles`
   plus the `business_party_roles` many-to-many table). A role can be renamed or
   deactivated; a role still assigned to a party cannot be deleted.
-- The separate Places master was removed in migration `c3d4e5f6a7b8`; route stops
-  now use a dynamic Place Role plus a free-text location.
+- The separate Places collection is no longer exposed in Master Data. Migration
+  `c3d4e5f6a7b8` preserves the legacy `places` table and its historical
+  references; new route stops use a dynamic Place Role plus a free-text location.
 - Posting Rules are configurable in the UI and resolved per document type and
   optional fee type; the service layer has a last-resort fallback only.
 - Google Sheets backup mirrors supported database tables automatically; sensitive

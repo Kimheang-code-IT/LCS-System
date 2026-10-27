@@ -473,7 +473,7 @@ effective permission set before the router calls a service.
 - Number allocation uses row locks (`with_for_update`) plus unique constraints.
 - Positive/negative invariants not expressible as constraints are enforced in
   services (for example, journal balance before posting).
-- The schema has 70 tables and the current Alembic head is `24ac57ef90bd`.
+- The schema has 78 tables and the current Alembic head is `f6a7b8c9d0e1`.
   `docs/06_database_design.sql` is the single generated reference: DDL, indexes,
   constraints, and a `COMMENT ON` description for every table and column.
   Relationships are summarised in `docs/04_functional_design.md` section 17.
@@ -522,7 +522,7 @@ acceptable.
 
 ## Appendix A - Tables by module
 
-The schema has 70 tables. Column definitions for every table are in
+The schema has 78 tables. Column definitions for every table are in
 `docs/06_database_design.sql`; relations are in `docs/04_functional_design.md` §17.
 
 | Module | Tables |
@@ -531,7 +531,7 @@ The schema has 70 tables. Column definitions for every table are in
 | quotations | `quotations`, `quotation_revisions`, `quotation_revision_places`, `quotation_revision_containers`, `quotation_revision_lines`, `quotation_conversions` |
 | operations | `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links` |
 | finance | `chart_of_accounts`, `financial_accounts`, `accounting_periods`, `document_sequences`, `financial_documents`, `financial_document_lines`, `financial_document_sources`, `financial_document_allocations`, `posting_rules`, `journal_entries`, `journal_entry_lines`, `financial_document_postings` |
-| master_data | `place_roles`, `party_roles`, `business_party_roles`, `trade_directions`, `currencies`, `currency_rates`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `transport_assets`, `customer_customs_accounts`, `configuration_versions`, `component_attributes`, `component_groups`, `component_group_attributes`, `component_tabs`, `component_tab_groups`, `module_records` |
+| master_data | `places`, `place_roles`, `place_role_places`, `party_roles`, `business_party_roles`, `trade_directions`, `currencies`, `currency_rates`, `container_types`, `transport_types`, `fee_types`, `business_parties`, `transport_assets`, `customer_customs_accounts`, `configuration_versions`, `component_attributes`, `component_groups`, `component_group_attributes`, `component_tabs`, `component_tab_groups`, `module_records` |
 | backup | `backup_runs`, `backup_records`, `backup_states`, `backup_logs` |
 | audit | `audit_events` |
 | settings | `app_settings` |

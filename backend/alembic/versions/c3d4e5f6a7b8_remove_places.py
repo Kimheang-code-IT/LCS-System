@@ -1,10 +1,17 @@
-"""Remove the Places master and its route/movement references.
+"""Preserve the Places master and its historical references.
 
-Places are no longer a master-data collection: a route stop keeps its Place Role
-and a free-text location. Before the table is dropped, the selected place name is
-copied into the route-stop ``free_text`` snapshot and the movement origin and
-destination names are copied into the movement ``data`` JSON, so existing
-documents keep the location text they showed.
+Places are no longer exposed as a master-data collection, but dropping the
+table would delete operator-entered codes, names, addresses and the historical
+foreign keys on route stops and movements. This revision is deliberately
+non-destructive: it only fills the printable text snapshots that the new
+route-stop UI reads. The table, the Place Role mapping and the legacy columns
+stay in place for at least this release; removal is deferred to a later
+expand/migrate/contract release after a verified backup and a data-retention
+decision.
+
+Databases that already applied the earlier destructive form of this revision
+are detected by ``d4e5f6a7b8c9``, which aborts with restore instructions instead
+of pretending the lost master data still exists.
 
 Revision ID: c3d4e5f6a7b8
 Revises: a9b8c7d6e5f4
@@ -15,8 +22,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-
 from alembic import op
 
 revision: str = "c3d4e5f6a7b8"
@@ -26,7 +31,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Keep the displayed location text before the reference disappears.
+    # Keep the displayed location text before any future contract phase. These
+    # statements only fill blanks, so re-running them is safe.
     op.execute(
         """
         UPDATE quotation_revision_places AS r
@@ -50,120 +56,24 @@ def upgrade() -> None:
         UPDATE service_order_movements AS m
         SET data = COALESCE(m.data, '{}'::jsonb) || jsonb_strip_nulls(
             jsonb_build_object(
-                'originPlace', (SELECT p.name FROM places AS p WHERE p.id = m.origin_place_id),
-                'destinationPlace', (SELECT p.name FROM places AS p WHERE p.id = m.destination_place_id)
+                'originPlace', CASE
+                    WHEN m.origin_place_id IS NOT NULL
+                     AND COALESCE(btrim(m.data->>'originPlace'), '') = ''
+                    THEN (SELECT p.name FROM places AS p WHERE p.id = m.origin_place_id)
+                END,
+                'destinationPlace', CASE
+                    WHEN m.destination_place_id IS NOT NULL
+                     AND COALESCE(btrim(m.data->>'destinationPlace'), '') = ''
+                    THEN (SELECT p.name FROM places AS p WHERE p.id = m.destination_place_id)
+                END
             )
         )
         WHERE m.origin_place_id IS NOT NULL OR m.destination_place_id IS NOT NULL
         """
     )
 
-    op.drop_constraint(
-        "fk_quotation_revision_places_place_id_places",
-        "quotation_revision_places",
-        type_="foreignkey",
-    )
-    op.drop_column("quotation_revision_places", "place_id")
-    op.drop_constraint(
-        "fk_service_order_places_place_id_places",
-        "service_order_places",
-        type_="foreignkey",
-    )
-    op.drop_column("service_order_places", "place_id")
-    op.drop_constraint(
-        "fk_service_order_movements_origin_place_id_places",
-        "service_order_movements",
-        type_="foreignkey",
-    )
-    op.drop_column("service_order_movements", "origin_place_id")
-    op.drop_constraint(
-        "fk_service_order_movements_destination_place_id_places",
-        "service_order_movements",
-        type_="foreignkey",
-    )
-    op.drop_column("service_order_movements", "destination_place_id")
-
-    op.drop_table("place_role_places")
-    op.drop_table("places")
-
 
 def downgrade() -> None:
-    op.create_table(
-        "places",
-        sa.Column("code", sa.String(length=50), nullable=True),
-        sa.Column("name", sa.String(length=255), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("address", sa.Text(), nullable=True),
-        sa.Column("status", sa.String(length=20), nullable=False),
-        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("deleted_by_user_id", sa.BigInteger(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["deleted_by_user_id"],
-            ["users.id"],
-            name=op.f("fk_places_deleted_by_user_id_users"),
-            ondelete="SET NULL",
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_places")),
-    )
-    op.create_index("uq_places_code_active", "places", ["code"], unique=True, postgresql_where=sa.text("deleted_at IS NULL"))
-    op.create_index("ix_places_deleted_at", "places", ["deleted_at"], unique=False)
-    op.create_index("ix_places_deleted_by_user_id", "places", ["deleted_by_user_id"], unique=False)
-
-    op.create_table(
-        "place_role_places",
-        sa.Column("place_role_id", sa.BigInteger(), nullable=False),
-        sa.Column("place_id", sa.BigInteger(), nullable=False),
-        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
-        sa.ForeignKeyConstraint(
-            ["place_id"],
-            ["places.id"],
-            name=op.f("fk_place_role_places_place_id_places"),
-            ondelete="CASCADE",
-        ),
-        sa.ForeignKeyConstraint(
-            ["place_role_id"],
-            ["place_roles.id"],
-            name=op.f("fk_place_role_places_place_role_id_place_roles"),
-            ondelete="CASCADE",
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_place_role_places")),
-        sa.UniqueConstraint("place_role_id", "place_id", name="uq_place_role_places"),
-    )
-    op.create_index("ix_place_role_places_place_id", "place_role_places", ["place_id"], unique=False)
-    op.create_index("ix_place_role_places_place_role_id", "place_role_places", ["place_role_id"], unique=False)
-
-    op.add_column("quotation_revision_places", sa.Column("place_id", sa.BigInteger(), nullable=True))
-    op.create_foreign_key(
-        "fk_quotation_revision_places_place_id_places",
-        "quotation_revision_places",
-        "places",
-        ["place_id"],
-        ["id"],
-    )
-    op.add_column("service_order_places", sa.Column("place_id", sa.BigInteger(), nullable=True))
-    op.create_foreign_key(
-        "fk_service_order_places_place_id_places",
-        "service_order_places",
-        "places",
-        ["place_id"],
-        ["id"],
-    )
-    op.add_column("service_order_movements", sa.Column("origin_place_id", sa.BigInteger(), nullable=True))
-    op.create_foreign_key(
-        "fk_service_order_movements_origin_place_id_places",
-        "service_order_movements",
-        "places",
-        ["origin_place_id"],
-        ["id"],
-    )
-    op.add_column("service_order_movements", sa.Column("destination_place_id", sa.BigInteger(), nullable=True))
-    op.create_foreign_key(
-        "fk_service_order_movements_destination_place_id_places",
-        "service_order_movements",
-        "places",
-        ["destination_place_id"],
-        ["id"],
-    )
+    # No schema or data change to undo. Keeping this a no-op is intentional:
+    # downgrading must not drop Places either.
+    pass

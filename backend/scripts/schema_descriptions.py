@@ -47,6 +47,17 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "notification_outbox": "Durable notification delivery and sanitized history. Claims use leases and PostgreSQL row locks. Recovery ciphertext expires before its token and is purged after delivery or expiry.",
     "notification_incidents": "Runtime incident duration, cooldown and recovery state, plus the committed audit-event scan cursor. No credentials or message bodies.",
     # -- master data ------------------------------------------------------
+    "places": (
+        "Legacy location master retained for historical route and movement references.\n"
+        "Places are no longer exposed as an editable collection, but the rows and the\n"
+        "route-stop foreign keys are kept: dropping the table would destroy operator-entered\n"
+        "codes, names and addresses and break historical documents."
+    ),
+    "place_role_places": (
+        "Optional allowed-place mapping for a Place Role. Retained from the former\n"
+        "master-data screen; historical route stops use the role plus free text, so the\n"
+        "mapping is not required for new writes."
+    ),
     "place_roles": (
         "Administrator-managed vocabulary of roles a route stop can play (Pickup, Origin,\n"
         "Customs Clearance, ...). Configuration data, not a physical location: the same\n"
@@ -596,6 +607,17 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "created_at": "Request timestamp for this reset code.",
     },
     # -- master data ------------------------------------------------------
+    "places": {
+        "code": "Optional operator-entered location code. Unique among non-archived rows.",
+        "name": "Location name shown on historical route stops and movement legs.",
+        "description": "Free-text description of the location.",
+        "address": "Printable address of the location.",
+        "status": "Record status (ACTIVE, INACTIVE). Historical rows are retained as-is.",
+    },
+    "place_role_places": {
+        "place_role_id": "Place Role the allowed place belongs to. CASCADE on role deletion.",
+        "place_id": "Allowed legacy place. CASCADE on place deletion.",
+    },
     "place_roles": {
         "code": (
             "Stable role code (e.g. PICKUP). Unique among non-archived rows and stored on a\n"
@@ -863,6 +885,10 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "Configured Place Role the stop plays. SET NULL only if the role row is purged;\n"
             "the place_role text snapshot keeps the historical label."
         ),
+        "place_id": (
+            "Legacy Places reference retained for historical route stops. New writes use the\n"
+            "role and free_text snapshot; NULL when the stop never selected a place."
+        ),
         "place_role": (
             "Text snapshot of the role (the role name at save time). Preserved so a route\n"
             "still prints after the role is renamed or deactivated."
@@ -945,6 +971,10 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "place_role_id": (
             "Configured Place Role the stop plays. Copied from the quotation on conversion,\n"
             "then independent; SET NULL only if the role row is purged."
+        ),
+        "place_id": (
+            "Legacy Places reference retained for historical service-order stops. New writes\n"
+            "use the role and free_text snapshot; NULL when no place was selected."
         ),
         "place_role": (
             "Text snapshot of the role at save time. Preserved so a route still prints after\n"
@@ -1038,6 +1068,14 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "sequence_no": "Order of this leg along the shipment itinerary.",
         "transport_type_id": "Mode of transport used for this leg.",
         "transport_asset_id": "Specific vehicle, vessel or aircraft performing the leg.",
+        "origin_place_id": (
+            "Legacy Places reference for the origin of the leg. Retained for historical rows;\n"
+            "the movement data snapshot carries the printable origin text."
+        ),
+        "destination_place_id": (
+            "Legacy Places reference for the destination of the leg. Retained for historical\n"
+            "rows; the movement data snapshot carries the printable destination text."
+        ),
         "planned_departure": "Scheduled departure (UTC, timezone-aware).",
         "actual_departure": "Recorded departure. NULL until the leg actually departs.",
         "planned_arrival": "Scheduled arrival (UTC, timezone-aware).",

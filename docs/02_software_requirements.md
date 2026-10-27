@@ -85,7 +85,7 @@ The platform is **single-tenant**: organizations and branches were removed from 
 | Organization / Branch | Removed from the schema and product; the platform is single-tenant and no longer models either entity |
 | Business party | Customer, supplier, carrier, broker, or other counterparty |
 | Trade direction | Import, export, transit, re-export, or another movement direction |
-| Place | A free-text location on a route or movement, classified by a Place Role; the separate Places master data was removed |
+| Place | A free-text location on a route or movement, classified by a Place Role; the separate Places collection is no longer exposed, but legacy rows and references are retained for history |
 | Component template | Configurable structure defining attributes for an operational component |
 | Service component | Runtime instance of a template attached to a service order |
 | Service charge | Informational customer-fee record under a service order |
@@ -239,7 +239,7 @@ The organization and branch capability has been **removed** from the schema and 
 
 **FR-043** The system shall manage trade directions with stable codes and names.
 
-**FR-044** The system shall manage administrator-defined route-stop roles and store a free-text location on each route stop. The separate Places master was removed in `c3d4e5f6a7b8` and is not part of the current implementation.
+**FR-044** The system shall manage administrator-defined route-stop roles and store a free-text location on each route stop. The separate Places collection is no longer exposed; migration `c3d4e5f6a7b8` preserves the legacy table and historical references, and `d4e5f6a7b8c9` guards those structures.
 
 **FR-045** The system shall manage physical container types with size, kind, ISO code, dimensions, and weight attributes.
 

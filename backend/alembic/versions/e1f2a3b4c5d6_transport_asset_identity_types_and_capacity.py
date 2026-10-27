@@ -7,7 +7,7 @@ matches, ``NULL`` meaning the identity type suits every type. Assets also gain
 an optional display name and capacity value/unit/status extension support.
 
 Revision ID: e1f2a3b4c5d6
-Revises: c3d4e5f6a7b8
+Revises: d4e5f6a7b8c9
 Create Date: 2026-10-22
 """
 
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e1f2a3b4c5d6"
-down_revision: str | None = "c3d4e5f6a7b8"
+down_revision: str | None = "d4e5f6a7b8c9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

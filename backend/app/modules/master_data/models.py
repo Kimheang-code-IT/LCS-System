@@ -42,6 +42,25 @@ def active_unique_index(name: str, *columns: str) -> Index:
     )
 
 
+class Place(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A legacy location master retained for historical route references.
+
+    Places are no longer exposed as an editable collection, but the table and
+    its rows are kept because quotation route stops and service-order movements
+    still reference them. Dropping the table would destroy operator-entered
+    codes, names and addresses and break the historical foreign keys.
+    """
+
+    __tablename__ = "places"
+    __table_args__ = (active_unique_index("uq_places_code_active", "code"),)
+
+    code: Mapped[str | None] = mapped_column(String(50))
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    address: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
 class PlaceRole(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     """A reusable role a route stop can play (Pickup, Origin, Customs …).
 
@@ -59,6 +78,25 @@ class PlaceRole(PKMixin, TimestampMixin, SoftDeleteMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+
+class PlaceRolePlace(PKMixin, Base):
+    """Optional allowed-place mapping for a Place Role.
+
+    The mapping is retained from the earlier master-data screen. Historical
+    route stops use the role plus free text, so the mapping is not required for
+    new writes, but existing links must not disappear.
+    """
+
+    __tablename__ = "place_role_places"
+    __table_args__ = (UniqueConstraint("place_role_id", "place_id", name="uq_place_role_places"),)
+
+    place_role_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("place_roles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    place_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("places.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
 
 class TradeDirection(PKMixin, TimestampMixin, SoftDeleteMixin, Base):

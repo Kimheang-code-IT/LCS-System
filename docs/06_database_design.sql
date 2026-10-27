@@ -2167,6 +2167,61 @@ COMMENT ON COLUMN place_roles.deleted_at IS 'Soft-deletion timestamp. A non-NULL
 COMMENT ON COLUMN place_roles.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 
 -- --------------------------------------------------------------------------
+-- Table: places
+-- Module: Master Data  [app.modules.master_data.models]
+-- Legacy location master retained for historical route and movement
+-- references. Places are no longer exposed as an editable collection, but the
+-- rows and the route-stop foreign keys are kept: dropping the table would
+-- destroy operator-entered codes, names and addresses and break historical
+-- documents.
+-- --------------------------------------------------------------------------
+CREATE TABLE places (
+    -- Optional operator-entered location code. Unique among non-archived
+    -- rows.
+    code VARCHAR(50),
+    -- Location name shown on historical route stops and movement legs.
+    name VARCHAR(255) NOT NULL,
+    -- Free-text description of the location.
+    description TEXT,
+    -- Printable address of the location.
+    address TEXT,
+    -- Record status (ACTIVE, INACTIVE). Historical rows are retained as-is.
+    status VARCHAR(20) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Soft-deletion timestamp. A non-NULL value means the row is archived: it
+    -- is excluded from listings and uniqueness checks but stays in place.
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    -- Identifier of the user who archived this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    deleted_by_user_id BIGINT,
+    CONSTRAINT pk_places PRIMARY KEY (id),
+    CONSTRAINT fk_places_deleted_by_user_id_users FOREIGN KEY(deleted_by_user_id) REFERENCES users (id) ON DELETE SET NULL
+);
+CREATE INDEX ix_places_deleted_at ON places (deleted_at);
+CREATE INDEX ix_places_deleted_by_user_id ON places (deleted_by_user_id);
+CREATE UNIQUE INDEX uq_places_code_active ON places (code) WHERE deleted_at IS NULL;
+
+COMMENT ON TABLE places IS 'Legacy location master retained for historical route and movement references. Places are no longer exposed as an editable collection, but the rows and the route-stop foreign keys are kept: dropping the table would destroy operator-entered codes, names and addresses and break historical documents.';
+COMMENT ON COLUMN places.code IS 'Optional operator-entered location code. Unique among non-archived rows.';
+COMMENT ON COLUMN places.name IS 'Location name shown on historical route stops and movement legs.';
+COMMENT ON COLUMN places.description IS 'Free-text description of the location.';
+COMMENT ON COLUMN places.address IS 'Printable address of the location.';
+COMMENT ON COLUMN places.status IS 'Record status (ACTIVE, INACTIVE). Historical rows are retained as-is.';
+COMMENT ON COLUMN places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN places.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN places.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+COMMENT ON COLUMN places.deleted_at IS 'Soft-deletion timestamp. A non-NULL value means the row is archived: it is excluded from listings and uniqueness checks but stays in place.';
+COMMENT ON COLUMN places.deleted_by_user_id IS 'Identifier of the user who archived this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+
+-- --------------------------------------------------------------------------
 -- Table: quotation_conversions
 -- Module: Quotations  [app.modules.quotations.models]
 -- Record of a quotation revision being converted into a service order. Both
@@ -3157,6 +3212,33 @@ COMMENT ON COLUMN financial_documents.created_at IS 'Row creation timestamp (UTC
 COMMENT ON COLUMN financial_documents.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
+-- Table: place_role_places
+-- Module: Master Data  [app.modules.master_data.models]
+-- Optional allowed-place mapping for a Place Role. Retained from the former
+-- master-data screen; historical route stops use the role plus free text, so
+-- the mapping is not required for new writes.
+-- --------------------------------------------------------------------------
+CREATE TABLE place_role_places (
+    -- Place Role the allowed place belongs to. CASCADE on role deletion.
+    place_role_id BIGINT NOT NULL,
+    -- Allowed legacy place. CASCADE on place deletion.
+    place_id BIGINT NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_place_role_places PRIMARY KEY (id),
+    CONSTRAINT uq_place_role_places UNIQUE (place_role_id, place_id),
+    CONSTRAINT fk_place_role_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE CASCADE,
+    CONSTRAINT fk_place_role_places_place_id_places FOREIGN KEY(place_id) REFERENCES places (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_place_role_places_place_id ON place_role_places (place_id);
+CREATE INDEX ix_place_role_places_place_role_id ON place_role_places (place_role_id);
+
+COMMENT ON TABLE place_role_places IS 'Optional allowed-place mapping for a Place Role. Retained from the former master-data screen; historical route stops use the role plus free text, so the mapping is not required for new writes.';
+COMMENT ON COLUMN place_role_places.place_role_id IS 'Place Role the allowed place belongs to. CASCADE on role deletion.';
+COMMENT ON COLUMN place_role_places.place_id IS 'Allowed legacy place. CASCADE on place deletion.';
+COMMENT ON COLUMN place_role_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
 -- Table: posting_rules
 -- Module: Double-Entry Finance  [app.modules.finance.models]
 -- Rule mapping a document type and fee type to the debit and credit
@@ -3260,6 +3342,10 @@ CREATE TABLE quotation_revision_places (
     -- Configured Place Role the stop plays. SET NULL only if the role row is
     -- purged; the place_role text snapshot keeps the historical label.
     place_role_id BIGINT,
+    -- Legacy Places reference retained for historical route stops. New writes
+    -- use the role and free_text snapshot; NULL when the stop never selected
+    -- a place.
+    place_id BIGINT,
     -- Text snapshot of the role (the role name at save time). Preserved so a
     -- route still prints after the role is renamed or deactivated.
     place_role VARCHAR(32) NOT NULL,
@@ -3277,13 +3363,15 @@ CREATE TABLE quotation_revision_places (
     CONSTRAINT pk_quotation_revision_places PRIMARY KEY (id),
     CONSTRAINT uq_quotation_revision_places_sequence UNIQUE (quotation_revision_id, sequence_no),
     CONSTRAINT fk_quotation_revision_places_quotation_revision_id_quot_f0f2 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id) ON DELETE CASCADE,
-    CONSTRAINT fk_quotation_revision_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL
+    CONSTRAINT fk_quotation_revision_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL,
+    CONSTRAINT fk_quotation_revision_places_place_id_places FOREIGN KEY(place_id) REFERENCES places (id)
 );
 CREATE INDEX ix_quotation_revision_places_quotation_revision_id ON quotation_revision_places (quotation_revision_id);
 
 COMMENT ON TABLE quotation_revision_places IS 'Routing stop of a quotation revision (origin, destination, pickup, delivery).';
 COMMENT ON COLUMN quotation_revision_places.quotation_revision_id IS 'Revision the routing stop belongs to. CASCADE on revision deletion.';
 COMMENT ON COLUMN quotation_revision_places.place_role_id IS 'Configured Place Role the stop plays. SET NULL only if the role row is purged; the place_role text snapshot keeps the historical label.';
+COMMENT ON COLUMN quotation_revision_places.place_id IS 'Legacy Places reference retained for historical route stops. New writes use the role and free_text snapshot; NULL when the stop never selected a place.';
 COMMENT ON COLUMN quotation_revision_places.place_role IS 'Text snapshot of the role (the role name at save time). Preserved so a route still prints after the role is renamed or deactivated.';
 COMMENT ON COLUMN quotation_revision_places.sequence_no IS 'Position of this stop within the route. Unique per revision; the server renumbers from the submitted row order.';
 COMMENT ON COLUMN quotation_revision_places.planned_at IS 'Planned date/time for the stop.';
@@ -3366,6 +3454,10 @@ CREATE TABLE service_order_places (
     -- Configured Place Role the stop plays. Copied from the quotation on
     -- conversion, then independent; SET NULL only if the role row is purged.
     place_role_id BIGINT,
+    -- Legacy Places reference retained for historical service-order stops.
+    -- New writes use the role and free_text snapshot; NULL when no place was
+    -- selected.
+    place_id BIGINT,
     -- Text snapshot of the role at save time. Preserved so a route still
     -- prints after the role is renamed or deactivated.
     place_role VARCHAR(32) NOT NULL,
@@ -3388,13 +3480,15 @@ CREATE TABLE service_order_places (
     CONSTRAINT pk_service_order_places PRIMARY KEY (id),
     CONSTRAINT uq_service_order_places_sequence UNIQUE (service_order_id, sequence_no),
     CONSTRAINT fk_service_order_places_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
-    CONSTRAINT fk_service_order_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL
+    CONSTRAINT fk_service_order_places_place_role_id_place_roles FOREIGN KEY(place_role_id) REFERENCES place_roles (id) ON DELETE SET NULL,
+    CONSTRAINT fk_service_order_places_place_id_places FOREIGN KEY(place_id) REFERENCES places (id)
 );
 CREATE INDEX ix_service_order_places_service_order_id ON service_order_places (service_order_id);
 
 COMMENT ON TABLE service_order_places IS 'Routing stop attached to a service order.';
 COMMENT ON COLUMN service_order_places.service_order_id IS 'Service order the stop belongs to. CASCADE on order deletion.';
 COMMENT ON COLUMN service_order_places.place_role_id IS 'Configured Place Role the stop plays. Copied from the quotation on conversion, then independent; SET NULL only if the role row is purged.';
+COMMENT ON COLUMN service_order_places.place_id IS 'Legacy Places reference retained for historical service-order stops. New writes use the role and free_text snapshot; NULL when no place was selected.';
 COMMENT ON COLUMN service_order_places.place_role IS 'Text snapshot of the role at save time. Preserved so a route still prints after the role is renamed or deactivated.';
 COMMENT ON COLUMN service_order_places.sequence_no IS 'Position of this stop within the route. Unique per order; the server renumbers from the submitted row order.';
 COMMENT ON COLUMN service_order_places.planned_at IS 'Planned date/time for the stop.';
@@ -3926,6 +4020,14 @@ CREATE TABLE service_order_movements (
     transport_type_id BIGINT,
     -- Specific vehicle, vessel or aircraft performing the leg.
     transport_asset_id BIGINT,
+    -- Legacy Places reference for the origin of the leg. Retained for
+    -- historical rows; the movement data snapshot carries the printable
+    -- origin text.
+    origin_place_id BIGINT,
+    -- Legacy Places reference for the destination of the leg. Retained for
+    -- historical rows; the movement data snapshot carries the printable
+    -- destination text.
+    destination_place_id BIGINT,
     -- Scheduled departure (UTC, timezone-aware).
     planned_departure TIMESTAMP WITH TIME ZONE,
     -- Recorded departure. NULL until the leg actually departs.
@@ -3950,7 +4052,9 @@ CREATE TABLE service_order_movements (
     CONSTRAINT pk_service_order_movements PRIMARY KEY (id),
     CONSTRAINT fk_service_order_movements_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
     CONSTRAINT fk_service_order_movements_transport_type_id_transport_types FOREIGN KEY(transport_type_id) REFERENCES transport_types (id),
-    CONSTRAINT fk_service_order_movements_transport_asset_id_transport_assets FOREIGN KEY(transport_asset_id) REFERENCES transport_assets (id)
+    CONSTRAINT fk_service_order_movements_transport_asset_id_transport_assets FOREIGN KEY(transport_asset_id) REFERENCES transport_assets (id),
+    CONSTRAINT fk_service_order_movements_origin_place_id_places FOREIGN KEY(origin_place_id) REFERENCES places (id),
+    CONSTRAINT fk_service_order_movements_destination_place_id_places FOREIGN KEY(destination_place_id) REFERENCES places (id)
 );
 CREATE INDEX ix_service_order_movements_service_order_id ON service_order_movements (service_order_id);
 
@@ -3959,6 +4063,8 @@ COMMENT ON COLUMN service_order_movements.service_order_id IS 'Service order the
 COMMENT ON COLUMN service_order_movements.sequence_no IS 'Order of this leg along the shipment itinerary.';
 COMMENT ON COLUMN service_order_movements.transport_type_id IS 'Mode of transport used for this leg.';
 COMMENT ON COLUMN service_order_movements.transport_asset_id IS 'Specific vehicle, vessel or aircraft performing the leg.';
+COMMENT ON COLUMN service_order_movements.origin_place_id IS 'Legacy Places reference for the origin of the leg. Retained for historical rows; the movement data snapshot carries the printable origin text.';
+COMMENT ON COLUMN service_order_movements.destination_place_id IS 'Legacy Places reference for the destination of the leg. Retained for historical rows; the movement data snapshot carries the printable destination text.';
 COMMENT ON COLUMN service_order_movements.planned_departure IS 'Scheduled departure (UTC, timezone-aware).';
 COMMENT ON COLUMN service_order_movements.actual_departure IS 'Recorded departure. NULL until the leg actually departs.';
 COMMENT ON COLUMN service_order_movements.planned_arrival IS 'Scheduled arrival (UTC, timezone-aware).';
@@ -4312,5 +4418,5 @@ COMMENT ON COLUMN service_order_charge_lines.line_amount IS 'Final payable amoun
 COMMENT ON COLUMN service_order_charge_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- ==========================================================================
--- END OF SCHEMA - 76 tables
+-- END OF SCHEMA - 78 tables
 -- ==========================================================================

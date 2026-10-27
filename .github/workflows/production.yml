@@ -8,9 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Existing immutable image tag to deploy (e.g. sha-c1ccaf8). Leave empty to build from this commit.'
+        description: 'Existing immutable image tag to deploy (rollback/redeploy). Leave empty to build from this commit.'
         required: false
         default: ''
+      skip_migrations:
+        description: 'Skip Alembic (only for rolling back/redeploying an image whose schema is already current)'
+        type: boolean
+        required: false
+        default: false
       diagnose:
         description: 'Only print runtime diagnostics from the host (no deploy, no changes)'
         type: boolean
@@ -204,8 +209,10 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
-  # 6-13. Transfer ONLY the runtime files, generate .env, back up PostgreSQL,
-  # deploy the exact SHA-tagged images and verify HTTPS readiness.
+  # 6-13. Transfer ONLY the runtime files, pre-pull the new images, take and
+  # verify a backup, run Alembic explicitly while the old app is still serving,
+  # then recreate the stack and verify HTTPS readiness. Previous image IDs are
+  # kept as local rollback tags; no destructive database restore is automatic.
   #
   # EC2 is a Docker runtime host: it does NOT hold the Git repository and never
   # runs git clone/pull/fetch/reset. The runtime directory is /opt/lcs.
@@ -242,7 +249,7 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           envs: DEPLOY_DIR
           script: |
-            set -euo pipefail
+            set -eu
             if mkdir -p "$DEPLOY_DIR/nginx" 2>/dev/null; then
               echo "Runtime directory ready: $DEPLOY_DIR"
             elif sudo -n mkdir -p "$DEPLOY_DIR/nginx" 2>/dev/null; then
@@ -253,7 +260,7 @@ jobs:
               exit 1
             fi
 
-      # Copy only the runtime bundle: compose.yml + nginx/production.conf.
+      # Copy only the runtime bundle: compose.yml + restore helper + nginx config.
       - name: Upload runtime files
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
         with:
@@ -261,19 +268,24 @@ jobs:
           username: ${{ vars.AWS_USER || secrets.AWS_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
-          source: "deploy/compose.yml,infrastructure/nginx/production.conf"
+          source: "deploy/compose.yml,deploy/restore-db.sh,infrastructure/nginx/production.conf"
           target: /opt/lcs
           strip_components: 1
           overwrite: true
 
-      # Generate the runtime .env atomically, back up PostgreSQL, then pull the
-      # exact immutable (public) images and recreate the stack.
+      # Generate the runtime .env atomically, pre-pull the new images, take and
+      # verify a backup, run migrations with the new image while the old stack is
+      # still serving, then recreate the stack. Previous image IDs are kept as
+      # local rollback tags; no image is pruned before the new release passes.
       - name: Deploy ${{ needs.resolve.outputs.image_tag }}
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         env:
           DEPLOY_DIR: /opt/lcs
           IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+          SKIP_MIGRATIONS: ${{ github.event.inputs.skip_migrations || 'false' }}
+          BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET || '' }}
+          BACKUP_S3_KMS_KEY_ID: ${{ vars.BACKUP_S3_KMS_KEY_ID || '' }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB || 'freight' }}
           POSTGRES_USER: ${{ vars.POSTGRES_USER || 'freight' }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
@@ -295,36 +307,60 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
           script: |
-            set -euo pipefail
+            set -eu
             cd "$DEPLOY_DIR"
+            # scp may not preserve the executable bit; the restore helper is
+            # invoked directly during a drill.
+            chmod 700 "$DEPLOY_DIR/restore-db.sh" 2>/dev/null || true
 
             # Docker command (docker group, else sudo fallback).
             if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
             COMPOSE="$DOCKER compose -f compose.yml"
 
             # Fail fast if required production values are missing, before any
-            # container or volume is touched.
-            for name in POSTGRES_PASSWORD JWT_SECRET_KEY CSRF_SECRET_KEY FIELD_ENCRYPTION_KEY MINIO_ROOT_PASSWORD S3_ACCESS_KEY S3_SECRET_KEY S3_PUBLIC_ENDPOINT_URL; do
-              eval "value=\"\${$name:-}\""
-              if [ -z "$value" ]; then
-                echo "Missing required production value: $name" >&2
+            # container or volume is touched. Avoid eval with secret values.
+            require_value() {
+              if [ -z "$1" ]; then
+                echo "Missing required production value: $2" >&2
                 exit 1
               fi
-            done
+            }
+            require_value "${POSTGRES_PASSWORD:-}" POSTGRES_PASSWORD
+            require_value "${JWT_SECRET_KEY:-}" JWT_SECRET_KEY
+            require_value "${CSRF_SECRET_KEY:-}" CSRF_SECRET_KEY
+            require_value "${FIELD_ENCRYPTION_KEY:-}" FIELD_ENCRYPTION_KEY
+            require_value "${MINIO_ROOT_PASSWORD:-}" MINIO_ROOT_PASSWORD
+            require_value "${S3_ACCESS_KEY:-}" S3_ACCESS_KEY
+            require_value "${S3_SECRET_KEY:-}" S3_SECRET_KEY
+            require_value "${S3_PUBLIC_ENDPOINT_URL:-}" S3_PUBLIC_ENDPOINT_URL
 
             # Image names must be lowercase.
             IMAGE_PREFIX="$(printf '%s' "$IMAGE_PREFIX" | tr '[:upper:]' '[:lower:]')"
+            umask 077
+
+            # Keep the previous .env so a failure before the stack is replaced
+            # can put the host back exactly as it was.
+            ENV_FILE="$DEPLOY_DIR/.env"
+            PREVIOUS_ENV="$DEPLOY_DIR/.env.previous"
+            if [ -f "$ENV_FILE" ]; then
+              cp -p "$ENV_FILE" "$PREVIOUS_ENV"
+              chmod 600 "$PREVIOUS_ENV"
+              echo "Preserved previous runtime .env for failure recovery."
+            else
+              rm -f "$PREVIOUS_ENV"
+            fi
+
+            restore_previous_env() {
+              if [ -f "$PREVIOUS_ENV" ]; then
+                mv -f "$PREVIOUS_ENV" "$ENV_FILE"
+                echo "Restored previous runtime .env; the running stack was not replaced."
+              fi
+            }
 
             # Write the runtime .env atomically (0600). Values are passed as
             # printf arguments so their contents are never shell-expanded.
-            ENV_FILE="$DEPLOY_DIR/.env"
-            PREVIOUS_IMAGE_TAG=""
-            if [ -f "$ENV_FILE" ]; then
-              PREVIOUS_IMAGE_TAG="$(sed -n 's/^IMAGE_TAG=//p' "$ENV_FILE" | head -n 1)"
-            fi
-            umask 077
             TMP="$(mktemp "$DEPLOY_DIR/.env.XXXXXX")"
             trap 'rm -f "$TMP"' EXIT
             write_kv() {
@@ -358,96 +394,221 @@ jobs:
             trap - EXIT
             echo "Runtime .env written atomically (0600)."
 
-            # Create and verify a PostgreSQL backup BEFORE any migration runs.
-            # 'ff-db' is the postgres container name from deploy/compose.yml.
-            if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" = "true" ]; then
-              BACKUP_DIR="${HOME}/lcs-backups"
-              mkdir -p "$BACKUP_DIR"
-              BACKUP_FILE="$BACKUP_DIR/freight-$(date +%Y%m%d-%H%M%S).dump"
-              echo "Backing up PostgreSQL to $BACKUP_FILE"
-              # Credentials come from the container environment; nothing is echoed.
-              if ! $COMPOSE exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_FILE"; then
-                echo "PostgreSQL backup failed; aborting deployment." >&2
-                rm -f "$BACKUP_FILE"
+            # Capture the exact image IDs the healthy stack is running. Tags in
+            # a registry can be overwritten; these local tags cannot.
+            PREVIOUS_BACKEND_IMAGE="$($DOCKER inspect -f '{{.Image}}' ff-api 2>/dev/null || true)"
+            PREVIOUS_FRONTEND_IMAGE="$($DOCKER inspect -f '{{.Image}}' ff-frontend 2>/dev/null || true)"
+            ROLLBACK_TAG="rollback-$(date -u +%Y%m%dT%H%M%SZ)"
+            ROLLBACK_READY=false
+            if [ -n "$PREVIOUS_BACKEND_IMAGE" ] && [ -n "$PREVIOUS_FRONTEND_IMAGE" ]; then
+              if ! $DOCKER tag "$PREVIOUS_BACKEND_IMAGE" "rollback-backend:$ROLLBACK_TAG" \
+                 || ! $DOCKER tag "$PREVIOUS_FRONTEND_IMAGE" "rollback-frontend:$ROLLBACK_TAG"; then
+                echo "Could not tag the previous images for rollback; old stack left running." >&2
+                restore_previous_env
                 exit 1
               fi
-              if [ ! -s "$BACKUP_FILE" ]; then
-                echo "PostgreSQL backup is empty; aborting deployment." >&2
-                exit 1
-              fi
-              sha256sum "$BACKUP_FILE" > "$BACKUP_FILE.sha256"
-              find "$BACKUP_DIR" -maxdepth 1 -type f \
-                \( -name 'freight-*.dump' -o -name 'freight-*.dump.sha256' \) \
-                -mtime +30 -delete
-              echo "Backup complete: $BACKUP_FILE"
+              ROLLBACK_READY=true
+              echo "Previous images preserved as rollback-backend:$ROLLBACK_TAG and rollback-frontend:$ROLLBACK_TAG"
             else
-              echo "PostgreSQL is not running yet (first deployment); skipping backup."
+              echo "No running previous backend/frontend images found; first deployment or incomplete stack."
             fi
 
-            # Reclaim disk space BEFORE pulling. This host's root disk is small,
-            # so the old (in-use) images must be released first: stop the stack
-            # (named volumes persist), then prune. Without this the pull fails
-            # with "no space left on device" while extracting layers.
-            echo "Disk usage before cleanup:"; df -h / | tail -n 1
-            $COMPOSE down --remove-orphans || true
-            $DOCKER container prune -f || true
-            $DOCKER image prune -af || true
-            $DOCKER builder prune -af || true
-            $DOCKER system df || true
-            echo "Disk usage after cleanup:"; df -h / | tail -n 1
+            # Pull both new images before stopping or recreating anything. A
+            # registry, network or disk failure here leaves the healthy stack up.
+            echo "Pre-pulling new images..."
+            if ! $DOCKER pull "$IMAGE_PREFIX-backend:$IMAGE_TAG"; then
+              echo "Backend image pre-pull failed; old stack left running." >&2
+              restore_previous_env
+              exit 1
+            fi
+            if ! $DOCKER pull "$IMAGE_PREFIX-frontend:$IMAGE_TAG"; then
+              echo "Frontend image pre-pull failed; old stack left running." >&2
+              restore_previous_env
+              exit 1
+            fi
+            if ! $DOCKER image inspect "$IMAGE_PREFIX-backend:$IMAGE_TAG" >/dev/null 2>&1 \
+               || ! $DOCKER image inspect "$IMAGE_PREFIX-frontend:$IMAGE_TAG" >/dev/null 2>&1; then
+              echo "Pre-pulled images are missing locally; old stack left running." >&2
+              restore_previous_env
+              exit 1
+            fi
 
-            # Pull the exact immutable (public) images and start the stack.
-            # `up` may fail while a dependency becomes healthy; the readiness
-            # loop and rollback below own that outcome, so a failed `up` must
-            # not abort the script and leave the site stopped.
-            export IMAGE_TAG
-            $COMPOSE pull
-            $COMPOSE up -d --remove-orphans || true
-            $DOCKER image prune -f
+            # Ensure PostgreSQL is running for backup/migration. On an existing
+            # host this is already true; on first deployment it starts only the
+            # data services, not the application.
+            if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" != "true" ]; then
+              echo "PostgreSQL is not running; starting data services for backup/migration..."
+              if ! $COMPOSE up -d postgres redis minio; then
+                echo "Could not start data services; aborting before migration." >&2
+                restore_previous_env
+                exit 1
+              fi
+            fi
+            DB_HEALTH=""
+            for attempt in $(seq 1 30); do
+              DB_HEALTH="$($DOCKER inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' ff-db 2>/dev/null || echo unknown)"
+              [ "$DB_HEALTH" = "healthy" ] && break
+              sleep 2
+            done
+            if [ "$DB_HEALTH" != "healthy" ]; then
+              echo "PostgreSQL did not become healthy (state=$DB_HEALTH); aborting before migration." >&2
+              restore_previous_env
+              exit 1
+            fi
+
+            # Create and verify a PostgreSQL backup BEFORE any migration runs.
+            # 'ff-db' is the postgres container name from deploy/compose.yml.
+            BACKUP_DIR="${HOME}/lcs-backups"
+            mkdir -p "$BACKUP_DIR"
+            chmod 700 "$BACKUP_DIR"
+            BACKUP_FILE="$BACKUP_DIR/freight-$(date +%Y%m%d-%H%M%S).dump"
+            echo "Backing up PostgreSQL to $BACKUP_FILE"
+            # Credentials come from the container environment; nothing is echoed.
+            if ! $COMPOSE exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$BACKUP_FILE"; then
+              echo "PostgreSQL backup failed; aborting deployment." >&2
+              rm -f "$BACKUP_FILE"
+              restore_previous_env
+              exit 1
+            fi
+            if [ ! -s "$BACKUP_FILE" ]; then
+              echo "PostgreSQL backup is empty; aborting deployment." >&2
+              restore_previous_env
+              exit 1
+            fi
+            if ! $COMPOSE exec -T postgres pg_restore --list < "$BACKUP_FILE" >/dev/null; then
+              echo "PostgreSQL backup failed pg_restore --list verification; aborting." >&2
+              restore_previous_env
+              exit 1
+            fi
+            sha256sum "$BACKUP_FILE" > "$BACKUP_FILE.sha256"
+            echo "Backup complete and verified: $BACKUP_FILE"
+
+            # Optional encrypted off-host copy. If the bucket is configured, a
+            # missing AWS CLI or failed upload aborts the deployment rather than
+            # pretending the run has an off-host backup.
+            if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
+              if ! command -v aws >/dev/null 2>&1; then
+                echo "BACKUP_S3_BUCKET is configured but the aws CLI is not installed; aborting." >&2
+                restore_previous_env
+                exit 1
+              fi
+              S3_PREFIX="s3://$BACKUP_S3_BUCKET/lcs/postgres/$(basename "$BACKUP_FILE")"
+              echo "Uploading encrypted off-host backup to $S3_PREFIX"
+              if [ -n "${BACKUP_S3_KMS_KEY_ID:-}" ]; then
+                if ! aws s3 cp "$BACKUP_FILE" "$S3_PREFIX" --sse aws:kms --sse-kms-key-id "$BACKUP_S3_KMS_KEY_ID" \
+                   || ! aws s3 cp "$BACKUP_FILE.sha256" "$S3_PREFIX.sha256" --sse aws:kms --sse-kms-key-id "$BACKUP_S3_KMS_KEY_ID"; then
+                  echo "Off-host backup upload failed; aborting deployment." >&2
+                  restore_previous_env
+                  exit 1
+                fi
+              else
+                if ! aws s3 cp "$BACKUP_FILE" "$S3_PREFIX" --sse aws:kms \
+                   || ! aws s3 cp "$BACKUP_FILE.sha256" "$S3_PREFIX.sha256" --sse aws:kms; then
+                  echo "Off-host backup upload failed; aborting deployment." >&2
+                  restore_previous_env
+                  exit 1
+                fi
+              fi
+            fi
+
+            find "$BACKUP_DIR" -maxdepth 1 -type f \
+              \( -name 'freight-*.dump' -o -name 'freight-*.dump.sha256' \) \
+              -mtime +30 -delete || true
+
+            # Run migrations explicitly with the new backend image while the
+            # old application is still serving. Current migrations are additive,
+            # so the old image remains schema-compatible if rollback is needed.
+            if [ "${SKIP_MIGRATIONS:-false}" = "true" ]; then
+              echo "SKIP_MIGRATIONS=true: not running Alembic (manual rollback/redeploy)."
+            else
+              echo "Running Alembic upgrade head with $IMAGE_PREFIX-backend:$IMAGE_TAG"
+              if ! IMAGE_PREFIX="$IMAGE_PREFIX" IMAGE_TAG="$IMAGE_TAG" \
+                   $COMPOSE run -T --rm --no-deps backend alembic upgrade head; then
+                echo "Migration failed; old application stack left running." >&2
+                restore_previous_env
+                exit 1
+              fi
+              EXPECTED_HEAD="$(IMAGE_PREFIX="$IMAGE_PREFIX" IMAGE_TAG="$IMAGE_TAG" \
+                $COMPOSE run -T --rm --no-deps backend alembic heads 2>/dev/null \
+                | awk 'NF && $1 !~ /^INFO/ {print $1; exit}' || true)"
+              CURRENT_HEAD="$(IMAGE_PREFIX="$IMAGE_PREFIX" IMAGE_TAG="$IMAGE_TAG" \
+                $COMPOSE run -T --rm --no-deps backend alembic current 2>/dev/null \
+                | awk 'NF && $1 !~ /^INFO/ {print $1; exit}' || true)"
+              if [ -z "$EXPECTED_HEAD" ] || [ "$CURRENT_HEAD" != "$EXPECTED_HEAD" ]; then
+                echo "Migration verification failed: expected=${EXPECTED_HEAD:-unknown} current=${CURRENT_HEAD:-unknown}" >&2
+                restore_previous_env
+                exit 1
+              fi
+              echo "Migration verified at $CURRENT_HEAD."
+            fi
+
+            # The new images are local, the database is migrated, and the old
+            # stack is still running. Recreate only changed services.
+            export IMAGE_PREFIX IMAGE_TAG
+            UP_OK=false
+            if $COMPOSE up -d --remove-orphans; then
+              UP_OK=true
+            else
+              echo "Compose up failed; readiness/rollback handling follows." >&2
+            fi
 
             # Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
+            READY=false
             for attempt in $(seq 1 30); do
               if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
+                READY=true
                 echo "Deployment healthy (attempt $attempt)."
-                exit 0
+                break
               fi
               echo "Not ready yet (attempt $attempt/30); retrying in 4s..."
               sleep 4
             done
-            echo "Application did not become healthy within the retry window." >&2
-            # The readiness probe only sees "connection refused". Dump the state
-            # that explains it before rolling back, so a failed deploy is
-            # diagnosable from the workflow log alone.
-            echo "--- compose ps -a ---"
-            $COMPOSE ps -a || true
-            echo "--- ff-frontend logs ---"
-            $DOCKER logs --tail 100 ff-frontend 2>&1 || true
-            echo "--- ff-api logs ---"
-            $DOCKER logs --tail 40 ff-api 2>&1 || true
-            echo "--- nginx config test ---"
-            $COMPOSE run --rm --no-deps frontend nginx -t 2>&1 || true
-            echo "--- certificate volume ---"
-            $DOCKER run --rm -v freight_forwarding_certbot_etc:/etc/letsencrypt alpine sh -c 'ls -la /etc/letsencrypt/live 2>&1; ls -la /etc/letsencrypt/live/lcslog.minidev.in 2>&1' || true
-            # A healthy API with an unreachable site is an edge failure (nginx,
-            # TLS or network), not a bad release. Rolling the images back here
-            # only makes it worse: the database has already been migrated
-            # forward, so the previous image exits on an unknown Alembic head and
-            # takes the API down with it.
-            API_HEALTH="$($DOCKER inspect -f '{{.State.Health.Status}}' ff-api 2>/dev/null || echo unknown)"
-            if [ "$API_HEALTH" = "healthy" ]; then
-              echo "Backend is healthy; the failure is at the edge (nginx/TLS/network). Skipping the image rollback." >&2
+
+            if [ "$UP_OK" != "true" ] || [ "$READY" != "true" ]; then
+              echo "Deployment did not complete cleanly (compose_up=$UP_OK readiness=$READY)." >&2
+              echo "--- compose ps -a ---"
+              $COMPOSE ps -a || true
+              echo "--- ff-frontend logs ---"
+              $DOCKER logs --tail 100 ff-frontend 2>&1 || true
+              echo "--- ff-api logs ---"
+              $DOCKER logs --tail 40 ff-api 2>&1 || true
+              echo "--- nginx config test ---"
+              $COMPOSE run -T --rm --no-deps frontend nginx -t 2>&1 || true
+              echo "--- certificate volume ---"
+              $DOCKER run --rm -v freight_forwarding_certbot_etc:/etc/letsencrypt alpine sh -c 'ls -la /etc/letsencrypt/live 2>&1; ls -la /etc/letsencrypt/live/lcslog.minidev.in 2>&1' || true
+              echo "--- disk ---"
+              df -h / || true
+
+              if [ "$ROLLBACK_READY" = "true" ]; then
+                echo "Rolling application images back to rollback-backend:$ROLLBACK_TAG and rollback-frontend:$ROLLBACK_TAG" >&2
+                sed -i "s|^IMAGE_PREFIX=.*|IMAGE_PREFIX=rollback|; s|^IMAGE_TAG=.*|IMAGE_TAG=$ROLLBACK_TAG|" "$ENV_FILE"
+                chmod 600 "$ENV_FILE"
+                export IMAGE_PREFIX=rollback IMAGE_TAG="$ROLLBACK_TAG"
+                if $COMPOSE up -d --remove-orphans; then
+                  for attempt in $(seq 1 30); do
+                    if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
+                      echo "Rollback healthy (attempt $attempt); deployment failed." >&2
+                      rm -f "$PREVIOUS_ENV"
+                      exit 1
+                    fi
+                    echo "Rollback not ready yet (attempt $attempt/30); retrying in 4s..."
+                    sleep 4
+                  done
+                fi
+                echo "Rollback did not become healthy. Manual recovery is required." >&2
+              else
+                echo "No previous image IDs are available; manual recovery is required." >&2
+              fi
+              echo "Do not automatically restore the database: writes may have occurred since $BACKUP_FILE." >&2
               exit 1
             fi
-            echo "Backend health is '$API_HEALTH'; rolling back." >&2
-            if [ -n "$PREVIOUS_IMAGE_TAG" ] && printf '%s' "$PREVIOUS_IMAGE_TAG" | grep -Eq '^sha-[0-9a-f]{7,40}$'; then
-              echo "Rolling back application images to $PREVIOUS_IMAGE_TAG"
-              $COMPOSE down --remove-orphans || true
-              $DOCKER image prune -af || true
-              sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$PREVIOUS_IMAGE_TAG/" "$ENV_FILE"
-              export IMAGE_TAG="$PREVIOUS_IMAGE_TAG"
-              $COMPOSE pull
-              $COMPOSE up -d --remove-orphans
-            else
-              echo "No valid previous immutable image tag is available for automatic rollback." >&2
-            fi
-            exit 1
+
+            rm -f "$PREVIOUS_ENV"
+            # Remove only dangling layers and older rollback tags; the release we
+            # just replaced stays available for a manual rollback.
+            $DOCKER image prune -f || true
+            $DOCKER image ls --format '{{.Repository}}:{{.Tag}}' \
+              | grep -E '^rollback-(backend|frontend):' \
+              | grep -v ":$ROLLBACK_TAG" \
+              | xargs -r -n1 $DOCKER rmi >/dev/null 2>&1 || true
+            echo "Deployment complete. Previous release remains available as rollback-*:${ROLLBACK_TAG}."

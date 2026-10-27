@@ -3,6 +3,10 @@
 # This file is the ONLY compose file deployed to EC2 (as /opt/lcs/compose.yml)
 # by .github/workflows/production.yml. Nothing is built on the host: images come
 # prebuilt from GHCR and are pinned by the immutable sha-<short> tag in .env.
+# The workflow pre-pulls the new images, runs Alembic explicitly with the new
+# backend image while the old stack still serves, and only then recreates the
+# stack. The backend command here never migrates on startup, so rolling back to
+# a previous image cannot fail on an unknown Alembic head.
 #
 # Networking: only the frontend (nginx) publishes host ports (80/443). Postgres,
 # Redis, MinIO and the backend are reachable only on the internal Docker network
@@ -107,7 +111,21 @@ services:
   backend:
     container_name: ff-api
     image: ${IMAGE_PREFIX}-backend:${IMAGE_TAG}
-    pull_policy: always
+    # Pull only through the workflow's explicit pre-pull; never implicitly while
+    # recreating a healthy stack or starting a rollback image.
+    pull_policy: never
+    # Migrations are a deploy step, not a container startup step. This also
+    # keeps an older rollback image from rejecting a newer alembic_version.
+    command:
+      - "uvicorn"
+      - "app.main:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips"
+      - "*"
     restart: unless-stopped
     read_only: true
     cap_drop: ["ALL"]
@@ -187,7 +205,8 @@ services:
   frontend:
     container_name: ff-frontend
     image: ${IMAGE_PREFIX}-frontend:${IMAGE_TAG}
-    pull_policy: always
+    # Same as backend: the workflow pre-pulls, rollback uses local images.
+    pull_policy: never
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

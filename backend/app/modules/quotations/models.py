@@ -64,6 +64,9 @@ class QuotationRevisionPlace(PKMixin, Base):
     # The configured role a stop plays, plus the text snapshot that lets a
     # historical route still print if the role is later deactivated or removed.
     place_role_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("place_roles.id", ondelete="SET NULL"))
+    # Legacy Places reference retained for historical rows. New writes use the
+    # role and free-text snapshot; this column is not exposed by the form.
+    place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     place_role: Mapped[str] = mapped_column(String(32), nullable=False)
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     planned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
