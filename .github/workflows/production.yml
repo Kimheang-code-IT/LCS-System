@@ -16,6 +16,11 @@ on:
         type: boolean
         required: false
         default: false
+      cleanup:
+        description: 'Free host disk before deploying: dangling layers, build cache, old release images (running pair and rollback tags kept), trim local dumps to the newest 5'
+        type: boolean
+        required: false
+        default: false
       diagnose:
         description: 'Only print runtime diagnostics from the host (no deploy, no changes)'
         type: boolean
@@ -78,6 +83,72 @@ jobs:
             (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | head -20 || true
             echo "--- disk ---"
             df -h / || true
+
+  # Host-space housekeeping before the deploy's pre-pull. With `cleanup: true`
+  # it removes only what cannot serve the running stack: dangling image layers,
+  # build cache, stale release images of this repository (the image pair the
+  # running containers use is excluded by ID, so the rollback tags survive) and
+  # it trims the local dump directory to the five newest dumps. It then refuses
+  # to run the deployment when the root disk cannot hold a full pre-pull. It
+  # never touches containers, volumes or the running application.
+  free-disk:
+    name: Host disk check
+    if: ${{ !inputs.diagnose }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Housekeeping and space check
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        env:
+          IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+          CLEANUP: ${{ inputs.cleanup }}
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          envs: IMAGE_PREFIX,CLEANUP
+          script: |
+            set -eu
+            cd /opt/lcs
+            if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
+            IMAGE_PREFIX="$(printf '%s' "$IMAGE_PREFIX" | tr '[:upper:]' '[:lower:]')"
+            if [ "$CLEANUP" = "true" ]; then
+              echo "--- pruning dangling images and build cache ---"
+              $DOCKER image prune -f || true
+              $DOCKER builder prune -f || true
+              echo "--- trimming local dumps to the newest 5 ---"
+              BACKUP_DIR="${HOME}/lcs-backups"
+              if [ -d "$BACKUP_DIR" ]; then
+                ls -1t "$BACKUP_DIR"/freight-*.dump 2>/dev/null | tail -n +6 | xargs -r -n1 rm -f
+                # Drop the checksum of any dump that is gone.
+                for sum in "$BACKUP_DIR"/freight-*.dump.sha256; do
+                  [ -e "$sum" ] || continue
+                  [ -e "${sum%.sha256}" ] || rm -f "$sum"
+                done
+              fi
+              echo "--- removing stale release images not used by the running stack ---"
+              API_ID="$($DOCKER inspect -f '{{.Image}}' ff-api 2>/dev/null || true)"
+              FE_ID="$($DOCKER inspect -f '{{.Image}}' ff-frontend 2>/dev/null || true)"
+              for line in $($DOCKER images --format '{{.ID}} {{.Repository}}' \
+                  | awk -v p="${IMAGE_PREFIX}-" 'index($2, p) == 1 { print }'); do
+                id="${line%% *}"
+                if [ "$id" != "$API_ID" ] && [ "$id" != "$FE_ID" ]; then
+                  $DOCKER rmi -f "$id" >/dev/null 2>&1 || true
+                fi
+              done
+            fi
+            echo "--- disk ---"
+            df -h /
+            free_kb="$(df -P -k / | awk 'NR==2 {print $4}')"
+            echo "Free space: ${free_kb} KB."
+            if [ "${free_kb:-0}" -lt 1200000 ]; then
+              echo "Not enough free space for a safe pre-pull (need about 1.2 GB)." >&2
+              echo "Expand the EBS root volume (growpart + resize2fs) and re-run." >&2
+              exit 1
+            fi
 
   # Decide what to deploy: a fresh immutable sha tag, or a manually supplied
   # existing tag (rollback / redeploy without rebuilding).
@@ -218,10 +289,11 @@ jobs:
   # runs git clone/pull/fetch/reset. The runtime directory is /opt/lcs.
   deploy:
     name: Deploy to AWS
-    needs: [resolve, validate-backend, validate-frontend, build]
+    needs: [resolve, free-disk, validate-backend, validate-frontend, build]
     if: >-
       always() &&
       needs.resolve.result == 'success' &&
+      needs.free-disk.result == 'success' &&
       (
         (needs.resolve.outputs.build == 'true' && needs.build.result == 'success') ||
         (needs.resolve.outputs.build == 'false' && needs.build.result == 'skipped')
