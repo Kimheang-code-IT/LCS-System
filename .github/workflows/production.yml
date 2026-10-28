@@ -117,7 +117,7 @@ jobs:
             echo "Could not reach the VPS SSH port ${PORT}." >&2
             exit 1
           fi
-          if ! ssh-keygen -lf "$scan" | grep "ED25519 $FINGERPRINT" >/dev/null; then
+          if ! ssh-keygen -lf "$scan" | grep "$FINGERPRINT" | grep -q "(ED25519)"; then
             echo "SSH host key fingerprint mismatch for ${HOST} — possible MITM or wrong host. Deploy aborted." >&2
             exit 1
           fi
@@ -221,10 +221,11 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --extra dev
       - run: uv run ruff check .
+      # `test_route_authorization.py` is not yet committed to `main`; add it
+      # back once that test lands. The full suite still gates dev merges.
       - run: >
           uv run pytest -q
           tests/test_frontend_api_contract.py
-          tests/test_route_authorization.py
           tests/test_finance_automation.py
           tests/test_posting_rules.py
 
