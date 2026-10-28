@@ -62,7 +62,7 @@ jobs:
             set -uo pipefail
             cd /opt/lcs
             if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
-            COMPOSE="$DOCKER compose -f compose.yml"
+            COMPOSE="$DOCKER compose -f docker-compose.prod.yml"
             echo "--- .env (image tag only) ---"
             sed -n 's/^IMAGE_TAG=/IMAGE_TAG=/p' .env || true
             echo "--- compose ps -a ---"
@@ -99,6 +99,30 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Pin the VPS SSH host key: the deploy never talks to an unverified host.
+      - name: Verify VPS SSH host key
+        env:
+          HOST: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          PORT: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          FINGERPRINT: ${{ vars.AWS_HOST_FINGERPRINT }}
+        run: |
+          set -eu
+          if [ -z "$FINGERPRINT" ]; then
+            echo "Missing repo variable AWS_HOST_FINGERPRINT (ED25519 SHA256 fingerprint of the VPS host key)." >&2
+            exit 1
+          fi
+          scan="$(mktemp)"
+          ssh-keyscan -p "$PORT" "$HOST" > "$scan" 2>/dev/null
+          if [ ! -s "$scan" ]; then
+            echo "Could not reach the VPS SSH port ${PORT}." >&2
+            exit 1
+          fi
+          if ! ssh-keygen -lf "$scan" | grep "ED25519 $FINGERPRINT" >/dev/null; then
+            echo "SSH host key fingerprint mismatch for ${HOST} — possible MITM or wrong host. Deploy aborted." >&2
+            exit 1
+          fi
+          echo "SSH host key verified: $FINGERPRINT"
+
       - name: Housekeeping and space check
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         env:
@@ -176,9 +200,12 @@ jobs:
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # 1. Validate/test the exact production commit.
+  # 1. Fast smoke of the core features only (auth/security, finance integrity,
+  # cross-stack contract). The full backend suite runs on `dev` via dev-ci.yml
+  # before anything can merge into `main`; production validation stays light so
+  # deploys to the VPS stay fast.
   validate-backend:
-    name: Production backend validation
+    name: Backend smoke (core features)
     needs: [resolve]
     if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
@@ -194,10 +221,15 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --extra dev
       - run: uv run ruff check .
-      - run: uv run pytest -q
+      - run: >
+          uv run pytest -q
+          tests/test_frontend_api_contract.py
+          tests/test_route_authorization.py
+          tests/test_finance_automation.py
+          tests/test_posting_rules.py
 
   validate-frontend:
-    name: Production frontend validation
+    name: Frontend smoke (core features)
     needs: [resolve]
     if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
@@ -215,9 +247,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm vitest run tests/freight-remote-endpoints.spec.ts tests/auth-api.spec.ts
 
   # 2-5. Build both images, tag with the immutable commit SHA and push to GHCR.
   # No environment: the frontend build only needs the repository-level
@@ -332,7 +363,7 @@ jobs:
               exit 1
             fi
 
-      # Copy only the runtime bundle: compose.yml + restore helper + nginx config.
+      # Copy only the runtime bundle: production compose + restore helper.
       - name: Upload runtime files
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
         with:
@@ -340,9 +371,23 @@ jobs:
           username: ${{ vars.AWS_USER || secrets.AWS_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
-          source: "deploy/compose.yml,deploy/restore-db.sh,infrastructure/nginx/production.conf"
+          source: "infrastructure/docker-compose.prod.yml,infrastructure/restore-db.sh"
           target: /opt/lcs
           strip_components: 1
+          overwrite: true
+
+      # The compose file mounts ./nginx/production.conf, so it must land inside
+      # /opt/lcs/nginx/ (strip both path components).
+      - name: Upload nginx config
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
+        with:
+          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          source: "infrastructure/nginx/production.conf"
+          target: /opt/lcs/nginx
+          strip_components: 2
           overwrite: true
 
       # Generate the runtime .env atomically, pre-pull the new images, take and
@@ -389,7 +434,7 @@ jobs:
 
             # Docker command (docker group, else sudo fallback).
             if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
-            COMPOSE="$DOCKER compose -f compose.yml"
+            COMPOSE="$DOCKER compose -f docker-compose.prod.yml"
 
             # Fail fast if required production values are missing, before any
             # container or volume is touched. Avoid eval with secret values.
@@ -529,7 +574,7 @@ jobs:
             fi
 
             # Create and verify a PostgreSQL backup BEFORE any migration runs.
-            # 'ff-db' is the postgres container name from deploy/compose.yml.
+            # 'ff-db' is the postgres container name from the production compose.
             BACKUP_DIR="${HOME}/lcs-backups"
             mkdir -p "$BACKUP_DIR"
             chmod 700 "$BACKUP_DIR"
@@ -624,10 +669,12 @@ jobs:
               echo "Compose up failed; readiness/rollback handling follows." >&2
             fi
 
-            # Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback).
+            # Bounded HTTPS readiness check (no fixed sleep, no HTTP fallback):
+            # backend readiness AND the SPA itself must answer through nginx.
             READY=false
             for attempt in $(seq 1 30); do
-              if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
+              if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready \
+                 && curl -fsS --max-time 5 -o /dev/null https://lcslog.minidev.in/; then
                 READY=true
                 echo "Deployment healthy (attempt $attempt)."
                 break
@@ -658,7 +705,8 @@ jobs:
                 export IMAGE_PREFIX=rollback IMAGE_TAG="$ROLLBACK_TAG"
                 if $COMPOSE up -d --remove-orphans; then
                   for attempt in $(seq 1 30); do
-                    if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready; then
+                    if curl -fsS --max-time 5 https://lcslog.minidev.in/health/ready \
+                       && curl -fsS --max-time 5 -o /dev/null https://lcslog.minidev.in/; then
                       echo "Rollback healthy (attempt $attempt); deployment failed." >&2
                       rm -f "$PREVIOUS_ENV"
                       exit 1

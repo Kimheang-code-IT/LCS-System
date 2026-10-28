@@ -531,7 +531,7 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 - **Business purpose:** make the system installable, observable, upgradeable and safe to operate.
 - **Expected behaviour:** container images, migrations on start, TLS, CI gates, versioned releases, rollback,
   monitoring, and a schema reference that never drifts.
-- **Current implementation:** `infrastructure/` (compose + nginx), `deploy/compose.yml`, four GitHub workflows,
+- **Current implementation:** `infrastructure/` (compose + nginx), four GitHub workflows,
   generated schema docs, 52 backend test files and 74 frontend specs.
 - **Verified:** compose stack healthy, health endpoints, 207 OpenAPI paths, schema docs current (76 tables), linear
   migration chain, frontend/backend gates, dependency and secret scans, CSV export in reports (client-side).

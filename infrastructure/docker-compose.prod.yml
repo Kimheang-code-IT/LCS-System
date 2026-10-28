@@ -1,42 +1,250 @@
-# Production override for a single EC2 host (Docker Compose + Let's Encrypt).
+# Standalone production stack for the EC2 runtime host.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+# This file is the ONLY compose file deployed to EC2 (as /opt/lcs/compose.yml)
+# by .github/workflows/production.yml. Nothing is built on the host: images come
+# prebuilt from GHCR and are pinned by the immutable sha-<short> tag in .env.
+# The workflow pre-pulls the new images, runs Alembic explicitly with the new
+# backend image while the old stack still serves, and only then recreates the
+# stack. The backend command here never migrates on startup, so rolling back to
+# a previous image cannot fail on an unknown Alembic head.
 #
-# Set NGINX_CONF=production.conf in infrastructure/.env once the certificate
-# exists. Until then keep NGINX_CONF=default.conf (HTTP) so the ACME challenge
-# can be served on port 80.
+# Networking: only the frontend (nginx) publishes host ports (80/443). Postgres,
+# Redis, MinIO and the backend are reachable only on the internal Docker network
+# via their service names. No datastore or backend port is published.
 #
-# Issue the first certificate with:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-#     run --rm certbot certonly --webroot -w /var/www/certbot \
-#     -d lcslog.minidev.in -d storage.lcslog.minidev.in \
-#     --email you@example.com --agree-tos --no-eff-email
+# Persistence: every stateful service uses a named volume. Never run
+# `docker compose down -v` — it would delete the database, uploads, objects and
+# TLS certificates.
+name: freight_forwarding
 
 services:
-  # Prebuilt images published by .github/workflows/production.yml (GHCR).
-  # Override IMAGE_PREFIX / IMAGE_TAG in .env to pin or roll back a release.
+  postgres:
+    container_name: ff-db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    expose:
+      - "5432"
+    volumes:
+      - freight_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [data]
+
+  redis:
+    container_name: ff-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    volumes:
+      - freight_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [data]
+
+  minio:
+    container_name: ff-minio
+    # Upstream MinIO removed its Docker Hub/Quay images (source-only since Oct
+    # 2025). pgsty/minio is a maintained, drop-in community fork: same env vars,
+    # `server` command, /data layout and `mc` healthcheck binary.
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - freight_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [app]
+
+  minio-init:
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+    command:
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        mc admin user add local "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY" || mc admin user info local "$$S3_ACCESS_KEY"
+        printf '%s' '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::'"$$S3_BUCKET"'"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::'"$$S3_BUCKET"'/*"]}]}' > /tmp/app-policy.json
+        mc admin policy create local lcs-app /tmp/app-policy.json || mc admin policy info local lcs-app
+        mc admin policy attach local lcs-app --user "$$S3_ACCESS_KEY"
+    depends_on:
+      minio:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    networks: [app]
+
   backend:
-    image: ${IMAGE_PREFIX:-ghcr.io/kimheang-code-it/lcs-system}-backend:${IMAGE_TAG:-latest}
-    pull_policy: always
+    container_name: ff-api
+    image: ${IMAGE_PREFIX}-backend:${IMAGE_TAG}
+    # Pull only through the workflow's explicit pre-pull; never implicitly while
+    # recreating a healthy stack or starting a rollback image.
+    pull_policy: never
+    # Migrations are a deploy step, not a container startup step. This also
+    # keeps an older rollback image from rejecting a newer alembic_version.
+    command:
+      - "uvicorn"
+      - "app.main:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "--proxy-headers"
+      - "--forwarded-allow-ips"
+      - "*"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      # Internal wiring is fixed here; secrets/values come from /opt/lcs/.env.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_ENABLED: "true"
+      RATE_LIMIT_ENABLED: "true"
+      ENVIRONMENT: production
+      DEBUG: "false"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      CSRF_SECRET_KEY: ${CSRF_SECRET_KEY}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+      TELEGRAM_PUBLIC_APP_URL: ${TELEGRAM_PUBLIC_APP_URL:-}
+      TELEGRAM_WORKER_ENABLED: ${TELEGRAM_WORKER_ENABLED:-true}
+      TELEGRAM_API_HEALTH_URL: http://127.0.0.1:8000/health
+      AUTH_RETURN_TOKENS: "false"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+      SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-480}
+      SESSION_ABSOLUTE_TIMEOUT_MINUTES: ${SESSION_ABSOLUTE_TIMEOUT_MINUTES:-1440}
+      REFRESH_TOKEN_EXPIRE_DAYS: "30"
+      SESSION_REFRESH_TOKEN_EXPIRE_HOURS: "12"
+      PASSWORD_MIN_LENGTH: "8"
+      PASSWORD_MAX_LENGTH: "20"
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      ALLOWED_HOSTS: lcslog.minidev.in
+      COOKIE_SECURE: "true"
+      ACCESS_COOKIE_NAME: __Host-access_token
+      REFRESH_COOKIE_NAME: __Secure-refresh_token
+      CSRF_COOKIE_NAME: __Host-XSRF-TOKEN
+      FORWARDED_ALLOW_IPS: "*"
+      STORAGE_PROVIDER: s3
+      STORAGE_LOCAL_PATH: /app/storage
+      S3_ENDPOINT_URL: http://minio:9000
+      # Browser-facing endpoint used to sign upload/download URLs. MinIO has no
+      # public host/port; the main-domain nginx proxies /<bucket>/ to minio:9000.
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_REGION: ${S3_REGION}
+      S3_USE_SSL: "false"
+      STORAGE_PRESIGNED_UPLOADS_ENABLED: "false"
+      UPLOAD_MAX_SIZE_MB: "20"
+      PRESIGNED_URL_EXPIRE_SECONDS: "300"
+      DATABASE_POOL_SIZE: "10"
+      DATABASE_MAX_OVERFLOW: "20"
+    expose:
+      - "8000"
+    volumes:
+      - freight_uploads:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # The API rejects unknown Host headers (ALLOWED_HOSTS hardening), and
+      # production deliberately forbids localhost there, so the in-container
+      # probe must send the public hostname.
+      test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Host': 'lcslog.minidev.in'}); urllib.request.urlopen(r, timeout=4).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [app, data]
 
   frontend:
-    image: ${IMAGE_PREFIX:-ghcr.io/kimheang-code-it/lcs-system}-frontend:${IMAGE_TAG:-latest}
-    pull_policy: always
+    container_name: ff-frontend
+    image: ${IMAGE_PREFIX}-frontend:${IMAGE_TAG}
+    # Same as backend: the workflow pre-pulls, rollback uses local images.
+    pull_policy: never
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # The only service that publishes host ports.
     ports:
-      - "${FRONTEND_HTTPS_PORT:-443}:443"
+      - "80:80"
+      - "443:443"
     volumes:
+      # HTTPS + SPA + API proxy + storage proxy (deployed by the workflow).
+      - ./nginx/production.conf:/etc/nginx/conf.d/default.conf:ro
       # Shared with certbot: read-only certificate store + ACME webroot.
       - certbot_etc:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [app]
 
-  # One-shot helper (profile "tools"): not started by `up`.
+  # One-shot helper (profile "tools"): certificate issuance/renewal only.
   certbot:
     image: certbot/certbot:latest
     profiles: ["tools"]
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - certbot_etc:/etc/letsencrypt
       - certbot_www:/var/www/certbot
+    networks: [app]
 
 volumes:
+  freight_postgres_data:
+  freight_redis_data:
+  freight_minio_data:
+  freight_uploads:
   certbot_etc:
   certbot_www:
+
+networks:
+  app:
+  data:
+    internal: true

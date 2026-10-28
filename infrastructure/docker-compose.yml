@@ -61,7 +61,7 @@ services:
     build:
       context: ../backend
     # Local dev keeps the convenience auto-migration on startup. Production
-    # (deploy/compose.yml) runs migrations explicitly before switching images.
+    # (docker-compose.prod.yml) runs migrations explicitly before switching images.
     command:
       - "sh"
       - "-c"
