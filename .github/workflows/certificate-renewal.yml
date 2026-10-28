@@ -36,7 +36,7 @@ jobs:
             echo "Could not reach the VPS SSH port ${PORT}." >&2
             exit 1
           fi
-          if ! ssh-keygen -lf "$scan" | grep "ED25519 $FINGERPRINT" >/dev/null; then
+          if ! ssh-keygen -lf "$scan" | grep "$FINGERPRINT" | grep -q "(ED25519)"; then
             echo "SSH host key fingerprint mismatch for ${HOST}. Renewal aborted." >&2
             exit 1
           fi
