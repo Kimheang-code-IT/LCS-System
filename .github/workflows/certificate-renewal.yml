@@ -17,6 +17,31 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      # Same host-key pin as the deploy pipeline; never renew against an
+      # unverified host.
+      - name: Verify VPS SSH host key
+        env:
+          HOST: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
+          PORT: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          FINGERPRINT: ${{ vars.AWS_HOST_FINGERPRINT }}
+        run: |
+          set -eu
+          if [ -z "$FINGERPRINT" ]; then
+            echo "Missing repo variable AWS_HOST_FINGERPRINT." >&2
+            exit 1
+          fi
+          scan="$(mktemp)"
+          ssh-keyscan -p "$PORT" "$HOST" > "$scan" 2>/dev/null
+          if [ ! -s "$scan" ]; then
+            echo "Could not reach the VPS SSH port ${PORT}." >&2
+            exit 1
+          fi
+          if ! ssh-keygen -lf "$scan" | grep "ED25519 $FINGERPRINT" >/dev/null; then
+            echo "SSH host key fingerprint mismatch for ${HOST}. Renewal aborted." >&2
+            exit 1
+          fi
+          echo "SSH host key verified: $FINGERPRINT"
+
       - name: Renew Let's Encrypt certificate
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         with:
@@ -28,6 +53,6 @@ jobs:
             set -euo pipefail
             cd /opt/lcs
             if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
-            $DOCKER compose -f compose.yml --profile tools run --rm certbot \
+            $DOCKER compose -f docker-compose.prod.yml --profile tools run --rm certbot \
               renew --webroot -w /var/www/certbot --quiet
-            $DOCKER compose -f compose.yml exec -T frontend nginx -s reload
+            $DOCKER compose -f docker-compose.prod.yml exec -T frontend nginx -s reload

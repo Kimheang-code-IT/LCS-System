@@ -20,6 +20,14 @@ The focused gate is preferred while iterating (for example
 `dev` or `main`. The CI workflow runs the frontend gates, backend tests/lint, the
 contract test, and a Docker build; it never deploys.
 
+The `production.yml` pipeline deliberately runs a reduced smoke gate so deploys to
+the runtime host stay fast: backend `ruff` plus the core-feature tests
+(`test_frontend_api_contract.py`, `test_route_authorization.py`,
+`test_finance_automation.py`, `test_posting_rules.py`) and frontend `typecheck`
+plus `tests/freight-remote-endpoints.spec.ts` and `tests/auth-api.spec.ts`. The
+full suites still gate every merge into `main` through `dev-ci.yml`; the smoke set
+is a deploy speed trade-off, not a replacement.
+
 ## 2. Backend Test Architecture
 
 - Tests live in `backend/tests/` and use **in-memory SQLite** (`aiosqlite`).
@@ -168,7 +176,7 @@ LCS_TEST_POSTGRES_URL=postgresql://user:password@host:5432/postgres \
   succeeded; `docker run --rm lcs-pr35-backend:test alembic heads` reports
   `d4e5f6a7b8c9 (head)`, and the image CMD is Uvicorn only (no startup
   migration).
-- Restore drill: `deploy/restore-db.sh` restored a custom-format dump into a new
+- Restore drill: `infrastructure/restore-db.sh` restored a custom-format dump into a new
   isolated database; `SELECT count(*) ...` returned `2` and both codes were
   present. The helper refused an existing target (exit 2) and refused the
   production-named database (exit 2). The disposable source/target databases were

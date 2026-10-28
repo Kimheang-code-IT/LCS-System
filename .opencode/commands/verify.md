@@ -26,7 +26,7 @@ fails.
 6. **Authorization and money** — a new endpoint has a permission code and a test proving
    the denial path; a money path has a balanced journal and `Decimal` arithmetic.
 7. **Build** only when the diff can break it (see `/build-fast`); Docker only for a
-   Dockerfile, dependency manifest, `infrastructure/**` or `deploy/compose.yml` change.
+   Dockerfile, dependency manifest, `infrastructure/**` or `infrastructure/docker-compose.prod.yml` change.
 
 Finish with: gates run, their observed results, anything still unverified (say so
 explicitly), and the changed files.

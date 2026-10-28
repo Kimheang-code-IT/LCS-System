@@ -491,7 +491,7 @@ posted journal lines only.
 ## 15. Deployment Topology
 
 Two runtimes are supported: Docker Compose for local/development and the
-production Compose bundle in `deploy/compose.yml` behind nginx. PostgreSQL,
+production Compose bundle in `infrastructure/docker-compose.prod.yml` behind nginx. PostgreSQL,
 Redis, MinIO, the FastAPI API, and the static Nuxt SPA run as separate services.
 Environment configuration, CI/CD, backup/restore, migration, and rollback
 procedures are in `docs/11_deployment_and_security.md`.

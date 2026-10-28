@@ -10,7 +10,7 @@ Skip anything the diff cannot affect, and say what you skipped.
    (`nuxt generate`; this is the production SPA build). A dev-server check is
    `pnpm dev`, not a build.
 3. Docker: only when a Dockerfile, dependency manifest, `infrastructure/**` or
-   `deploy/compose.yml` changed. Rebuild one service, not the stack:
+   `infrastructure/docker-compose.prod.yml` changed. Rebuild one service, not the stack:
    `docker compose -f infrastructure/docker-compose.yml build backend` (or `frontend`).
 4. Do not run `--no-cache`, do not prune, and do not run `docker compose down -v`.
    Layer caches are the point: `uv sync --frozen` and `pnpm install --frozen-lockfile`
