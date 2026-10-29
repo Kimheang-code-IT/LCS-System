@@ -1,7 +1,7 @@
 # Standalone production stack for the EC2 runtime host.
 #
-# This file is the ONLY compose file deployed to EC2 (as /opt/lcs/compose.yml)
-# by .github/workflows/production.yml. Nothing is built on the host: images come
+# This file is the ONLY compose file deployed to the production host (as
+# /opt/lcs/docker-compose.prod.yml) by .github/workflows/production.yml. Nothing is built on the host: images come
 # prebuilt from GHCR and are pinned by the immutable sha-<short> tag in .env.
 # The workflow pre-pulls the new images, runs Alembic explicitly with the new
 # backend image while the old stack still serves, and only then recreates the

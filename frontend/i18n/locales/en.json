@@ -846,7 +846,11 @@
       "users": {
         "title": "Users",
         "singular": "User",
-        "description": "Manage staff access by role and department."
+        "description": "Manage staff access by role and department.",
+        "fields": {
+          "role": "Assigned Role",
+          "pagePermissions": "Effective permissions"
+        }
       }
     },
     "tables": {
@@ -1579,6 +1583,27 @@
       },
       "netProfit": "Net Profit",
       "difference": "Difference",
+      "generate": "Generate",
+      "generating": "Generating report...",
+      "generateFailed": "The report could not be generated.",
+      "generateFailedTitle": "Report failed",
+      "stale": "Filters changed. Press Generate to refresh these results.",
+      "emptyTitle": "No report generated yet",
+      "emptyDescription": "Choose your filters, then press Generate to load this report.",
+      "emptyResultTitle": "No matching rows",
+      "emptyResultDescription": "No posted entries match these filters.",
+      "generatedAt": "Generated {at}",
+      "totals": "Totals",
+      "periodDebit": "Period debit",
+      "periodCredit": "Period credit",
+      "closingDebit": "Closing debit",
+      "closingCredit": "Closing credit",
+      "unbalanced": "Debits do not equal credits",
+      "resetFilters": "Reset filters",
+      "accountFrom": "Account from",
+      "accountTo": "Account to",
+      "accountCode": "Account code",
+      "fiscalYear": "Fiscal year",
       "titles": {
         "openServiceOrders": "Open Service Orders",
         "serviceOrderCharges": "Service Order Charges",

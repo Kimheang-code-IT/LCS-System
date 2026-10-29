@@ -3,6 +3,7 @@ import type {
   AuditRepository,
   FinanceRepository,
   JobRepository,
+  PermissionCatalog,
   QuotationRepository,
   ServiceChargeRepository,
   UiSchemaRepository,
@@ -140,6 +141,10 @@ export function createHttpUserAdminRepository(): UserAdminRepository {
           mustChangePassword: options.mustChangePassword ?? true,
         }),
       ),
+    permissionCatalog: async () =>
+      unwrapApiData(await api.get<ApiResponse<PermissionCatalog>>(ApiV1Endpoints.PERMISSION_CATALOG)),
+    effectivePermissions: async userId =>
+      unwrapApiData(await api.get<ApiResponse<FreightRecord>>(ApiV1Endpoints.USER_EFFECTIVE_PERMISSIONS(userId))),
   }
 }
 
@@ -198,5 +203,9 @@ export function createHttpReportsRepository(): import('~/repositories/contracts/
     payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),
     profitability: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PROFITABILITY)),
     ledgerLines: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_LEDGER_LINES)),
+    generateTrialBalance: async filters => unwrapApiData(await api.post<ApiResponse<import('~/repositories/contracts/lcs').TrialBalanceReport>>(ApiV1Endpoints.REPORTS_TRIAL_BALANCE_GENERATE, filters)),
+    generateGeneralLedger: async filters => unwrapApiData(await api.post<ApiResponse<import('~/repositories/contracts/lcs').GeneralLedgerReport>>(ApiV1Endpoints.REPORTS_GENERAL_LEDGER_GENERATE, filters)),
+    exportTrialBalance: async filters => await api.post<Blob>(ApiV1Endpoints.REPORTS_TRIAL_BALANCE_EXPORT, filters, { responseType: 'blob' }),
+    exportGeneralLedger: async filters => await api.post<Blob>(ApiV1Endpoints.REPORTS_GENERAL_LEDGER_EXPORT, filters, { responseType: 'blob' }),
   }
 }

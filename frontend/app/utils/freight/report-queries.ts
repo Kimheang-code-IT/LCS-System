@@ -1,5 +1,5 @@
 import type { FreightRecord } from '~/types/record'
-import { daysSince, postedJournalLines } from '~/utils/freight/report'
+import { daysSince } from '~/utils/freight/report'
 
 export function indexRowsByKey<T extends Record<string, unknown>>(
   rows: T[],
@@ -76,32 +76,6 @@ export function buildRevenueExpenseReportRows(postedLines: FreightRecord[]) {
     }))
 }
 
-export function buildTrialBalanceReportRows(postedLines: FreightRecord[]) {
-  const map = new Map<string, FreightRecord>()
-  for (const line of postedLines) {
-    const key = String(line.accountCode)
-    const row = map.get(key) || {
-      id: key,
-      accountCode: key,
-      accountName: line.accountName,
-      accountId: line.accountId,
-      openingDebit: 0,
-      openingCredit: 0,
-      periodDebit: 0,
-      periodCredit: 0,
-      closingDebit: 0,
-      closingCredit: 0,
-    }
-    row.periodDebit = Number(row.periodDebit) + Number(line.debit)
-    row.periodCredit = Number(row.periodCredit) + Number(line.credit)
-    const balance = Number(row.periodDebit) - Number(row.periodCredit)
-    row.closingDebit = Math.max(balance, 0)
-    row.closingCredit = Math.max(-balance, 0)
-    map.set(key, row)
-  }
-  return [...map.values()]
-}
-
 export function buildCashFlowReportRows(
   postedLines: FreightRecord[],
   financialAccounts: FreightRecord[],
@@ -129,7 +103,6 @@ export function buildReportRows(
   const charges = store.list('jobCharges')
   const documents = store.list('debitNotes')
   const components = store.list('serviceComponents')
-  const postedLines = postedJournalLines(store.list('journals'), store.list('chartOfAccounts'))
 
   if (['service-orders', 'service-order-status'].includes(slug)) {
     return buildServiceOrderReportRows(jobs, {
@@ -142,14 +115,5 @@ export function buildReportRows(
   if (slug === 'containers') {
     return buildContainerReportRows(store.list('actualContainers'), jobsByNo)
   }
-  if (slug === 'revenue-expense') {
-    return buildRevenueExpenseReportRows(postedLines)
-  }
-  if (slug === 'trial-balance') {
-    return buildTrialBalanceReportRows(postedLines)
-  }
-  if (slug === 'cash-flow') {
-    return buildCashFlowReportRows(postedLines, store.list('financialAccounts'))
-  }
-  return postedLines
+  return []
 }

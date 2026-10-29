@@ -23,6 +23,16 @@ from app.core.exceptions import DomainError
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 _AUTH_PREFIX = "/api/v1/auth/"
 _SETTINGS_PATH = "/api/v1/settings/app-config"
+# Report generation and export are POSTs only because they carry a filter
+# object; they read the ledger and write nothing, so read-only mode must not
+# disable them.
+_GENERATED_REPORT_PREFIX = "/api/v1/reports/"
+_GENERATED_REPORT_SUFFIXES = ("/generate", "/export")
+
+
+def _is_generated_report(request: Request) -> bool:
+    path = request.url.path.rstrip("/")
+    return path.startswith(_GENERATED_REPORT_PREFIX) and path.endswith(_GENERATED_REPORT_SUFFIXES)
 
 
 def _is_recovery_admin(context: RequestContext) -> bool:
@@ -55,6 +65,7 @@ async def enforce_access_modes(request: Request, context: RequestContext, sessio
     if (
         policy["readOnly"]
         and request.method.upper() not in _SAFE_METHODS
+        and not _is_generated_report(request)
         and not _recovery_allowed(request, context)
     ):
         raise DomainError(

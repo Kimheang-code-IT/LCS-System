@@ -55,13 +55,15 @@ models.py      SQLAlchemy 2.x typed mappings
   dotted path for nested rows. When a key is prefixed by a row index, agree the
   base with the frontend rather than inventing one.
 - Permissions are declared with
-  `context: RequestContext = Depends(require_permission("code"))`. The catalog in
+  `context: RequestContext = Depends(require_permission("code"))` (or
+  `require_any_permission(...)` when either code suffices). The catalog in
   `app/core/permissions.py` is code-owned and synced on startup; a new endpoint
-  needs a code there, plus a page mapping so it is grantable from the Roles
-  screen. `tests/test_role_permissions.py` fails if a source permission has no
-  page key.
-- `context.has_permission()` returns true for everything when the caller is a
-  platform admin by design — do not "fix" that.
+  needs a code there, plus a page grant in `PAGE_PERMISSION_GRANTS` so it is
+  grantable from the Roles screen. `tests/test_role_permissions.py` fails if a
+  capability no page can grant.
+- `context.has_permission()` asks Casbin on every call and returns true for
+  everything only for the protected `SUPER_ADMIN` wildcard — do not "fix" that.
+  Never read `roles`/`permissions`/`casbin_rule` to decide access yourself.
 
 ## Workflow
 

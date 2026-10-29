@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     cache_ttl_report_seconds: int = Field(default=60, alias="CACHE_TTL_REPORT_SECONDS")
     cache_ttl_permissions_seconds: int = Field(default=300, alias="CACHE_TTL_PERMISSIONS_SECONDS")
 
+    # Casbin policy synchronization. A policy change publishes a new ``auth``
+    # cache version in Redis and every worker reloads on its next request; this
+    # interval is the backstop that keeps a policy copy from outliving a Redis
+    # outage.
+    casbin_reload_interval_seconds: int = Field(default=30, ge=1, le=3600, alias="CASBIN_RELOAD_INTERVAL_SECONDS")
+
     jwt_secret_key: str = Field(
         default="change-me-in-production-use-a-32-byte-minimum-secret", alias="JWT_SECRET_KEY"
     )

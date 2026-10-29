@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import cache, deletion
+from app.core import authorization, cache, deletion
 from app.core.bootstrap import provision_admin, requires_setup
 from app.core.config import settings
 from app.core.context import RequestContext
@@ -15,10 +15,13 @@ from app.core.exceptions import AccessDenied, AuthRequired, Conflict, NotFound, 
 from app.core.locks import advisory_lock
 from app.core.pagination import PageParams, paged
 from app.core.permissions import (
-    PAGE_KEYS_BY_SOURCE,
-    PAGE_PERMISSION_SOURCE_CODES,
-    ROLE_DEFINITIONS,
-    SOURCE_PERMISSIONS,
+    ALL_PERMISSION_CODES,
+    PAGE_PERMISSION_CODES,
+    PROTECTED_ROLE_CODES,
+    SOURCE_PERMISSION_CODES,
+    SUPER_ADMIN_ROLE,
+    compile_role_permissions,
+    resolve_role_codes,
 )
 from app.core.redis import safe_delete
 from app.core.security import (
@@ -33,46 +36,13 @@ from app.core.security import (
 from app.modules.auth.models import (
     PROTECTED_SYSTEM_ADMIN_IDENTITY,
     PasswordResetToken,
-    Permission,
     Role,
-    RolePermission,
     UsedRefreshToken,
     User,
     UserCredential,
-    UserRoleAssignment,
     UserSession,
 )
 from app.modules.auth.repository import AuthRepository
-
-# Legacy source permissions expand into the finer-grained action codes the
-# matrix stores, so a role created before the matrix keeps working.
-SOURCE_PERMISSION_COMPATIBILITY: dict[str, tuple[str, ...]] = {
-    "quotation.update_draft": ("quotation.update", "quotation.delete", "quotation.revise"),
-    "quotation.send": ("quotation.submit",),
-    "service_order.update": ("service_order.submit",),
-    "service_charge.create": ("service_charge.update", "service_charge.delete"),
-    "service_charge.issue": ("service_charge.submit",),
-    "financial_document.update_draft": ("financial_document.update", "financial_document.delete"),
-    "financial_document.post": ("financial_document.submit",),
-    "journal_entry.read": ("chart_of_accounts.read", "financial_account.read"),
-    "journal_entry.create": ("journal_entry.update", "journal_entry.delete"),
-    "accounting_period.close": ("accounting_period.update",),
-    "chart_of_accounts.manage": (
-        "chart_of_accounts.read",
-        "chart_of_accounts.create",
-        "chart_of_accounts.update",
-        "chart_of_accounts.delete",
-        "financial_account.read",
-        "financial_account.create",
-        "financial_account.update",
-        "financial_account.delete",
-    ),
-    "posting_rule.manage": ("posting_rule.create", "posting_rule.update", "posting_rule.delete"),
-    "user.manage": ("user.read",),
-    "role.manage": ("role.read",),
-}
-
-SOURCE_PERMISSION_CODES = {code for code, _, _ in SOURCE_PERMISSIONS}
 
 # Account lockout policy for privileged/credentialed access. These are the
 # defaults; the effective values come from app_settings(`security`) so an
@@ -83,7 +53,6 @@ MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
 _LOCKOUT_ATTEMPTS_RANGE = (3, 100)
 _LOCKOUT_MINUTES_RANGE = (1, 1440)
-PLATFORM_ADMIN_ROLE = "PLATFORM_ADMIN"
 
 
 def _clamped_int(value: Any, default: int, bounds: tuple[int, int]) -> int:
@@ -120,15 +89,8 @@ def _is_protected_system_admin(user: User) -> bool:
     return user.system_identity == PROTECTED_SYSTEM_ADMIN_IDENTITY
 
 
-async def _active_role_code(session: AsyncSession, user_id: int) -> str | None:
-    return await AuthRepository(session).active_role_code(user_id)
-
-
-def _is_active_assignment(expires_at: datetime | None, now: datetime) -> bool:
-    """True when a role assignment is currently active (tz-safe for SQLite)."""
-    if expires_at is None:
-        return True
-    return _as_utc(expires_at) > now
+async def _user_role_codes(session: AsyncSession, user_id: int) -> list[str]:
+    return await authorization.user_role_codes(session, user_id)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -138,24 +100,19 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _assert_can_manage_platform_admin(context: RequestContext | None, role_code: str | None) -> None:
-    """Only a platform administrator may touch the super-admin role."""
-    if role_code == PLATFORM_ADMIN_ROLE and not (context and context.is_platform_admin):
-        raise AccessDenied("Only a platform administrator can modify the Platform Administrator role.")
+def _assert_can_manage_protected_role(context: RequestContext | None, role_code: str | None) -> None:
+    """Only a super administrator may touch a protected system role."""
+    if role_code in PROTECTED_ROLE_CODES and not (context and context.is_platform_admin):
+        raise AccessDenied(f"Only a super administrator can modify the {role_code} role.")
 
 
 def _assert_can_grant_permissions(context: RequestContext, codes: list[str]) -> None:
     """Prevent delegated role managers from granting capabilities they lack."""
     if context.is_platform_admin:
         return
-    required: set[str] = set()
-    for code in codes:
-        if code in PAGE_PERMISSION_SOURCE_CODES:
-            # A page with no source mapping is its own capability; requiring
-            # nothing would let a role manager grant a page they cannot open.
-            required.update(PAGE_PERMISSION_SOURCE_CODES[code] or (code,))
-        else:
-            required.add(code)
+    # Compare the closed set: granting a page checkbox also grants the API codes
+    # behind it, so the actor must hold those too.
+    required = set(resolve_role_codes(codes))
     missing = sorted(code for code in required if not context.has_permission(code))
     if missing:
         raise AccessDenied(
@@ -166,16 +123,7 @@ def _assert_can_grant_permissions(context: RequestContext, codes: list[str]) -> 
 async def _assert_can_assign_role(session: AsyncSession, context: RequestContext, role: Role) -> None:
     if context.is_platform_admin:
         return
-    codes = list(
-        (
-            await session.execute(
-                select(Permission.code)
-                .join(RolePermission, RolePermission.permission_id == Permission.id)
-                .where(RolePermission.role_id == role.id)
-            )
-        ).scalars().all()
-    )
-    _assert_can_grant_permissions(context, codes)
+    _assert_can_grant_permissions(context, await authorization.role_permission_codes(session, role.code))
 
 
 async def _revoke_all_sessions(session: AsyncSession, user: User) -> None:
@@ -196,28 +144,6 @@ async def must_change_password(session: AsyncSession, user_id: int) -> bool:
     """Whether the current password was chosen by somebody other than its owner."""
     credential = await AuthRepository(session).credential_for_user(user_id)
     return bool(credential and credential.must_change_password)
-
-
-def expand_source_permissions(permissions: set[str]) -> set[str]:
-    """Expand stored page permissions into the source/API permissions they imply.
-
-    Chains are followed (page -> source -> legacy compatibility), so a role that
-    only stored ``quotation.update_draft`` still receives the newer, narrower
-    action codes that the route guards check.
-    """
-    expanded = set(permissions)
-    pending = list(permissions)
-    while pending:
-        code = pending.pop()
-        implied = (
-            *PAGE_PERMISSION_SOURCE_CODES.get(code, ()),
-            *SOURCE_PERMISSION_COMPATIBILITY.get(code, ()),
-        )
-        for item in implied:
-            if item not in expanded:
-                expanded.add(item)
-                pending.append(item)
-    return expanded
 
 
 async def get_user_by_login(session: AsyncSession, login: str) -> User | None:
@@ -266,52 +192,18 @@ async def authenticate(session: AsyncSession, login: str, password: str) -> User
     return user
 
 
-async def resolve_permissions(session: AsyncSession, user_id: int) -> tuple[set[str], list[str]]:
-    now = datetime.now(UTC)
-    assignments = (
-        await session.execute(select(UserRoleAssignment).where(UserRoleAssignment.user_id == user_id))
-    ).scalars().all()
-    role_ids = {a.role_id for a in assignments if _is_active_assignment(a.expires_at, now)}
-    role_codes: list[str] = []
-    permissions: set[str] = set()
-    if role_ids:
-        active_roles = (
-            await session.execute(
-                select(Role.id, Role.code).where(Role.id.in_(role_ids), Role.status == "ACTIVE")
-            )
-        ).all()
-        active_role_ids = [role_id for role_id, _ in active_roles]
-        role_codes = [code for _, code in active_roles]
-        if active_role_ids:
-            permissions = set(
-                (
-                    await session.execute(
-                        select(Permission.code)
-                        .join(RolePermission, RolePermission.permission_id == Permission.id)
-                        .where(RolePermission.role_id.in_(active_role_ids))
-                    )
-                )
-                .scalars()
-                .all()
-            )
-    # A role may store matrix page permissions; expand them to the API-level
-    # source permissions they imply so enforcement keeps working.
-    return expand_source_permissions(permissions), role_codes
-
-
 def resolve_page_keys(permissions: set[str], is_platform_admin: bool) -> tuple[list[str], list[str]]:
-    if is_platform_admin or "ALL_PAGES" in permissions:
+    """Split a user's effective codes into API capabilities and page keys.
+
+    Both halves come from Casbin: a role stores the page code *and* the API codes
+    that page needs (compiled when the role is saved), so nothing is implied at
+    read time.
+    """
+    if is_platform_admin or "*" in permissions:
         return ["ALL_PAGES"], ["ALL_PAGES"]
     source = sorted(code for code in permissions if code in SOURCE_PERMISSION_CODES)
-    pages: set[str] = set()
-    for code in permissions:
-        # Page-level codes (configuration.manage, master.reference.view, …) are
-        # also mapped so they grant the finer-grained matrix pages.
-        if code in SOURCE_PERMISSION_CODES or code in PAGE_KEYS_BY_SOURCE:
-            pages.update(PAGE_KEYS_BY_SOURCE.get(code, ()))
-        if code not in SOURCE_PERMISSION_CODES and "." in code:
-            pages.add(code)
-    return source, sorted(pages)
+    pages = sorted(code for code in permissions if code in PAGE_PERMISSION_CODES)
+    return source, pages
 
 
 async def build_context(
@@ -322,8 +214,12 @@ async def build_context(
     ip_address: str | None = None,
     user_agent: str | None = None,
 ) -> RequestContext:
+    # Every authenticated request and every login/refresh reaches a context, so
+    # this is the one place that guarantees the policy copy is current before any
+    # decision (and before the identity snapshot is cached).
+    await authorization.ensure_current(session)
     permissions, role_codes, avatar = await resolve_identity(session, user)
-    is_platform_admin = "PLATFORM_ADMIN" in role_codes or "*" in permissions
+    is_platform_admin = authorization.is_super_admin(user.id) or "*" in permissions
 
     return RequestContext(
         user_id=user.id,
@@ -336,17 +232,19 @@ async def build_context(
         ip_address=ip_address,
         user_agent=user_agent,
         avatar=avatar,
+        roles=role_codes,
     )
 
 
 async def resolve_identity(session: AsyncSession, user: User) -> tuple[set[str], list[str], str | None]:
     """Effective permissions, role codes and avatar for one user.
 
-    Cached read-through with version-based invalidation. The cache key includes
-    the user's ``token_version`` so session revocation invalidates it, and role
-    or permission changes bump the ``auth`` namespace immediately (see the
-    mutations in this module). Backend authorization remains authoritative:
-    every request still verifies the user row and token version first.
+    The codes come from the Casbin enforcer, which is synchronized before any
+    request is authorized. The result is cached read-through with version-based
+    invalidation: the key includes the user's ``token_version`` so session
+    revocation invalidates it, and every policy mutation bumps the ``auth``
+    namespace. Enforcement never reads this cache — ``RequestContext`` asks
+    Casbin for each decision.
     """
     parts = ("identity", user.id, int(user.token_version or 0))
     cached = await cache.get_json("auth", *parts)
@@ -355,23 +253,34 @@ async def resolve_identity(session: AsyncSession, user: User) -> tuple[set[str],
             return set(cached["permissions"]), list(cached.get("roles") or []), cached.get("avatar")
         except (TypeError, ValueError):
             pass
-    permissions, role_codes = await resolve_permissions(session, user.id)
+    permissions = set(authorization.effective_codes(user.id))
+    role_codes = await authorization.user_role_codes(session, user.id)
     avatar = await get_user_avatar(session, user.id)
-    await cache.set_json(
-        "auth", *parts,
-        value={"permissions": sorted(permissions), "roles": role_codes, "avatar": avatar},
-        ttl_seconds=settings.cache_ttl_permissions_seconds,
-    )
+    if authorization.is_loaded():
+        # Never memoize a snapshot taken while the policy copy was unavailable:
+        # it would keep an empty permission set for the whole TTL.
+        await cache.set_json(
+            "auth", *parts,
+            value={"permissions": sorted(permissions), "roles": role_codes, "avatar": avatar},
+            ttl_seconds=settings.cache_ttl_permissions_seconds,
+        )
     return permissions, role_codes, avatar
 
 
-def build_auth_user(ctx: RequestContext, role_label: str, *, must_change_password: bool = False) -> dict:
+def build_auth_user(
+    ctx: RequestContext,
+    role_label: str,
+    *,
+    must_change_password: bool = False,
+    roles: list[str] | None = None,
+) -> dict:
     source_permissions, page_access = resolve_page_keys(ctx.permissions, ctx.is_platform_admin)
     return {
         "id": ctx.user_id,
         "name": ctx.display_name,
         "email": ctx.email,
         "role": role_label,
+        "roles": roles if roles is not None else [role_label],
         "avatar": ctx.avatar,
         "permissions": page_access,
         "pageAccess": page_access,
@@ -629,7 +538,10 @@ async def set_user_password(
     user = await session.get(User, user_id)
     if user is None:
         raise NotFound("User not found.")
-    _assert_can_manage_platform_admin(context, await _active_role_code(session, user.id))
+    target_roles = await authorization.user_role_codes(session, user.id)
+    _assert_can_manage_protected_role(
+        context, SUPER_ADMIN_ROLE if SUPER_ADMIN_ROLE in target_roles else None
+    )
     errors = validate_password_strength(password)
     if errors:
         raise ValidationFailed(errors[0], {"password": errors[0]})
@@ -667,14 +579,20 @@ async def force_logout_user(session: AsyncSession, user_id: int) -> None:
 
 
 async def list_users(session: AsyncSession, page: PageParams | None = None) -> list[dict]:
-    rows = await AuthRepository(session).users_with_role_codes(page)
+    """Users with their role codes.
+
+    Returns a bare list: ``GET /users`` has always answered that way and the SPA
+    consumes it directly. ``page`` still bounds the query, it just does not add a
+    ``meta`` envelope the clients do not read.
+    """
+    rows, _total = await AuthRepository(session).users_with_role_codes(page)
     from app.core.users import creator_names_from_audit
 
     creators = await creator_names_from_audit(
         session, "user", "USER_CREATED", (user.id for user, _assignments in rows)
     )
     output = []
-    for user, assignments in rows:
+    for user, role_codes in rows:
         output.append(
             {
                 "id": user.id,
@@ -683,7 +601,8 @@ async def list_users(session: AsyncSession, page: PageParams | None = None) -> l
                 "email": user.email,
                 "displayName": user.display_name,
                 "status": user.status,
-                "roles": list(assignments),
+                "role": role_codes[0] if role_codes else None,
+                "roles": list(role_codes),
                 "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
                 "createdBy": creators.get(user.id),
                 "createdAt": user.created_at.isoformat() if user.created_at else None,
@@ -693,117 +612,71 @@ async def list_users(session: AsyncSession, page: PageParams | None = None) -> l
     return output
 
 
-def _requested_role_code(data: dict) -> str | None:
-    """Resolve the single role requested by a user create/update payload.
+def _requested_role_codes(data: dict) -> list[str] | None:
+    """The single role code requested by a user create/update payload.
 
-    Single-Role RBAC: a user has exactly one role. Accepts the ``role`` /
-    ``role_code`` / ``roleCode`` aliases and the legacy ``roles`` list, but a
-    list with more than one entry is rejected.
-
-    Returns ``None`` when the payload does not mention any role (leave the
-    current assignment unchanged), ``""`` when the payload explicitly clears the
-    role, or the role code otherwise.
+    Returns ``None`` when the payload mentions no role (leave the assignment
+    alone) and ``[]`` when it explicitly clears it. A user holds exactly one
+    role, so the value is one code; multi-role payloads are refused by the
+    request schemas.
     """
-    roles = data.get("roles")
-    if roles is not None:
-        codes = [roles] if isinstance(roles, str) else list(roles)
-        codes = [str(code).strip() for code in codes if str(code).strip()]
-        if len(codes) > 1:
-            raise ValidationFailed(
-                "A user can only have one role.", {"role": "Only one role is allowed"}
-            )
-        return codes[0] if codes else ""
-
-    legacy = data.get("role_code") or data.get("roleCode") or data.get("role")
-    if legacy:
-        return str(legacy).strip()
-
-    mentioned = any(
-        key in data and data.get(key) is not None
-        for key in ("role_code", "roleCode", "role")
-    )
-    return "" if mentioned else None
+    for key in ("role_code", "roleCode", "role"):
+        if data.get(key) is not None:
+            value = str(data[key]).strip()
+            return [value] if value else []
+    return None
 
 
-async def _sync_user_role(
-    session: AsyncSession, user_id: int, role_code: str, context: RequestContext | None
-) -> None:
-    """Replace a user's active role with ``role_code``.
-
-    The previous active assignment is expired (never deleted) so history is
-    preserved and the partial unique index still allows exactly one active row.
-    ``role_code`` must reference an existing active role.
-    """
-    # Serialize role replacement per user. PostgreSQL enforces the partial
-    # unique index as the final backstop; SQLite safely ignores FOR UPDATE.
-    await session.execute(select(User.id).where(User.id == user_id).with_for_update())
-    role = (
-        await session.execute(select(Role).where(Role.code == role_code))
-    ).scalars().first()
-    if role is None:
-        raise ValidationFailed(f"Unknown role: {role_code}.", {"role": "Unknown role"})
-    if str(role.status or "").upper() != "ACTIVE":
-        raise ValidationFailed("The selected role is not active.", {"role": "Role is inactive"})
-
-    now = datetime.now(UTC)
-    active = (
-        await session.execute(
-            select(UserRoleAssignment).where(
-                UserRoleAssignment.user_id == user_id,
-                UserRoleAssignment.expires_at.is_(None),
-            )
-        )
-    ).scalars().all()
-    for assignment in active:
-        assignment.expires_at = now
-    # Flush the expiry before inserting so the partial unique index is satisfied.
-    await session.flush()
-    session.add(
-        UserRoleAssignment(
-            user_id=user_id,
-            role_id=role.id,
-            assigned_by_user_id=context.user_id if context else None,
-        )
-    )
-    await session.flush()
-
-
-async def _assert_platform_admin_remains(session: AsyncSession, user_id: int, new_role_code: str | None) -> None:
-    """Block removing the last remaining Platform Administrator assignment."""
-    if new_role_code == PLATFORM_ADMIN_ROLE:
-        return
-    # Serialize all changes that could remove a platform administrator so two
-    # concurrent requests cannot each observe the other administrator.
-    await session.execute(
-        select(Role.id).where(Role.code == PLATFORM_ADMIN_ROLE).with_for_update()
-    )
-    assignment = (
-        await session.execute(
-            select(UserRoleAssignment.id)
-            .join(Role, Role.id == UserRoleAssignment.role_id)
-            .where(
-                UserRoleAssignment.user_id == user_id,
-                UserRoleAssignment.expires_at.is_(None),
-                Role.code == PLATFORM_ADMIN_ROLE,
-            )
-        )
-    ).scalars().first()
-    if assignment is None:
-        return
-    others = await session.scalar(
-        select(func.count())
-        .select_from(UserRoleAssignment)
-        .join(Role, Role.id == UserRoleAssignment.role_id)
-        .where(
-            Role.code == PLATFORM_ADMIN_ROLE,
-            UserRoleAssignment.user_id != user_id,
-            UserRoleAssignment.expires_at.is_(None),
-        )
-    )
-    if not others:
+async def _load_roles(session: AsyncSession, codes: list[str]) -> list[Role]:
+    """Resolve role codes to active role rows, refusing unknown or inactive ones."""
+    unique = list(dict.fromkeys(codes))
+    if not unique:
+        return []
+    roles = (await session.execute(select(Role).where(Role.code.in_(unique)))).scalars().all()
+    by_code = {role.code: role for role in roles}
+    unknown = [code for code in unique if code not in by_code]
+    if unknown:
+        raise ValidationFailed(f"Unknown role: {', '.join(unknown)}.", {"roles": "Unknown role"})
+    inactive = [role.code for role in roles if str(role.status or "").upper() != "ACTIVE"]
+    if inactive:
         raise ValidationFailed(
-            "At least one Platform Administrator must remain.", {"roles": "Required"}
+            "The selected role is not active.", {"roles": "Inactive role: " + ", ".join(inactive)}
         )
+    return [by_code[code] for code in unique]
+
+
+async def _apply_user_roles(session: AsyncSession, user_id: int, role_codes: list[str]) -> None:
+    """Store a user's role set in Casbin, the only role-assignment store."""
+    # Serialize per user so two concurrent edits cannot interleave their writes.
+    await session.execute(select(User.id).where(User.id == user_id).with_for_update())
+    await authorization.set_user_roles(session, user_id, role_codes)
+
+
+def _assert_can_touch_super_admin(context: RequestContext, current: list[str], requested: list[str] | None) -> None:
+    if context.is_platform_admin:
+        return
+    if SUPER_ADMIN_ROLE in current or (requested and SUPER_ADMIN_ROLE in requested):
+        raise AccessDenied("Only a super administrator can change a Super Administrator assignment.")
+
+
+async def _assert_super_admin_remains(session: AsyncSession, user_id: int, new_codes: list[str]) -> None:
+    """Block removing the last remaining super administrator assignment."""
+    if SUPER_ADMIN_ROLE in new_codes:
+        return
+    # Serialize the check so two concurrent requests cannot each see the other.
+    await session.execute(select(Role.id).where(Role.code == SUPER_ADMIN_ROLE).with_for_update())
+    current = await authorization.user_role_codes(session, user_id)
+    if SUPER_ADMIN_ROLE not in current:
+        return
+    others = 0
+    for other_id in await authorization.users_with_role(session, SUPER_ADMIN_ROLE):
+        if other_id == user_id:
+            continue
+        other = await session.get(User, other_id)
+        if other is not None and str(other.status or "").upper() == "ACTIVE":
+            others += 1
+    if not others:
+        raise ValidationFailed("At least one Super Administrator must remain.", {"roles": "Required"})
 
 
 async def create_user(session: AsyncSession, data: dict, context: RequestContext) -> User:
@@ -814,10 +687,13 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
     user_code = str(data.get("user_code") or data["username"].upper()).strip()
     if (await session.execute(select(User).where(User.user_code == user_code))).scalars().first():
         raise Conflict("DUPLICATE_USER_CODE", "A user with this code already exists.", {"userCode": "Already in use"})
-    role_code = _requested_role_code(data)
-    if not role_code:
-        raise ValidationFailed("A role is required.", {"role": "Required"})
-    _assert_can_manage_platform_admin(context, role_code)
+    role_codes = _requested_role_codes(data)
+    if not role_codes:
+        raise ValidationFailed("At least one role is required.", {"roles": "Required"})
+    for code in role_codes:
+        _assert_can_manage_protected_role(context, code)
+    for role in await _load_roles(session, role_codes):
+        await _assert_can_assign_role(session, context, role)
     password = str(data.get("password") or "")
     password_errors = validate_password_strength(password)
     if password_errors:
@@ -838,8 +714,9 @@ async def create_user(session: AsyncSession, data: dict, context: RequestContext
             password_changed_at=datetime.now(UTC),
         )
     )
-    await _sync_user_role(session, user.id, role_code, context)
+    await _apply_user_roles(session, user.id, role_codes)
     await session.commit()
+    await authorization.refresh(session)
     return user
 
 
@@ -847,9 +724,10 @@ async def update_user(session: AsyncSession, user_id: int, data: dict, context: 
     user = await session.get(User, user_id)
     if user is None:
         raise NotFound("User not found.")
-    role_code = _requested_role_code(data)
+    requested = _requested_role_codes(data)
+    current_roles = await authorization.user_role_codes(session, user_id)
     if _is_protected_system_admin(user):
-        if role_code is not None and role_code != PLATFORM_ADMIN_ROLE:
+        if requested is not None and requested != [SUPER_ADMIN_ROLE]:
             raise AccessDenied("The built-in System Administrator role cannot be changed.")
         if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
             raise AccessDenied("The built-in System Administrator cannot be deactivated.")
@@ -873,41 +751,37 @@ async def update_user(session: AsyncSession, user_id: int, data: dict, context: 
             raise Conflict("DUPLICATE_USER_CODE", "A user with this code already exists.", {"userCode": "Already in use"})
         user.user_code = new_code
 
-    if role_code is not None:
-        if not role_code:
-            raise ValidationFailed("A user must have exactly one role.", {"role": "Required"})
-        current_role_code = await _active_role_code(session, user_id)
-        if role_code != current_role_code:
+    if requested is not None:
+        if set(requested) != set(current_roles):
             if context.user_id == user_id:
-                raise AccessDenied("You cannot change your own role.")
-            _assert_can_manage_platform_admin(context, role_code)
-            target_role = (
-                await session.execute(select(Role).where(Role.code == role_code))
-            ).scalars().first()
-            if target_role is None:
-                raise ValidationFailed(f"Unknown role: {role_code}.", {"role": "Unknown role"})
-            await _assert_can_assign_role(session, context, target_role)
-            await _assert_platform_admin_remains(session, user_id, role_code)
-            await _sync_user_role(session, user_id, role_code, context)
+                raise AccessDenied("You cannot change your own roles.")
+            _assert_can_touch_super_admin(context, current_roles, requested)
+            for code in requested:
+                _assert_can_manage_protected_role(context, code)
+            for role in await _load_roles(session, requested):
+                await _assert_can_assign_role(session, context, role)
+            await _assert_super_admin_remains(session, user_id, requested)
+            await _apply_user_roles(session, user_id, requested)
 
     if data.get("status") is not None:
         new_status = str(data["status"]).upper()
         if context.user_id == user_id and new_status != "ACTIVE":
             raise AccessDenied("You cannot deactivate your own account.")
         if new_status != "ACTIVE":
-            # The last active Platform Administrator cannot be deactivated.
-            await _assert_platform_admin_remains(session, user_id, None)
+            _assert_can_touch_super_admin(context, current_roles, None)
+            # The last active Super Administrator cannot be deactivated.
+            await _assert_super_admin_remains(session, user_id, [])
         user.status = new_status
         if new_status != "ACTIVE":
             await _revoke_all_sessions(session, user)
     await session.commit()
-    await cache.bump("auth")
+    await authorization.refresh(session)
     return user
 
 
 async def user_payload(session: AsyncSession, user: User) -> dict:
-    assignments = await list_role_assignments(session, user.id)
-    roles = [item["roleCode"] for item in assignments if item.get("roleCode")]
+    roles = await authorization.user_role_codes(session, user.id)
+    effective = authorization.effective_codes(user.id)
     return {
         "id": user.id,
         "userCode": user.user_code,
@@ -917,33 +791,53 @@ async def user_payload(session: AsyncSession, user: User) -> dict:
         "status": str(user.status or "").upper(),
         "role": roles[0] if roles else None,
         "roles": roles,
+        # The pages this account can open. Display only: the server re-checks
+        # every request against Casbin, and the full code list is on
+        # ``GET /users/{id}/effective-permissions``.
+        "pagePermissions": sorted(code for code in effective if code in PAGE_PERMISSION_CODES),
         "lastLogin": user.last_login_at.isoformat() if user.last_login_at else None,
         "isProtectedSystemAccount": _is_protected_system_admin(user),
     }
 
 
 async def list_role_assignments(session: AsyncSession, user_id: int) -> list[dict]:
-    """Return the user's *active* role assignment(s).
-
-    Single-Role RBAC means at most one row. Expired rows are kept for history
-    but excluded here so callers always see the current role.
-    """
-    now = datetime.now(UTC)
-    rows = await AuthRepository(session).assignment_rows(user_id)
+    """Return the roles currently assigned to the user, in Casbin."""
+    codes = await authorization.user_role_codes(session, user_id)
+    if not codes:
+        return []
+    rows = (await session.execute(select(Role).where(Role.code.in_(codes)))).scalars().all()
+    by_code = {role.code: role for role in rows}
     return [
         {
-            "id": assignment.id,
-            "userId": assignment.user_id,
-            "roleId": assignment.role_id,
+            "userId": user_id,
+            "roleId": getattr(by_code.get(code), "id", None),
             "roleCode": code,
-            "expiresAt": assignment.expires_at.isoformat() if assignment.expires_at else None,
+            "roleName": getattr(by_code.get(code), "name", code),
         }
-        for assignment, code in rows
-        if _is_active_assignment(assignment.expires_at, now)
+        for code in codes
     ]
 
 
-async def assign_role(session: AsyncSession, user_id: int, data: dict, context: RequestContext) -> UserRoleAssignment:
+async def effective_permissions(session: AsyncSession, user_id: int) -> dict:
+    """Every code the user holds through its assigned role, resolved by Casbin."""
+    user = await get_user(session, user_id)
+    roles = await authorization.user_role_codes(session, user_id)
+    codes = sorted(authorization.effective_codes(user_id))
+    source = [code for code in codes if code in SOURCE_PERMISSION_CODES]
+    pages = [code for code in codes if code in PAGE_PERMISSION_CODES]
+    return {
+        "userId": user.id,
+        "username": user.username,
+        "roles": roles,
+        "isSuperAdmin": authorization.is_super_admin(user_id) or "*" in codes,
+        "permissions": codes,
+        "sourcePermissions": source,
+        "pagePermissions": pages,
+    }
+
+
+async def assign_role(session: AsyncSession, user_id: int, data: dict, context: RequestContext) -> dict:
+    """Replace the user's assigned role: a user holds exactly one role."""
     user = await session.get(User, user_id)
     if user is None:
         raise NotFound("User not found.")
@@ -954,28 +848,45 @@ async def assign_role(session: AsyncSession, user_id: int, data: dict, context: 
         role = (await session.execute(select(Role).where(Role.code == data["role_code"]))).scalars().first()
     if role is None:
         raise NotFound("Role not found.")
-    if _is_protected_system_admin(user) and role.code != PLATFORM_ADMIN_ROLE:
+    if str(role.status or "").upper() != "ACTIVE":
+        raise ValidationFailed("The selected role is not active.", {"role": "Role is inactive"})
+    current = await authorization.user_role_codes(session, user_id)
+    if _is_protected_system_admin(user) and role.code != SUPER_ADMIN_ROLE:
         raise AccessDenied("The built-in System Administrator role cannot be changed.")
-    _assert_can_manage_platform_admin(context, role.code)
-    current_role_code = await _active_role_code(session, user_id)
-    if role.code != current_role_code:
+    _assert_can_manage_protected_role(context, role.code)
+    if role.code not in current:
         if context.user_id == user_id:
-            raise AccessDenied("You cannot change your own role.")
+            raise AccessDenied("You cannot change your own roles.")
+        _assert_can_touch_super_admin(context, current, [role.code])
         await _assert_can_assign_role(session, context, role)
-        await _assert_platform_admin_remains(session, user_id, role.code)
-        # Single-Role RBAC: assigning a role replaces the previous active role.
-        await _sync_user_role(session, user_id, role.code, context)
+        # The new role replaces the old one, so the previous assignment's
+        # removal must not leave the system without a super administrator.
+        await _assert_super_admin_remains(session, user_id, [role.code])
+        await _apply_user_roles(session, user_id, [role.code])
     await session.commit()
-    await cache.bump("auth")
-    assignment = (
-        await session.execute(
-            select(UserRoleAssignment).where(
-                UserRoleAssignment.user_id == user_id,
-                UserRoleAssignment.expires_at.is_(None),
-            )
-        )
-    ).scalars().first()
-    return assignment
+    await authorization.refresh(session)
+    return {"userId": user_id, "roleId": role.id, "roleCode": role.code}
+
+
+async def remove_role(session: AsyncSession, user_id: int, role_code: str, context: RequestContext) -> dict:
+    """Remove the user's assigned role; the user then holds no permissions."""
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFound("User not found.")
+    current = await authorization.user_role_codes(session, user_id)
+    if role_code not in current:
+        raise NotFound("Role assignment not found.")
+    if _is_protected_system_admin(user):
+        raise AccessDenied("The built-in System Administrator role cannot be changed.")
+    if context.user_id == user_id:
+        raise AccessDenied("You cannot change your own roles.")
+    _assert_can_touch_super_admin(context, current, [])
+    remaining = [code for code in current if code != role_code]
+    await _assert_super_admin_remains(session, user_id, remaining)
+    await _apply_user_roles(session, user_id, remaining)
+    await session.commit()
+    await authorization.refresh(session)
+    return {"userId": user_id, "roleCode": role_code, "roles": remaining}
 
 
 async def list_roles(
@@ -987,19 +898,9 @@ async def list_roles(
     creators = await creator_names_from_audit(
         session, "role", "ROLE_CREATED", (role.id for role, _perms in roles)
     )
+    counts = await authorization.user_counts_by_role(session)
     output = []
     for role, perms in roles:
-        user_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(UserRoleAssignment)
-                .where(
-                    UserRoleAssignment.role_id == role.id,
-                    UserRoleAssignment.expires_at.is_(None),
-                )
-            )
-            or 0
-        )
         output.append(
             {
                 "id": role.id,
@@ -1007,10 +908,11 @@ async def list_roles(
                 "name": role.name,
                 "description": role.description,
                 "isSystemRole": role.is_system_role,
+                "isProtected": role.code in PROTECTED_ROLE_CODES,
                 "status": role.status,
                 "permissions": list(perms),
                 "permissionCount": len(perms),
-                "userCount": user_count,
+                "userCount": counts.get(role.code, 0),
                 "createdBy": creators.get(role.id),
                 "createdAt": role.created_at.isoformat() if role.created_at else None,
             }
@@ -1031,13 +933,16 @@ def _derive_role_code(name: str, existing: set[str]) -> str:
     return code
 
 
-async def _validate_permission_codes(session: AsyncSession, codes: list[str]) -> None:
+def _validate_permission_codes(codes: list[str]) -> None:
+    """Refuse codes the backend does not define.
+
+    The catalog is code-defined (``app/core/permissions.py``) because a new
+    endpoint ships with its guard; accepting an arbitrary string would create a
+    grant nothing can ever check.
+    """
     if not codes:
         return
-    found = set(
-        (await session.execute(select(Permission.code).where(Permission.code.in_(codes)))).scalars().all()
-    )
-    unknown = sorted(set(codes) - found)
+    unknown = sorted({code for code in codes if code not in ALL_PERMISSION_CODES and code != "*"})
     if unknown:
         raise ValidationFailed(
             f"Unknown permission(s): {', '.join(unknown)}.", {"permissions": "Unknown permission"}
@@ -1050,21 +955,21 @@ async def create_role(session: AsyncSession, data: dict, context: RequestContext
         raise ValidationFailed("A role name is required.", {"name": "Required"})
     code = str(data.get("code") or "").strip()
     if not code:
-        existing = set(
-            (await session.execute(select(Role.code))).scalars().all()
-        )
+        existing = set((await session.execute(select(Role.code))).scalars().all())
         code = _derive_role_code(name, existing)
-    _assert_can_manage_platform_admin(context, code)
+    code = code.upper()
+    _assert_can_manage_protected_role(context, code)
     if (await session.execute(select(Role).where(Role.code == code))).scalars().first():
         raise Conflict("DUPLICATE_ROLE", "A role with this code already exists.", {"code": "Already in use"})
     permissions = [str(value) for value in data.get("permissions") or []]
-    await _validate_permission_codes(session, permissions)
+    _validate_permission_codes(permissions)
     _assert_can_grant_permissions(context, permissions)
     role = Role(code=code, name=name, description=data.get("description"), status="ACTIVE")
     session.add(role)
     await session.flush()
-    await sync_role_permissions(session, role.id, permissions)
+    await sync_role_permissions(session, code, permissions)
     await session.commit()
+    await authorization.refresh(session)
     return role
 
 
@@ -1074,29 +979,18 @@ async def update_role(session: AsyncSession, role_id: int, data: dict, context: 
     ).scalars().first()
     if role is None:
         raise NotFound("Role not found.")
-    _assert_can_manage_platform_admin(context, role.code)
-    if role.is_system_role and role.code == PLATFORM_ADMIN_ROLE:
+    _assert_can_manage_protected_role(context, role.code)
+    if role.code in PROTECTED_ROLE_CODES:
         if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
-            raise AccessDenied("The built-in Platform Administrator role cannot be deactivated.")
-        if data.get("permissions") is not None:
-            required = set(ROLE_DEFINITIONS[PLATFORM_ADMIN_ROLE]["permissions"])
-            requested = {str(value) for value in data["permissions"]}
-            if not required.issubset(requested):
-                raise AccessDenied("Critical permissions cannot be removed from the built-in administrator role.")
+            raise AccessDenied(f"The protected {role.code} role cannot be deactivated.")
+        if data.get("permissions") is not None and "*" not in {str(value) for value in data["permissions"]}:
+            raise AccessDenied("The protected super administrator grant cannot be removed.")
     if data.get("status") is not None and str(data["status"]).upper() != "ACTIVE":
-        active_users = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(UserRoleAssignment)
-                .join(User, User.id == UserRoleAssignment.user_id)
-                .where(
-                    UserRoleAssignment.role_id == role.id,
-                    UserRoleAssignment.expires_at.is_(None),
-                    User.status == "ACTIVE",
-                )
-            )
-            or 0
-        )
+        active_users = 0
+        for user_id in await authorization.users_with_role(session, role.code):
+            member = await session.get(User, user_id)
+            if member is not None and str(member.status or "").upper() == "ACTIVE":
+                active_users += 1
         if active_users:
             raise Conflict(
                 "ROLE_IN_USE",
@@ -1107,33 +1001,27 @@ async def update_role(session: AsyncSession, role_id: int, data: dict, context: 
             setattr(role, key, str(data[key]).upper() if key == "status" else data[key])
     if data.get("permissions") is not None:
         permissions = [str(value) for value in data["permissions"]]
+        _validate_permission_codes(permissions)
         _assert_can_grant_permissions(context, permissions)
-        await sync_role_permissions(session, role.id, permissions)
+        await sync_role_permissions(session, role.code, permissions)
     await session.commit()
-    await cache.bump("auth")
+    await authorization.refresh(session)
     return role
 
 
-async def sync_role_permissions(session: AsyncSession, role_id: int, codes: list[str]) -> None:
-    await _validate_permission_codes(session, codes)
-    role = await session.get(Role, role_id)
-    if role is not None and role.is_system_role and role.code == PLATFORM_ADMIN_ROLE:
-        required = set(ROLE_DEFINITIONS[PLATFORM_ADMIN_ROLE]["permissions"])
-        if not required.issubset(codes):
-            raise AccessDenied("Critical permissions cannot be removed from the built-in administrator role.")
-    await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
-    await session.flush()
-    if not codes:
-        return
-    ids = (
-        await session.execute(select(Permission.id).where(Permission.code.in_(codes)))
-    ).scalars().all()
-    for pid in ids:
-        session.add(RolePermission(role_id=role_id, permission_id=pid))
+async def sync_role_permissions(session: AsyncSession, role_code: str, codes: list[str]) -> None:
+    """Replace a role's grants in Casbin, closing page codes over their API codes."""
+    _validate_permission_codes(codes)
+    role = (await session.execute(select(Role).where(Role.code == role_code))).scalars().first()
+    if role is not None and role.code in PROTECTED_ROLE_CODES:
+        if "*" not in codes:
+            raise AccessDenied("The protected super administrator grant cannot be removed.")
+    resolved = sorted(resolve_role_codes(codes)) if "*" not in codes else ["*"]
+    await authorization.set_role_permissions(session, role_code, resolved)
 
 
 def role_label(role_codes: list[str]) -> str:
-    if "PLATFORM_ADMIN" in role_codes:
+    if SUPER_ADMIN_ROLE in role_codes:
         return "SuperAdmin"
     if role_codes:
         return role_codes[0]
@@ -1141,40 +1029,34 @@ def role_label(role_codes: list[str]) -> str:
 
 
 async def role_payload(session: AsyncSession, role: Role) -> dict:
-    perms = (
-        await session.execute(
-            select(Permission.code)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == role.id)
-        )
-    ).scalars().all()
-    assigned_users = (
-        await session.execute(
-            select(User.id, User.username, User.display_name, User.email, User.status)
-            .join(UserRoleAssignment, UserRoleAssignment.user_id == User.id)
-            .where(
-                UserRoleAssignment.role_id == role.id,
-                UserRoleAssignment.expires_at.is_(None),
+    perms = await authorization.role_permission_codes(session, role.code)
+    assigned_users = []
+    for user_id in await authorization.users_with_role(session, role.code):
+        member = await session.get(User, user_id)
+        if member is not None:
+            assigned_users.append(
+                {
+                    "id": member.id,
+                    "username": member.username,
+                    "displayName": member.display_name,
+                    "email": member.email,
+                    "status": member.status,
+                }
             )
-            .order_by(User.display_name, User.id)
-        )
-    ).all()
-    users = [
-        {"id": row.id, "username": row.username, "displayName": row.display_name, "email": row.email, "status": row.status}
-        for row in assigned_users
-    ]
+    assigned_users.sort(key=lambda item: (item["displayName"] or "", item["id"]))
     return {
         "id": role.id,
         "code": role.code,
         "name": role.name,
         "description": role.description,
         "isSystemRole": role.is_system_role,
+        "isProtected": role.code in PROTECTED_ROLE_CODES,
         "status": role.status,
         "permissions": list(perms),
         "permissionCount": len(perms),
-        "userCount": len(users),
-        "assignedUsers": users,
-        "assignedUsersSummary": ", ".join(user["displayName"] for user in users),
+        "userCount": len(assigned_users),
+        "assignedUsers": assigned_users,
+        "assignedUsersSummary": ", ".join(user["displayName"] for user in assigned_users),
     }
 
 
@@ -1184,15 +1066,7 @@ async def duplicate_role(
     source = await session.get(Role, role_id)
     if source is None:
         raise NotFound("Role not found.")
-    permissions = list(
-        (
-            await session.execute(
-                select(Permission.code)
-                .join(RolePermission, RolePermission.permission_id == Permission.id)
-                .where(RolePermission.role_id == source.id)
-            )
-        ).scalars().all()
-    )
+    permissions = await authorization.role_permission_codes(session, source.code)
     _assert_can_grant_permissions(context, permissions)
     name = str(data.get("name") or f"{source.name} Copy").strip()
     requested_code = str(data.get("code") or "").strip()
@@ -1215,21 +1089,116 @@ async def get_role(session: AsyncSession, role_id: int) -> dict:
     return await role_payload(session, role)
 
 
+async def permission_catalog(session: AsyncSession) -> dict:
+    """Matrix metadata the Roles & Permissions screen renders.
+
+    Pages, their actions and the label keys come from the backend so the UI can
+    never drift from what a guard checks.
+    """
+    from app.core.permissions import MATRIX_PAGES, permission_name
+
+    roles = (await session.execute(select(Role).order_by(Role.code))).scalars().all()
+    grouped: dict[str, list[dict]] = {}
+    for code in ALL_PERMISSION_CODES:
+        module, _, action = code.rpartition(".")
+        grouped.setdefault(module, []).append(
+            {"code": code, "module": module, "action": action, "name": permission_name(code)}
+        )
+    return {
+        "pages": [
+            {
+                "value": value,
+                "group": group,
+                "prefix": prefix,
+                "labelKey": label_key,
+                "actions": list(actions),
+                "permissions": [f"{prefix}.{action}" for action in actions],
+            }
+            for value, group, prefix, label_key, actions in MATRIX_PAGES
+        ],
+        "roles": [
+            {
+                "id": role.id,
+                "code": role.code,
+                "name": role.name,
+                "description": role.description,
+                "status": role.status,
+                "isProtected": role.code in PROTECTED_ROLE_CODES,
+            }
+            for role in roles
+        ],
+        "modules": [
+            {"module": module, "permissions": entries} for module, entries in sorted(grouped.items())
+        ],
+    }
+
+
+async def _locked_role(session: AsyncSession, role_id: int, context: RequestContext) -> Role:
+    role = (
+        await session.execute(select(Role).where(Role.id == role_id).with_for_update())
+    ).scalars().first()
+    if role is None:
+        raise NotFound("Role not found.")
+    _assert_can_manage_protected_role(context, role.code)
+    return role
+
+
+async def replace_role_permissions(
+    session: AsyncSession, role_id: int, codes: list[str], context: RequestContext
+) -> dict:
+    """Set a role's grants to exactly ``codes``."""
+    role = await _locked_role(session, role_id, context)
+    _validate_permission_codes(codes)
+    _assert_can_grant_permissions(context, codes)
+    await sync_role_permissions(session, role.code, codes)
+    await session.commit()
+    await authorization.refresh(session)
+    return await role_payload(session, role)
+
+
+async def grant_role_permissions(
+    session: AsyncSession, role_id: int, codes: list[str], context: RequestContext
+) -> dict:
+    role = await _locked_role(session, role_id, context)
+    _validate_permission_codes(codes)
+    _assert_can_grant_permissions(context, codes)
+    current = await authorization.role_permission_codes(session, role.code)
+    await sync_role_permissions(session, role.code, sorted(set(current) | set(codes)))
+    await session.commit()
+    await authorization.refresh(session)
+    return await role_payload(session, role)
+
+
+async def revoke_role_permissions(
+    session: AsyncSession, role_id: int, codes: list[str], context: RequestContext
+) -> dict:
+    role = await _locked_role(session, role_id, context)
+    if role.code in PROTECTED_ROLE_CODES:
+        raise AccessDenied("The protected super administrator grant cannot be removed.")
+    current = await authorization.role_permission_codes(session, role.code)
+    # Revoking a page also revokes the capabilities that page uniquely supplied,
+    # otherwise the compiler would simply re-derive them from the capability that
+    # is still in the set.
+    targets: set[str] = set()
+    for code in codes:
+        value = str(code).strip()
+        targets.add(value)
+        targets.update(compile_role_permissions([value]))
+    remaining = sorted(set(current) - targets)
+    await sync_role_permissions(session, role.code, remaining)
+    await session.commit()
+    await authorization.refresh(session)
+    return await role_payload(session, role)
+
+
 async def delete_roles(session: AsyncSession, ids: list[int]) -> None:
     roles = [await session.get(Role, role_id) for role_id in set(ids)]
-    if any(role is not None and role.is_system_role for role in roles):
-        raise AccessDenied("Built-in system roles cannot be deleted.")
+    if any(role is not None and role.code in PROTECTED_ROLE_CODES for role in roles):
+        raise AccessDenied("The protected super administrator role cannot be deleted.")
     for role in roles:
         if role is not None:
             await deletion.require_inactive(role.status, label="role")
-    assigned_role_ids = {
-        role.id
-        for role in roles
-        if role is not None
-        and await session.scalar(
-            select(func.count()).select_from(UserRoleAssignment).where(UserRoleAssignment.role_id == role.id)
-        )
-    }
+    assigned_role_ids = {role.id for role in roles if role is not None and await authorization.users_with_role(session, role.code)}
     if assigned_role_ids:
         raise Conflict(
             "ROLE_IN_USE",
@@ -1239,10 +1208,10 @@ async def delete_roles(session: AsyncSession, ids: list[int]) -> None:
         role = await session.get(Role, role_id)
         if role is None:
             continue
-        await session.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        await authorization.delete_role_policies(session, role.code)
         await session.delete(role)
     await session.commit()
-    await cache.bump("auth")
+    await authorization.refresh(session)
 
 
 async def delete_users(session: AsyncSession, ids: list[int], context: RequestContext | None = None) -> None:
@@ -1253,39 +1222,25 @@ async def delete_users(session: AsyncSession, ids: list[int], context: RequestCo
     if context is not None and context.user_id in ids:
         raise AccessDenied("You cannot delete your own account.")
 
-    # Guard: the last Platform Administrator cannot be deleted.
-    admin_role_id = (
-        await session.execute(select(Role.id).where(Role.code == PLATFORM_ADMIN_ROLE))
-    ).scalars().first()
+    # Guard: the last Super Administrator cannot be deleted.
     target_ids = [user.id for user in users]
-    if admin_role_id is not None and target_ids:
-        deleting_admins = await session.scalar(
-            select(func.count())
-            .select_from(UserRoleAssignment)
-            .where(
-                UserRoleAssignment.role_id == admin_role_id,
-                UserRoleAssignment.user_id.in_(target_ids),
-                UserRoleAssignment.expires_at.is_(None),
-            )
-        )
-        if deleting_admins:
-            total_admins = await session.scalar(
-                select(func.count())
-                .select_from(UserRoleAssignment)
-                .where(
-                    UserRoleAssignment.role_id == admin_role_id,
-                    UserRoleAssignment.expires_at.is_(None),
-                )
-            )
-            if (total_admins or 0) - deleting_admins < 1:
-                raise ValidationFailed("At least one Platform Administrator must remain.")
+    super_admins = set(await authorization.users_with_role(session, SUPER_ADMIN_ROLE))
+    deleting_admins = super_admins & set(target_ids)
+    if deleting_admins:
+        active_super_admins = 0
+        for other_id in super_admins - deleting_admins:
+            other = await session.get(User, other_id)
+            if other is not None and str(other.status or "").upper() == "ACTIVE":
+                active_super_admins += 1
+        if not active_super_admins:
+            raise ValidationFailed("At least one Super Administrator must remain.")
 
     for user in users:
         await deletion.require_inactive(user.status, label="user")
 
     for user in users:
         await session.execute(delete(UserCredential).where(UserCredential.user_id == user.id))
-        await session.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user.id))
+        await authorization.delete_user_policies(session, user.id)
         await session.execute(delete(UserSession).where(UserSession.user_id == user.id))
         await session.delete(user)
     # Deleting every account would make `requires_setup` true again and expose the
@@ -1295,6 +1250,7 @@ async def delete_users(session: AsyncSession, ids: list[int], context: RequestCo
         await session.rollback()
         raise ValidationFailed("At least one user account must remain.")
     await session.commit()
+    await authorization.refresh(session)
 
 
 # --- Profile avatar (stored as a generic module record) ----------------------

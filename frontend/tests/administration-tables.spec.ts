@@ -11,7 +11,7 @@ describe('administration tables', () => {
       'username',
       'displayName',
       'email',
-      'roles',
+      'role',
       'status',
       'lastLogin',
       'createdBy',

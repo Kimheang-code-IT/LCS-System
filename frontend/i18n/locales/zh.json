@@ -1450,7 +1450,11 @@
       "users": {
         "title": "用户",
         "singular": "用户",
-        "description": "按角色和部门管理员工访问权限。"
+        "description": "按角色和部门管理员工访问权限。",
+        "fields": {
+          "role": "分配角色",
+          "pagePermissions": "有效权限"
+        }
       }
     },
     "sections": {
@@ -1907,6 +1911,27 @@
       },
       "netProfit": "净利润",
       "difference": "差额",
+      "generate": "生成报表",
+      "generating": "正在生成报表...",
+      "generateFailed": "无法生成该报表。",
+      "generateFailedTitle": "报表生成失败",
+      "stale": "筛选条件已更改。请点击“生成报表”以刷新结果。",
+      "emptyTitle": "尚未生成报表",
+      "emptyDescription": "选择筛选条件，然后点击“生成报表”以加载此报表。",
+      "emptyResultTitle": "没有匹配的行",
+      "emptyResultDescription": "没有已过账的分录符合这些筛选条件。",
+      "generatedAt": "生成于 {at}",
+      "totals": "合计",
+      "periodDebit": "本期借方",
+      "periodCredit": "本期贷方",
+      "closingDebit": "期末借方",
+      "closingCredit": "期末贷方",
+      "unbalanced": "借方与贷方不相等",
+      "resetFilters": "重置筛选",
+      "accountFrom": "起始科目",
+      "accountTo": "结束科目",
+      "accountCode": "科目代码",
+      "fiscalYear": "财政年度",
       "titles": {
         "openServiceOrders": "未结服务订单",
         "serviceOrderCharges": "服务订单费用",

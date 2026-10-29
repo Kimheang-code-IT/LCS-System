@@ -120,6 +120,49 @@ COMMENT ON COLUMN backup_states.created_at IS 'Row creation timestamp (UTC, time
 COMMENT ON COLUMN backup_states.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
+-- Table: casbin_rule
+-- Module: app.core.authorization.models  [app.core.authorization.models]
+-- Casbin policy store and the single authorization source of truth. p rows
+-- grant an object/action pair to a subject, g rows assign a role to a user
+-- (exactly one per user, enforced by uq_casbin_rule_single_user_role).
+-- Subjects are namespaced: user:<id> and role:<code>.
+-- --------------------------------------------------------------------------
+CREATE TABLE casbin_rule (
+    -- Policy line type: p (a grant) or g (a user-to-role assignment).
+    ptype VARCHAR(100) NOT NULL,
+    -- Subject. p: role:<code> or user:<id>; g: the assigned user (user:<id>).
+    v0 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- p: the object half of the permission code; g: the assigned role
+    -- (role:<code>).
+    v1 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- The action half of the permission code (p rows only).
+    v2 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- Unused by the RBAC model; reserved for a future policy extension (for
+    -- example tenancy).
+    v3 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- Unused by the RBAC model; reserved for a future policy extension.
+    v4 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- Unused by the RBAC model; reserved for a future policy extension.
+    v5 VARCHAR(255) DEFAULT '' NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_casbin_rule PRIMARY KEY (id),
+    CONSTRAINT uq_casbin_rule UNIQUE (ptype, v0, v1, v2, v3, v4, v5)
+);
+CREATE INDEX ix_casbin_rule_ptype ON casbin_rule (ptype);
+CREATE UNIQUE INDEX uq_casbin_rule_single_user_role ON casbin_rule (v0) WHERE ptype = 'g' AND v0 LIKE 'user:%%';
+
+COMMENT ON TABLE casbin_rule IS 'Casbin policy store and the single authorization source of truth. p rows grant an object/action pair to a subject, g rows assign a role to a user (exactly one per user, enforced by uq_casbin_rule_single_user_role). Subjects are namespaced: user:<id> and role:<code>.';
+COMMENT ON COLUMN casbin_rule.ptype IS 'Policy line type: p (a grant) or g (a user-to-role assignment).';
+COMMENT ON COLUMN casbin_rule.v0 IS 'Subject. p: role:<code> or user:<id>; g: the assigned user (user:<id>).';
+COMMENT ON COLUMN casbin_rule.v1 IS 'p: the object half of the permission code; g: the assigned role (role:<code>).';
+COMMENT ON COLUMN casbin_rule.v2 IS 'The action half of the permission code (p rows only).';
+COMMENT ON COLUMN casbin_rule.v3 IS 'Unused by the RBAC model; reserved for a future policy extension (for example tenancy).';
+COMMENT ON COLUMN casbin_rule.v4 IS 'Unused by the RBAC model; reserved for a future policy extension.';
+COMMENT ON COLUMN casbin_rule.v5 IS 'Unused by the RBAC model; reserved for a future policy extension.';
+COMMENT ON COLUMN casbin_rule.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
 -- Table: chart_of_accounts
 -- Module: Double-Entry Finance  [app.modules.finance.models]
 -- Chart of accounts. A self-referencing tree of general-ledger accounts;
@@ -467,22 +510,28 @@ COMMENT ON COLUMN notification_outbox.updated_at IS 'Last modification timestamp
 -- --------------------------------------------------------------------------
 -- Table: permissions
 -- Module: Authentication & Access Control  [app.modules.auth.models]
--- Atomic capability in the code-defined permission catalog (for example
--- service_orders.create), synchronised on startup. Rows are never edited by
--- hand.
+-- Descriptive metadata for one permission code (module, resource, action),
+-- seeded from the code-defined catalog in app/core/permissions.py on startup.
+-- A row here grants nothing: the grant is a casbin_rule policy. Rows are
+-- never edited by hand.
 -- --------------------------------------------------------------------------
 CREATE TABLE permissions (
-    -- Fully-qualified permission code in the form <resource>.<action> (for
-    -- example service_orders.create). This is the value every authorization
-    -- check matches on.
+    -- Fully-qualified permission code in the form
+    -- <module>.<resource>.<action> or <module>.<action> (for example
+    -- quotation.read). Descriptive only: the grant is a casbin_rule policy
+    -- row.
     code VARCHAR(128) NOT NULL,
     -- Display name for the permission.
     name VARCHAR(255) NOT NULL,
+    -- Administration grouping (quotation, finance, admin, ...). Descriptive
+    -- only.
+    module VARCHAR(64) DEFAULT 'general' NOT NULL,
     -- Resource segment of the code — the page or entity the action applies
     -- to.
     resource VARCHAR(64) NOT NULL,
-    -- Action segment of the code (create, read, update, delete, approve,
-    -- export, print, reset, restore, manage...).
+    -- Action segment of the code (view, create, update, delete, submit,
+    -- export, publish, restore, manage...). Casbin matches this against
+    -- p.act.
     action VARCHAR(64) NOT NULL,
     -- Explanation of what the action allows.
     description TEXT,
@@ -492,11 +541,12 @@ CREATE TABLE permissions (
     CONSTRAINT uq_permissions_code UNIQUE (code)
 );
 
-COMMENT ON TABLE permissions IS 'Atomic capability in the code-defined permission catalog (for example service_orders.create), synchronised on startup. Rows are never edited by hand.';
-COMMENT ON COLUMN permissions.code IS 'Fully-qualified permission code in the form <resource>.<action> (for example service_orders.create). This is the value every authorization check matches on.';
+COMMENT ON TABLE permissions IS 'Descriptive metadata for one permission code (module, resource, action), seeded from the code-defined catalog in app/core/permissions.py on startup. A row here grants nothing: the grant is a casbin_rule policy. Rows are never edited by hand.';
+COMMENT ON COLUMN permissions.code IS 'Fully-qualified permission code in the form <module>.<resource>.<action> or <module>.<action> (for example quotation.read). Descriptive only: the grant is a casbin_rule policy row.';
 COMMENT ON COLUMN permissions.name IS 'Display name for the permission.';
+COMMENT ON COLUMN permissions.module IS 'Administration grouping (quotation, finance, admin, ...). Descriptive only.';
 COMMENT ON COLUMN permissions.resource IS 'Resource segment of the code — the page or entity the action applies to.';
-COMMENT ON COLUMN permissions.action IS 'Action segment of the code (create, read, update, delete, approve, export, print, reset, restore, manage...).';
+COMMENT ON COLUMN permissions.action IS 'Action segment of the code (view, create, update, delete, submit, export, publish, restore, manage...). Casbin matches this against p.act.';
 COMMENT ON COLUMN permissions.description IS 'Explanation of what the action allows.';
 COMMENT ON COLUMN permissions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
@@ -647,23 +697,25 @@ COMMENT ON COLUMN quotations.updated_at IS 'Last modification timestamp (UTC, ti
 -- --------------------------------------------------------------------------
 -- Table: roles
 -- Module: Authentication & Access Control  [app.modules.auth.models]
--- Named role bundling a set of permissions. The catalog is code-defined in
--- app/core/permissions.py and synchronised on startup; administrators grant
--- these roles through the Roles & Permissions screen.
+-- Role display metadata for the Roles & Permissions screen: code, name,
+-- description and active state. Authorization never reads this table — the
+-- grants behind a role live in casbin_rule. Rows are created by
+-- app/core/bootstrap.py.
 -- --------------------------------------------------------------------------
 CREATE TABLE roles (
-    -- Stable machine code for the role (e.g. FINANCE_MANAGER). Unique.
+    -- Stable machine code for the role (e.g. ACCOUNTANT). Unique; policy
+    -- subjects use role:<code>.
     code VARCHAR(64) NOT NULL,
     -- Display name shown in the Roles & Permissions matrix.
     name VARCHAR(255) NOT NULL,
     -- Human-readable explanation of what the role is allowed to do.
     description TEXT,
-    -- TRUE for built-in roles that must not be renamed or deleted (for
-    -- example the Platform Administrator and the zero-permission
-    -- migrated-users role).
+    -- TRUE for the roles provisioned by app/core/bootstrap.py. Only
+    -- SUPER_ADMIN is protected from modification; the others may be edited or
+    -- deactivated.
     is_system_role BOOLEAN NOT NULL,
     -- Role lifecycle state (ACTIVE, INACTIVE). An inactive role grants
-    -- nothing.
+    -- nothing: its policy rows are skipped when the enforcer loads.
     status VARCHAR(20) NOT NULL,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
     id BIGSERIAL NOT NULL,
@@ -677,12 +729,12 @@ CREATE TABLE roles (
     CONSTRAINT uq_roles_code UNIQUE (code)
 );
 
-COMMENT ON TABLE roles IS 'Named role bundling a set of permissions. The catalog is code-defined in app/core/permissions.py and synchronised on startup; administrators grant these roles through the Roles & Permissions screen.';
-COMMENT ON COLUMN roles.code IS 'Stable machine code for the role (e.g. FINANCE_MANAGER). Unique.';
+COMMENT ON TABLE roles IS 'Role display metadata for the Roles & Permissions screen: code, name, description and active state. Authorization never reads this table — the grants behind a role live in casbin_rule. Rows are created by app/core/bootstrap.py.';
+COMMENT ON COLUMN roles.code IS 'Stable machine code for the role (e.g. ACCOUNTANT). Unique; policy subjects use role:<code>.';
 COMMENT ON COLUMN roles.name IS 'Display name shown in the Roles & Permissions matrix.';
 COMMENT ON COLUMN roles.description IS 'Human-readable explanation of what the role is allowed to do.';
-COMMENT ON COLUMN roles.is_system_role IS 'TRUE for built-in roles that must not be renamed or deleted (for example the Platform Administrator and the zero-permission migrated-users role).';
-COMMENT ON COLUMN roles.status IS 'Role lifecycle state (ACTIVE, INACTIVE). An inactive role grants nothing.';
+COMMENT ON COLUMN roles.is_system_role IS 'TRUE for the roles provisioned by app/core/bootstrap.py. Only SUPER_ADMIN is protected from modification; the others may be edited or deactivated.';
+COMMENT ON COLUMN roles.status IS 'Role lifecycle state (ACTIVE, INACTIVE). An inactive role grants nothing: its policy rows are skipped when the enforcer loads.';
 COMMENT ON COLUMN roles.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 COMMENT ON COLUMN roles.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
 COMMENT ON COLUMN roles.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
@@ -780,8 +832,8 @@ COMMENT ON COLUMN telegram_updates.received_at IS 'Receipt timestamp; receipts o
 -- Table: users
 -- Module: Authentication & Access Control  [app.modules.auth.models]
 -- Application user account — one row per person who can sign in.
--- Authorization is granted through user_role_assignments (at most one active
--- role) and the permissions that role carries.
+-- Authorization is granted through casbin_rule: g rows assign one or more
+-- roles to the user and the roles carry the permission policies.
 -- --------------------------------------------------------------------------
 CREATE TABLE users (
     -- Stable business identifier for the user (e.g. EMP-0001). Unique and
@@ -828,7 +880,7 @@ CREATE TABLE users (
     CONSTRAINT uq_users_system_identity UNIQUE (system_identity)
 );
 
-COMMENT ON TABLE users IS 'Application user account — one row per person who can sign in. Authorization is granted through user_role_assignments (at most one active role) and the permissions that role carries.';
+COMMENT ON TABLE users IS 'Application user account — one row per person who can sign in. Authorization is granted through casbin_rule: g rows assign one or more roles to the user and the roles carry the permission policies.';
 COMMENT ON COLUMN users.user_code IS 'Stable business identifier for the user (e.g. EMP-0001). Unique and never reused.';
 COMMENT ON COLUMN users.username IS 'Login name used to sign in. Unique across all users.';
 COMMENT ON COLUMN users.email IS 'Primary email address. Unique, and the delivery target for password reset codes and notifications.';
@@ -2266,26 +2318,6 @@ COMMENT ON COLUMN quotation_conversions.idempotency_key IS 'Client-supplied key 
 COMMENT ON COLUMN quotation_conversions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
--- Table: role_permissions
--- Module: Authentication & Access Control  [app.modules.auth.models]
--- Join row granting one permission to one role. The composite primary key
--- makes a duplicate grant impossible.
--- --------------------------------------------------------------------------
-CREATE TABLE role_permissions (
-    -- Role that receives the grant.
-    role_id BIGINT NOT NULL,
-    -- Permission being granted to the role.
-    permission_id BIGINT NOT NULL,
-    CONSTRAINT pk_role_permissions PRIMARY KEY (role_id, permission_id),
-    CONSTRAINT fk_role_permissions_role_id_roles FOREIGN KEY(role_id) REFERENCES roles (id) ON DELETE CASCADE,
-    CONSTRAINT fk_role_permissions_permission_id_permissions FOREIGN KEY(permission_id) REFERENCES permissions (id) ON DELETE CASCADE
-);
-
-COMMENT ON TABLE role_permissions IS 'Join row granting one permission to one role. The composite primary key makes a duplicate grant impossible.';
-COMMENT ON COLUMN role_permissions.role_id IS 'Role that receives the grant.';
-COMMENT ON COLUMN role_permissions.permission_id IS 'Permission being granted to the role.';
-
--- --------------------------------------------------------------------------
 -- Table: service_order_charges
 -- Module: Service Operations  [app.modules.operations.models]
 -- Customer-facing invoice or service note raised from a service order.
@@ -2687,56 +2719,6 @@ COMMENT ON COLUMN user_credentials.failed_attempt_count IS 'Consecutive failed s
 COMMENT ON COLUMN user_credentials.locked_until IS 'Instant until which sign-in is refused after too many failed attempts. NULL when the account is not locked.';
 COMMENT ON COLUMN user_credentials.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
 COMMENT ON COLUMN user_credentials.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
-
--- --------------------------------------------------------------------------
--- Table: user_role_assignments
--- Module: Authentication & Access Control  [app.modules.auth.models]
--- Assignment of a role to a user. Replacing a role expires the previous row
--- instead of deleting it, so history is preserved while the partial unique
--- index uq_user_role_assignments_active_user keeps at most one active
--- assignment per user.
--- --------------------------------------------------------------------------
-CREATE TABLE user_role_assignments (
-    -- User the role is assigned to.
-    user_id BIGINT NOT NULL,
-    -- Role held by the user. Single-role RBAC: only the active row counts.
-    role_id BIGINT NOT NULL,
-    -- Identifier of the user who assigned this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    assigned_by_user_id BIGINT,
-    -- Moment the assignment becomes effective.
-    starts_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Expiry of a temporary assignment. NULL means active and permanent; the
-    -- partial unique index uq_user_role_assignments_active_user covers
-    -- exactly these rows and is the database-level one-user/one-active-role
-    -- guarantee.
-    expires_at TIMESTAMP WITH TIME ZONE,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_user_role_assignments PRIMARY KEY (id),
-    CONSTRAINT fk_user_role_assignments_user_id_users FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE,
-    CONSTRAINT fk_user_role_assignments_role_id_roles FOREIGN KEY(role_id) REFERENCES roles (id),
-    CONSTRAINT fk_user_role_assignments_assigned_by_user_id_users FOREIGN KEY(assigned_by_user_id) REFERENCES users (id)
-);
-CREATE INDEX ix_user_role_assignments_user_id ON user_role_assignments (user_id);
-CREATE UNIQUE INDEX uq_user_role_assignments_active_user ON user_role_assignments (user_id) WHERE expires_at IS NULL;
-
-COMMENT ON TABLE user_role_assignments IS 'Assignment of a role to a user. Replacing a role expires the previous row instead of deleting it, so history is preserved while the partial unique index uq_user_role_assignments_active_user keeps at most one active assignment per user.';
-COMMENT ON COLUMN user_role_assignments.user_id IS 'User the role is assigned to.';
-COMMENT ON COLUMN user_role_assignments.role_id IS 'Role held by the user. Single-role RBAC: only the active row counts.';
-COMMENT ON COLUMN user_role_assignments.assigned_by_user_id IS 'Identifier of the user who assigned this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN user_role_assignments.starts_at IS 'Moment the assignment becomes effective.';
-COMMENT ON COLUMN user_role_assignments.expires_at IS 'Expiry of a temporary assignment. NULL means active and permanent; the partial unique index uq_user_role_assignments_active_user covers exactly these rows and is the database-level one-user/one-active-role guarantee.';
-COMMENT ON COLUMN user_role_assignments.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN user_role_assignments.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN user_role_assignments.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: user_sessions
@@ -4418,5 +4400,5 @@ COMMENT ON COLUMN service_order_charge_lines.line_amount IS 'Final payable amoun
 COMMENT ON COLUMN service_order_charge_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- ==========================================================================
--- END OF SCHEMA - 78 tables
+-- END OF SCHEMA - 77 tables
 -- ==========================================================================

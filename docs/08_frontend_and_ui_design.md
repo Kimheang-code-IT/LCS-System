@@ -342,8 +342,50 @@ One shared pipeline covers every form; no page implements its own.
 - `useReferenceOptions()` loads dynamic options (Party Roles, Place Roles, trade
   directions, fee types, currencies, and other references) and caches them by
   collection and status filter. It never hardcodes a role option array.
+- `useRolePermissionCatalog()` loads `/api/v1/permissions/catalog` once and
+  feeds the role matrix: pages, actions, groups and label keys come from the
+  backend, so a page added server-side appears without a frontend release. The
+  built-in page list is only the fallback while the request is in flight. The
+  matrix sends page codes and the server compiles them into API capabilities —
+  the frontend holds no permission implication table.
+- The users form assigns **roles** with a multi-select (`roles` list); the role
+  form assigns **parentRoles** (inheritance) and shows the permissions inherited
+  from them read-only.
 - The frontend never computes financial balances. Report screens render backend
   `/reports/*` data through `ReportsRepository`.
+
+### Report pages generate on demand
+
+Opening `/reports/:area/:slug` loads no report rows. `ReportsView.vue` shows the
+title, the filter controls and an empty state; only **Generate** (header action,
+empty-state action, or the header Refresh control) requests data. This follows
+the ERPNext report pattern and keeps a large ledger off the page-load path.
+
+- `Trial Balance` and `General Ledger` post their filters to
+  `/reports/trial-balance/generate` and `/reports/general-ledger/generate`
+  through `reportGenerateBody()` (`app/utils/freight/report-request.ts`), which
+  is a pure, unit-tested function. Both are server-paginated: the table's page
+  controls request the page the user asked for and `meta.total` drives the
+  pager.
+- Every other catalogued report requests its existing endpoint only after
+  Generate; operational registers still derive their rows from the freight store.
+- States are explicit: idle empty state, loading, generated empty state, success,
+  and an error alert carrying the backend `message`. Changing any filter marks
+  the current result **stale** instead of silently showing it as current;
+  regenerating clears the marker. Repeated Generate clicks are ignored while a
+  request is in flight.
+- Trial Balance shows period debit/credit and closing debit/credit totals above
+  the table, plus an error badge when the backend reports an imbalance.
+- **Export** for these two reports asks the backend for the whole filtered
+  result (`POST /reports/<key>/export`) and saves the streamed CSV, so an export
+  is never limited to the visible page. The export dialog's column selection is
+  sent as `fields`; the format is CSV, even though the shared dialog also lists
+  Excel. Every other report still exports the rows already on screen.
+- Filters are remembered per report for the session (going to another report and
+  back keeps the period), results are not.
+- The `labelKm` rule, the shared validation pipeline and the notification policy
+  are untouched: filter input stays inline, a refusal is shown in an alert, and
+  only confirmed success raises a toast.
 
 ## 9. Shared Components
 

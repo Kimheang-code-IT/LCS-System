@@ -102,25 +102,38 @@ handler and its request/response schemas are in the linked router.
 
 ### Users, roles and permissions
 
+Authorization decisions come from Casbin (`docs/09_roles_and_permissions.md`).
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/permissions` | List Permissions |
-| DELETE | `/roles` | Delete Roles |
-| GET | `/roles` | List Roles |
-| POST | `/roles` | Create Role |
-| GET | `/roles/{role_id}` | Get Role |
-| PUT | `/roles/{role_id}` | Update Role |
+| GET | `/permissions` | List Permissions (flat catalog with `module`) |
+| GET | `/permissions/catalog` | Permission Matrix Metadata (pages, actions, groups, roles, modules) |
+| DELETE | `/roles` | Delete Roles (inactive, unassigned, not `SUPER_ADMIN`) |
+| GET | `/roles` | List Roles (grants, counts) |
+| POST | `/roles` | Create Role (direct grants) |
+| GET | `/roles/{role_id}` | Get Role (grants, users) |
+| PUT | `/roles/{role_id}` | Update Role (fields, status, grants) |
 | POST | `/roles/{role_id}/duplicate` | Duplicate Role |
-| DELETE | `/users` | Delete Users |
-| GET | `/users` | List Users |
-| POST | `/users` | Create User |
-| GET | `/users/{user_id}` | Get User |
+| PUT | `/roles/{role_id}/permissions` | Replace Role Permissions |
+| POST | `/roles/{role_id}/permissions` | Grant Role Permissions |
+| DELETE | `/roles/{role_id}/permissions` | Revoke Role Permissions |
+| DELETE | `/users` | Delete Users (inactive only) |
+| GET | `/users` | List Users (paginated; assigned role per user) |
+| POST | `/users` | Create User (one role) |
+| GET | `/users/{user_id}` | Get User (assigned role + effective permissions) |
 | PATCH | `/users/{user_id}` | Update User |
 | PUT | `/users/{user_id}` | Update User |
+| GET | `/users/{user_id}/effective-permissions` | Effective Permissions (the assigned role's grants) |
 | POST | `/users/{user_id}/password` | Set User Password |
 | POST | `/users/{user_id}/revoke-sessions` | Revoke User Sessions |
-| GET | `/users/{user_id}/role-assignments` | List Role Assignments |
-| POST | `/users/{user_id}/role-assignments` | Assign Role |
+| GET | `/users/{user_id}/role-assignments` | List Role Assignments (zero or one) |
+| POST | `/users/{user_id}/role-assignments` | Assign Role (replaces the previous role) |
+| DELETE | `/users/{user_id}/role-assignments/{role_code}` | Remove Role Assignment |
+
+Missing credentials answer `401`; an authenticated caller without the code answers
+`403 ACCESS_DENIED` and the attempt is recorded as an `AUTHORIZATION_DENIED` audit
+event. Payload shapes (single `roleCode`, compiled `permissions`) are in
+`docs/09_roles_and_permissions.md` §10.
 
 ### Record status
 
@@ -300,6 +313,106 @@ is rolled back and reported as `409 DUPLICATE_CONVERSION`.
 | GET | `/reports/service-order-profitability` | Profitability |
 | GET | `/reports/service-orders` | Service Orders Report |
 | GET | `/reports/trial-balance` | Trial Balance |
+| POST | `/reports/trial-balance/generate` | Generate Trial Balance |
+| POST | `/reports/general-ledger/generate` | Generate General Ledger |
+| POST | `/reports/trial-balance/export` | Export Trial Balance (CSV) |
+| POST | `/reports/general-ledger/export` | Export General Ledger (CSV) |
+
+#### Generated financial reports
+
+A report page posts its filters and receives one page of rows plus the metadata
+that produced it. Both endpoints are read-only, are guarded by the report's own
+page permission (`reports.trial_balance.view`, `reports.general_ledger.view`,
+with `report.read` accepted for legacy roles) and share the report rate limit.
+
+Request body (all fields optional, `extra="forbid"`):
+
+| Field | Type | Applies to | Meaning |
+|---|---|---|---|
+| `fromDate` / `toDate` | `YYYY-MM-DD` | both | Period bounds. Omitted bound = no bound. `fromDate > toDate` is a `422` on `toDate`. |
+| `fiscalYear` | int | both | Resolves the range to that year's `accounting_periods`; explicit dates narrow it. Unknown year is a `422` on `fiscalYear`. |
+| `page` / `pageSize` | int | both | 1-based page, `1..200` (default `1` / `50`). |
+| `accountFrom` / `accountTo` | string | trial balance | Account-code range, inclusive. |
+| `accountCode` | string | general ledger | Exact account code. |
+| `party` | string | general ledger | Case-insensitive contains on the party display name. |
+| `voucherType` | string | general ledger | `journal_entries.entry_type`, case-insensitive. |
+| `voucherNo` | string | general ledger | Contains match on the journal number. |
+| `currency` | 3 letters | general ledger | Transaction currency of the line. |
+
+Response envelope:
+
+```json
+{
+  "data": {
+    "meta": {
+      "reportKey": "trial-balance",
+      "title": "Trial Balance",
+      "titleKey": "freight.reportCatalog.reports.trial-balance.title",
+      "generatedAt": "2026-10-27T08:00:00Z",
+      "page": 1,
+      "pageSize": 50,
+      "total": 42,
+      "filters": { "fromDate": "2026-10-01", "toDate": "2026-10-31", "fiscalYear": null },
+      "warnings": []
+    },
+    "items": [],
+    "totals": {},
+    "balanced": true,
+    "imbalance": 0
+  }
+}
+```
+
+Trial Balance items carry `accountId`, `accountCode`, `accountName`,
+`accountType`, `openingDebit`, `openingCredit`, `periodDebit`, `periodCredit`,
+`closingDebit`, `closingCredit`; `totals` sums the same six columns over the whole
+filtered set (not just the page). `balanced` is false when the period or the
+closing position does not net to zero, and `meta.warnings` then names the
+difference — an imbalance is reported, never hidden.
+
+General Ledger items carry `postingDate`, `journalNo`, `journalId`,
+`voucherType`, `voucherNo`, `sourceDocument`, `accountId`, `accountCode`,
+`accountName`, `account`, `description`, `partyId`, `party`, `currency`, `debit`,
+`credit`, `runningBalance`, plus the response-level `openingBalance` and
+`totals: {debit, credit, closingBalance}`.
+
+Calculation rules: only `journal_entries.status = 'POSTED'` rows are read, so a
+draft never contributes and a reversal appears as its own opposite journal.
+Amounts are `base_debit_amount` / `base_credit_amount` (`NUMERIC`, summed in
+`Decimal`), so a multi-currency ledger is never added up in mixed denominations.
+Opening balances are the movement strictly before `fromDate`; the running balance
+is a window function over the filtered set evaluated before `LIMIT`, so page two
+continues from page one. Ordering is `(posting_date, journal_entry_id, line_no)`.
+No caching: each generation reads the ledger as it is and stamps `generatedAt`.
+
+Errors use the standard envelope: `422 VALIDATION_ERROR` with `field_errors`
+(`toDate`, `fiscalYear`, unknown field), `403 ACCESS_DENIED` without the report
+permission, `429` above the report rate limit. The system read-only mode does not
+block generation — it writes nothing, so `access_modes.py` keeps these two paths
+available while every other `POST` still returns `409 READ_ONLY_MODE`.
+
+#### Report exports
+
+`POST /reports/<key>/export` takes the same filter body as `/generate` plus an
+optional `fields` list (report column keys, in report order) and returns
+`text/csv; charset=utf-8` with a `Content-Disposition: attachment` filename of
+`<report>-<date>.csv`. Permission, filters and calculations are the generated
+report's own: the export is not a second query path, and the footer totals are
+the totals `/generate` returns.
+
+- Every matching row is exported, not the visible page: the general ledger is
+  read through a server-side cursor and written one line at a time, so memory is
+  bounded by the batch (500 rows), not by the result size. The trial balance is
+  bounded by the account count, which the report already loads to total it.
+- The file starts with metadata rows — report title, `Generated at`, `Period`,
+  the active filters, and for the trial balance `Balanced` / `Imbalance` — so an
+  exported file states what it contains and when it was produced.
+- Money is written as the fixed four-decimal `NUMERIC(19,4)` value. A text cell
+  that starts with `=`, `+`, `@`, a tab or a carriage return is prefixed with an
+  apostrophe so a spreadsheet cannot execute it; a negative amount is data and
+  keeps its sign.
+- An unknown `fields` value is a `422` on `fields`. The read-only carve-out above
+  covers `/export` as well as `/generate`.
 
 ### Configuration
 

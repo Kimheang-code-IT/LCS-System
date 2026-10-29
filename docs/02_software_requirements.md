@@ -185,19 +185,19 @@ The platform is single-tenant. Every request is authorized against an authentica
 
 **FR-020** The system shall support roles containing multiple permissions.
 
-**FR-021** A user shall hold exactly one active role at a time.
+**FR-021** A user shall hold exactly one role at a time.
 
-**FR-022** Replacing a user's role shall expire the previous assignment and retain it as history; the previous row shall not be deleted.
+**FR-022** The assigned role shall be replaceable; replacing or removing it shall stop contributing permissions on the next request.
 
-**FR-023** Expired assignments shall not contribute permissions.
+**FR-023** A deactivated role shall not contribute permissions.
 
-**FR-024** Effective permissions shall be the permissions of the single active role.
+**FR-024** Effective permissions shall be exactly the direct grants of the user's one assigned role; roles do not inherit permissions from other roles.
 
 **FR-025** Permission and role-assignment changes shall be auditable.
 
-**FR-026** The system shall deny access when the user has no active role.
+**FR-026** The system shall deny access when the user holds no role that grants the required permission.
 
-**FR-027** The last active Platform Administrator assignment shall not be removed.
+**FR-027** The last active Super Administrator assignment shall not be removed, and the protected `SUPER_ADMIN` role shall not be modified by a caller that does not hold the wildcard grant.
 
 ### 6.4 Audit
 
@@ -566,7 +566,7 @@ The API is a modular monolith. The current endpoint groups are:
 | Settings and search | `/settings/app-info`, `/settings/app-config`, `/settings/reset-data`, `/search`, `/search/ask` | App info/config, email and Telegram connection tests, data reset, and search |
 | Backup | `/backup/status`, `/backup/runs`, `/backup/run`, `/backup/restore`, `/backup/test-connection` | Optional Google Sheets mirror plus restore/test utilities |
 | Audit | `/audit-events` | Searchable audit trail |
-| Reports | `/reports/dashboard`, `/reports/service-orders`, `/reports/quotation-performance`, `/reports/receivables`, `/reports/payables`, `/reports/income`, `/reports/expenses`, `/reports/profitability`, `/reports/ledger-lines`, `/reports/financial-summary`, plus `/receivables`, `/payables`, `/profitability` aliases | Backend-served reporting; finance reports consume the complete posted-ledger projection rather than browser-loaded pages |
+| Reports | `/reports/dashboard`, `/reports/service-orders`, `/reports/quotation-performance`, `/reports/receivables`, `/reports/payables`, `/reports/income`, `/reports/expenses`, `/reports/profitability`, `/reports/ledger-lines`, `/reports/financial-summary`, `POST /reports/trial-balance/generate`, `POST /reports/general-ledger/generate`, `POST /reports/trial-balance/export`, `POST /reports/general-ledger/export`, plus `/receivables`, `/payables`, `/profitability` aliases | Backend-served reporting; finance reports consume the complete posted-ledger projection rather than browser-loaded pages, the generated financial reports return one server-paginated page per request, and their exports stream every matching row as CSV |
 
 ## 20. Non-Functional Requirements
 

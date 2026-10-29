@@ -11,6 +11,8 @@ type ApiRequestOptions = {
     headers?: Record<string, string>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     body?: Record<string, any> | BodyInit | null
+    /** `blob` for a file download; the payload is then the raw file. */
+    responseType?: 'json' | 'blob' | 'text' | 'arrayBuffer'
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     query?: Record<string, any> | TableQueryParams
     suppressErrorToast?: boolean

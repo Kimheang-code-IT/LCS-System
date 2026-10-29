@@ -26,6 +26,7 @@ from app.modules.auth.schemas import (
     RoleAssignmentCreate,
     RoleCreate,
     RoleDuplicate,
+    RolePermissionsUpdate,
     RoleUpdate,
     SetPasswordRequest,
     SetupInitializeRequest,
@@ -152,7 +153,6 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
-    _, role_codes = await service.resolve_permissions(session, user.id)
     access, refresh = await service.create_session(
         session,
         user,
@@ -162,8 +162,9 @@ async def login(payload: LoginRequest, request: Request, response: Response, ses
     )
     auth_user = service.build_auth_user(
         context,
-        service.role_label(role_codes),
+        service.role_label(context.roles),
         must_change_password=await service.must_change_password(session, user.id),
+        roles=context.roles,
     )
     await write_audit(
         session,
@@ -225,7 +226,6 @@ async def refresh(
         user_agent=request.headers.get("user-agent"),
     )
     context = await service.build_context(session, user, request_id=getattr(request.state, "request_id", ""))
-    _, role_codes = await service.resolve_permissions(session, user.id)
     from app.modules.auth.models import UserSession
 
     record = await session.get(UserSession, int(decode_token(access)["sid"]))
@@ -235,8 +235,9 @@ async def refresh(
         "data": {
             "user": service.build_auth_user(
                 context,
-                service.role_label(role_codes),
+                service.role_label(context.roles),
                 must_change_password=await service.must_change_password(session, user.id),
+                roles=context.roles,
             ),
             **_auth_tokens(access, refresh_token),
             "expires_in": max(1, decode_token(access)["exp"] - int(datetime.now(UTC).timestamp())),
@@ -257,6 +258,8 @@ async def me(
             "name": context.display_name,
             "email": context.email,
             "avatar": context.avatar,
+            "role": service.role_label(context.roles),
+            "roles": list(context.roles),
             "permissions": page_access,
             "sourcePermissions": page_permissions,
             # Reported so a reload recovers the forced-change state from the
@@ -516,10 +519,43 @@ async def assign_role(
     await write_audit(
         session, context, event_type="ROLE_ASSIGNED", entity_type="user", entity_id=user_id,
         action="assign_role",
-        after={"roleId": assignment.role_id, "roleCode": payload.role_code},
+        after={"roleId": assignment["roleId"], "roleCode": assignment["roleCode"]},
     )
     await session.commit()
-    return {"data": {"id": assignment.id, "userId": assignment.user_id, "roleId": assignment.role_id}}
+    return {"data": assignment}
+
+
+@router.delete("/users/{user_id}/role-assignments/{role_code}")
+async def remove_role(
+    user_id: int,
+    role_code: str,
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    try:
+        result = await service.remove_role(session, user_id, role_code, context)
+    except AccessDenied as exc:
+        await _record_rejected_admin_operation(
+            session, context, exc, event_type="ROLE_UNASSIGNMENT_REJECTED",
+            entity_type="user", entity_id=user_id, action="remove_role",
+            metadata={"roleCode": role_code},
+        )
+        raise
+    await write_audit(
+        session, context, event_type="ROLE_UNASSIGNED", entity_type="user", entity_id=user_id,
+        action="remove_role", after={"roleCode": role_code},
+    )
+    await session.commit()
+    return {"data": result}
+
+
+@router.get("/users/{user_id}/effective-permissions")
+async def user_effective_permissions(
+    user_id: int,
+    context: RequestContext = Depends(require_permission("role.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.effective_permissions(session, user_id)}
 
 
 @router.get("/roles")
@@ -630,11 +666,76 @@ async def delete_roles(
 async def list_permissions(
     context: RequestContext = Depends(require_permission("role.read")),
 ) -> dict:
-    from app.core.permissions import PERMISSION_CATALOG, permission_name
+    from app.core.permissions import PERMISSION_CATALOG, permission_module, permission_name
 
     return {
         "data": [
-            {"code": code, "resource": resource, "action": action, "name": permission_name(code)}
+            {
+                "code": code,
+                "module": permission_module(code),
+                "resource": resource,
+                "action": action,
+                "name": permission_name(code),
+            }
             for code, resource, action in PERMISSION_CATALOG
         ]
     }
+
+
+@router.get("/permissions/catalog")
+async def permission_catalog(
+    context: RequestContext = Depends(require_permission("role.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Pages, actions, modules and roles the permission matrix renders."""
+    return {"data": await service.permission_catalog(session)}
+
+
+@router.put("/roles/{role_id}/permissions")
+async def replace_role_permissions(
+    role_id: int,
+    payload: RolePermissionsUpdate,
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    role = await service.replace_role_permissions(session, role_id, payload.permissions, context)
+    await write_audit(
+        session, context, event_type="ROLE_PERMISSIONS_CHANGED", entity_type="role",
+        entity_id=role_id, action="set_permissions",
+        after={"permissions": role["permissions"]},
+    )
+    await session.commit()
+    return {"data": role}
+
+
+@router.post("/roles/{role_id}/permissions")
+async def grant_role_permissions(
+    role_id: int,
+    payload: RolePermissionsUpdate,
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    role = await service.grant_role_permissions(session, role_id, payload.permissions, context)
+    await write_audit(
+        session, context, event_type="ROLE_PERMISSIONS_GRANTED", entity_type="role",
+        entity_id=role_id, action="grant_permissions", after={"permissions": payload.permissions},
+    )
+    await session.commit()
+    return {"data": role}
+
+
+@router.delete("/roles/{role_id}/permissions")
+async def revoke_role_permissions(
+    role_id: int,
+    payload: RolePermissionsUpdate = Body(default=RolePermissionsUpdate()),
+    context: RequestContext = Depends(require_permission("role.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    role = await service.revoke_role_permissions(session, role_id, payload.permissions, context)
+    await write_audit(
+        session, context, event_type="ROLE_PERMISSIONS_REVOKED", entity_type="role",
+        entity_id=role_id, action="revoke_permissions", after={"permissions": payload.permissions},
+    )
+    await session.commit()
+    return {"data": role}
+

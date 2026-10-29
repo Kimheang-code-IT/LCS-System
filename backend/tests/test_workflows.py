@@ -472,7 +472,7 @@ async def test_user_create_exposes_role_and_normalizes_status(client):
             "username": "new.user",
             "displayName": "New User",
             "email": "new.user@example.com",
-            "role": "AUDITOR",
+            "role": "VIEWER",
             "status": "Active",
             "password": "Passw0rd!",
         },
@@ -480,18 +480,18 @@ async def test_user_create_exposes_role_and_normalizes_status(client):
     assert created.status_code == 201, created.text
     data = created.json()["data"]
     assert data["userCode"] == "NEW.USER"
-    assert data["role"] == "AUDITOR"
+    assert data["role"] == "VIEWER"
     assert data["status"] == "ACTIVE"
 
     detail = await client.get(f"/api/v1/users/{data['id']}", headers=headers)
     assert detail.status_code == 200
-    assert detail.json()["data"]["role"] == "AUDITOR"
+    assert detail.json()["data"]["role"] == "VIEWER"
 
     updated = await client.put(
-        f"/api/v1/users/{data['id']}", headers=headers, json={"role": "SALES_OFFICER"}
+        f"/api/v1/users/{data['id']}", headers=headers, json={"role": "SALES"}
     )
     assert updated.status_code == 200
-    assert updated.json()["data"]["role"] == "SALES_OFFICER"
+    assert updated.json()["data"]["role"] == "SALES"
 
     # A display-case status must not block authentication.
     relogin = await client.post("/api/v1/auth/login", json={"username": "new.user", "password": "Passw0rd!"})

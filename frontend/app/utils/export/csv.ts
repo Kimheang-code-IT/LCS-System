@@ -14,9 +14,27 @@ export function downloadCsv(options: {
     fields.map(field => field.label),
     ...rows.map(row => fields.map(field => String(row[field.value] ?? ''))),
   ]
-    .map(line => line.map(cellValue => `"${cellValue.replaceAll('"', '""')}"`).join(','))
+    .map(line => line.map(csvCell).join(','))
     .join('\n')
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+  downloadBlob(new Blob([csv], { type: 'text/csv' }), filename)
+}
+
+/**
+ * One CSV cell: quoted/escaped, and neutralised when a spreadsheet would treat
+ * it as a formula. A number (including a negative amount) stays data.
+ */
+export function csvCell(value: unknown) {
+  const text = String(value ?? '')
+  const numeric = /^-?\d+(?:\.\d+)?$/.test(text)
+  const dangerous = text.startsWith('=') || text.startsWith('+') || text.startsWith('@')
+    || text.startsWith('\t') || text.startsWith('\r')
+    || (text.startsWith('-') && !numeric)
+  return `"${(dangerous ? `'${text}` : text).replaceAll('"', '""')}"`
+}
+
+/** Save an already-built file (for example a report the backend streamed). */
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
   link.download = filename

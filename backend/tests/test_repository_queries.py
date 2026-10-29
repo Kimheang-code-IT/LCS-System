@@ -5,8 +5,9 @@ from datetime import date
 import pytest
 from sqlalchemy import event, func, select
 
+from app.core.authorization.models import CasbinRule
 from app.core.pagination import PageParams
-from app.modules.auth.models import Role, User, UserRoleAssignment
+from app.modules.auth.models import User
 from app.modules.auth.repository import AuthRepository
 from app.modules.finance.models import FinancialDocument, FinancialDocumentLine
 from app.modules.finance.repository import FinanceRepository
@@ -40,18 +41,18 @@ async def test_auth_repository_batches_user_roles(session_factory, seeded, engin
             legacy_users = list((await session.execute(select(User))).scalars().all())
             for user in legacy_users:
                 await session.execute(
-                    select(Role.code)
-                    .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
-                    .where(
-                        UserRoleAssignment.user_id == user.id,
-                        UserRoleAssignment.expires_at.is_(None),
+                    select(CasbinRule.v1).where(
+                        CasbinRule.ptype == "g",
+                        CasbinRule.v0 == f"user:{user.id}",
                     )
                 )
         with QueryCounter(engine) as optimized:
-            rows = await AuthRepository(session).users_with_role_codes()
+            rows, total = await AuthRepository(session).users_with_role_codes()
 
+    assert total == len(users)
     assert len(rows) == len(users)
     assert legacy.count == len(users) + 1
+    # One query for the users, one for every assignment in the page.
     assert optimized.count == 2
 
 

@@ -10,7 +10,7 @@ Pick the smallest backend test set for the uncommitted diff. Run from `backend/`
 | `app/modules/operations/**` | `uv run pytest -q tests/test_workflows.py tests/test_component_attributes.py tests/test_movements_and_milestones.py` |
 | `app/modules/master_data/**` | `uv run pytest -q tests/test_config_versions.py tests/test_config_compare.py tests/test_currencies_and_fx.py tests/test_places.py` |
 | `app/modules/finance/**` | `uv run pytest -q tests/test_financial_documents_module.py tests/test_posting_rules.py tests/test_finance_automation.py tests/test_multi_currency.py` |
-| `app/modules/auth/**`, `app/core/permissions.py` | `uv run pytest -q tests/test_auth_rbac.py tests/test_role_permissions.py tests/test_page_api_integration.py` |
+| `app/modules/auth/**`, `app/core/permissions.py`, `app/core/authorization/**` | `uv run pytest -q tests/test_auth_rbac.py tests/test_role_permissions.py tests/test_page_api_integration.py` |
 | `app/api/**`, `app/core/**` | `uv run pytest -q tests/test_api_completeness.py tests/test_frontend_api_contract.py tests/test_request_schemas.py` |
 | `models.py`, `alembic/versions/**` | `uv run pytest -q tests/test_migration_chain.py tests/test_schema_integrity.py tests/test_schema_docs.py` |
 | `frontend/app/utils/constants/**`, `app/utils/api/**` | `uv run pytest -q tests/test_frontend_api_contract.py` |

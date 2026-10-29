@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from sqlalchemy import case, func, select
+from collections.abc import AsyncIterator
+from datetime import date
+from decimal import Decimal
+
+from sqlalchemy import case, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from app.modules.finance.models import (
     ChartOfAccount,
@@ -195,13 +200,21 @@ class ReportRepository:
         result = await self.session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
 
-    async def posted_ledger_rows(self) -> list[dict]:
-        stmt = (
+    def _posted_ledger_statement(self) -> Select:
+        """The posted ledger projection every ledger report reads.
+
+        One definition of "posted line", so the general ledger, the cash-flow
+        report and the statements cannot drift onto different filters. Drafts
+        are excluded by the status predicate; a reversal is its own POSTED
+        journal and therefore appears as a real, opposite movement.
+        """
+        return (
             select(
                 JournalEntryLine.id,
                 JournalEntry.id.label("journal_id"),
                 JournalEntry.posting_date,
                 JournalEntry.entry_no,
+                JournalEntry.entry_type,
                 JournalEntry.description.label("journal_description"),
                 FinancialDocument.id.label("source_document_id"),
                 FinancialDocument.document_no.label("source_document_no"),
@@ -226,7 +239,216 @@ class ReportRepository:
             .outerjoin(ServiceOrder, ServiceOrder.id == JournalEntryLine.service_order_id)
             .outerjoin(FinancialAccount, FinancialAccount.account_id == ChartOfAccount.id)
             .where(JournalEntry.status == "POSTED")
-            .order_by(JournalEntry.posting_date, JournalEntry.id, JournalEntryLine.line_no)
+        )
+
+    async def posted_ledger_rows(self) -> list[dict]:
+        stmt = self._posted_ledger_statement().order_by(
+            JournalEntry.posting_date, JournalEntry.id, JournalEntryLine.line_no
         )
         result = await self.session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
+
+    async def trial_balance_balances(
+        self,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        account_from: str | None = None,
+        account_to: str | None = None,
+    ) -> list[dict]:
+        """Posted movement per account, split into opening and period totals.
+
+        One grouped query, not one query per account: the opening balance is the
+        movement before ``from_date`` and the period movement is the rest, both
+        summed from ``base_*`` columns so a multi-currency ledger is never added
+        up in mixed denominations.
+        """
+        result = await self.session.execute(
+            self._trial_balance_statement(
+                from_date=from_date, to_date=to_date, account_from=account_from, account_to=account_to
+            )
+        )
+        return [dict(row) for row in result.mappings().all()]
+
+    def _trial_balance_statement(
+        self,
+        *,
+        from_date: date | None,
+        to_date: date | None,
+        account_from: str | None = None,
+        account_to: str | None = None,
+    ) -> Select:
+        opening = JournalEntry.posting_date < from_date if from_date else false()
+        conditions = [JournalEntry.status == "POSTED"]
+        if to_date:
+            conditions.append(JournalEntry.posting_date <= to_date)
+        if account_from:
+            conditions.append(ChartOfAccount.account_code >= account_from)
+        if account_to:
+            conditions.append(ChartOfAccount.account_code <= account_to)
+        return (
+            select(
+                ChartOfAccount.id.label("account_id"),
+                ChartOfAccount.account_code,
+                ChartOfAccount.account_name,
+                ChartOfAccount.account_type,
+                func.coalesce(
+                    func.sum(JournalEntryLine.base_debit_amount).filter(opening), 0
+                ).label("opening_debit"),
+                func.coalesce(
+                    func.sum(JournalEntryLine.base_credit_amount).filter(opening), 0
+                ).label("opening_credit"),
+                func.coalesce(
+                    func.sum(JournalEntryLine.base_debit_amount).filter(~opening), 0
+                ).label("period_debit"),
+                func.coalesce(
+                    func.sum(JournalEntryLine.base_credit_amount).filter(~opening), 0
+                ).label("period_credit"),
+            )
+            .join(JournalEntryLine, JournalEntryLine.account_id == ChartOfAccount.id)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .where(*conditions)
+            .group_by(
+                ChartOfAccount.id,
+                ChartOfAccount.account_code,
+                ChartOfAccount.account_name,
+                ChartOfAccount.account_type,
+            )
+            .order_by(ChartOfAccount.account_code)
+        )
+
+    @staticmethod
+    def _ledger_conditions(
+        *,
+        from_date: date | None = None,
+        to_date: date | None = None,
+        before: date | None = None,
+        account_code: str | None = None,
+        party: str | None = None,
+        voucher_type: str | None = None,
+        voucher_no: str | None = None,
+        currency: str | None = None,
+    ) -> list:
+        """Predicates shared by the ledger page, its totals and its opening balance.
+
+        ``before`` replaces the period range with an exclusive upper bound, which
+        is what an opening balance needs.
+        """
+        conditions: list = [JournalEntry.status == "POSTED"]
+        if before:
+            conditions.append(JournalEntry.posting_date < before)
+        else:
+            if from_date:
+                conditions.append(JournalEntry.posting_date >= from_date)
+            if to_date:
+                conditions.append(JournalEntry.posting_date <= to_date)
+        if account_code:
+            conditions.append(ChartOfAccount.account_code == account_code)
+        if party:
+            # A correlated id filter rather than a join, so the same predicate
+            # works in the page, totals and opening-balance statements.
+            conditions.append(
+                JournalEntryLine.party_id.in_(
+                    select(BusinessParty.id).where(BusinessParty.display_name.ilike(f"%{party}%"))
+                )
+            )
+        if voucher_type:
+            conditions.append(func.upper(JournalEntry.entry_type) == voucher_type.upper())
+        if voucher_no:
+            conditions.append(JournalEntry.entry_no.ilike(f"%{voucher_no}%"))
+        if currency:
+            conditions.append(func.upper(JournalEntryLine.currency_code) == currency.upper())
+        return conditions
+
+    async def ledger_opening_balances(self, *, from_date: date | None, **filters) -> dict[int, Decimal]:
+        """Signed movement per account strictly before the report period."""
+        if not from_date:
+            return {}
+        result = await self.session.execute(
+            self._opening_balances_statement(from_date=from_date, **filters)
+        )
+        return {int(row["account_id"]): Decimal(str(row["net"] or 0)) for row in result.mappings()}
+
+    def _opening_balances_statement(self, *, from_date: date | None, **filters) -> Select:
+        conditions = self._ledger_conditions(before=from_date, **filters)
+        return (
+            select(
+                JournalEntryLine.account_id.label("account_id"),
+                func.coalesce(
+                    func.sum(JournalEntryLine.base_debit_amount - JournalEntryLine.base_credit_amount), 0
+                ).label("net"),
+            )
+            .select_from(JournalEntryLine)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .join(ChartOfAccount, ChartOfAccount.id == JournalEntryLine.account_id)
+            .where(*conditions)
+            .group_by(JournalEntryLine.account_id)
+        )
+
+    async def general_ledger_totals(self, **filters) -> tuple[int, Decimal, Decimal]:
+        """Row count and signed sums over the whole filtered set (not the page)."""
+        conditions = self._ledger_conditions(**filters)
+        stmt = (
+            select(
+                func.count(JournalEntryLine.id).label("total"),
+                func.coalesce(func.sum(JournalEntryLine.base_debit_amount), 0).label("debit"),
+                func.coalesce(func.sum(JournalEntryLine.base_credit_amount), 0).label("credit"),
+            )
+            .select_from(JournalEntryLine)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .join(ChartOfAccount, ChartOfAccount.id == JournalEntryLine.account_id)
+            .where(*conditions)
+        )
+        row = (await self.session.execute(stmt)).mappings().one()
+        return (
+            int(row["total"] or 0),
+            Decimal(str(row["debit"] or 0)),
+            Decimal(str(row["credit"] or 0)),
+        )
+
+    async def general_ledger_page(self, *, offset: int, limit: int, **filters) -> list[dict]:
+        """One page of posted ledger lines with a running balance per account.
+
+        The window function is evaluated over the whole filtered set and only
+        then sliced, so a later page continues from the earlier balance instead
+        of restarting at the page boundary. Ordering is the posting date and
+        then the immutable (journal, line) identity, which keeps pagination
+        stable when several lines share a date.
+        """
+        stmt = self._general_ledger_statement(**filters).offset(offset).limit(limit)
+        result = await self.session.execute(stmt)
+        return [dict(row) for row in result.mappings().all()]
+
+    def _general_ledger_statement(self, **filters) -> Select:
+        conditions = self._ledger_conditions(**filters)
+        running = (
+            func.sum(JournalEntryLine.base_debit_amount - JournalEntryLine.base_credit_amount)
+            .over(
+                partition_by=JournalEntryLine.account_id,
+                order_by=(
+                    JournalEntry.posting_date,
+                    JournalEntry.id,
+                    JournalEntryLine.line_no,
+                ),
+            )
+            .label("running_balance")
+        )
+        return (
+            self._posted_ledger_statement()
+            .add_columns(running)
+            .where(*conditions)
+            .order_by(JournalEntry.posting_date, JournalEntry.id, JournalEntryLine.line_no)
+        )
+
+    async def general_ledger_stream(self, **filters) -> AsyncIterator[dict]:
+        """Every matching line, streamed: an export never loads the ledger at once.
+
+        Same statement as the page, without LIMIT, executed as a server-side
+        cursor where the driver supports one (PostgreSQL); the rows are consumed
+        in batches so memory stays bounded by the batch, not by the result size.
+        """
+        result = await self.session.stream(
+            self._general_ledger_statement(**filters).execution_options(yield_per=500)
+        )
+        async for row in result.mappings():
+            yield dict(row)

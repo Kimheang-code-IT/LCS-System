@@ -42,6 +42,7 @@ from schema_descriptions import (  # noqa: E402
 from sqlalchemy.dialects import postgresql  # noqa: E402
 from sqlalchemy.schema import CreateIndex, CreateTable, sort_tables  # noqa: E402
 
+import app.core.authorization.models  # noqa: E402, F401
 import app.modules.archive.models  # noqa: E402, F401  (populates Base.metadata)
 import app.modules.audit.models  # noqa: E402, F401
 import app.modules.auth.models  # noqa: E402, F401

@@ -119,8 +119,10 @@ business data.
 - **API envelope:** success is `{"data": ...}`. Lists return
   `{"data": {"items": [...], "meta": {page, page_size, total}}}` (`core/pagination.py`).
   Errors are `{code, message, request_id, field_errors}` (`app/main.py` handlers).
-- Permission catalog and role mapping are **code-defined** in `app/core/permissions.py`,
-  synced on startup; update it (and `docs/09_roles_and_permissions.md`) with any new endpoint.
+- Permission catalog is **code-defined** in `app/core/permissions.py`, synced on startup; update
+  it (and `docs/09_roles_and_permissions.md`) with any new endpoint. Authorization decisions
+  come from **Casbin** (`app/core/authorization/`, policies in `casbin_rule`); never add a
+  second role→permission mapping.
 - Migrations live in `alembic/versions/`. `alembic/env.py` imports every model module — add
   new ones there and to `reset_all_data` in `app/core/bootstrap.py`.
 - Ruff: line-length 120, `select = [E,F,I,UP,B]`, ignores `B008`, `E501`.
@@ -130,7 +132,7 @@ business data.
 - Backup module runs an **in-process asyncio scheduler** (Google Sheets, no worker);
   `BACKUP_SCHEDULER_ENABLED` toggles it, config is per-install.
 - Check impact before editing shared code: other callers, `tests/test_frontend_api_contract.py`,
-  `app/core/permissions.py`, generated schema docs.
+  `tests/test_route_authorization.py`, `app/core/permissions.py`, generated schema docs.
 
 ### Tests
 
@@ -309,3 +311,17 @@ of glossing over it. FAST changes still satisfy every item that applies to them.
    `docs/lcssystem.pem` is an exception under owner review; never stage or commit it.
 10. The result is reported with the exact commands run and their observed outcomes, and every
     unverified claim is named as such.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.

@@ -123,15 +123,17 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 | AUTH-012 | Authentication | User deletion | BROKEN | P1 | No | `audit/models.py` FK without `ondelete`; SQLite tests run FK-off; `docs/10` §7 | 2026-10-23 |
 | AUTH-013 | Authentication | Password strength policy | WORKING | P1 | Yes | `test_password_policy.py` (20): length + uppercase + lowercase + number + special on setup, reset, change, admin reset and user creation; legacy weak login still succeeds; `tests/password-policy.spec.ts` + `tests/password-forms.spec.ts` (frontend mirror, 5 forms gated) | 2026-10-24 |
 | AUTH-014 | Authentication | MFA for privileged users | MISSING | P2 | No | `docs/11` §18 (open risk) | docs |
-| AUTH-015 | Authentication | Permission/role change effective without re-login | WORKING | P1 | Yes | `test_auth_rbac.py::test_permission_and_role_changes_take_effect_without_relogin` | 2026-10-23 |
-| RBAC-001 | Roles & permissions | Permission catalog and startup sync | WORKING | P0 | Yes | `test_role_permissions.py::test_permission_catalog_is_unique_and_covers_matrix` | 2026-10-23 |
-| RBAC-002 | Roles & permissions | Role CRUD, duplicate, search, pagination | WORKING | P0 | Yes | `test_role_permissions.py` (17) | 2026-10-23 |
-| RBAC-003 | Roles & permissions | Role permission matrix UI and round-trip | WORKING | P1 | Yes | `test_role_permissions.py::test_role_page_permissions_roundtrip`; `tests/role-permission-coverage.spec.ts` | 2026-10-23 |
-| RBAC-004 | Roles & permissions | Single active role with assignment history | WORKING | P0 | Yes | `test_auth_rbac.py::test_user_has_exactly_one_role_and_replacement` | 2026-10-23 |
-| RBAC-005 | Roles & permissions | Page grant expands to API permissions | WORKING | P0 | Yes | `test_role_permissions.py::test_page_permissions_expand_to_source_permissions` | 2026-10-23 |
-| RBAC-006 | Roles & permissions | Protected system administrator identity | WORKING | P0 | Yes | `test_auth_rbac.py::test_protected_system_admin_*`; migration `c9d0e1f2a3b4` | 2026-10-23 |
-| RBAC-007 | Roles & permissions | Delegation and privilege-escalation guard | WORKING | P0 | Yes | `test_auth_rbac.py::test_privilege_escalation_is_blocked` | 2026-10-23 |
-| RBAC-008 | Roles & permissions | Server-side authorization (401/403) | WORKING | P0 | Yes | `test_auth_rbac.py::test_least_privilege_default_deny`; live 401 on `/quotations` | 2026-10-23 |
+| AUTH-015 | Authentication | Permission/role change effective without re-login | WORKING | P1 | Yes | `test_auth_rbac.py::test_permission_and_role_changes_take_effect_without_relogin`: a role grant/revoke flips `/users` 403↔200 on the live session; the enforcer reloads after every policy write | 2026-10-27 |
+| RBAC-001 | Roles & permissions | Permission catalog and startup sync | WORKING | P0 | Yes | `test_role_permissions.py` (catalog uniqueness/classification, seeded grants); `ensure_permission_catalog` seeds 283 codes + 7 roles + their Casbin grants at startup; `/permissions/catalog` returns 39 pages and 81 modules | 2026-10-27 |
+| RBAC-002 | Roles & permissions | Role CRUD, duplicate, search, pagination | WORKING | P0 | Yes | `test_role_permissions.py::test_creating_a_role_stores_policy_rows` plus the role lifecycle cases in `test_auth_rbac.py`; create/read over HTTP verified in `pytest` on this revision (2026-10-28) | 2026-10-28 |
+| RBAC-003 | Roles & permissions | Role permission matrix UI and round-trip | UNVERIFIED | P1 | No | Matrix renders the backend `/permissions/catalog` pages and saves page codes (compile happens server-side); `pnpm lint`/`typecheck`/`test`/`i18n:check` pass but the page was not exercised in a browser | 2026-10-27 |
+| RBAC-004 | Roles & permissions | Single-role assignment (one role per user, replacement semantics) | WORKING | P0 | Yes | `test_auth_rbac.py::test_a_user_holds_exactly_one_role_and_assignment_replaces_it` + `test_multiple_role_payloads_are_rejected`; `test_single_role_rbac.py::test_the_database_allows_only_one_role_per_user` (partial unique index); migration `b4c5d6e7f8a9` materializes legacy inheritance and aborts on unresolved multi-role users | 2026-10-28 |
+| RBAC-005 | Roles & permissions | Page grant compiles to API permissions | WORKING | P0 | Yes | `test_role_permissions.py`: a configuration *view* page no longer grants write, a settings view no longer grants backup, untick/revoke drops the derived capabilities, one capability never grants an independent one, and compiling is idempotent for all 283 codes; `test_single_role_rbac.py::test_repeated_permission_saves_do_not_expand` proves repeated saves never widen the set | 2026-10-28 |
+| RBAC-006 | Roles & permissions | Protected system administrator identity | WORKING | P0 | Yes | `test_auth_rbac.py`: stripping/ deactivating/deleting `SUPER_ADMIN` and mutating the built-in administrator are refused (403); last holder cannot be unassigned or deactivated; migration `a1b2c3d4e5f7` renamed `PLATFORM_ADMIN` → `SUPER_ADMIN` | 2026-10-27 |
+| RBAC-007 | Roles & permissions | Delegation and privilege-escalation guard | WORKING | P0 | Yes | `test_auth_rbac.py::test_privilege_escalation_is_blocked`: a delegated role manager holding `role.manage` cannot grant a code it lacks, create a privileged role, or assign `SUPER_ADMIN` | 2026-10-28 |
+| RBAC-008 | Roles & permissions | Server-side authorization (401/403) | WORKING | P0 | Yes | `test_auth_rbac.py::test_least_privilege_default_deny` (403 + `AUTHORIZATION_DENIED` row written by `record_denial`); compose stack 2026-10-27: anonymous `/users` → 401, `VIEWER` `/users` → 403, `/quotations` → 200 | 2026-10-27 |
+| RBAC-009 | Roles & permissions | Role inheritance without cycles | MISSING | P1 | Yes | Intentionally removed (task 2026-10-28): no `parentRoles` field, no `/roles/{id}/inheritance` endpoints, the loader ignores legacy `role:`→`role:` edges, and migration `b4c5d6e7f8a9` materializes inherited grants as direct child-role grants before deleting the edges; covered by `test_role_permissions.py::test_role_permissions_are_direct_and_inheritance_is_gone` | 2026-10-28 |
+| RBAC-010 | Roles & permissions | Redis policy synchronization and fail-closed reload | WORKING | P0 | Conditional | `cache.bump("auth")` + per-worker reload with the version read before the rows; `CASBIN_RELOAD_INTERVAL_SECONDS` backstop; a load failure drops the copy and answers `503`. Compose run 2026-10-27 (Redis up); the Redis-outage path was not exercised | 2026-10-27 |
 | MASTER-001 | Master data | Business parties | WORKING | P0 | Yes | `test_workflows.py::test_business_party_roles`; business-parties pages | 2026-10-23 |
 | MASTER-002 | Master data | Party roles and assignments | WORKING | P1 | Yes | `test_party_roles.py` (5) | 2026-10-23 |
 | MASTER-003 | Master data | Place roles and route stops | WORKING | P1 | Yes | `test_place_roles.py` (6); `tests/place-roles.spec.ts` | 2026-10-23 |
@@ -170,7 +172,7 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 | QUOT-012 | Quotations | Side-by-side revision comparison UI | MISSING | P1 | No | Compare API + `test_compare_revisions_*` exist; the Compare Selected UI was removed at the owner's request | 2026-10-23 |
 | QUOT-013 | Quotations | Re-quotation from a service order | WORKING | P2 | Yes | `test_quotations.py::test_requotation_from_a_service_order_creates_a_new_draft` (+3 sibling tests, route/containers/pricing asserted); `test_quotation_postgres.py::test_deleting_the_order_nulls_the_requotation_link`; `quotation-actions.spec.ts`; order header action in `DocumentView.vue` | 2026-10-23 |
 | QUOT-014 | Quotations | Bilingual print preview | WORKING | P2 | Yes | `quotation-print.spec.ts`; `print-model.spec.ts`; visual output not machine-checked | 2026-10-23 |
-| QUOT-015 | Quotations | Quotation permissions | WORKING | P0 | Yes | `test_role_permissions.py`; `test_frontend_api_contract.py` | 2026-10-23 |
+| QUOT-015 | Quotations | Quotation permissions | WORKING | P0 | Yes | Casbin `p, role:<code>, quotation, <action>` policies + page compile (`compile_role_permissions`); `test_frontend_api_contract.py` keeps the route list honest | 2026-10-27 |
 | ORDER-001 | Service orders | Create from quotation, list, detail | WORKING | P0 | Yes | `test_workflows.py::test_quotation_lifecycle_and_conversion` | 2026-10-23 |
 | ORDER-002 | Service orders | Edit with source snapshots | WORKING | P0 | Yes | `test_workflows.py`; `operations/service.py` | 2026-10-23 |
 | ORDER-003 | Service orders | ACTIVE/INACTIVE status policy | WORKING | P0 | Yes | `test_record_status.py`; `test_movements_and_milestones.py::test_inactive_service_orders_reject_operational_edits` | 2026-10-23 |
@@ -211,11 +213,11 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 | REP-003 | Reports | Container register | WORKING | P2 | Yes | `test_reporting_values.py::test_container_register_*` | 2026-10-23 |
 | REP-004 | Reports | Profitability (operational) | UNVERIFIED | P1 | No | Column contract tested (`operations-reports.spec.ts`); `/profitability` row values still unasserted | docs |
 | REP-005 | Reports | Quotation performance | UNVERIFIED | P2 | No | Endpoint exists; no assertion test | docs |
-| REP-006 | Reports | Trial balance | WORKING | P0 | Yes | `test_reporting_values.py::test_trial_balance_*` (2) | 2026-10-23 |
+| REP-006 | Reports | Trial balance | WORKING | P0 | Yes | `test_report_accounting.py` (13 independent-fixture assertions); `test_report_generation.py` (14); browser `e2e/reports-generate.spec.ts` (7) | 2026-10-27 |
 | REP-007 | Reports | Profit & loss, balance sheet, cash flow | WORKING | P0 | Yes | Three `test_reporting_values.py` tests | 2026-10-23 |
 | REP-008 | Reports | Receivables, payables, revenue and expense | WORKING | P0 | Yes | `test_workflows.py::test_payment_allocation_and_receivables`; P&L tests | 2026-10-23 |
-| REP-009 | Reports | General ledger lines and financial summary | UNVERIFIED | P1 | No | Endpoints exist; no direct assertion test (`vw_general_ledger` also unexposed) | docs |
-| REP-010 | Reports | Filters and CSV export | NEEDS_IMPROVEMENT | P2 | No | `ReportsView.vue` client-side export; no test; no server export endpoint | 2026-10-23 |
+| REP-009 | Reports | General ledger lines and financial summary | WORKING | P1 | Yes | `test_report_accounting.py` (opening/running balances, cross-account partition, voucher filters); `test_report_generation.py`; browser `e2e/reports-generate.spec.ts` | 2026-10-27 |
+| REP-010 | Reports | Filters and CSV export | WORKING | P2 | Yes | Generate-on-demand filters are server-applied (`report-generation.spec.ts`, 8); full-result CSV export verified by `test_report_export.py` (9) and by a real browser download whose totals reconcile | 2026-10-27 |
 | ADM-001 | Administration | Application info and branding | WORKING | P1 | Yes | `test_api_completeness.py::test_settings_app_info_and_app_config_roundtrip` | 2026-10-23 |
 | ADM-002 | Administration | App configuration incl. email/Telegram test send | PARTIAL | P1 | No | Security lifetime settings validated in 26 passing auth tests; existing channel delivery limitations remain (`docs/10`) | 2026-10-24 |
 | ADM-003 | Administration | Reset application data | WORKING | P1 | Conditional | `test_setup.py`; typed `RESET` confirmation in `settings/router.py` | 2026-10-23 |
@@ -268,7 +270,7 @@ listed evidence was actually executed, or `docs` when only documentation was rev
   audit history on PostgreSQL; add MFA for privileged roles.
 - **Frontend evidence:** `app/pages/auth/*`, `app/stores/auth.ts`, `app/middleware/*`.
 - **Backend evidence:** `app/modules/auth/*`, `core/deps.py`, `core/security.py`.
-- **Database evidence:** `users`, `user_credentials`, stable `user_sessions`, consumed `used_refresh_tokens`, `user_role_assignments`, `audit_events`.
+- **Database evidence:** `users`, `user_credentials`, stable `user_sessions`, consumed `used_refresh_tokens`, `casbin_rule`, `audit_events`.
 - **2026-10-24 verification:** 26 auth tests passed; disposable PostgreSQL rotation/replay/schema/rollback test passed; frontend auth/API tests (17) passed. Full backend rerun: `uv run pytest -q --disable-warnings` → 606 passed, 4 optional skips; `pnpm test` → 681 passed; lint/typecheck/i18n passed. Isolated Playwright auth journeys: 4 passed, including a Service Order draft save after silent refresh, reload, cross-tab rotation/logout and genuine idle expiry without losing the draft. Production HTTPS delivery remains a release check. See `docs/10_testing_and_quality.md` for exact commands and broader gate results.
 - **Test evidence:** `test_auth_rbac.py`, `test_auth_remember_me.py`, `test_password_reset.py`,
   `test_lockout_policy.py`, `test_rate_limit.py`, `test_setup.py`; Vitest session/remember-me/password specs.
@@ -279,24 +281,37 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 
 ### 2. Roles and permissions (RBAC)
 
-- **Business purpose:** least-privilege access for eight role templates without a per-tenant scope.
-- **Expected behaviour:** one active role per user, page grants expanding to API permissions, protected system
-  administrator, audited role changes, no privilege escalation.
-- **Current implementation:** catalog and role templates in `core/permissions.py` (904 lines), synced at startup;
-  roles/users pages; permission matrix in the role form.
-- **Verified:** catalog uniqueness, every source permission reachable from a page checkbox, matrix round-trip,
-  single-role replacement, protected administrator (direct and bulk mutation), escalation guard, server 403/401.
-- **Missing / defects:** none found in the audited scope.
-- **Improvement opportunities:** the catalog is large and manually maintained; a generated catalog diff check
-  would catch a permission added without a page mapping.
-- **Frontend evidence:** `administration/roles/*`, `administration/users/*`, `role-permission-coverage.spec.ts`.
-- **Backend evidence:** `core/permissions.py`, `auth/service.py` (role methods), `api/v1/router.py`.
-- **Database evidence:** `roles`, `permissions`, `role_permissions`, `user_role_assignments`.
-- **Test evidence:** `test_role_permissions.py` (17), `test_auth_rbac.py` (15).
-- **Security considerations:** the denial path is tested at the API, not only hidden in the UI; protected identity
-  is enforced by immutable identity, not display name.
-- **Dependencies:** users table, audit.
-- **Recommended next action:** keep as-is; re-verify whenever a new endpoint is added (contract test helps).
+- **Business purpose:** least-privilege access for seven role templates without a per-tenant scope.
+- **Expected behaviour:** multiple roles per user, role inheritance without cycles, page grants compiled into API
+  capabilities at save time, protected super administrator, audited role changes, no privilege escalation,
+  default deny, fail closed when the policy store is unreadable.
+- **Current implementation:** PyCasbin over the `casbin_rule` table
+  (`backend/app/core/authorization/`: `model.conf`, `models.py`, `service.py`); catalog, matrix pages, page→capability
+  grants and the seven seeded roles in `core/permissions.py`; enforcement through
+  `core/deps.py::require_permission`/`require_any_permission` and `RequestContext.has_permission`; administration
+  endpoints in `modules/auth/`; matrix UI in `AppRolePermissionMatrix.vue` fed by `/permissions/catalog`.
+- **Verified (2026-10-27):** `tests/test_role_permissions.py` (12 passed) and `tests/test_auth_rbac.py` (15 passed)
+  cover the catalog, the page→capability compile (including the no-over-grant rules), policy persistence, inheritance
+  and cycle refusal, deny-by-default with the `AUTHORIZATION_DENIED` row, escalation guards and revocation without
+  re-login. Compose stack: Alembic upgrade → downgrade → upgrade, startup, seven roles (ADMIN 283, ACCOUNTANT 110,
+  MANAGER 97, SALES 48, VIEWER 44, OPERATIONS 39, `SUPER_ADMIN` `*`), `VIEWER` login (33 page + 12 capability codes),
+  `/users` 403, `/permissions/catalog` 403, `/quotations` 200. Frontend `lint`, `typecheck`, `test` (743 passed) and
+  `i18n:check` pass; the SPA builds (`pnpm generate`).
+- **Missing / defects:** the browser matrix was not exercised, and a grant written by an *older* compiler keeps its old
+  capabilities until the role is saved again or `scripts/rebuild_role_permissions.py --apply` is run (documented in
+  `docs/09` §9.1). Redis-unavailable reload and fail-closed behaviour were verified in an isolated probe, not on the
+  compose stack.
+- **Improvement opportunities:** a PostgreSQL rehearsal of the policy migration, and a browser pass over the matrix.
+- **Frontend evidence:** `administration/roles/*`, `administration/users/*`, `components/common/AppRolePermissionMatrix.vue`,
+  `composables/common/useRolePermissionCatalog.ts`, `utils/role/permissions.ts`.
+- **Backend evidence:** `core/authorization/*`, `core/permissions.py`, `core/deps.py`, `core/context.py`,
+  `auth/service.py` (role/user methods), `api/v1/router.py`.
+- **Database evidence:** `roles`, `permissions`, `casbin_rule`.
+- **Security considerations:** the denial path is enforced and audited at the API, not hidden in the UI; the protected
+  super administrator is enforced by policy and identity, not by display name; policy-load failure denies rather than
+  serving a stale copy.
+- **Dependencies:** users table, audit, optional Redis (policy version broadcast; the reload interval is the fallback).
+- **Recommended next action:** a browser pass over the role matrix; the route-inventory gate now protects new endpoints.
 
 ### 3. Master data
 
@@ -457,25 +472,37 @@ listed evidence was actually executed, or `docs` when only documentation was rev
 
 - **Business purpose:** give operations and finance a read-only, posted-data view for decisions and reconciliation.
 - **Expected behaviour:** 12 catalogued reports, filters by party/status/currency/date, statements reconcile,
-  permissions per report area.
-- **Current implementation:** `modules/reports/` (service + repository, 16 endpoints) and
-  `config/freight-reports.ts` (12 definitions), `ReportsView.vue`, dashboard components.
+  permissions per report area, and no report data on page load.
+- **Current implementation:** `modules/reports/` (service + repository + on-demand generation engine:
+  `engine.py`, `ledger_reports.py`, `schemas.py`, `csv_export.py`), `config/freight-reports.ts` (12 definitions),
+  `ReportsView.vue`, `utils/freight/report-request.ts`, dashboard components.
 - **Verified:** dashboard KPIs, trial balance, P&L, balance sheet, cash flow, container register, receivables via
-  allocation tests.
-- **Missing / defects:** service-order register/status, profitability, quotation performance, ledger lines and
-  financial summary have no direct assertion test (`REP-002/004/005/009`); CSV export is client-side and untested
-  (`REP-010`).
-- **Improvement opportunities:** add one assertion per endpoint (row count + a known amount) — cheap and closes
-  five UNVERIFIED rows; move export server-side if it ever carries more than a page of data.
+  allocation tests; generated Trial Balance and General Ledger via `test_report_accounting.py` (13, independent
+  fixed-date fixtures) and `test_report_generation.py` (14); full-result CSV export via `test_report_export.py` (9);
+  the browser journeys in `e2e/reports-generate.spec.ts` (7) on a disposable compose stack, including the download.
+- **Performance:** measured, not assumed — see `docs/10` §8 (200,000 ledger lines: Trial Balance 72–87 ms, General
+  Ledger page 43 ms with an account filter and 474 ms unfiltered over 101,470 rows, exports 0.17 s / 3.69 s). No
+  index was added because the plans do not support one; the next lever is a narrower window sort.
+- **Missing / defects:** service-order register/status, profitability and quotation performance still have no direct
+  row assertion (`REP-002/004/005`); the four statement reports still request the whole ledger
+  (`/reports/ledger-lines`) instead of a paginated engine report; export is CSV only.
+- **Improvement opportunities:** add one assertion per remaining endpoint; move the statements onto the engine; trim
+  the window's projected columns to speed up an unfiltered ledger page.
 - **Frontend evidence:** `pages/reports/**`, `config/freight-reports.ts`, `components/freight/ReportsView.vue`,
-  `components/dashboard/**`, `report-access.spec.ts`.
-- **Backend evidence:** `modules/reports/{router,service,repository}.py`, `core/pagination.py`.
-- **Database evidence:** reporting views (`vw_*`), journal and document tables; reports read posted data only.
-- **Test evidence:** `test_reports_dashboard.py` (2), `test_reporting_values.py` (10), `test_workflows.py`.
-- **Security considerations:** each endpoint maps to a report page code plus `report.read`; date filters are
-  server-side; no report writes data.
+  `utils/freight/report-request.ts`, `utils/export/csv.ts`, `components/dashboard/**`, `report-access.spec.ts`,
+  `report-generation.spec.ts`, `e2e/reports-generate.spec.ts`.
+- **Backend evidence:** `modules/reports/{router,service,repository,engine,ledger_reports,schemas,csv_export}.py`,
+  `core/pagination.py`, `scripts/verify_report_performance.py`.
+- **Database evidence:** reporting views (`vw_*`), journal and document tables; reports read posted data only, and
+  the generated reports read the same posted-ledger projection as the statements.
+- **Test evidence:** `test_reports_dashboard.py` (2), `test_reporting_values.py` (10), `test_report_generation.py`
+  (14), `test_report_accounting.py` (13), `test_report_export.py` (9), `test_workflows.py`, browser 7.
+- **Security considerations:** each endpoint maps to a report page code plus `report.read`; the engine re-checks the
+  registry permission before a byte is streamed; filters are parameterised server-side; period, account, party,
+  voucher and currency filters never widen the posted-only scope; no report writes data; exported text cells are
+  neutralised against spreadsheet formula injection.
 - **Dependencies:** finance posting, service orders.
-- **Recommended next action:** add the five missing endpoint assertions.
+- **Recommended next action:** add the three missing endpoint assertions and move the statements onto the engine.
 
 ### 10. Administration, audit and archive
 
@@ -576,8 +603,8 @@ Ordered by risk, as required.
    existing endpoint.
 8. **P1 — Currency-rate maintenance is API-only (`MASTER-010`).** *Action:* expose the rate list in the Currencies
    screen; keep approved-only semantics.
-9. **P1 — Audit-log search is unverified (`ADM-005`)** and **operational reports have no assertion tests
-   (`REP-002/004/005/009`).** *Action:* one focused test each; cheap and removes ambiguity.
+9. **P1 — Audit-log search is unverified (`ADM-005`)** and **three operational reports have no assertion tests
+   (`REP-002/004/005`).** *Action:* one focused test each; cheap and removes ambiguity.
 10. **P1 — Browser coverage stops at the login form (`PLAT-013`).** *Action:* run the authenticated Playwright
     journey in CI against the compose stack with a dedicated non-production account.
 11. **P2 — API returns money as JSON floats (`FIN-016`).** Stored values stay `Decimal`, but clients receive
@@ -626,7 +653,7 @@ them requires reworking the domain model.
 | 7 | ORDER-007/008 | Itinerary/milestone panel on the service order | Tested APIs, no user access | P1 | None | Create/edit/delete movement and milestone from the order page; Vitest + Playwright proof |
 | 8 | QUOT-012 | Read-only revision compare screen | Endpoint exists; users cannot see differences | P1 | None | Compare two revisions side by side; identical revisions show no change |
 | 9 | MASTER-010 | Currency-rate list on the Currencies screen | Rates can only be maintained by API | P1 | None | Approved rates visible and filterable; create/edit gated by permission |
-| 10 | ADM-005 / REP-002/004/005/009 | Add one focused backend test per unverified screen | Removes five UNVERIFIED rows | P1 | None | Each endpoint asserts a known seeded value and a permission denial |
+| 10 | ADM-005 / REP-002/004/005 | Add one focused backend test per unverified screen | Removes three UNVERIFIED rows | P1 | None | Each endpoint asserts a known seeded value and a permission denial |
 | 11 | PLAT-013 | Authenticated Playwright journey in CI | Login/navigation regressions can reach `dev` | P1 | Dedicated test account | Quotation → order navigation passes headlessly in CI |
 | 12 | PLAT-012 / PLAT-014 | Complete 52 Khmer strings; add an a11y check on core forms | Quality and accessibility | P2 | Translation review | `i18n:check` reports 0 identical values; a11y spec passes |
 | 13 | FIN-016 | Serialize money as strings/fixed-scale decimals | API precision contract | P2 | Frontend formatters | API contract test asserts exact string amounts; UI unchanged |
@@ -640,6 +667,10 @@ Record only meaningful status transitions; do not add a row when nothing changed
 
 | Date | Change | Detail |
 |---|---|---|
+| 2026-10-28 | RBAC-004 redefined to single-role assignment; RBAC-009 WORKING → MISSING (inheritance removed by design) | Direct RBAC: each user holds exactly one role — request schemas take a single `roleCode` (a `roles`/`role_ids` array is refused with 422), `POST /users/{id}/role-assignments` now **replaces** the previous role, and a partial unique index `uq_casbin_rule_single_user_role` enforces one assignment per user at the database level. Role inheritance was removed: no `parentRoles` payload field, no `/roles/{id}/inheritance` endpoints, the policy loader ignores legacy `role:`→`role:` edges, and the Role Management UI lost the "Inherits from", "Inherited permissions" and "Effective permissions" fields; the Users form now uses a searchable single-select "Assigned Role" dropdown. New tests `test_single_role_rbac.py` (5) cover the constraint, roleless accounts, idempotent saves, audit events and the migration's multi-role conflict report; `test_auth_rbac.py`/`test_role_permissions.py` rewritten for the model. |
+| 2026-10-27 | REP-010 NEEDS_IMPROVEMENT → WORKING; report exports and measurement; Casbin wildcard repaired | Trial Balance and General Ledger now export the whole filtered result as a streamed CSV (`POST /reports/<key>/export`, server-side cursor, footer totals equal `/generate`, formula-injection guard, read-only mode allowed). Independent accounting coverage added (`test_report_accounting.py`, 13) with fixed-date fixtures: opening/period/closing columns, debit-credit control, reversal policy, foreign-currency base amounts, four-decimal round-trip, fiscal-year boundaries, same-date ordering, P&L agreement. `test_report_export.py` (9) covers full-result rows, totals reconciliation, column selection, 403, read-only. Browser suite `e2e/reports-generate.spec.ts` (7) ran green on a disposable compose stack, including a downloaded CSV. Performance measured with `scripts/verify_report_performance.py` on 200,000 lines: TB 72–87 ms, GL page 43 ms (one account) / 474 ms (unfiltered 101k rows), exports 0.17 s / 3.69 s; no index added because the plans do not support one. Root cause of the failing working-tree suite fixed: `*` was stored as a two-token policy row, so the protected administrator held nothing; `split_code`/`join_code`/loader repaired and covered by `test_authorization_wildcard.py` (3). Stale test fixtures still naming removed roles (`AUDITOR`, `SALES_OFFICER`) updated to `VIEWER`/`SALES`. Combined working tree: backend **733 passed / 7 skipped**, frontend 91 files / 747 passed, ruff/lint/typecheck/i18n green. |
+| 2026-10-27 | REP-009 UNVERIFIED → WORKING; reports generate on demand | Trial Balance and General Ledger moved behind a shared report engine (`engine.py` registry + `ledger_reports.py` calculations + `schemas.py` contracts) and two POST generate endpoints with server pagination; report pages load no rows until Generate and mark results stale on filter changes. `test_report_generation.py` (13) verifies opening/period split, imbalance reporting, draft exclusion, running balances across pages, voucher/account filters, read-only behaviour, 403 and 422; `report-generation.spec.ts` (6) pins the request body and the no-fetch rule. Backend suite 708 passed / 7 skipped on a clean HEAD worktree carrying these files; frontend 91 files / 743 passed, lint/typecheck/i18n green. |
+| 2026-10-27 | Authorization engine replaced with Casbin | `role_permissions`/`user_role_assignments` dropped in favour of `casbin_rule`; multi-role, role inheritance, page→capability compile at save time, Redis-synced reload, fail-closed on policy load failure. Follow-up pass: the compile no longer loops capability→page→capability (a configuration viewer no longer inherited configuration write, a settings viewer no longer inherited `backup.manage`), `quotation.convert` and the attachment capabilities are reachable from the document pages, four dead codes (`excel.import/export`, `telegram.manage/view`) were removed (283 codes), the denial audit moved into the request session, and the enforcer reads the published version before the rows. `test_role_permissions.py` (12) and `test_auth_rbac.py` (15) were rewritten for the Casbin model and pass, together with `test_password_reset.py`, `test_repository_queries.py` and `test_migration_chain.py`; RBAC-003 (browser matrix) stays UNVERIFIED. |
 | 2026-10-23 | Initial baseline | 138 features: 102 WORKING, 10 PARTIAL, 12 UNVERIFIED, 7 MISSING, 1 BROKEN, 6 NEEDS_IMPROVEMENT, 0 BLOCKED. Backend 531 pass / 1 stale-expectation failure (re-run green), frontend 606 pass, lint/typecheck/i18n/schema/ruff green. |
 | 2026-10-23 | QUOT-013 UNVERIFIED → WORKING | `POST /quotations/from-service-order/{identifier}` now copies customer, direction, route, containers and priced lines into a new draft, records `source_service_order_id` (Alembic `c7e8f9a0b1c2`), and is reachable from the service-order header. QUOT-009 evidence extended with the `Idempotency-Key` replay test. Backend `pytest` 538 pass, frontend 609 pass. |
 | 2026-10-23 | Verification pass; QUOT-006 UNVERIFIED → WORKING | Backend image rebuilt with `c7e8f9a0b1c2` and restarted against the existing database (`alembic current` = `c7e8f9a0b1c2 (head)`, health `ok`); a clean-database Alembic chain ran up → down → up. PostgreSQL: two concurrent conversions produced one order and one `409 DUPLICATE_CONVERSION`; two same-key retries produced one order; deleting the order nulled the re-quotation link. Container requirements now have a round-trip + child-row test. Backend 540 passed / 3 PostgreSQL-only skipped (no URL), focused 120 passed, ruff clean; browser suite 6 passed / 2 skipped (no credentials). |

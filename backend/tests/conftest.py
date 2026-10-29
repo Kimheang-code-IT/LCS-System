@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core import authorization
 from app.core.config import settings
 from app.core.database import Base, get_session
+from app.core.exceptions import AccessDenied
 from app.main import app
 from tests.seed import DEFAULT_PASSWORD, ensure_seed_data, seed_demo_data
 
@@ -73,14 +76,31 @@ async def seeded(session_factory):
         await ensure_seed_data(session)
         await seed_demo_data(session)
         await session.commit()
+        # The demo users' role assignments are the last policy mutation, so the
+        # in-memory Casbin copy must be republished from this database before any
+        # request is decided (every product-side policy writer does the same).
+        await authorization.refresh(session)
     return True
 
 
 @pytest_asyncio.fixture
 async def client(session_factory, seeded):
-    async def override_get_session():
+    async def override_get_session(request: Request):
+        # Mirrors ``app.core.database.get_session`` against the test database: a
+        # refused request must leave the same AUTHORIZATION_DENIED trail it does in
+        # production, or the audit assertions would pass without anything writing.
         async with session_factory() as session:
-            yield session
+            try:
+                yield session
+            except AccessDenied as exc:
+                from app.core.database import record_denial
+
+                await session.rollback()
+                await record_denial(request, session, exc)
+                raise
+            except Exception:
+                await session.rollback()
+                raise
 
     app.dependency_overrides[get_session] = override_get_session
     transport = ASGITransport(app=app)

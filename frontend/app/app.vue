@@ -93,11 +93,6 @@ useSeoMeta({
 
 <template>
   <UApp class="h-full min-h-0" :locale="currentLocale">
-    <NuxtLoadingIndicator
-      color="var(--ui-primary, #e8472a)"
-      error-color="#ef4444"
-      :height="3"
-    />
     <CommonAppSessionStatus />
     <NuxtLayout />
     <CommonAppConfirmHost />
