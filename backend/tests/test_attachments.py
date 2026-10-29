@@ -111,7 +111,7 @@ async def test_editing_an_attachment_note_requires_upload_permission(client):
             "email": "note.auditor@example.com",
             "password": "Passw0rd!",
             "status": "Active",
-            "role": "AUDITOR",
+            "role": "VIEWER",
         },
     )
     assert created.status_code == 201, created.text
@@ -218,9 +218,22 @@ async def test_deleting_attachments_requires_a_permission(client):
     headers = await login(client)
     attachment = await _upload(client, headers)
 
-    sales = await login(client, "sales")
+    created = await client.post(
+        "/api/v1/users",
+        headers=headers,
+        json={
+            "username": "attachment.viewer",
+            "displayName": "Attachment Viewer",
+            "email": "attachment.viewer@example.com",
+            "password": "Passw0rd!",
+            "status": "Active",
+            "role": "VIEWER",
+        },
+    )
+    assert created.status_code == 201, created.text
+    viewer = await login(client, "attachment.viewer")
     blocked = await client.request(
-        "DELETE", "/api/v1/attachments", headers=sales, json={"ids": [attachment["id"]]}
+        "DELETE", "/api/v1/attachments", headers=viewer, json={"ids": [attachment["id"]]}
     )
     assert blocked.status_code == 403, blocked.text
 

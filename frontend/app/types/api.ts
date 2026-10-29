@@ -15,7 +15,10 @@ export interface AuthUser {
   id?: number
   name: string
   email: string
+  /** Display label derived from the highest role (e.g. ``SuperAdmin``). */
   role?: string
+  /** Every role code the account holds; authorization is their union. */
+  roles?: string[]
   avatar?: string
   permissions?: string[]
   pageAccess?: string[]

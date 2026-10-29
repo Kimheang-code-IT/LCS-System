@@ -113,7 +113,7 @@ async def test_list_payloads_report_the_creator_and_resist_spoofing(client):
             "email": "creator.check@example.com",
             "password": "Passw0rd!",
             "status": "Active",
-            "role": "SALES_OFFICER",
+            "role": "SALES",
         },
     )
     assert created_user.status_code == 201, created_user.text

@@ -18,7 +18,7 @@ import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
 import { financeDomainStatus, isRecordReadOnly, quotationDomainStatus } from '~/utils/freight/states'
-import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys } from '~/utils/role/permissions'
+import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys, extraPermissionCodes } from '~/utils/role/permissions'
 import type { AppRolePermissionRow } from '~/types/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
 import { recalculateFreightRecord } from '~/utils/freight/document-calculations'
@@ -51,6 +51,7 @@ import type { RecordStatusTransition } from '~/types/status'
 import { buildPrintRoute } from '~/utils/freight/print-navigation'
 import { splitDocumentHeaderActions } from '~/utils/layout/document-header-actions'
 import type { FreightAction, FreightField, FreightTable } from '~/config/freight-modules'
+import { useRolePermissionCatalog } from '~/composables/common/useRolePermissionCatalog'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useDocumentActions } from '~/composables/freight/useDocumentActions'
 import { useRecordStatus } from '~/composables/freight/useRecordStatus'
@@ -203,25 +204,32 @@ const {
   deleteComment,
 } = useFreightRecordChrome({ module, isCreate, recordId, model })
 
+const { pages: rolePermissionPages, load: loadRolePermissionCatalog } = useRolePermissionCatalog()
+
 function applyRoleMatrix() {
   if (module.value?.collection !== 'roles') return
   const existing = model.value.permissionRows as AppRolePermissionRow[] | undefined
   // Existing roles return flat `permissions`; build the matrix from them the
   // first time. Once edited, `permissionRows` is authoritative.
   const rows = existing?.length
-    ? normalizePermissionRows(existing)
-    : permissionRowsFromFlatKeys(model.value.permissions as string[] | undefined)
-  const keys = permissionRowsToFlatKeys(rows)
+    ? normalizePermissionRows(existing, true, rolePermissionPages.value)
+    : permissionRowsFromFlatKeys(model.value.permissions as string[] | undefined, rolePermissionPages.value)
+  const keys = permissionRowsToFlatKeys(rows, rolePermissionPages.value)
+  // A capability granted through the API without its page is not a checkbox; it
+  // must survive a save from this screen instead of being replaced by the pages.
+  const extras = extraPermissionCodes(model.value.permissions as string[] | undefined, rolePermissionPages.value)
+  const permissions = [...new Set([...keys, ...extras])].sort()
   model.value = {
     ...model.value,
     permissionRows: rows,
-    permissionCount: keys.length,
-    permissions: keys,
+    permissionCount: permissions.length,
+    permissions,
   }
 }
 
 async function load() {
   if (!module.value) return
+  if (module.value.collection === 'roles') void loadRolePermissionCatalog()
   if (isCreate.value) {
     model.value = emptyFreightRecord(module.value) as FreightRecord
     if (module.value.collection === 'documentSequences') {
@@ -247,7 +255,11 @@ async function load() {
     const found = await moduleRecord.get(recordId.value)
     notFound.value = false
     const normalized = module.value.collection === 'users'
-      ? { ...found, role: found.role || (Array.isArray(found.roles) ? found.roles[0] : '') }
+      ? {
+          ...found,
+          // Exactly one role: fall back to the legacy list payload if present.
+          role: String(found.role ?? (Array.isArray(found.roles) ? found.roles[0] ?? '' : '')),
+        }
       : found
     model.value = { ...normalized } as FreightRecord
     originalModel.value = { ...normalized } as FreightRecord
@@ -521,7 +533,7 @@ const canSave = computed(() => {
   return true
 })
 
-/** Role names from the Roles & Permissions page, used by the users role select. */
+/** Role names from the Roles & Permissions page, used by the users role picker. */
 const roleFieldOptions = computed(() => store.list('roles')
   .filter(role => String(role.status || 'ACTIVE').toUpperCase() !== 'INACTIVE')
   .map(role => ({
@@ -565,19 +577,26 @@ const formTabs = computed(() => {
       recordNo: String(model.value.id || ''),
     },
   })
-  if (module.value.collection === 'roles' && model.value.isSystemRole === true) {
+  if (module.value.collection === 'roles') {
+    // A protected system role keeps its grant read-only (the backend refuses
+    // the change anyway).
     return compiled.map(tab => ({
       ...tab,
       sections: tab.sections.map(section => ({
         ...section,
-        fields: section.fields.map(field =>
-          field.key === 'permissionRows' ? { ...field, readOnly: true } : field,
-        ),
+        fields: section.fields.map((field) => {
+          if (field.key === 'permissionRows') {
+            if (model.value.isSystemRole === true || !lcs.can('role.manage')) return { ...field, readOnly: true }
+            return field
+          }
+          return field
+        }),
       })),
     }))
   }
   if (module.value.collection !== 'users') return compiled
-  // Source the role field from existing roles so users pick one instead of typing.
+  // The user picks one existing active role from a searchable dropdown; a user
+  // holds exactly one role, so this is a single selection.
   return compiled.map(tab => ({
     ...tab,
     sections: tab.sections.map(section => ({
@@ -915,11 +934,11 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
 })
 
 function setRolePermissions(rows: AppRolePermissionRow[]) {
-  const normalized = normalizePermissionRows(rows)
+  const normalized = normalizePermissionRows(rows, true, rolePermissionPages.value)
   model.value = {
     ...model.value,
     permissionRows: normalized,
-    permissionCount: permissionRowsToFlatKeys(normalized).length,
+    permissionCount: permissionRowsToFlatKeys(normalized, rolePermissionPages.value).length,
   }
 }
 
@@ -1213,11 +1232,15 @@ async function save(status?: string) {
       Object.assign(payload, normalizeComponentAssignmentRecord(payload))
     }
     if (module.value.collection === 'roles') {
-      const rows = normalizePermissionRows(payload.permissionRows as AppRolePermissionRow[] | undefined)
-      const keys = permissionRowsToFlatKeys(rows)
+      const rows = normalizePermissionRows(payload.permissionRows as AppRolePermissionRow[] | undefined, true, rolePermissionPages.value)
+      const keys = permissionRowsToFlatKeys(rows, rolePermissionPages.value)
+      // A capability granted through the API without its page is not a checkbox;
+      // keep it instead of replacing the set with the ticked pages only.
+      const extras = extraPermissionCodes(payload.permissions as string[] | undefined, rolePermissionPages.value)
+      const permissions = [...new Set([...keys, ...extras])].sort()
       payload.permissionRows = rows
-      payload.permissions = keys
-      payload.permissionCount = keys.length
+      payload.permissions = permissions
+      payload.permissionCount = permissions.length
     }
     if (module.value.collection === 'debitNotes') {
       // A line's account code is derived from the posting rules for display, so it

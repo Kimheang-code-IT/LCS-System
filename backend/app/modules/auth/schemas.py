@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from email_validator import EmailNotValidError, validate_email
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -110,11 +108,22 @@ class UserCreate(BaseModel):
         min_length=1, max_length=255, validation_alias=AliasChoices("display_name", "displayName", "name")
     )
     password: str | None = Field(default=None, max_length=128)
-    roles: list[str] | None = None
+    # Rejected, not ignored: a user holds exactly one role. The aliases cover the
+    # legacy multi-role and role-id array keys so clients get a clear 422.
+    roles: list[str] | None = Field(
+        default=None, validation_alias=AliasChoices("roles", "role_ids", "roleIds")
+    )
     role_code: str | None = Field(
         default=None, max_length=64, validation_alias=AliasChoices("role_code", "roleCode", "role")
     )
     status: str = Field(default="ACTIVE", max_length=20)
+
+    @field_validator("roles", mode="before")
+    @classmethod
+    def _reject_role_arrays(cls, value: object) -> None:
+        if value is not None:
+            raise ValueError("A user holds exactly one role: send the single 'roleCode' value.")
+        return None
 
 
 class UserUpdate(BaseModel):
@@ -128,33 +137,71 @@ class UserUpdate(BaseModel):
     status: str | None = Field(default=None, max_length=20)
     locale: str | None = Field(default=None, max_length=16)
     timezone: str | None = Field(default=None, max_length=64)
-    roles: list[str] | None = None
+    roles: list[str] | None = Field(
+        default=None, validation_alias=AliasChoices("roles", "role_ids", "roleIds")
+    )
     role_code: str | None = Field(
         default=None, max_length=64, validation_alias=AliasChoices("role_code", "roleCode", "role")
     )
+
+    @field_validator("roles", mode="before")
+    @classmethod
+    def _reject_role_arrays(cls, value: object) -> None:
+        if value is not None:
+            raise ValueError("A user holds exactly one role: send the single 'roleCode' value.")
+        return None
 
 
 class RoleAssignmentCreate(BaseModel):
     role_id: int | None = None
     role_code: str | None = None
-    starts_at: datetime | None = None
-    expires_at: datetime | None = None
 
 
 class RoleCreate(BaseModel):
     # `code` is optional: when omitted the service derives a stable code from
     # the role name, so the UI only needs to collect a name.
+    model_config = ConfigDict(populate_by_name=True)
+
     code: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     permissions: list[str] = []
+    # Rejected, not ignored: roles do not inherit permissions.
+    parent_roles: list[str] | None = Field(
+        default=None, validation_alias=AliasChoices("parent_roles", "parentRoles")
+    )
+
+    @field_validator("parent_roles", mode="before")
+    @classmethod
+    def _reject_inheritance(cls, value: object) -> None:
+        if value is not None:
+            raise ValueError("Roles do not inherit permissions; assign permissions directly.")
+        return None
 
 
 class RoleUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     status: str | None = Field(default=None, max_length=20)
     permissions: list[str] | None = None
+    parent_roles: list[str] | None = Field(
+        default=None, validation_alias=AliasChoices("parent_roles", "parentRoles")
+    )
+
+    @field_validator("parent_roles", mode="before")
+    @classmethod
+    def _reject_inheritance(cls, value: object) -> None:
+        if value is not None:
+            raise ValueError("Roles do not inherit permissions; assign permissions directly.")
+        return None
+
+
+class RolePermissionsUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    permissions: list[str] = []
 
 
 class RoleDuplicate(BaseModel):

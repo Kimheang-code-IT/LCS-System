@@ -27,7 +27,7 @@ template that an administrator creates from Roles & Permissions.
 
 | Role (code) | Main responsibilities |
 |---|---|
-| Platform Administrator (`PLATFORM_ADMIN`) | Full platform administration; built in |
+| Super Administrator (`SUPER_ADMIN`) | Full platform administration; protected built-in role |
 | Administrator (`ADMINISTRATOR`) | Users, roles, configuration, reference data, settings, backup |
 | Operations Manager (`OPERATIONS_MANAGER`) | Service-order and quotation review, configuration |
 | Sales Officer (`SALES_OFFICER`) | Quotations, revisions, customer communication |
@@ -64,10 +64,11 @@ layer falls back to `DEFAULT_ACCOUNTS` only when no rule matches.
 
 - Setup can run only while no user exists.
 - User codes, usernames and emails are unique.
-- A user has exactly one active role. Replacing a role expires the previous
-  assignment; expired history grants no permissions.
-- The Platform Administrator role cannot be reduced below the bootstrap
-  administrator.
+- A user holds exactly one role; the effective permissions are that role's
+  direct grants (roles do not inherit from other roles).
+  Removing the role stops it contributing on the next request.
+- The Super Administrator role cannot be reduced below the bootstrap
+  administrator, and its wildcard grant cannot be removed.
 
 ## 4. User and Permission Administration
 
@@ -76,7 +77,7 @@ layer falls back to `DEFAULT_ACCOUNTS` only when no rule matches.
 1. Administrator opens Users and creates the user (code, username, email, display
    name, locale, timezone).
 2. Administrator sets the initial password (stored as an Argon2id hash).
-3. Administrator assigns exactly one active role.
+3. Administrator assigns one or more roles (at least one is required).
 4. User logs in and can change their own password.
 
 ### Change access

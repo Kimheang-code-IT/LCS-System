@@ -46,6 +46,8 @@ export type FreightField = {
   type?: FreightFieldType
   options?: readonly FreightSelectOption[] | FreightSelectOption[]
   required?: boolean
+  /** Display-only: the value is shown but never edited (e.g. the preview of the next sequence number). */
+  readOnly?: boolean
   /** Rendered only while creating a record (e.g. the initial user password); hidden when editing. */
   createOnly?: boolean
   /**
@@ -1257,7 +1259,7 @@ export const freightModules: FreightModule[] = [
       col('username', 'Username', 'ឈ្មោះអ្នកប្រើ'),
       col('displayName', 'Full Name', 'ឈ្មោះពេញ'),
       col('email', 'Email', 'អ៊ីមែល'),
-      col('roles', 'Roles', 'តួនាទី'),
+      col('role', 'Assigned Role', 'តួនាទី', { labelKey: 'freight.modules.users.fields.role' }),
       col('status', 'Status', 'ស្ថានភាព'),
       col('lastLogin', 'Last Login', 'ចូលចុងក្រោយ', { type: 'datetime' }),
       col('createdBy', 'Created By', 'បង្កើតដោយ', { labelKey: 'freight.fields.createdBy' }),
@@ -1268,7 +1270,8 @@ export const freightModules: FreightModule[] = [
       f('displayName', 'Display Name', 'ឈ្មោះបង្ហាញ', 'General', 'ទូទៅ', 'text', undefined, { required: true, rule: { maxLength: 255 } }),
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ', 'text', undefined, { required: true, rule: { maxLength: 255 } }),
       f('password', 'Password', 'ពាក្យសម្ងាត់', 'General', 'ទូទៅ', 'password', undefined, { required: true, createOnly: true, helpKey: 'freight.users.password.fieldHelp', rule: { password: true, minLength: 8, maxLength: 128 } }),
-      f('role', 'Role Name', 'ឈ្មោះតួនាទី', 'General', 'ទូទៅ', 'select', undefined, { required: true }),
+      f('role', 'Assigned Role', 'តួនាទីប្រើប្រាស់', 'General', 'ទូទៅ', 'select', undefined, { required: true, labelKey: 'freight.modules.users.fields.role' }),
+      f('pagePermissions', 'Effective Permissions', '', 'General', 'ទូទៅ', 'multiselect', undefined, { readOnly: true, labelKey: 'freight.modules.users.fields.pagePermissions' }),
     ],
     // There is no stored password to display: the server keeps an Argon2id
     // digest, so the only way to give somebody access is to set a new one.

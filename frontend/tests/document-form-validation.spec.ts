@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { freightModules, getFreightModule } from '../app/config/freight-modules'
 import { moduleDocumentTabs } from '../app/utils/freight/document-tabs'
+import { extraPermissionCodes } from '../app/utils/role/permissions'
 import { validateDocumentFields, validateTableRows } from '../app/utils/validation/record-validation'
 
 const label = (key: string) => key
@@ -367,5 +368,20 @@ describe('master data and administration forms', () => {
       label,
     })
     expect(failures).toContainEqual({ code: 'min', params: { min: 1000 }, key: 'year', label: 'year' })
+  })
+})
+
+describe('role permission payload', () => {
+  it('keeps capabilities the matrix cannot render when a role is saved', () => {
+    // A capability granted through the API without its page is not a checkbox;
+    // saving the matrix must not drop it.
+    expect(extraPermissionCodes(['backup.read', 'configuration.manage'])).toEqual([
+      'backup.read',
+      'configuration.manage',
+    ])
+  })
+
+  it('drops page codes and the super-admin wildcard from the extras', () => {
+    expect(extraPermissionCodes(['sales.quotations.view', 'quotation.read', '*'])).toEqual(['quotation.read'])
   })
 })

@@ -157,7 +157,7 @@ async def test_localization_update_requires_configuration_permission(client):
             "username": "localization.reader",
             "displayName": "Localization Reader",
             "email": "localization.reader@example.com",
-            "role": "AUDITOR",
+            "role": "VIEWER",
             "status": "ACTIVE",
             "password": "Passw0rd!",
         },

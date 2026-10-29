@@ -277,8 +277,8 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     # -- auth -------------------------------------------------------------
     "users": (
         "Application user account — one row per person who can sign in. Authorization is\n"
-        "granted through user_role_assignments (at most one active role) and the permissions\n"
-        "that role carries."
+        "granted through casbin_rule: g rows assign one or more roles to the user and the\n"
+        "roles carry the permission policies."
     ),
     "user_credentials": (
         "Password material for a user, split from users so credential attributes can be\n"
@@ -291,22 +291,20 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     ),
     "used_refresh_tokens": "Consumed refresh-token hashes associated with their stable session, retained for replay detection.",
     "roles": (
-        "Named role bundling a set of permissions. The catalog is code-defined in\n"
-        "app/core/permissions.py and synchronised on startup; administrators grant these\n"
-        "roles through the Roles & Permissions screen."
+        "Role display metadata for the Roles & Permissions screen: code, name,\n"
+        "description and active state. Authorization never reads this table — the grants\n"
+        "behind a role live in casbin_rule. Rows are created by app/core/bootstrap.py."
     ),
     "permissions": (
-        "Atomic capability in the code-defined permission catalog (for example\n"
-        "service_orders.create), synchronised on startup. Rows are never edited by hand."
+        "Descriptive metadata for one permission code (module, resource, action), seeded\n"
+        "from the code-defined catalog in app/core/permissions.py on startup. A row here\n"
+        "grants nothing: the grant is a casbin_rule policy. Rows are never edited by hand."
     ),
-    "role_permissions": (
-        "Join row granting one permission to one role. The composite primary key makes a\n"
-        "duplicate grant impossible."
-    ),
-    "user_role_assignments": (
-        "Assignment of a role to a user. Replacing a role expires the previous row instead of\n"
-        "deleting it, so history is preserved while the partial unique index\n"
-        "uq_user_role_assignments_active_user keeps at most one active assignment per user."
+    "casbin_rule": (
+        "Casbin policy store and the single authorization source of truth. p rows grant an\n"
+        "object/action pair to a subject, g rows assign a role to a user (exactly one per\n"
+        "user, enforced by uq_casbin_rule_single_user_role). Subjects are namespaced:\n"
+        "user:<id> and role:<code>."
     ),
     "password_reset_tokens": (
         "One-time password reset code. Only the hash of the code is stored; rows are retained\n"
@@ -562,41 +560,38 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     # -- roles / permissions ---------------------------------------------
     "roles": {
-        "code": "Stable machine code for the role (e.g. FINANCE_MANAGER). Unique.",
+        "code": "Stable machine code for the role (e.g. ACCOUNTANT). Unique; policy subjects use role:<code>.",
         "name": "Display name shown in the Roles & Permissions matrix.",
         "description": "Human-readable explanation of what the role is allowed to do.",
         "is_system_role": (
-            "TRUE for built-in roles that must not be renamed or deleted (for example the\n"
-            "Platform Administrator and the zero-permission migrated-users role)."
+            "TRUE for the roles provisioned by app/core/bootstrap.py. Only SUPER_ADMIN is\n"
+            "protected from modification; the others may be edited or deactivated."
         ),
-        "status": "Role lifecycle state (ACTIVE, INACTIVE). An inactive role grants nothing.",
+        "status": "Role lifecycle state (ACTIVE, INACTIVE). An inactive role grants nothing: its policy rows are skipped when the enforcer loads.",
     },
     "permissions": {
         "code": (
-            "Fully-qualified permission code in the form <resource>.<action> (for example\n"
-            "service_orders.create). This is the value every authorization check matches on."
+            "Fully-qualified permission code in the form <module>.<resource>.<action> or\n"
+            "<module>.<action> (for example quotation.read). Descriptive only: the grant is a\n"
+            "casbin_rule policy row."
         ),
         "name": "Display name for the permission.",
+        "module": "Administration grouping (quotation, finance, admin, ...). Descriptive only.",
         "resource": "Resource segment of the code — the page or entity the action applies to.",
         "action": (
-            "Action segment of the code (create, read, update, delete, approve, export, print,\n"
-            "reset, restore, manage...)."
+            "Action segment of the code (view, create, update, delete, submit, export, publish,\n"
+            "restore, manage...). Casbin matches this against p.act."
         ),
         "description": "Explanation of what the action allows.",
     },
-    "role_permissions": {
-        "role_id": "Role that receives the grant.",
-        "permission_id": "Permission being granted to the role.",
-    },
-    "user_role_assignments": {
-        "user_id": "User the role is assigned to.",
-        "role_id": "Role held by the user. Single-role RBAC: only the active row counts.",
-        "starts_at": "Moment the assignment becomes effective.",
-        "expires_at": (
-            "Expiry of a temporary assignment. NULL means active and permanent; the partial\n"
-            "unique index uq_user_role_assignments_active_user covers exactly these rows and is\n"
-            "the database-level one-user/one-active-role guarantee."
-        ),
+    "casbin_rule": {
+        "ptype": "Policy line type: p (a grant) or g (a user-to-role assignment).",
+        "v0": "Subject. p: role:<code> or user:<id>; g: the assigned user (user:<id>).",
+        "v1": "p: the object half of the permission code; g: the assigned role (role:<code>).",
+        "v2": "The action half of the permission code (p rows only).",
+        "v3": "Unused by the RBAC model; reserved for a future policy extension (for example tenancy).",
+        "v4": "Unused by the RBAC model; reserved for a future policy extension.",
+        "v5": "Unused by the RBAC model; reserved for a future policy extension.",
     },
     "password_reset_tokens": {
         "user_id": "User the reset code was issued for.",

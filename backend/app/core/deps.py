@@ -179,7 +179,7 @@ async def get_optional_context(
 
 
 def require_any_permission(*codes: str) -> Callable[..., RequestContext]:
-    """Accept a caller holding any one of ``codes``.
+    """Accept a caller holding at least one of ``codes``.
 
     Used where a precise matrix page code is preferred but a legacy coarse
     permission must keep working for roles created before the matrix existed.
@@ -187,50 +187,25 @@ def require_any_permission(*codes: str) -> Callable[..., RequestContext]:
 
     async def dependency(
         context: RequestContext = Depends(get_current_context),
-        session: AsyncSession = Depends(get_session),
     ) -> RequestContext:
-        if not any(context.has_permission(code) for code in codes):
-            from app.modules.audit.service import write_audit
-
-            await write_audit(
-                session,
-                context,
-                event_type="AUTHORIZATION_DENIED",
-                entity_type="permission",
-                entity_id=0,
-                action=codes[0],
-                result="REJECTED",
-                reason="Missing permission: " + " or ".join(codes),
-            )
-            await session.commit()
+        if not context.has_any_permission(*codes):
+            # The denial audit is written centrally by the AccessDenied handler.
             raise AccessDenied("Missing permission: " + " or ".join(codes))
         return context
 
     return dependency
 
 
-def require_permission(code: str) -> Callable[..., RequestContext]:
+def require_permission(*codes: str) -> Callable[..., RequestContext]:
+    """Require every code in ``codes`` (the common case is one code)."""
+
     async def dependency(
         context: RequestContext = Depends(get_current_context),
-        session: AsyncSession = Depends(get_session),
     ) -> RequestContext:
-        if not context.has_permission(code):
-            # Permission denials happen before the route handler, so record them
-            # here; otherwise direct API bypass attempts would leave no trace.
-            from app.modules.audit.service import write_audit
-
-            await write_audit(
-                session,
-                context,
-                event_type="AUTHORIZATION_DENIED",
-                entity_type="permission",
-                entity_id=0,
-                action=code,
-                result="REJECTED",
-                reason=f"Missing permission: {code}",
-            )
-            await session.commit()
-            raise AccessDenied(f"Missing permission: {code}")
+        for code in codes:
+            if not context.has_permission(code):
+                raise AccessDenied(f"Missing permission: {code}")
         return context
 
     return dependency
+

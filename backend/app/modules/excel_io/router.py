@@ -66,7 +66,16 @@ async def list_modules(
     context: RequestContext = Depends(get_current_context),
 ) -> dict:
     _rate_limit(context, "modules")
-    return {"data": service.module_catalog()}
+    # Offer only the modules this caller may use: the catalog carries the module
+    # names, match keys and permission codes, so an unscoped list would describe
+    # import surfaces the caller cannot reach.
+    catalog = [
+        module
+        for module in service.module_catalog()
+        if context.has_permission(str(module["viewPermission"]))
+        or context.has_permission(str(module["managePermission"]))
+    ]
+    return {"data": catalog}
 
 
 @router.get("/{module}/template")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, false, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, PKMixin, TimestampMixin
@@ -87,43 +87,21 @@ class Role(PKMixin, TimestampMixin, Base):
 
 
 class Permission(PKMixin, Base):
+    """Display metadata for a permission code.
+
+    Never consulted by an enforcement decision: the code's grant lives in
+    ``casbin_rule``. This table only tells the administration UI what the code
+    means and how to group it.
+    """
+
     __tablename__ = "permissions"
 
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    module: Mapped[str] = mapped_column(String(64), nullable=False, default="general", server_default="general")
     resource: Mapped[str] = mapped_column(String(64), nullable=False)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-
-
-class RolePermission(Base):
-    __tablename__ = "role_permissions"
-
-    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
-    permission_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True)
-
-
-class UserRoleAssignment(PKMixin, TimestampMixin, Base):
-    __tablename__ = "user_role_assignments"
-    # Single-Role RBAC: a user may hold at most one *active* (non-expiring)
-    # assignment. Replacing a role expires the previous row instead of deleting
-    # it, so history is preserved while this partial index keeps the active role
-    # unique — the database guarantee behind "one user = one role".
-    __table_args__ = (
-        Index(
-            "uq_user_role_assignments_active_user",
-            "user_id",
-            unique=True,
-            postgresql_where=text("expires_at IS NULL"),
-            sqlite_where=text("expires_at IS NULL"),
-        ),
-    )
-
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    role_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("roles.id"), nullable=False)
-    assigned_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
-    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PasswordResetToken(PKMixin, Base):

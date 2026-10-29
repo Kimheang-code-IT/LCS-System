@@ -1,6 +1,21 @@
 import type { AppRolePermissionRow } from '~/types/entities'
 
-/** Actions exposed per page in the role permission matrix. */
+/**
+ * The Roles & Permissions matrix.
+ *
+ * A matrix row is one *page*; a checkbox is one action on it. The codes the
+ * matrix stores are page codes (`sales.quotations.view`). Turning a page code
+ * into the API capabilities that page needs is the backend's job — it does that
+ * once when the role is saved and Casbin then evaluates the result. Nothing here
+ * implies one permission from another, so the UI can never disagree with the
+ * server about what a checkbox grants.
+ *
+ * `ROLE_DOCUMENT_TYPES` is the fallback page list (labels, order, groups). When
+ * the server catalog is available (`/api/v1/permissions/catalog`) it replaces it,
+ * so a page added on the backend appears here without a frontend release.
+ */
+
+/** Display order for matrix action checkboxes. */
 export const ROLE_PERMISSION_ACTIONS = [
   'view',
   'create',
@@ -20,9 +35,9 @@ export interface RoleDocumentTypeDefinition {
   value: string
   labelKey: string
   permissionPrefix: string
-  actions: readonly RolePermissionAction[]
+  actions: readonly string[]
   group: string
-  groupLabelKey: string
+  groupLabelKey?: string
 }
 
 const CRUD_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'update', 'delete', 'export']
@@ -38,19 +53,12 @@ const QUOTATION_ACTIONS: readonly RolePermissionAction[] = [
   'quotation',
   'export',
 ]
-const ADMIN_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'update', 'delete', 'export']
 const SETTINGS_ACTIONS: readonly RolePermissionAction[] = ['view', 'update']
 const BACKUP_ACTIONS: readonly RolePermissionAction[] = ['view', 'create', 'update']
 
 const group = (key: string) => ({ group: key, groupLabelKey: `lcs.rolePermissions.groups.${key}` })
 
-/**
- * Every page in the application, in navigation order.
- *
- * `permissionPrefix` is combined with an action to form the permission code
- * stored on the role (for example `sales.quotations.view`). The backend maps
- * these page permissions onto the source/API permissions they imply.
- */
+/** Every page in the application, in navigation order. */
 export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { ...group('dashboard'), value: 'dashboard', labelKey: 'freight.pages.dashboard', permissionPrefix: 'dashboard', actions: ['view', 'export', 'summary'] },
 
@@ -89,11 +97,11 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { ...group('master'), value: 'master_fee_types', labelKey: 'freight.pages.feeTypes', permissionPrefix: 'master.fee_types', actions: CRUD_ACTIONS },
   { ...group('master'), value: 'master_currencies', labelKey: 'freight.pages.currencies', permissionPrefix: 'master.currencies', actions: CRUD_ACTIONS },
 
-  { ...group('configuration'), value: 'configuration', labelKey: 'freight.nav.configuration', permissionPrefix: 'configuration', actions: ADMIN_ACTIONS },
+  { ...group('configuration'), value: 'configuration', labelKey: 'freight.nav.configuration', permissionPrefix: 'configuration', actions: CRUD_ACTIONS },
 
-  { ...group('admin'), value: 'admin_document_sequences', labelKey: 'freight.pages.documentSequences', permissionPrefix: 'admin.document_sequences', actions: ADMIN_ACTIONS },
-  { ...group('admin'), value: 'admin_users', labelKey: 'freight.pages.users', permissionPrefix: 'admin.users', actions: ADMIN_ACTIONS },
-  { ...group('admin'), value: 'admin_roles', labelKey: 'freight.pages.roles', permissionPrefix: 'admin.roles', actions: ADMIN_ACTIONS },
+  { ...group('admin'), value: 'admin_document_sequences', labelKey: 'freight.pages.documentSequences', permissionPrefix: 'admin.document_sequences', actions: CRUD_ACTIONS },
+  { ...group('admin'), value: 'admin_users', labelKey: 'freight.pages.users', permissionPrefix: 'admin.users', actions: CRUD_ACTIONS },
+  { ...group('admin'), value: 'admin_roles', labelKey: 'freight.pages.roles', permissionPrefix: 'admin.roles', actions: CRUD_ACTIONS },
   { ...group('admin'), value: 'admin_audit_logs', labelKey: 'freight.pages.auditLogs', permissionPrefix: 'admin.audit_logs', actions: READ_ACTIONS },
   { ...group('admin'), value: 'admin_archive', labelKey: 'freight.pages.archive', permissionPrefix: 'admin.archive', actions: ['view', 'export', 'restore'] },
 
@@ -101,335 +109,95 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { ...group('settings'), value: 'settings_backup', labelKey: 'freight.pages.backup', permissionPrefix: 'settings.backup', actions: BACKUP_ACTIONS },
 ] as const
 
-export const ROLE_PERMISSION_GROUPS: readonly string[] =
-  [...new Set(ROLE_DOCUMENT_TYPES.map(definition => definition.group))]
+const ACTION_ORDER = new Map<string, number>(ROLE_PERMISSION_ACTIONS.map((action, index) => [action, index]))
 
-/**
- * Navigation permission codes still used by module configuration. They are
- * accepted as a fallback by the route guard and hydrated onto the row they
- * belong to, so a role saved before the matrix existed still renders.
- */
-export const PAGE_PERMISSION_ALIASES: Record<string, readonly string[]> = {
-  reports_accounts_receivable: ['finance.accounts_receivable.view'],
-  reports_accounts_payable: ['finance.accounts_payable.view'],
-  reports_service_order_profitability: ['finance.job_profitability.view'],
-  admin_archive: ['archive.view'],
+export function pagesOf(catalog: readonly RoleDocumentTypeDefinition[] | null | undefined): readonly RoleDocumentTypeDefinition[] {
+  return catalog && catalog.length ? catalog : ROLE_DOCUMENT_TYPES
 }
 
-const ALIAS_ROWS: Map<string, string> = new Map(
-  ROLE_DOCUMENT_TYPES.flatMap(definition =>
-    (PAGE_PERMISSION_ALIASES[definition.value] || []).map(alias => [alias, definition.value] as const),
-  ),
-)
-
-const ACTION_SET = new Set<string>(ROLE_PERMISSION_ACTIONS)
-const LEGACY_ACTION_MAP: Record<string, RolePermissionAction | undefined> = {
-  select: 'view',
-  read: 'view',
-  write: 'update',
-  edit: 'update',
-  email: 'update',
-  report: 'view',
-  import: 'create',
-  mask: 'view',
-  manage: 'update',
-  download: 'export',
+export function groupsOf(pages: readonly RoleDocumentTypeDefinition[]): string[] {
+  return [...new Set(pages.map(page => page.group))]
 }
 
-function addAction(target: Map<string, Set<RolePermissionAction>>, value: string, action: RolePermissionAction) {
-  const set = target.get(value) || new Set<RolePermissionAction>()
-  set.add(action)
-  target.set(value, set)
+function sortActions(actions: Iterable<string>): string[] {
+  return [...new Set(actions)].sort((left, right) => {
+    const leftIndex = ACTION_ORDER.get(left) ?? Number.MAX_SAFE_INTEGER
+    const rightIndex = ACTION_ORDER.get(right) ?? Number.MAX_SAFE_INTEGER
+    return leftIndex - rightIndex || left.localeCompare(right)
+  })
 }
 
-function allReportViews(): Array<{ value: string, action: RolePermissionAction }> {
-  return ROLE_DOCUMENT_TYPES
-    .filter(definition => definition.permissionPrefix.startsWith('reports.'))
-    .map(definition => ({ value: definition.value, action: 'view' }))
+/** Ordered, de-duplicated actions; any non-view action keeps `view` selected. */
+export function normalizePermissionActions(actions: readonly string[] | null | undefined): string[] {
+  const values = new Set((actions || []).filter(Boolean))
+  if ([...values].some(action => action !== 'view')) values.add('view')
+  return sortActions(values)
 }
 
-function allReportExports(): Array<{ value: string, action: RolePermissionAction }> {
-  return ROLE_DOCUMENT_TYPES
-    .filter(definition => definition.permissionPrefix.startsWith('reports.'))
-    .map(definition => ({ value: definition.value, action: 'export' }))
-}
-
-function allMasterActions(actions: readonly RolePermissionAction[]) {
-  return ROLE_DOCUMENT_TYPES
-    .filter(definition => definition.permissionPrefix.startsWith('master.'))
-    .flatMap(definition => actions.map(action => ({ value: definition.value, action })))
-}
-
-/**
- * Legacy source/API permission codes mapped onto matrix pages. Used to hydrate
- * the matrix for roles that were granted permissions before the page catalog
- * existed. New roles store the page codes directly.
- */
-export const SOURCE_PERMISSION_PAGE_ACTIONS: Record<string, ReadonlyArray<{ value: string, action: RolePermissionAction }>> = {
-  'dashboard.summary': [{ value: 'dashboard', action: 'summary' }],
-  'dashboard.view': [{ value: 'dashboard', action: 'view' }],
-
-  'quotation.read': [{ value: 'sales_quotations', action: 'view' }],
-  'quotation.create': [{ value: 'sales_quotations', action: 'create' }],
-  'quotation.update': [{ value: 'sales_quotations', action: 'update' }],
-  'quotation.update_draft': [{ value: 'sales_quotations', action: 'update' }],
-  'quotation.delete': [{ value: 'sales_quotations', action: 'delete' }],
-  'quotation.submit': [{ value: 'sales_quotations', action: 'submit' }],
-  'quotation.send': [
-    { value: 'sales_quotations', action: 'submit' },
-    { value: 'sales_quotations', action: 'quotation' },
-  ],
-  'quotation.revise': [{ value: 'sales_quotations', action: 're_quotation' }],
-  'quotation.accept': [{ value: 'sales_quotations', action: 'update' }],
-  'quotation.convert': [{ value: 'sales_quotations', action: 'update' }, { value: 'operations_service_orders', action: 'view' }],
-  'sales.quotations.edit': [
-    { value: 'sales_quotations', action: 'update' },
-    { value: 'sales_quotations', action: 'delete' },
-    { value: 'sales_quotations', action: 'submit' },
-    { value: 'sales_quotations', action: 're_quotation' },
-    { value: 'sales_quotations', action: 'quotation' },
-  ],
-
-  'service_order.read': [{ value: 'operations_service_orders', action: 'view' }],
-  'service_order.create': [{ value: 'operations_service_orders', action: 'create' }],
-  'service_order.update': [{ value: 'operations_service_orders', action: 'update' }],
-  'service_order.delete': [{ value: 'operations_service_orders', action: 'delete' }],
-  'service_order.submit': [{ value: 'operations_service_orders', action: 'submit' }],
-  'service_order.complete': [{ value: 'operations_service_orders', action: 'submit' }],
-  'service_order_config.view': [{ value: 'operations_service_orders', action: 'view' }],
-  'service_order_config.create': [{ value: 'operations_service_orders', action: 'create' }],
-  'service_order_config.update': [{ value: 'operations_service_orders', action: 'update' }],
-  'service_order_config.delete': [{ value: 'operations_service_orders', action: 'delete' }],
-  'operations.service_orders.edit': [
-    { value: 'operations_service_orders', action: 'update' },
-    { value: 'operations_service_orders', action: 'submit' },
-    { value: 'operations_service_orders', action: 'delete' },
-  ],
-
-  'service_charge.read': [{ value: 'finance_service_charges', action: 'view' }],
-  'service_charge.create': [{ value: 'finance_service_charges', action: 'create' }],
-  'service_charge.update': [{ value: 'finance_service_charges', action: 'update' }],
-  'service_charge.delete': [{ value: 'finance_service_charges', action: 'delete' }],
-  'service_charge.submit': [{ value: 'finance_service_charges', action: 'submit' }],
-  'service_charge.issue': [{ value: 'finance_service_charges', action: 'submit' }],
-  'service_charge.convert_to_invoice': [{ value: 'finance_service_charges', action: 'update' }],
-  'finance.service_charges.edit': [
-    { value: 'finance_service_charges', action: 'update' },
-    { value: 'finance_service_charges', action: 'submit' },
-  ],
-
-  'financial_document.read': [{ value: 'finance_financial_documents', action: 'view' }],
-  'financial_document.create': [{ value: 'finance_financial_documents', action: 'create' }],
-  'financial_document.update': [{ value: 'finance_financial_documents', action: 'update' }],
-  'financial_document.update_draft': [{ value: 'finance_financial_documents', action: 'update' }],
-  'financial_document.delete': [{ value: 'finance_financial_documents', action: 'delete' }],
-  'financial_document.submit': [{ value: 'finance_financial_documents', action: 'submit' }],
-  'financial_document.post': [{ value: 'finance_financial_documents', action: 'submit' }],
-  'financial_document.reverse': [{ value: 'finance_financial_documents', action: 'update' }],
-  'financial_document.allocate': [{ value: 'finance_financial_documents', action: 'update' }],
-  'finance.financial_documents.edit': [
-    { value: 'finance_financial_documents', action: 'update' },
-    { value: 'finance_financial_documents', action: 'submit' },
-    { value: 'finance_financial_documents', action: 'delete' },
-  ],
-
-  'chart_of_accounts.read': [{ value: 'finance_chart_of_accounts', action: 'view' }],
-  'chart_of_accounts.create': [{ value: 'finance_chart_of_accounts', action: 'create' }],
-  'chart_of_accounts.update': [{ value: 'finance_chart_of_accounts', action: 'update' }],
-  'chart_of_accounts.delete': [{ value: 'finance_chart_of_accounts', action: 'delete' }],
-  'chart_of_accounts.manage': [CRUD_ACTIONS.map(action => ({ value: 'finance_chart_of_accounts', action }))].flat(),
-  'financial_account.read': [{ value: 'finance_financial_accounts', action: 'view' }],
-  'financial_account.create': [{ value: 'finance_financial_accounts', action: 'create' }],
-  'financial_account.update': [{ value: 'finance_financial_accounts', action: 'update' }],
-  'financial_account.delete': [{ value: 'finance_financial_accounts', action: 'delete' }],
-  'journal_entry.read': [
-    { value: 'finance_journal_entries', action: 'view' },
-    { value: 'finance_chart_of_accounts', action: 'view' },
-    { value: 'finance_financial_accounts', action: 'view' },
-  ],
-  'journal_entry.create': [{ value: 'finance_journal_entries', action: 'create' }],
-  'journal_entry.update': [{ value: 'finance_journal_entries', action: 'update' }],
-  'journal_entry.delete': [{ value: 'finance_journal_entries', action: 'delete' }],
-  'journal_entry.post': [{ value: 'finance_journal_entries', action: 'update' }],
-  'accounting_period.read': [{ value: 'finance_accounting_periods', action: 'view' }],
-  'accounting_period.update': [{ value: 'finance_accounting_periods', action: 'update' }],
-  'accounting_period.close': [{ value: 'finance_accounting_periods', action: 'update' }],
-  'posting_rule.read': [{ value: 'finance_posting_rules', action: 'view' }],
-  'posting_rule.create': [{ value: 'finance_posting_rules', action: 'create' }],
-  'posting_rule.update': [{ value: 'finance_posting_rules', action: 'update' }],
-  'posting_rule.delete': [{ value: 'finance_posting_rules', action: 'delete' }],
-  'posting_rule.manage': [
-    { value: 'finance_posting_rules', action: 'view' },
-    { value: 'finance_posting_rules', action: 'create' },
-    { value: 'finance_posting_rules', action: 'update' },
-    { value: 'finance_posting_rules', action: 'delete' },
-  ],
-
-  'report.read': [...allReportViews(), { value: 'dashboard', action: 'view' }],
-  'report.export': [
-    ...allReportExports(),
-    { value: 'dashboard', action: 'export' },
-    { value: 'sales_quotations', action: 'export' },
-    { value: 'operations_service_orders', action: 'export' },
-    { value: 'finance_service_charges', action: 'export' },
-    { value: 'finance_financial_documents', action: 'export' },
-  ],
-  'reports.view': allReportViews(),
-  'finance.accounts_receivable.view': [{ value: 'reports_accounts_receivable', action: 'view' }],
-  'finance.accounts_payable.view': [{ value: 'reports_accounts_payable', action: 'view' }],
-  'finance.job_profitability.view': [{ value: 'reports_service_order_profitability', action: 'view' }],
-
-  'master.reference.view': allMasterActions(['view']),
-  'master.reference.manage': allMasterActions(['create', 'update', 'delete']),
-
-  'configuration.read': [{ value: 'configuration', action: 'view' }],
-  'configuration.manage': [
-    { value: 'configuration', action: 'view' },
-    { value: 'configuration', action: 'create' },
-    { value: 'configuration', action: 'update' },
-    { value: 'configuration', action: 'delete' },
-    { value: 'admin_document_sequences', action: 'view' },
-    { value: 'admin_document_sequences', action: 'create' },
-    { value: 'admin_document_sequences', action: 'update' },
-    { value: 'admin_document_sequences', action: 'delete' },
-    { value: 'settings_app_config', action: 'view' },
-    { value: 'settings_app_config', action: 'update' },
-  ],
-  'configuration.configure': [{ value: 'configuration', action: 'update' }],
-
-  'user.read': [{ value: 'admin_users', action: 'view' }],
-  'user.manage': ADMIN_ACTIONS.map(action => ({ value: 'admin_users', action })),
-  'role.read': [{ value: 'admin_roles', action: 'view' }],
-  'role.manage': ADMIN_ACTIONS.map(action => ({ value: 'admin_roles', action })),
-  'audit_log.read': [{ value: 'admin_audit_logs', action: 'view' }],
-  'archive.view': [{ value: 'admin_archive', action: 'view' }],
-  'archive.restore': [{ value: 'admin_archive', action: 'restore' }],
-  'archive.hard_delete': [{ value: 'admin_archive', action: 'delete' }],
-
-  'settings.manage': [
-    { value: 'settings_app_config', action: 'view' },
-    { value: 'settings_app_config', action: 'update' },
-    { value: 'settings_backup', action: 'view' },
-    { value: 'settings_backup', action: 'create' },
-    { value: 'settings_backup', action: 'update' },
-  ],
-  'backup.read': [{ value: 'settings_backup', action: 'view' }],
-  'backup.manage': [{ value: 'settings_backup', action: 'create' }, { value: 'settings_backup', action: 'update' }],
-
-  'finance.accounting.view': [
-    { value: 'finance_chart_of_accounts', action: 'view' },
-    { value: 'finance_financial_accounts', action: 'view' },
-    { value: 'finance_journal_entries', action: 'view' },
-    { value: 'finance_accounting_periods', action: 'view' },
-  ],
-  'finance.accounting.create': [
-    { value: 'finance_chart_of_accounts', action: 'create' },
-    { value: 'finance_financial_accounts', action: 'create' },
-    { value: 'finance_journal_entries', action: 'create' },
-  ],
-  'finance.accounting.edit': [
-    { value: 'finance_chart_of_accounts', action: 'update' },
-    { value: 'finance_chart_of_accounts', action: 'create' },
-    { value: 'finance_chart_of_accounts', action: 'delete' },
-    { value: 'finance_financial_accounts', action: 'update' },
-    { value: 'finance_financial_accounts', action: 'create' },
-    { value: 'finance_financial_accounts', action: 'delete' },
-    { value: 'finance_journal_entries', action: 'update' },
-    { value: 'finance_accounting_periods', action: 'update' },
-  ],
-  'finance.accounting.delete': [
-    { value: 'finance_chart_of_accounts', action: 'delete' },
-    { value: 'finance_financial_accounts', action: 'delete' },
-    { value: 'finance_journal_entries', action: 'delete' },
-  ],
-  'finance.view': [
-    { value: 'finance_chart_of_accounts', action: 'view' },
-    { value: 'finance_financial_accounts', action: 'view' },
-    { value: 'finance_journal_entries', action: 'view' },
-    { value: 'finance_accounting_periods', action: 'view' },
-  ],
-}
-
-export function normalizePermissionActions(actions: readonly string[] | null | undefined): RolePermissionAction[] {
-  const normalized = new Set<RolePermissionAction>()
-  for (const raw of actions || []) {
-    const action = ACTION_SET.has(raw)
-      ? raw as RolePermissionAction
-      : LEGACY_ACTION_MAP[raw]
-    if (action) normalized.add(action)
-  }
-  if ([...normalized].some(action => action !== 'view')) normalized.add('view')
-  return ROLE_PERMISSION_ACTIONS.filter(action => normalized.has(action))
-}
-
-/** Merge API rows with the current matrix catalog and discard unknown rows/actions. */
-export function normalizePermissionRows(
+function normaliseRows(
   rows: readonly AppRolePermissionRow[] | null | undefined,
-  includeEmpty = true,
+  pages: readonly RoleDocumentTypeDefinition[],
 ): AppRolePermissionRow[] {
   const byType = new Map((rows || []).map(row => [row.documentType, row]))
-  const normalized = ROLE_DOCUMENT_TYPES.map((definition) => {
-    const existing = byType.get(definition.value)
+  return pages.map((page) => {
+    const existing = byType.get(page.value)
     const actions = normalizePermissionActions(existing?.actions)
-      .filter(action => definition.actions.includes(action))
+      .filter(action => page.actions.includes(action))
     return {
-      id: existing?.id || `perm_${definition.value}`,
-      documentType: definition.value,
+      id: existing?.id || `perm_${page.value}`,
+      documentType: page.value,
       onlyIfCreator: Boolean(existing?.onlyIfCreator),
       level: Math.min(9, Math.max(0, Number(existing?.level || 0))),
       actions,
     }
   })
+}
+
+/** Merge API rows with the page catalog and discard unknown pages/actions. */
+export function normalizePermissionRows(
+  rows: readonly AppRolePermissionRow[] | null | undefined,
+  includeEmpty = true,
+  catalog?: readonly RoleDocumentTypeDefinition[] | null,
+): AppRolePermissionRow[] {
+  const normalized = normaliseRows(rows, pagesOf(catalog))
   return includeEmpty ? normalized : normalized.filter(row => row.actions.length > 0)
 }
 
 /**
- * Build matrix rows from flat permission codes. Accepts both page codes emitted
- * by this matrix (`sales.quotations.view`) and legacy source codes
- * (`quotation.read`) so previously saved roles render correctly.
+ * Build matrix rows from the flat page codes a role stores. `*` (the protected
+ * super administrator grant) ticks every box.
  */
 export function permissionRowsFromFlatKeys(
   codes: readonly string[] | null | undefined,
+  catalog?: readonly RoleDocumentTypeDefinition[] | null,
 ): AppRolePermissionRow[] {
-  const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.permissionPrefix, item.value]))
-  const granted = new Map<string, Set<RolePermissionAction>>()
-
+  const pages = pagesOf(catalog)
+  const definitions = new Map(pages.map(page => [page.permissionPrefix, page]))
+  const granted = new Map<string, Set<string>>()
   for (const code of codes || []) {
-    const mapped = SOURCE_PERMISSION_PAGE_ACTIONS[code]
-    if (mapped) {
-      for (const item of mapped) addAction(granted, item.value, item.action)
+    if (code === '*') {
+      for (const page of pages) granted.set(page.value, new Set(page.actions))
       continue
     }
-
     const dot = code.lastIndexOf('.')
-    if (dot > 0) {
-      const prefix = code.slice(0, dot)
-      const rawAction = code.slice(dot + 1)
-      const value = definitions.get(prefix)
-      const action = ACTION_SET.has(rawAction)
-        ? rawAction as RolePermissionAction
-        : LEGACY_ACTION_MAP[rawAction]
-      if (value && action) {
-        addAction(granted, value, action)
-        continue
-      }
-    }
-
-    const aliasValue = ALIAS_ROWS.get(code)
-    if (aliasValue) addAction(granted, aliasValue, 'view')
+    if (dot <= 0) continue
+    const page = definitions.get(code.slice(0, dot))
+    const action = code.slice(dot + 1)
+    if (!page || !page.actions.includes(action)) continue
+    const actions = granted.get(page.value) || new Set<string>()
+    actions.add(action)
+    granted.set(page.value, actions)
   }
-
-  return ROLE_DOCUMENT_TYPES.map((definition) => {
-    const actions = normalizePermissionActions([...(granted.get(definition.value) || [])])
-      .filter(action => definition.actions.includes(action))
-    return {
-      id: `perm_${definition.value}`,
-      documentType: definition.value,
+  return normaliseRows(
+    [...granted].map(([documentType, actions]) => ({
+      id: `perm_${documentType}`,
+      documentType,
       onlyIfCreator: false,
       level: 0,
-      actions,
-    }
-  })
+      actions: [...actions],
+    })),
+    pages,
+  )
 }
 
 /** Enforce action dependencies consistently for checkbox and API payload flows. */
@@ -438,37 +206,59 @@ export function setPermissionAction(
   action: string,
   enabled: boolean,
 ): AppRolePermissionRow {
-  const normalizedAction = ACTION_SET.has(action)
-    ? action as RolePermissionAction
-    : LEGACY_ACTION_MAP[action]
-  if (!normalizedAction) return row
   const actions = new Set(normalizePermissionActions(row.actions))
   if (enabled) {
-    actions.add(normalizedAction)
+    actions.add(action)
     actions.add('view')
   }
-  else if (normalizedAction === 'view') {
+  else if (action === 'view') {
     actions.clear()
   }
   else {
-    actions.delete(normalizedAction)
+    actions.delete(action)
   }
-  const ordered = ROLE_PERMISSION_ACTIONS.filter(item => actions.has(item))
-  return { ...row, actions: ordered }
+  return { ...row, actions: sortActions(actions) }
 }
 
-/** Expanded page permission codes sent to the API for a set of matrix rows. */
-export function permissionRowsToFlatKeys(rows: AppRolePermissionRow[]): string[] {
-  const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.value, item]))
+/** Page permission codes sent to the API for a set of matrix rows. */
+export function permissionRowsToFlatKeys(
+  rows: AppRolePermissionRow[],
+  catalog?: readonly RoleDocumentTypeDefinition[] | null,
+): string[] {
+  const pages = pagesOf(catalog)
+  const definitions = new Map(pages.map(page => [page.value, page]))
   const keys = new Set<string>()
-  for (const row of normalizePermissionRows(rows, false)) {
+  for (const row of normaliseRows(rows, pages)) {
     const prefix = definitions.get(row.documentType)?.permissionPrefix
     if (!prefix) continue
     for (const action of row.actions) keys.add(`${prefix}.${action}`)
-    // Navigation aliases travel with the row so the page is visible in the menu.
-    if (row.actions.includes('view')) {
-      for (const alias of PAGE_PERMISSION_ALIASES[row.documentType] || []) keys.add(alias)
-    }
   }
   return [...keys].sort()
+}
+
+/** Every code the matrix can render as a checkbox (`prefix.action`). */
+export function pagePermissionCodes(
+  catalog?: readonly RoleDocumentTypeDefinition[] | null,
+): Set<string> {
+  const codes = new Set<string>()
+  for (const page of pagesOf(catalog)) {
+    for (const action of page.actions) codes.add(`${page.permissionPrefix}.${action}`)
+  }
+  return codes
+}
+
+/**
+ * Codes a role holds that the matrix cannot show — a capability granted through
+ * the API without its page (for example `backup.read`). They are carried through a
+ * save unchanged instead of being dropped by the page-only payload.
+ */
+export function extraPermissionCodes(
+  codes: readonly string[] | null | undefined,
+  catalog?: readonly RoleDocumentTypeDefinition[] | null,
+): string[] {
+  const pages = pagePermissionCodes(catalog)
+  return [...new Set((codes || [])
+    .map(code => String(code).trim())
+    .filter(code => code && code !== '*' && !pages.has(code)))]
+    .sort()
 }

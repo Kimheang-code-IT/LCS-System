@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { confirmsArchiveHardDelete, hasArchivePermission } from '~/utils/archive/access'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
-import { permissionRowsFromFlatKeys, permissionRowsToFlatKeys } from '~/utils/role/permissions'
+import { permissionRowsFromFlatKeys } from '~/utils/role/permissions'
 
 describe('archive permissions and actions', () => {
   it('requires explicit source permissions for archive actions', () => {
@@ -9,18 +9,6 @@ describe('archive permissions and actions', () => {
     expect(hasArchivePermission(['archive.view'], 'archive.restore')).toBe(false)
     expect(hasArchivePermission(['archive.restore'], 'archive.restore')).toBe(true)
     expect(hasArchivePermission(['ALL_PAGES'], 'archive.hard_delete')).toBe(true)
-  })
-
-  it('maps legacy archive actions onto the matrix row', () => {
-    const rows = permissionRowsFromFlatKeys(['archive.view', 'archive.restore', 'archive.hard_delete'])
-    const archive = rows.find(row => row.documentType === 'admin_archive')
-    expect(archive?.actions).toEqual(['view', 'restore'])
-
-    const codes = permissionRowsToFlatKeys(rows)
-    expect(codes).toContain('admin.archive.view')
-    expect(codes).toContain('admin.archive.restore')
-    expect(codes).not.toContain('admin.archive.delete')
-    expect(codes).not.toContain('admin.archive.hard_delete')
   })
 
   it('does not imply restore from view or export', () => {

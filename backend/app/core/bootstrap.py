@@ -17,12 +17,15 @@ from typing import Any
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core import cache
+from app.core import authorization
 from app.core.database import Base
 from app.core.permissions import (
     BUILTIN_ROLE_CODES,
     PERMISSION_CATALOG,
     ROLE_DEFINITIONS,
+    SUPER_ADMIN_ROLE,
+    compile_role_permissions,
+    permission_module,
     permission_name,
 )
 from app.core.security import hash_password, validate_password_strength
@@ -30,10 +33,8 @@ from app.modules.auth.models import (
     PROTECTED_SYSTEM_ADMIN_IDENTITY,
     Permission,
     Role,
-    RolePermission,
     User,
     UserCredential,
-    UserRoleAssignment,
 )
 
 DEFAULT_ROLES = ", ".join(BUILTIN_ROLE_CODES)
@@ -67,21 +68,29 @@ async def ensure_permission_catalog(
     *,
     role_codes: Iterable[str] | None = None,
 ) -> None:
-    """Create missing permissions, roles and role → permission mappings.
+    """Create missing permissions, seed roles and synchronize their Casbin grants.
 
-    Only the built-in roles (PLATFORM_ADMIN) are provisioned by default; every
-    other role is created manually from the Roles & Permissions page. Pass
-    ``role_codes`` to provision additional defined roles (used by tests).
+    Idempotent and additive: an existing role only gains the grants it is missing,
+    so an administrator's customization survives a restart. ``SUPER_ADMIN`` keeps
+    its protected ``*, *`` policy. Pass ``role_codes`` to provision a subset.
     """
     existing = {code for (code,) in (await session.execute(select(Permission.code))).all()}
     for code, resource, action in PERMISSION_CATALOG:
         if code not in existing:
-            session.add(Permission(code=code, name=permission_name(code), resource=resource, action=action))
+            session.add(
+                Permission(
+                    code=code,
+                    name=permission_name(code),
+                    module=permission_module(code),
+                    resource=resource,
+                    action=action,
+                )
+            )
     await session.flush()
 
-    permission_ids = {code: pid for pid, code in (await session.execute(select(Permission.id, Permission.code))).all()}
     roles = {role.code: role for role in (await session.execute(select(Role))).scalars().all()}
-    for code in tuple(BUILTIN_ROLE_CODES if role_codes is None else role_codes):
+    wanted = tuple(BUILTIN_ROLE_CODES if role_codes is None else role_codes)
+    for code in wanted:
         definition = ROLE_DEFINITIONS.get(code)
         if definition is None:
             continue
@@ -99,48 +108,38 @@ async def ensure_permission_catalog(
         else:
             role.is_system_role = True
             role.status = "ACTIVE"
-        current = set(
-            (
-                await session.execute(
-                    select(Permission.code)
-                    .join(RolePermission, RolePermission.permission_id == Permission.id)
-                    .where(RolePermission.role_id == role.id)
-                )
+
+    await session.flush()
+
+    for code in wanted:
+        definition = ROLE_DEFINITIONS.get(code)
+        if definition is None or code not in roles:
+            continue
+        current = set(await authorization.role_permission_codes(session, code))
+        if code == SUPER_ADMIN_ROLE:
+            desired = current | {"*"}
+        else:
+            desired = current | set(
+                compile_role_permissions(definition["permissions"])  # type: ignore[arg-type]
             )
-            .scalars()
-            .all()
-        )
-        for code_to_add in set(definition["permissions"]) - current:  # type: ignore[arg-type]
-            pid = permission_ids.get(code_to_add)
-            if pid is not None:
-                session.add(RolePermission(role_id=role.id, permission_id=pid))
+        if desired != current:
+            await authorization.set_role_permissions(session, code, desired)
 
     protected_user = (
         await session.execute(
             select(User).where(User.system_identity == PROTECTED_SYSTEM_ADMIN_IDENTITY)
         )
     ).scalars().first()
-    platform_role = roles.get("PLATFORM_ADMIN")
-    if protected_user is not None and platform_role is not None:
+    if protected_user is not None and SUPER_ADMIN_ROLE in roles:
         protected_user.status = "ACTIVE"
-        active_assignments = (
-            await session.execute(
-                select(UserRoleAssignment).where(
-                    UserRoleAssignment.user_id == protected_user.id,
-                    UserRoleAssignment.expires_at.is_(None),
-                )
-            )
-        ).scalars().all()
-        if not any(assignment.role_id == platform_role.id for assignment in active_assignments):
-            now = datetime.now(UTC)
-            for assignment in active_assignments:
-                assignment.expires_at = now
-            await session.flush()
-            session.add(UserRoleAssignment(user_id=protected_user.id, role_id=platform_role.id))
+        assigned = await authorization.user_role_codes(session, protected_user.id)
+        if SUPER_ADMIN_ROLE not in assigned:
+            await authorization.set_user_roles(session, protected_user.id, [*assigned, SUPER_ADMIN_ROLE])
+
     await session.commit()
-    # New catalog entries or role mappings only reach cached identities after
-    # the 300s TTL otherwise; bump so a deploy takes effect immediately.
-    await cache.bump("auth")
+    # Reload immediately so a deploy applies the new grants without waiting for
+    # the reload interval, and publish the change to every other worker.
+    await authorization.refresh(session)
 
 
 async def requires_setup(session: AsyncSession) -> bool:
@@ -305,7 +304,7 @@ async def provision_admin(
     username: str | None = None,
     name: str | None = None,
     user_code: str | None = None,
-    role_code: str = "PLATFORM_ADMIN",
+    role_code: str = SUPER_ADMIN_ROLE,
 ) -> dict[str, Any]:
     """Create/refresh the baseline admin. Raises ``ValueError`` on invalid input."""
     password_errors = validate_password_strength(password)
@@ -352,19 +351,13 @@ async def provision_admin(
     else:
         credential.password_hash = hash_password(password)
 
-    assignment = (
-        await session.execute(
-            select(UserRoleAssignment).where(
-                UserRoleAssignment.user_id == user.id,
-                UserRoleAssignment.role_id == role.id,
-            )
-        )
-    ).scalars().first()
-    if assignment is None:
-        session.add(UserRoleAssignment(user_id=user.id, role_id=role.id))
+    assignment = await authorization.user_role_codes(session, user.id)
+    if role.code not in assignment:
+        await authorization.set_user_roles(session, user.id, [*assignment, role.code])
 
     await provision_baseline(session)
     await session.commit()
+    await authorization.refresh(session)
 
     return {
         "email": user.email,
@@ -398,8 +391,7 @@ async def reset_all_data(session: AsyncSession) -> None:
         "user_sessions",
         "roles",
         "permissions",
-        "role_permissions",
-        "user_role_assignments",
+        "casbin_rule",
         "audit_events",
         "import_jobs",
     }

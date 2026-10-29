@@ -8,6 +8,31 @@ export type LcsListQuery = {
   status?: string
 }
 
+/** One matrix row definition as the backend publishes it. */
+export type PermissionCatalogPage = {
+  value: string
+  group: string
+  prefix: string
+  labelKey: string
+  actions: string[]
+  permissions: string[]
+}
+
+export type PermissionCatalogRole = {
+  id: number
+  code: string
+  name: string
+  description?: string | null
+  status: string
+  isProtected: boolean
+}
+
+export type PermissionCatalog = {
+  pages: PermissionCatalogPage[]
+  roles: PermissionCatalogRole[]
+  modules: Array<{ module: string, permissions: Array<{ code: string, module: string, action: string, name: string }> }>
+}
+
 export type CreateRecordInput = Record<string, unknown>
 
 export interface QuotationRepository {
@@ -86,6 +111,10 @@ export interface UserAdminRepository {
     password: string,
     options?: { mustChangePassword?: boolean },
   ) => Promise<FreightRecord>
+  /** Pages, actions and roles behind the permission matrix, straight from the backend. */
+  permissionCatalog: () => Promise<PermissionCatalog>
+  /** Every code a user holds, including permissions inherited from parent roles. */
+  effectivePermissions: (userId: string) => Promise<FreightRecord>
 }
 
 export interface AttachmentRepository {
@@ -125,12 +154,51 @@ export type DashboardSummary = {
   }
 }
 
+export interface ReportGenerateMeta {
+  reportKey: string
+  title: string
+  titleKey: string
+  generatedAt: string
+  page: number
+  pageSize: number
+  total: number
+  filters: Record<string, unknown>
+  warnings: string[]
+}
+
+export interface TrialBalanceReport {
+  meta: ReportGenerateMeta
+  items: FreightRecord[]
+  totals: {
+    openingDebit: number
+    openingCredit: number
+    periodDebit: number
+    periodCredit: number
+    closingDebit: number
+    closingCredit: number
+  }
+  balanced: boolean
+  imbalance: number
+}
+
+export interface GeneralLedgerReport {
+  meta: ReportGenerateMeta
+  openingBalance: number
+  items: FreightRecord[]
+  totals: { debit: number, credit: number, closingBalance: number }
+}
+
 export interface ReportsRepository {
   dashboard: (granularity?: 'day' | 'month' | 'year') => Promise<DashboardSummary>
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>
   profitability: () => Promise<FreightRecord[]>
   ledgerLines: () => Promise<FreightRecord[]>
+  generateTrialBalance: (filters: Record<string, unknown>) => Promise<TrialBalanceReport>
+  generateGeneralLedger: (filters: Record<string, unknown>) => Promise<GeneralLedgerReport>
+  /** Full-result CSV of the same filters as Generate, streamed by the backend. */
+  exportTrialBalance: (filters: Record<string, unknown>) => Promise<Blob>
+  exportGeneralLedger: (filters: Record<string, unknown>) => Promise<Blob>
 }
 
 export type { CreateRecordInput as LcsCreateRecordInput }

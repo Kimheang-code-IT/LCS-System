@@ -121,7 +121,16 @@ Never run destructive migration operations without an approved backup and migrat
 
 ### Current chain and rollback boundary
 
-- Current Alembic head: `f6a7b8c9d0e1` (document_types soft-delete attribution:
+- Current Alembic head: `b4c5d6e7f8a9` (direct RBAC: materializes inherited
+  grants as direct child-role grants, refuses to upgrade while any user still
+  holds more than one role, removes the legacy role-inheritance edges and adds
+  the partial unique index `uq_casbin_rule_single_user_role`; `downgrade()` only
+  drops that index). Below it: `a1b2c3d4e5f7` (Casbin authorization: creates
+  `casbin_rule`, adds `permissions.module`, copies `role_permissions` and the
+  active `user_role_assignments` into policy rows, renames `PLATFORM_ADMIN` to
+  `SUPER_ADMIN`, then drops the two obsolete mappings; `downgrade()` recreates
+  them and copies the policies back). Below that: `f6a7b8c9d0e1` (document_types
+  soft-delete attribution:
   the `DocumentType` model carries `SoftDeleteMixin`, and the revision adds the
   `deleted_by_user_id` column and soft-delete indexes the creating migration
   omitted). Below it: `b2c3d4e5f6a7b8` (durable Excel import sessions:
@@ -143,7 +152,7 @@ Never run destructive migration operations without an approved backup and migrat
   capacity-unit vocabulary (`f5a6b7c8d9e0`), the transport-asset identity-type
   vocabulary (`e1f2a3b4c5d6`), and the release-time Places revisions
   (`d4e5f6a7b8c9`, `c3d4e5f6a7b8`) described below.
-  The schema has 78 tables plus 8 reporting views.
+  The schema has 77 tables plus 8 reporting views.
 - The shared Excel Import & Export endpoints accept only `.xlsx`, capped at
   10 MB / 2 000 rows per workbook, refuse formula cells and stale template
   versions, and rate-limit per user and per action (60 s window): 20 template
@@ -664,6 +673,14 @@ each exception as soon as its upstream dependency publishes a fixed release.
   Refresh/logout validate Origin and signed double-submit CSRF even with bearer
   headers. Configure explicit HTTPS CORS origins and the existing trusted proxy
   termination; cookie auth requires `credentials: include`. Keep clocks synced.
+- Authorization is Casbin over the `casbin_rule` table (`docs/09_roles_and_permissions.md`).
+  The in-memory policy copy is refreshed after every change through the `auth`
+  cache version in Redis, and unconditionally every
+  `CASBIN_RELOAD_INTERVAL_SECONDS` (default `30`) so a Redis outage cannot serve a
+  stale policy set. If the policy table cannot be read the copy is dropped and
+  every check denies until a reload succeeds. Set `CASBIN_RELOAD_INTERVAL_SECONDS`
+  in `infrastructure/.env` only to tune that backstop; lowering it costs one
+  policy query per interval per worker.
 
 ### Session migration and rollback
 
@@ -737,6 +754,11 @@ docker compose -f infrastructure/docker-compose.yml logs -f backend
 # migrations inside the local backend container
 docker compose -f infrastructure/docker-compose.yml exec backend alembic upgrade head
 
+# rebuild every role's Casbin grants from its page selection (dev only; dry run first)
+cd backend && uv run python scripts/rebuild_role_permissions.py
+uv run python scripts/rebuild_role_permissions.py --apply
+cd ..
+
 # health through nginx (frontend port 80)
 curl http://localhost/health/ready
 
@@ -761,6 +783,61 @@ docker compose run -T --rm --no-deps backend alembic current
 Production deploy, rollback, and restore procedures are in sections 7, 13 and
 12. The production workflow is automatic on `main` and manual-dispatch for a
 rollback/redeploy.
+
+### LAN access for manual testing
+
+Manual testing from another device on the same Wi-Fi uses the same local stack;
+nothing is rebuilt and no data is touched. Only the frontend port is published
+on the host's LAN interfaces — Postgres, Redis, MinIO and the backend stay on
+`127.0.0.1` (or the Docker network only) and are reached through nginx.
+
+1. Find the host IPv4 address: `ipconfig` (IPv4 Address of the active adapter),
+   or `Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -notlike '127.*'`.
+2. Set the LAN values in `infrastructure/.env` (copy from `.env.example`):
+   - `ALLOWED_HOSTS` must include that IP — the backend `TrustedHostMiddleware`
+     rejects any other `Host` header with `400 Invalid host header`.
+   - `S3_PUBLIC_ENDPOINT_URL=http://<LAN_IP>` so presigned attachment URLs point
+     at the same origin as the SPA. `infrastructure/nginx/default.conf` proxies
+     `/freight-attachments/` to `minio:9000`, so MinIO needs no host port and
+     the SPA content-security policy (`connect-src 'self'`) still holds.
+   - `CORS_ORIGINS` may include `http://<LAN_IP>`; the SPA calls the API
+     same-origin through nginx, so this only matters for direct API clients.
+3. Recreate the backend (env change) and reload nginx (config change):
+   `docker compose -f infrastructure/docker-compose.yml up -d backend`
+   then `docker exec ff-frontend nginx -s reload`.
+4. Allow the port on the host firewall, scoped to the local subnet only. In an
+   elevated PowerShell:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "LCS LAN HTTP 80" -Direction Inbound `
+     -Action Allow -Protocol TCP -LocalPort 80 -RemoteAddress LocalSubnet -Profile Any
+   ```
+
+   `LocalSubnet` restricts the rule to the directly attached networks, so it
+   never admits traffic from the internet. Remove it with
+   `Remove-NetFirewallRule -DisplayName "LCS LAN HTTP 80"`.
+   The Wi-Fi adapter often reports the `Public` profile; a `Private`-only rule
+   would not apply there, which is why the scope is by remote address instead.
+5. Open `http://<LAN_IP>` from the other device (`http://192.168.1.15` when the
+   port is the default 80, `http://192.168.1.15:8080` if `FRONTEND_HOST_PORT` is
+   changed). Authentication, session cookies and CSRF are origin-bound per
+   host, so each device signs in normally; use `/auth/setup` only on a fresh
+   database.
+
+Troubleshooting:
+
+| Symptom | Cause / fix |
+|---|---|
+| Page loads, API returns `400 Invalid host header` | The IP is missing from `ALLOWED_HOSTS`; update `.env` and recreate the backend |
+| Health check works from the host but not the other device | Firewall profile/rule; add the scoped rule above |
+| API calls go to `http://localhost:8000` | A build-time `NUXT_PUBLIC_API_BASE` was set; it must stay empty so the SPA uses `window.location.origin` |
+| Attachments fail, presigned URL shows `localhost:9000` | `S3_PUBLIC_ENDPOINT_URL` not set to the LAN origin, or the backend was not recreated |
+| 403 `CSRF_VALIDATION_FAILED` on login/refresh | A proxy is rewriting the `Host` header; nginx must forward `$host` |
+| LAN IP changed after a reboot (DHCP) | Update `ALLOWED_HOSTS` / `S3_PUBLIC_ENDPOINT_URL`, or reserve the address on the router |
+
+Never publish this stack to the internet from a Windows host: no HTTPS, no rate
+limiting at the edge, default secrets in `.env`. It is a LAN test deployment
+only.
 
 ## 20. Incident Evidence
 

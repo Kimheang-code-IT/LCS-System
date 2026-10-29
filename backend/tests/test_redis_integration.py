@@ -30,16 +30,18 @@ async def fake_redis(monkeypatch):
 
 
 class QueryCounter:
-    """Counts SQL statements executed while the context is active."""
+    """Counts (and records) SQL statements executed while the context is active."""
 
     def __init__(self, engine) -> None:
         self.engine = engine
         self.count = 0
+        self.statements: list[str] = []
         self._listener = None
 
     def __enter__(self):
         def listener(conn, cursor, statement, parameters, context, executemany):
             self.count += 1
+            self.statements.append(" ".join(statement.split()))
 
         self._listener = listener
         event.listen(self.engine.sync_engine, "before_cursor_execute", listener)
@@ -270,7 +272,11 @@ async def test_identity_cache_hit_and_role_change_invalidates(client, fake_redis
         me_cached = await client.get("/api/v1/auth/me", headers=sales_headers)
     assert me_cached.status_code == 200
     assert me_cached.json()["data"]["sourcePermissions"] == me_before.json()["data"]["sourcePermissions"]
-    assert second.count <= 2, f"identity cache miss: {second.count} queries"
+    # The hit must not re-resolve the identity (no user, role or policy read);
+    # the remaining statements are the session, user row and access policy the
+    # request itself needs.
+    assert not any("casbin_rule" in statement for statement in second.statements), second.statements
+    assert second.count <= 4, f"identity cache miss: {second.count} queries: {second.statements}"
 
     headers = await login(client)
     users = (await client.get("/api/v1/users", headers=headers)).json()["data"]

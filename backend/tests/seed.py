@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import authorization
 from app.core.bootstrap import ensure_permission_catalog
 from app.core.permissions import ROLE_DEFINITIONS
 from app.core.security import hash_password
@@ -20,7 +21,6 @@ from app.modules.auth.models import (
     Role,
     User,
     UserCredential,
-    UserRoleAssignment,
 )
 from app.modules.finance.models import (
     AccountingPeriod,
@@ -47,10 +47,10 @@ from app.modules.master_data.models import (
 from app.modules.master_data.service import seed_capacity_units, seed_transport_asset_identity_types
 
 DEMO_USERS = [
-    ("ADMIN-001", "admin", "admin@example.test", "Demo Administrator", "PLATFORM_ADMIN", "ADMIN"),
-    ("OPS-PP-001", "ops.pp", "ops.pp@example.test", "Phnom Penh Operations", "OPERATIONS_OFFICER", "OPS"),
-    ("FIN-001", "finance", "finance@example.test", "Finance Officer", "FINANCE_OFFICER", "FIN"),
-    ("SALES-001", "sales", "sales@example.test", "Sales Officer", "SALES_OFFICER", "SALES"),
+    ("ADMIN-001", "admin", "admin@example.test", "Demo Administrator", "SUPER_ADMIN", "ADMIN"),
+    ("OPS-PP-001", "ops.pp", "ops.pp@example.test", "Phnom Penh Operations", "OPERATIONS", "OPS"),
+    ("FIN-001", "finance", "finance@example.test", "Finance Officer", "ACCOUNTANT", "FIN"),
+    ("SALES-001", "sales", "sales@example.test", "Sales Officer", "SALES", "SALES"),
 ]
 
 DEFAULT_PASSWORD = "Passw0rd!"
@@ -312,26 +312,21 @@ async def seed_demo_data(session: AsyncSession) -> None:
                 "email": email,
                 "display_name": display_name,
                 "status": "ACTIVE",
-                "system_identity": PROTECTED_SYSTEM_ADMIN_IDENTITY if role_code == "PLATFORM_ADMIN" else None,
+                "system_identity": PROTECTED_SYSTEM_ADMIN_IDENTITY if role_code == "SUPER_ADMIN" else None,
             },
             user_code=user_code,
         )
         credential = (await session.execute(select(UserCredential).where(UserCredential.user_id == user.id))).scalars().first()
         if credential is None:
             session.add(UserCredential(user_id=user.id, password_hash=hash_password(DEFAULT_PASSWORD)))
-        role = roles.get(role_code)
-        if role is not None:
-            assignment = (
-                await session.execute(
-                    select(UserRoleAssignment).where(
-                        UserRoleAssignment.user_id == user.id,
-                        UserRoleAssignment.role_id == role.id,
-                    )
-                )
-            ).scalars().first()
-            if assignment is None:
-                session.add(UserRoleAssignment(user_id=user.id, role_id=role.id))
+        if role_code in roles:
+            assigned = await authorization.user_role_codes(session, user.id)
+            if role_code not in assigned:
+                await authorization.set_user_roles(session, user.id, [*assigned, role_code])
     await session.flush()
+    # The fixture commits after this call, so publish the policies now: the
+    # enforcer is a snapshot and the first request must already see these roles.
+    await authorization.refresh(session)
 
     await _ensure_finance_baseline(session)
     await session.flush()

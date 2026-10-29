@@ -322,20 +322,14 @@ _APPLIERS: dict[str, Callable[[AsyncSession, RequestContext, str, int, str], Any
 }
 
 
-async def _denied(session: AsyncSession, context: RequestContext, transition: StatusTransition) -> None:
-    """Record the refusal, exactly like ``require_permission`` does."""
+def _denied(transition: StatusTransition) -> None:
+    """Refuse the transition.
+
+    The refusal is recorded by the central ``AccessDenied`` handler in
+    ``app/main.py`` (event ``AUTHORIZATION_DENIED``), so it is not audited here as
+    well — one denial, one audit row.
+    """
     code = ",".join(transition.permissions)
-    await write_audit(
-        session,
-        context,
-        event_type="AUTHORIZATION_DENIED",
-        entity_type="permission",
-        entity_id=0,
-        action=code,
-        result="REJECTED",
-        reason=f"Missing permission: {code}",
-    )
-    await session.commit()
     raise AccessDenied(f"Missing permission: {code}")
 
 
@@ -369,7 +363,7 @@ async def change_status(
         if transition is None:
             raise InvalidState(f"Cannot change status from {current or 'unknown'} to {canonical}.")
         if not may_perform(context, transition):
-            await _denied(session, context, transition)
+            _denied(transition)
         if transition.kind != "status":
             raise Conflict(
                 "TRANSITION_REQUIRES_COMMAND",

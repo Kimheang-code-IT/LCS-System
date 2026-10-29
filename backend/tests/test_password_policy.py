@@ -96,7 +96,7 @@ async def _create_user(client, headers, username: str, password: str = "Original
             "email": f"{username}@example.com",
             "password": password,
             "status": "Active",
-            "role": "AUDITOR",
+            "role": "VIEWER",
         },
     )
     assert response.status_code == 201, response.text
@@ -115,7 +115,7 @@ async def test_user_creation_rejects_each_weak_password(client, session_factory)
                 "displayName": "Weak",
                 "email": f"{username}@example.com",
                 "password": password,
-                "role": "AUDITOR",
+                "role": "VIEWER",
             },
         )
         assert response.status_code == 422, response.text

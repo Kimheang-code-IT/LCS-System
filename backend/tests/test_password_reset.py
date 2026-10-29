@@ -1,4 +1,4 @@
-"""Administrator-set passwords, and the forced change that follows.
+﻿"""Administrator-set passwords, and the forced change that follows.
 
 Creating a user already means choosing that user's password; these tests cover
 the *recovery* path an administrator needs when a user cannot receive the
@@ -7,7 +7,7 @@ password from being kept in use.
 
 The security claims under test are:
 
-* an administrator never sees a stored password — there is none to see, only an
+* an administrator never sees a stored password â€” there is none to see, only an
   Argon2id digest;
 * setting a password signs every existing session out;
 * while a password is outstanding, the API refuses everything except changing it,
@@ -23,10 +23,10 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.permissions import SUPER_ADMIN_ROLE
 from app.core.security import verify_password
 from app.modules.audit.models import AuditEvent
 from app.modules.auth.models import UserCredential
-from app.modules.auth.service import PLATFORM_ADMIN_ROLE
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
@@ -36,7 +36,7 @@ NEW_PASSWORD = "Sup3r-Secret-9"
 USER_PASSWORD = "Original-Str0ng!"
 
 
-async def _make_user(client, headers, *, username: str = "recover.me", role: str = "AUDITOR") -> dict:
+async def _make_user(client, headers, *, username: str = "recover.me", role: str = "MANAGER") -> dict:
     response = await client.post(
         "/api/v1/users",
         headers=headers,
@@ -301,7 +301,7 @@ async def test_setting_a_password_requires_the_user_manage_permission(client):
     )).status_code == 200
 
 
-async def test_a_non_platform_administrator_cannot_reset_the_platform_administrator(client):
+async def test_a_non_super_administrator_cannot_reset_the_super_administrator(client):
     """The recovery path must not become a way to seize the super-admin account."""
     headers = await login(client)
     admins = await client.get("/api/v1/users", headers=headers)
@@ -358,7 +358,7 @@ async def test_setting_a_password_is_audited_without_recording_the_secret(client
         assert "password_hash" not in blob and "passwordHash" not in blob
 
 
-async def test_a_platform_administrator_can_reset_the_built_in_administrator(client):
+async def test_a_super_administrator_can_reset_the_built_in_administrator(client):
     """The one legitimate recovery path: nobody else can help a locked-out super admin."""
     headers = await login(client)
     admins = await client.get("/api/v1/users", headers=headers)
@@ -393,9 +393,9 @@ async def test_a_platform_administrator_can_reset_the_built_in_administrator(cli
     )).status_code == 200
 
 
-async def test_the_platform_admin_role_constant_still_matches_the_seeded_role(client):
+async def test_the_super_admin_role_constant_still_matches_the_seeded_role(client):
     """Guards the assumption the super-admin reset test relies on."""
     headers = await login(client)
     roles = await client.get("/api/v1/roles", headers=headers, params={"page_size": 200})
     codes = {item["code"] for item in roles.json()["data"]["items"]}
-    assert PLATFORM_ADMIN_ROLE in codes
+    assert SUPER_ADMIN_ROLE in codes

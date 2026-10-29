@@ -1,27 +1,20 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import authorization
 from app.core.pagination import PageParams, count_query, list_sort_orders
-from app.modules.auth.models import (
-    Permission,
-    Role,
-    RolePermission,
-    User,
-    UserCredential,
-    UserRoleAssignment,
-    UserSession,
-)
+from app.modules.auth.models import Role, User, UserCredential, UserSession
 
 
 class AuthRepository:
-    """Persistence operations for identities, sessions, roles and permissions.
+    """Persistence operations for identities and sessions.
 
-    The repository deliberately does not commit: authentication workflows own
-    their transaction boundary and can combine these operations atomically.
+    Roles and permissions live in ``casbin_rule`` and are read through
+    ``app.core.authorization``; this repository only keeps the user/role rows and
+    the authentication records. It deliberately does not commit: authentication
+    workflows own their transaction boundary.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -54,39 +47,18 @@ class AuthRepository:
         )
         return list(result.scalars().all())
 
-    async def active_role_code(self, user_id: int) -> str | None:
-        result = await self.session.execute(
-            select(Role.code)
-            .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
-            .where(UserRoleAssignment.user_id == user_id, UserRoleAssignment.expires_at.is_(None))
-        )
-        return result.scalars().first()
-
-    async def assignment_rows(self, user_id: int) -> list[tuple[UserRoleAssignment, str]]:
-        result = await self.session.execute(
-            select(UserRoleAssignment, Role.code)
-            .join(Role, Role.id == UserRoleAssignment.role_id)
-            .where(UserRoleAssignment.user_id == user_id)
-        )
-        return list(result.all())
-
-    async def users_with_role_codes(self, page: PageParams | None = None) -> list[tuple[User, list[str]]]:
+    async def users_with_role_codes(
+        self, page: PageParams | None = None
+    ) -> tuple[list[tuple[User, list[str]]], int]:
         orders = list_sort_orders(User, page, User.id) if page else [User.id]
-        users = list((await self.session.execute(select(User).order_by(*orders))).scalars().all())
-        if not users:
-            return []
-        role_result = await self.session.execute(
-            select(UserRoleAssignment.user_id, Role.code)
-            .join(Role, Role.id == UserRoleAssignment.role_id)
-            .where(
-                UserRoleAssignment.user_id.in_([user.id for user in users]),
-                UserRoleAssignment.expires_at.is_(None),
-            )
-        )
-        codes: defaultdict[int, list[str]] = defaultdict(list)
-        for user_id, code in role_result.all():
-            codes[user_id].append(code)
-        return [(user, codes[user.id]) for user in users]
+        stmt = select(User)
+        total = await count_query(self.session, stmt) if page is not None else 0
+        query = stmt.order_by(*orders)
+        if page is not None:
+            query = query.offset(page.offset).limit(page.page_size)
+        users = list((await self.session.execute(query)).scalars().all())
+        codes = await authorization.users_role_codes(self.session, [user.id for user in users])
+        return [(user, codes.get(user.id, [])) for user in users], (total or len(users))
 
     async def roles_with_permissions(
         self, page: PageParams | None = None, *, q: str | None = None, status: str | None = None
@@ -103,14 +75,5 @@ class AuthRepository:
         if page:
             query = query.offset(page.offset).limit(page.page_size)
         roles = list((await self.session.execute(query)).scalars().all())
-        if not roles:
-            return [], total
-        permission_result = await self.session.execute(
-            select(RolePermission.role_id, Permission.code)
-            .join(Permission, Permission.id == RolePermission.permission_id)
-            .where(RolePermission.role_id.in_([role.id for role in roles]))
-        )
-        permissions: defaultdict[int, list[str]] = defaultdict(list)
-        for role_id, code in permission_result.all():
-            permissions[role_id].append(code)
-        return [(role, permissions[role.id]) for role in roles], total
+        codes = await authorization.roles_permission_codes(self.session, [role.code for role in roles])
+        return [(role, codes.get(role.code, [])) for role in roles], total

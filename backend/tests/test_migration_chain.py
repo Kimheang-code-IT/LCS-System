@@ -44,6 +44,7 @@ ADDITIVE_REVISIONS = (
     "b6d7e8f9a0b1",  # component attribute catalog display order
     "c7e8f9a0b1c2",  # quotation source service order (re-quotation trace)
     "f6a7b8c9d0e1",  # document_types soft-delete attribution column + indexes
+    "b4c5d6e7f8a9",  # direct RBAC: one role per user, no role inheritance
 )
 
 PRESERVATION_REVISIONS = (
@@ -123,7 +124,7 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["f6a7b8c9d0e1"], (
+    assert heads == ["b4c5d6e7f8a9"], (
         "the head changed; update docs/11_deployment_and_security.md and the deployed "
         f"revision expectation (found {heads})"
     )
@@ -171,14 +172,19 @@ def test_new_revisions_are_additive_only(revision: str):
 
 
 def test_new_revisions_never_drop_a_pre_existing_table():
-    """The current schema keeps every pre-existing table; nothing may be dropped on upgrade."""
+    """The current schema keeps every pre-existing table; nothing may be dropped on upgrade.
+
+    ``role_permissions`` and ``user_role_assignments`` are deliberately absent:
+    ``a1b2c3d4e5f7`` replaces both editable authorization mappings with the
+    Casbin policy table ``casbin_rule`` (see ``docs/09_roles_and_permissions.md``
+    §2), and that replacement was reviewed and authorised as part of the
+    authorization migration rather than as an additive revision.
+    """
     pre_existing = (
         "roles",
         "users",
         "user_credentials",
-        "user_role_assignments",
         "permissions",
-        "role_permissions",
         "user_sessions",
         "password_reset_tokens",
         "business_parties",
@@ -254,6 +260,7 @@ def test_every_model_module_is_imported_by_the_migration_environment():
     """
     env = (BACKEND_ROOT / "alembic" / "env.py").read_text(encoding="utf-8")
     for module in (
+        "app.core.authorization.models",
         "app.modules.archive.models",
         "app.modules.audit.models",
         "app.modules.auth.models",

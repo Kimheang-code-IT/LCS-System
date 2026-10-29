@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { AppRolePermissionRow } from '~/types/entities'
+import { useRolePermissionCatalog } from '~/composables/common/useRolePermissionCatalog'
 import {
-  ROLE_DOCUMENT_TYPES,
   ROLE_PERMISSION_ACTIONS,
-  ROLE_PERMISSION_GROUPS,
+  groupsOf,
   normalizePermissionRows,
   setPermissionAction,
 } from '~/utils/role/permissions'
@@ -15,12 +15,18 @@ const props = withDefaults(defineProps<{ disabled?: boolean }>(), {
 })
 
 const { t, te } = useI18n()
+const { pages: catalogPages, load: loadCatalog } = useRolePermissionCatalog()
+
+const pageDefinitions = computed(() => catalogPages.value)
+const definitions = computed(() => new Map(pageDefinitions.value.map(item => [item.value, item])))
+const pageGroups = computed(() => groupsOf(pageDefinitions.value))
 
 const search = ref('')
 const baseline = ref<AppRolePermissionRow[]>([])
-const expanded = ref(new Set<string>(ROLE_PERMISSION_GROUPS))
-const definitions = new Map(ROLE_DOCUMENT_TYPES.map(item => [item.value, item]))
-const normalizedRows = computed(() => normalizePermissionRows(rows.value))
+const expanded = ref(new Set<string>(pageGroups.value))
+/** Set by the first user edit; until then the baseline follows the page catalog. */
+const edited = ref(false)
+const normalizedRows = computed(() => normalizePermissionRows(rows.value, true, pageDefinitions.value))
 const dirty = computed(() => JSON.stringify(normalizedRows.value) !== JSON.stringify(baseline.value))
 
 const visibleRows = computed(() => {
@@ -33,13 +39,13 @@ const visibleRows = computed(() => {
   })
 })
 
-const groups = computed(() => ROLE_PERMISSION_GROUPS
+const groups = computed(() => pageGroups.value
   .map(key => ({
     key,
     label: te(`lcs.rolePermissions.groups.${key}`)
       ? t(`lcs.rolePermissions.groups.${key}`)
       : key,
-    rows: visibleRows.value.filter(row => definitions.get(row.documentType)?.group === key),
+    rows: visibleRows.value.filter(row => definitions.value.get(row.documentType)?.group === key),
   }))
   .filter(group => group.rows.length > 0))
 
@@ -48,13 +54,14 @@ const visibleActions = computed(() => ROLE_PERMISSION_ACTIONS.filter(action =>
 ))
 
 const grantedCount = computed(() => normalizedRows.value.reduce((sum, row) => sum + row.actions.length, 0))
-const totalCount = computed(() => ROLE_DOCUMENT_TYPES.reduce((sum, definition) => sum + definition.actions.length, 0))
+const totalCount = computed(() => pageDefinitions.value.reduce((sum, definition) => sum + definition.actions.length, 0))
 const allGranted = computed(() => grantedCount.value === totalCount.value)
 const someGranted = computed(() => grantedCount.value > 0 && !allGranted.value)
 const allExpanded = computed(() => groups.value.every(group => expanded.value.has(group.key)))
 
 function commit(next: AppRolePermissionRow[]) {
-  rows.value = normalizePermissionRows(next)
+  edited.value = true
+  rows.value = normalizePermissionRows(next, true, pageDefinitions.value)
 }
 
 function clone(rowsToCopy: AppRolePermissionRow[]) {
@@ -62,19 +69,39 @@ function clone(rowsToCopy: AppRolePermissionRow[]) {
 }
 
 function ensureAllRows() {
-  const next = normalizePermissionRows(rows.value)
+  const next = normalizePermissionRows(rows.value, true, pageDefinitions.value)
   if (JSON.stringify(next) !== JSON.stringify(rows.value)) rows.value = next
-  if (!baseline.value.length) baseline.value = clone(next)
+  if (!baseline.value.length) rebaseline(next)
+}
+
+/**
+ * Take the current rows as the "no changes yet" state.
+ *
+ * The page catalog arrives after mount and the parent replaces the row set when a
+ * different role is opened; either one changes the shape of the matrix. Comparing
+ * a new shape with an old snapshot reported unsaved changes before the user had
+ * touched anything, so the baseline follows those loads until the first edit.
+ */
+function rebaseline(source?: AppRolePermissionRow[]) {
+  baseline.value = clone(normalizePermissionRows(source ?? rows.value, true, pageDefinitions.value))
+  edited.value = false
 }
 
 onMounted(() => {
+  void loadCatalog()
   ensureAllRows()
   if (import.meta.client) window.addEventListener('beforeunload', warnBeforeUnload)
 })
 onBeforeUnmount(() => {
   if (import.meta.client) window.removeEventListener('beforeunload', warnBeforeUnload)
 })
-watch(rows, ensureAllRows, { deep: false })
+watch(rows, (value) => {
+  ensureAllRows()
+  if (!edited.value) rebaseline(value)
+}, { deep: false })
+watch(pageDefinitions, () => {
+  if (!edited.value) rebaseline()
+})
 
 onBeforeRouteLeave(() => {
   if (!dirty.value) return true
@@ -90,7 +117,7 @@ function warnBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 function documentTypeLabel(value: string) {
-  const found = definitions.get(value)
+  const found = definitions.value.get(value)
   if (found && te(found.labelKey)) return t(found.labelKey)
   return value.replaceAll('_', ' ')
 }
@@ -101,7 +128,7 @@ function actionLabel(action: string) {
 }
 
 function moduleLabel(documentType: string) {
-  const definition = definitions.get(documentType)
+  const definition = definitions.value.get(documentType)
   const moduleName = definition?.permissionPrefix.split('.')[0] || 'system'
   return moduleName.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase())
 }
@@ -110,8 +137,8 @@ function hasAction(row: AppRolePermissionRow, action: string) {
   return row.actions.includes(action)
 }
 
-function allowedActions(documentType: string) {
-  return definitions.get(documentType)?.actions || []
+function allowedActions(documentType: string): readonly string[] {
+  return definitions.value.get(documentType)?.actions || []
 }
 
 function actionAllowed(documentType: string, action: string) {
@@ -183,12 +210,13 @@ function toggleExpanded(key: string) {
 }
 
 function toggleAllExpanded() {
-  expanded.value = allExpanded.value ? new Set() : new Set(ROLE_PERMISSION_GROUPS)
+  expanded.value = allExpanded.value ? new Set() : new Set(pageGroups.value)
 }
 
 function reset() {
   if (props.disabled) return
   rows.value = clone(baseline.value)
+  edited.value = false
 }
 </script>
 

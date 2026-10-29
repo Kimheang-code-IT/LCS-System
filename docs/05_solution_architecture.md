@@ -39,10 +39,12 @@ Each context is a folder under `backend/app/modules/<name>/` with `router.py`,
 
 ### Identity and authorization — `auth`
 
-Owns users, credentials, sessions, roles, permissions, role assignments,
-password-reset tokens, and the login/refresh/logout and profile flows. It also
-owns the users/roles/permissions administration endpoints. It does not own
-business records.
+Owns users, credentials, sessions, roles, permissions, Casbin policies
+(`casbin_rule`), password-reset tokens, and the login/refresh/logout and profile
+flows. It also owns the users/roles/permissions administration endpoints. It does
+not own business records. Authorization itself lives in
+`app/core/authorization/` (model plus enforcer); this module only persists the
+rows that engine reads and writes.
 
 Authentication uses one stable `user_sessions` row per login and indexed
 `used_refresh_tokens` hashes for rotation/replay detection. Access JWTs carry
@@ -88,8 +90,17 @@ journals, and the double-entry posting/reversal engine.
 ### Reporting — `reports`
 
 Read-only dashboard and report endpoints (service orders, quotation performance,
-receivables, payables, income, expenses, profitability, financial summary). It
-owns no tables.
+receivables, payables, income, expenses, profitability, financial summary) plus
+the on-demand generation engine. Three files split the responsibilities:
+
+- `engine.py` — the report registry (`ReportDefinition` per report key), the
+  permission the route guards on, execution, and the shared `meta` envelope
+  (`generatedAt`, period, page, total, warnings). No accounting arithmetic.
+- `ledger_reports.py` — the accounting calculations (trial balance, general
+  ledger) in `Decimal`, plus the fiscal-year/date resolution and refusal rules.
+- `repository.py` — the set-based SQL, all reading `POSTED` journals only.
+
+The module owns no tables.
 
 ### Settings — `settings`
 
@@ -162,11 +173,15 @@ backend/
       deps.py             auth/permission dependencies
       exceptions.py       domain error hierarchy
       pagination.py       page params + envelope helpers
-      permissions.py      permission catalog + role definitions
+      permissions.py      permission catalog, page catalog, seeded role definitions
       redis.py            lazy Redis + safe_* helpers
       security.py         Argon2 hashing, JWT, reset codes
       sequences.py        document-number allocation
       serialization.py    camel/snake + model serialization
+      authorization/
+        model.conf        Casbin RBAC model (p, g, default deny)
+        models.py         casbin_rule table
+        service.py        enforcer lifecycle, Redis sync, policy writers
       storage.py          LocalStorage / S3Storage
       types.py            JSONType (JSONB on PostgreSQL)
     modules/
@@ -458,12 +473,25 @@ Upload flow:
 
 ## 12. Security and Authorization
 
-Authentication, the role model, permission catalog, page-to-API mapping, and
-frontend route/button enforcement are in `docs/09_roles_and_permissions.md`.
+Authentication, the Casbin role model, permission catalog, page-to-API compile,
+and frontend route/button enforcement are in `docs/09_roles_and_permissions.md`.
 Transport, secret handling, and host hardening are in
 `docs/11_deployment_and_security.md`. The architectural rule is that every
-authenticated request resolves one current user, one active role, and the
-effective permission set before the router calls a service.
+authenticated request resolves one current user, its account state, and the
+policy copy before the router calls a service; each permission decision is then
+asked of Casbin (`app/core/authorization`), never of a cached copy.
+
+- **One authorization engine.** `casbin_rule` holds every grant and every
+  user→role assignment. `roles` and `permissions` are display
+  metadata for the administration UI and decide nothing.
+- **Default deny.** A request without an explicit policy for its subject is
+  refused; an unknown role, a deactivated role, a deleted policy or an
+  unloadable policy table all deny.
+- **Single role, no inheritance.** A user holds exactly one role (enforced by a
+  partial unique index); its effective permissions are that role's direct
+  grants.
+- **Fail closed.** If the policy table cannot be read, the in-memory copy is
+  dropped and every check answers *deny* until a reload succeeds.
 
 
 ## 13. Database and Consistency
@@ -473,7 +501,7 @@ effective permission set before the router calls a service.
 - Number allocation uses row locks (`with_for_update`) plus unique constraints.
 - Positive/negative invariants not expressible as constraints are enforced in
   services (for example, journal balance before posting).
-- The schema has 78 tables and the current Alembic head is `f6a7b8c9d0e1`.
+- The schema has 77 tables and the current Alembic head is `b4c5d6e7f8a9`.
   `docs/06_database_design.sql` is the single generated reference: DDL, indexes,
   constraints, and a `COMMENT ON` description for every table and column.
   Relationships are summarised in `docs/04_functional_design.md` section 17.
@@ -487,6 +515,17 @@ Reports are served by the backend `/reports/*` API (dashboard, receivables,
 payables, income, expenses, profitability, financial summary) and the
 frontend report catalogue (`FREIGHT_REPORTS`, 12 reports). Accounting reports read
 posted journal lines only.
+
+Trial Balance and General Ledger are generated on demand:
+`POST /reports/trial-balance/generate` and
+`POST /reports/general-ledger/generate` accept validated filters and return one
+server-paginated page plus the metadata that produced it. Both read the same
+posted-ledger projection, so the trial balance control and the ledger rows can
+never disagree about what "posted" means. Their CSV exports reuse that same
+calculation and stream every matching row from a server-side cursor. Statements
+keep their existing whole-ledger endpoints. Report data is never cached: every
+generation stamps `generatedAt`, and the SPA marks a result stale as soon as a
+filter changes.
 
 ## 15. Deployment Topology
 
@@ -522,12 +561,12 @@ acceptable.
 
 ## Appendix A - Tables by module
 
-The schema has 78 tables. Column definitions for every table are in
+The schema has 77 tables. Column definitions for every table are in
 `docs/06_database_design.sql`; relations are in `docs/04_functional_design.md` §17.
 
 | Module | Tables |
 |---|---|
-| auth | `users`, `user_credentials`, `user_sessions`, `used_refresh_tokens`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `password_reset_tokens` |
+| auth | `users`, `user_credentials`, `user_sessions`, `used_refresh_tokens`, `roles`, `permissions`, `casbin_rule`, `password_reset_tokens` |
 | quotations | `quotations`, `quotation_revisions`, `quotation_revision_places`, `quotation_revision_containers`, `quotation_revision_lines`, `quotation_conversions` |
 | operations | `service_orders`, `service_order_places`, `service_order_container_requirements`, `service_order_containers`, `service_order_pricing`, `service_order_pricing_lines`, `service_order_component_rows`, `service_order_movements`, `service_order_milestones`, `service_order_charges`, `service_order_charge_lines`, `attachments`, `attachment_links` |
 | finance | `chart_of_accounts`, `financial_accounts`, `accounting_periods`, `document_sequences`, `financial_documents`, `financial_document_lines`, `financial_document_sources`, `financial_document_allocations`, `posting_rules`, `journal_entries`, `journal_entry_lines`, `financial_document_postings` |
@@ -550,7 +589,7 @@ with the governing table named; `CODE` means no override exists.
 | `DEFAULT_PREFIXES` (sequences) | `document_sequences` | Editable in the UI; re-seeded each year if a row is missing |
 | `DEFAULT_LOCALIZATION` | `app_settings(localization)` | Selection constrained by code allow-lists |
 | `DEFAULT_APP_INFO`, `DEFAULT_APP_CONFIG` | `app_settings(app_info, general, ...)` | Deep-merged over defaults; reset deletes the row |
-| `ROLE_DEFINITIONS` | `roles` + `role_permissions` | Built-ins synced at startup; database grants persist; custom roles are database-only |
+| `ROLE_DEFINITIONS` | `roles` + `casbin_rule` | Seeds the 7 built-in roles on startup by adding missing grants only, so administrator edits survive; custom roles are database-only |
 | `DEFAULT_CURRENCY` | `app_settings(localization.currency)` | Value must exist in `currencies` |
 | Master-data reference rows | their own tables | Codes, names, symbols, statuses, and ordering are data |
 

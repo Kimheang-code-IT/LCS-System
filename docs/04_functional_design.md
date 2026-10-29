@@ -94,6 +94,14 @@ Read-only. It must not modify operational or accounting records. The dashboard
 and all report screens are served by `/reports/*`; the frontend does not compute
 report figures from cached store data.
 
+Trial Balance and General Ledger are **generated on request**: the page sends its
+filters, the backend validates them, and one server-paginated page plus report
+metadata comes back. Opening balances are the posted movement before the period,
+the period columns are the movement inside it, and closing is their sum. A
+difference between debits and credits is returned as `balanced: false` with the
+amount, never suppressed. Draft and cancelled journals are excluded by the shared
+posted-only predicate; a reversal appears as its own opposite journal.
+
 ### 3.10 Settings — `settings`
 
 Owns app info (branding) and app config (general/localization/email/telegram/
@@ -479,7 +487,7 @@ The following curated ER diagram mirrors the SQLAlchemy models. The generated
 ```mermaid
 %% Entity Relationship Diagram (generated from the SQLAlchemy models)
 %% Source of truth: backend/app/modules/*/models.py
-%% Table count and columns: docs/06_database_design.sql (generated; currently 67 tables).
+%% Table count and columns: docs/06_database_design.sql (generated; currently 77 tables).
 %% This diagram is a curated relationship view, not an exhaustive list; organizations
 %% and branches were removed and access is user/role/permission based.
 erDiagram
@@ -489,11 +497,11 @@ erDiagram
   USERS ||--|| USER_CREDENTIALS : authenticates
   USERS ||--o{ USER_SESSIONS : opens
   USERS ||--o{ PASSWORD_RESET_TOKENS : requests
-  USERS ||--o{ USER_ROLE_ASSIGNMENTS : receives
-  USERS ||--o{ USER_ROLE_ASSIGNMENTS : assigns
-  ROLES ||--o{ USER_ROLE_ASSIGNMENTS : assigned
-  ROLES ||--o{ ROLE_PERMISSIONS : grants
-  PERMISSIONS ||--o{ ROLE_PERMISSIONS : included
+  %% Authorization lives in CASBIN_RULE: `g` rows link a user (or role) to a role,
+  %% `p` rows grant an object/action pair to a role. ROLES and PERMISSIONS hold
+  %% display metadata only, so there is no role-permission join table.
+  USERS ||--o{ CASBIN_RULE : identified_by
+  ROLES ||--o{ CASBIN_RULE : granted_by
 
   %% ---------------------------------------------------------------
   %% Audit and backup
@@ -683,7 +691,7 @@ flowchart TD
 
   subgraph Setup
     SU1[Empty database] --> SU2["/auth/setup status"]
-    SU2 --> SU3[initialize: admin + PLATFORM_ADMIN + sequences + app info/config]
+    SU2 --> SU3[initialize: admin + SUPER_ADMIN + sequences + app info/config]
   end
 
   subgraph Quotation_to_Order

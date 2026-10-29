@@ -1,696 +1,458 @@
 # Roles and Permissions
 
+> Authorization engine: **PyCasbin** over PostgreSQL, synchronized through Redis.
+> Authentication (JWT, Argon2id, refresh rotation, sessions, lockout, CSRF) is in
+> `app/core/security.py`, `app/core/deps.py` and `docs/11_deployment_and_security.md`.
+
 ## 1. Interpretation
 
-A permission answers **what may the user do?** The platform is single-tenant:
-organizations and branches were removed, so there is no organization/branch scope.
-Access is granted through roles; each role is a set of permission codes, and every
-user has exactly one active role. Replaced assignments are retained as expired
-history but do not grant permissions.
+- **One engine.** Casbin decides every permission check. No handler, service or
+  frontend computes an effective permission set of its own.
+- **Default deny.** A subject without an explicit policy row is refused. An
+  unknown user, an unknown role, a deactivated role, a removed policy or an
+  unreadable policy table all deny.
+- **Single role.** A user holds exactly one role; the effective permissions are
+  that role's direct grants. Role inheritance is not supported.
+- **Namespaced subjects.** `user:<id>` and `role:<code>` — a user id can never
+  collide with a role code.
+- **Page codes and API codes.** The Roles & Permissions matrix stores *page*
+  codes (`sales.quotations.view`); route guards check *capability* codes
+  (`quotation.read`). A page code is compiled into the capabilities it needs
+  **once, when the role is saved**, so a request never walks an implication
+  graph.
+- **Backend authority.** The SPA hides menus and buttons from the permission
+  snapshot it is given. That is a usability aid, not a control: every request is
+  re-checked on the server.
 
-This document covers **RBAC user roles** (Administrator, Finance Officer, ...).
-They are unrelated to the administrator-managed **Party Roles** master data
-(Customer, Supplier, Carrier, ...) assigned to business parties; that is business
-vocabulary, not an authorization role.
+## 2. Where authorization data lives
 
-Every permission code is `module.action`, defined in code in
-`backend/app/core/permissions.py` and synced into the `permissions` table on
-startup (`ensure_permission_catalog`). The frontend mirrors the same catalog
-(`frontend/app/utils/role/permissions.ts`)
-and checks it through `useAuthStore().canAccessPage(pageId)`.
-
-The catalog is composed of three groups:
-
-1. **Source (API) permissions** — enforced by `require_permission(...)` on the
-   backend routers.
-2. **Page/configuration permissions** — legacy page-navigation keys.
-3. **Matrix page permissions** — the action set shown on the Roles & Permissions
-   screen; each page grant also implies the matching source/API permissions via
-   `PAGE_PERMISSION_SOURCE_CODES`.
-
-## 2. Permission Catalog
-
-### 2.1 Source (API) permissions
-
-These gate API endpoints. Every code below is enforced server-side.
-
-| Permission | Resource | Action |
+| Store | Holds | Decides access |
 |---|---|---|
-| user.read | user | read |
-| user.manage | user | manage |
-| role.read | role | read |
-| role.manage | role | manage |
-| quotation.read | quotation | read |
-| quotation.create | quotation | create |
-| quotation.update_draft | quotation | update_draft |
-| quotation.send | quotation | send |
-| quotation.accept | quotation | accept |
-| quotation.convert | quotation | convert |
-| service_order.read | service_order | read |
-| service_order.create | service_order | create |
-| service_order.update | service_order | update |
-| service_order.complete | service_order | complete |
-| service_order_config.view | service_order_config | view |
-| service_order_config.create | service_order_config | create |
-| service_order_config.update | service_order_config | update |
-| service_order_config.delete | service_order_config | delete |
-| service_order_config.publish | service_order_config | publish |
-| configuration.read | configuration | read |
-| configuration.publish | configuration | publish |
-| configuration.activate | configuration | activate |
-| configuration.rollback | configuration | rollback |
-| configuration.compare | configuration | compare |
-| service_charge.read | service_charge | read |
-| service_charge.create | service_charge | create |
-| service_charge.issue | service_charge | issue |
-| service_charge.convert_to_invoice | service_charge | convert_to_invoice |
-| financial_document.read | financial_document | read |
-| financial_document.create | financial_document | create |
-| financial_document.update_draft | financial_document | update_draft |
-| financial_document.post | financial_document | post |
-| financial_document.reverse | financial_document | reverse |
-| financial_document.allocate | financial_document | allocate |
-| journal_entry.read | journal_entry | read |
-| journal_entry.create | journal_entry | create |
-| journal_entry.post | journal_entry | post |
-| accounting_period.read | accounting_period | read |
-| accounting_period.close | accounting_period | close |
-| chart_of_accounts.manage | chart_of_accounts | manage |
-| posting_rule.read | posting_rule | read |
-| posting_rule.manage | posting_rule | manage |
-| customs_credential.retrieve | customs_credential | retrieve |
-| attachment.read | attachment | read |
-| attachment.upload | attachment | upload / edit note |
-| attachment.delete | attachment | delete |
-| audit_log.read | audit_log | read |
-| archive.view | archive | view |
-| archive.restore | archive | restore |
-| archive.hard_delete | archive | hard_delete |
-| report.read | report | read |
+| `casbin_rule` | every grant (`p`) and every user→role assignment (`g`, one per user) | **Yes — the only source** |
+| `roles` | role code, name, description, active state, system flag | No (display + lifecycle) |
+| `permissions` | code, module, resource, action, name | No (display only) |
+| `users`, `user_credentials`, `user_sessions` | identity, password hash, sessions | Authentication only |
+| `audit_events` | every refused permission and every policy change | No |
 
-The shared record-status endpoint (`POST /api/v1/{collection}/{item_id}/status`)
-introduces **no new codes**: each transition in
-`backend/app/modules/master_data/status_policy.py` requires the permission that already owns
-that area — `master.reference.manage` for reference data, `chart_of_accounts.manage`
-for the ledger accounts, `posting_rule.manage`, `configuration.manage` for the
-sequences, `accounting_period.close` for closing/reopening, `service_order.update`
-for the order lifecycle, `user.manage` / `role.manage` — and the policy endpoint
-returns only the transitions the caller may perform.
+There is no second editable role → permission mapping. Deleting `role_permissions`
+and `user_role_assignments` was deliberate: two writable mappings can disagree,
+and only one of them can be right.
 
-The shared Excel Import & Export endpoints follow the same rule: template download
-and export need the module's view permission, while import validate/preview/commit
-and the error report need the module's manage permission (`master.reference.view` /
-`master.reference.manage` for the Master Data lists). Import history is readable by
-holders of the module's view permission. No import is authorized by view alone.
+## 3. Casbin model
 
-### 2.2 Page and configuration permissions
+`backend/app/core/authorization/model.conf`:
 
-| Permission | Resource | Action |
+```ini
+[request_definition]
+r = sub, obj, act
+
+[policy_definition]
+p = sub, obj, act
+
+[role_definition]
+g = _, _
+
+[policy_effect]
+e = some(where (p.eft == allow))
+
+[matchers]
+m = g(r.sub, p.sub) && (p.obj == "*" || r.obj == p.obj) && (p.act == "*" || r.act == p.act)
+```
+
+Row shapes:
+
+```text
+p, role:SALES,       quotation,        read        # a role holds a capability
+p, role:MANAGER,     sales.quotations, view        # a page code (matrix)
+p, role:SUPER_ADMIN, *,                *           # protected super administrator
+g, user:15,          role:SALES                    # the user's one role assignment
+```
+
+A permission code is split at its **last** dot:
+
+```text
+quotation.read          -> (quotation, read)
+quotation.update_draft  -> (quotation, update_draft)
+sales.quotations.view   -> (sales.quotations, view)
+```
+
+`p.obj == "*"` matches the literal string `"*"` only — it is an explicit policy
+row, never a wildcard pattern. A broad grant can therefore never leak into an
+unrelated capability by accident.
+
+## 4. Permission catalog
+
+`backend/app/core/permissions.py` defines the vocabulary. It is code, not data,
+because a new endpoint ships with its guard: a code nothing checks is noise, and
+a check for a code nothing defines would always deny.
+
+| Group | Example | Checked by |
 |---|---|---|
-| master.reference.view | master_data | view |
-| master.reference.manage | master_data | manage |
-| configuration.manage | configuration | manage |
-| configuration.configure | configuration | configure |
-| admin.user_manage | admin | user_manage |
-| admin.role_manage | admin | role_manage |
-| settings.manage | settings | manage |
-| backup.read | backup | read |
-| backup.manage | backup | manage |
-| finance.view | finance | view |
-| report.export | report | export |
+| Capability (source) codes | `quotation.read`, `financial_document.post` | `require_permission(...)` in routers |
+| Matrix page codes | `sales.quotations.view`, `admin.users.update` | The Roles & Permissions matrix |
+| Legacy page codes | `admin.users.edit`, `finance.reports.view` | Accepted and mapped onto the modern action; not offered as new checkboxes |
+| Navigation codes | `sales.companies.view`, `settings.manage` | Menu/module visibility |
 
-### 2.3 Matrix page permissions (Roles & Permissions screen)
+### 4.1 Page → capability compile
 
-These are the action codes stored by the role matrix. The page-level
-`view/create/edit/delete/export` actions map to API permissions through
-`PAGE_PERMISSION_SOURCE_CODES`.
+`PAGE_PERMISSION_GRANTS` maps a page checkbox onto the capabilities that page
+needs, for example:
 
-| Page group | Permission codes |
+```text
+sales.quotations.submit   -> quotation.submit, quotation.send
+sales.quotations.update   -> quotation.update, quotation.accept, quotation.convert, attachment.upload
+finance.service_charges.view -> service_charge.read, financial_document.read, attachment.read
+```
+
+`compile_role_permissions()` expands **one direction at a time** and never
+repeats a pair of hops:
+
+1. a submitted page (or legacy aggregate) contributes the codes it declares;
+2. a declared *page* code contributes its own codes — the legacy aggregates point
+   at pages, so this second forward hop is required, and it stops there;
+3. a capability contributes the page code that renders it in the matrix, **but
+   only when that page grants nothing that is not already granted**.
+
+Rule 3 is what stops a grant from widening an independent permission: adding the
+quotations page for `quotation.read` would also have granted `attachment.read`, so
+the page is not added. It also makes the compile **idempotent** — saving the same
+selection twice produces the same policy set for every one of the 283 codes.
+
+Nothing ever goes capability → page → capability. That loop let one read
+capability inherit the write capabilities of every page that also grants it: a
+read-only configuration viewer used to end up with full configuration write
+access, and a settings viewer with `backup.manage`.
+
+`resolve_role_codes()` decides what a save means:
+
+- submitted page codes are kept and compiled;
+- a capability a *submitted* page already grants is dropped and re-derived, so
+  unticking that page really removes the capability — and `DELETE
+  /roles/{id}/permissions` removes the page **and** the capabilities it uniquely
+  supplied, then re-derives from whatever pages remain;
+- a capability with no page behind it stays a deliberate grant;
+- `*` is only ever accepted for `SUPER_ADMIN`.
+
+Granting or revoking one permission never changes an independent one: `POST
+/roles/{id}/permissions` with `attachment.upload` adds only that code, and
+`quotation.read` cannot drag `attachment.read` in with it.
+
+The result is stored as concrete `p` rows. Casbin never sees a page code as an
+implication, only as another string it may match.
+
+A code that no guard checks is not in the catalog at all. `excel.import`,
+`excel.export`, `telegram.manage` and `telegram.view` were removed: the Excel
+routes authorise per module and the Telegram routes use the settings permission.
+
+### 4.2 Adding a permission for a new module
+
+1. Add the capability code to `SOURCE_PERMISSIONS` in `app/core/permissions.py`.
+2. Guard the route: `Depends(require_permission("<code>"))`.
+3. If the screen is configurable from the matrix, add or extend its row in
+   `MATRIX_PAGES` and map each page action onto capabilities in
+   `PAGE_PERMISSION_GRANTS`.
+4. Decide which seeded role should hold it: add the page/capability to
+   `ROLE_DEFINITIONS`. Startup adds only the missing grants, so existing roles
+   keep their edits.
+5. Restart the backend (startup seeds the catalog and reloads the enforcer) and
+   refresh the matrix — `/api/v1/permissions/catalog` reports the new row.
+6. Document the change here and in `docs/10_testing_and_quality.md`.
+
+## 5. Seeded roles
+
+`provision` (startup, `POST /auth/setup/initialize`, and `/settings` reset) creates
+the seven roles below if they are missing and adds any grant the role lacks. It
+never removes an administrator's change.
+
+| Code | Name | Scope |
+|---|---|---|
+| `SUPER_ADMIN` | Super Administrator | `*, *` — unrestricted. Protected (see §7). |
+| `ADMIN` | Administrator | Entire permission catalog, including settings and backups. |
+| `MANAGER` | Manager | Quotations, service orders, finance **read/export**, all reports, master data read, user/role read. |
+| `SALES` | Sales Officer | Quotations (full), service orders read, reports read, master data read. |
+| `OPERATIONS` | Operations Officer | Service orders (full), quotations read, operations reports, master data read. |
+| `ACCOUNTANT` | Accountant | Finance documents, journals, periods, posting rules, finance reports; sales and operations read. |
+| `VIEWER` | Viewer | Read-only dashboards, documents, journals and reports. |
+
+The numbers behind those rows are generated by `compile_role_permissions()`
+(catalog of 283 codes at the time of writing):
+
+| Role | Compiled grants |
 |---|---|
-| Dashboard | `dashboard.view`, `dashboard.export`, `dashboard.summary` |
-| Quotations | `sales.quotations.view`, `sales.quotations.create`, `sales.quotations.update`, `sales.quotations.delete`, `sales.quotations.submit`, `sales.quotations.re_quotation`, `sales.quotations.quotation`, `sales.quotations.export` |
-| Service orders | `operations.service_orders.view`, `operations.service_orders.create`, `operations.service_orders.update`, `operations.service_orders.delete`, `operations.service_orders.submit`, `operations.service_orders.export` |
-| Service-order reports | `reports.service_order_register.*`, `reports.service_order_status.*`, `reports.service_order_containers.*`, `reports.service_order_profitability.*` (`view`, `export`) |
-| Service charges | `finance.service_charges.view`, `finance.service_charges.create`, `finance.service_charges.update`, `finance.service_charges.delete`, `finance.service_charges.submit`, `finance.service_charges.export` |
-| Financial documents | `finance.financial_documents.view`, `finance.financial_documents.create`, `finance.financial_documents.update`, `finance.financial_documents.delete`, `finance.financial_documents.submit`, `finance.financial_documents.export` |
-| Chart of accounts | `finance.chart_of_accounts.view`, `.create`, `.update`, `.delete`, `.export` |
-| Financial accounts | `finance.financial_accounts.view`, `.create`, `.update`, `.delete`, `.export` |
-| Journal entries | `finance.journal_entries.view`, `.create`, `.update`, `.delete`, `.export` |
-| Accounting periods | `finance.accounting_periods.view`, `.update`, `.export` |
-| Posting rules | `finance.posting_rules.view`, `.create`, `.update`, `.delete`, `.export` |
-| Financial reports | `reports.revenue_expense.*`, `reports.accounts_receivable.*`, `reports.accounts_payable.*`, `reports.general_ledger.*`, `reports.trial_balance.*`, `reports.profit_loss.*`, `reports.balance_sheet.*`, `reports.cash_flow.*` (`view`, `export`) |
-| Master data | `master.business_parties.*`, `master.place_roles.*`, `master.party_roles.*`, `master.trade_directions.*`, `master.container_types.*`, `master.transport_types.*`, `master.transport_assets.*`, `master.fee_types.*`, `master.currencies.*` (`view`, `create`, `update`, `delete`, `export`) |
-| Configuration | `configuration.view`, `.create`, `.update`, `.delete`, `.export` |
-| Users | `admin.users.view`, `.create`, `.update`, `.delete`, `.export` |
-| Roles | `admin.roles.view`, `.create`, `.update`, `.delete`, `.export` |
-| Document sequences | `admin.document_sequences.view`, `.create`, `.update`, `.delete`, `.export` |
-| Audit logs | `admin.audit_logs.view`, `admin.audit_logs.export` |
-| Archive | `admin.archive.view`, `admin.archive.export`, `admin.archive.restore` |
-| App config | `settings.app_config.view`, `settings.app_config.update` |
-| Backup | `settings.backup.view`, `settings.backup.create`, `settings.backup.update` |
+| `ADMIN` | 283 |
+| `ACCOUNTANT` | 110 |
+| `MANAGER` | 97 |
+| `SALES` | 48 |
+| `VIEWER` | 44 |
+| `OPERATIONS` | 39 |
+| `SUPER_ADMIN` | 1 (`*, *`) |
 
-The redacted `GET /settings/app-config` is readable by any authenticated user so
-the UI can load localization; the Settings page and every app-config write,
-connection-test, and reset endpoint still require the codes above.
+No role grants `*` except `SUPER_ADMIN`. Every other role is an explicit list:
+broad access is a decision somebody has to make in the matrix, not a default.
 
-Older releases wrote `.edit` codes (`sales.quotations.edit`,
-`operations.service_orders.edit`, `finance.service_charges.edit`,
-`finance.financial_documents.edit`, `configuration.edit`,
-`admin.users.edit`, `admin.roles.edit`, `admin.document_sequences.edit`,
-`settings.app_config.edit`, `settings.backup.edit`) and the coarse
-`finance.accounting.*`, `operations.reports.*`, `finance.reports.*`,
-`master.reference.*`, and `admin.archive.edit/delete` codes. They remain in the
-catalog and keep their documented behaviour for existing roles, but the matrix
-no longer offers them to new roles.
+## 6. No role inheritance
 
-These matrix codes are not only page checkboxes. The master-data router uses the
-collection's matrix prefix for its API actions (`master.party_roles.view/create/
-update/delete`, for example) and falls back to `master.reference.view` /
-`master.reference.manage` for a role that predates the granular page. This keeps
-existing roles working while new roles can be granted one collection without
-granting every master-data screen.
+Roles hold their own grants and nothing else — there is no
+`g, role:CHILD, role:PARENT` row, no `parentRoles` payload field and no
+inheritance endpoints. A role that needs another role's permissions is granted
+those permissions directly. A legacy `role:` → `role:` assignment edge is
+ignored by the policy loader (and removed by migration `b4c5d6e7f8a9`, which
+first materializes the inherited grants as the child's own grants), so stale
+rows can never re-enable inheritance.
 
-### 2.4 Navigation page codes (aliases)
+Each user holds exactly one role: the request schemas accept only a single
+`role_code`, the role-assignment endpoint **replaces** the previous role, and a
+partial unique index (`uq_casbin_rule_single_user_role`) refuses a second
+assignment at the database level. A user without a role holds no protected
+permission at all.
 
-Some pages are served by another matrix row and therefore have no checkbox of
-their own. Their navigation code travels with the row that serves them
-(`NAVIGATION_PAGE_ALIASES`), so a role created in Roles & Permissions can open
-them. Without this, the page stayed invisible to every non-administrator role.
+## 7. Protected roles
 
-| Pages | Navigation code | Granted with | API permission |
-|---|---|---|---|
-| Companies, Jobs, Shipments, Customs, Operations documents, Deliveries, Debit notes, Customer payments, Job charges, Supplier costs, Supplier payments | `sales.companies.view`, `operations.jobs.view`, `operations.shipments.view`, `operations.customs.view`, `operations.documents.view`, `operations.deliveries.view`, `finance.debit_notes.view`, `finance.customer_payments.view`, `finance.job_charges.view`, `finance.supplier_costs.view`, `finance.supplier_payments.view` | Master data (`master.reference.*`) | `master.reference.view` |
-| Reports | `reports.view` | Any report grant (`report.read`) | `report.read` |
-| Accounts receivable, Accounts payable, Job profitability | `finance.accounts_receivable.view`, `finance.accounts_payable.view`, `finance.job_profitability.view` | Any report grant (`report.read`) | `report.read` |
+`PROTECTED_ROLE_CODES = {SUPER_ADMIN}`.
 
-### 2.5 Page grant -> API permission mapping
+- Only a caller that itself holds `*, *` may create, update, deactivate,
+  or delete it — enforced in the service layer, not only in the UI.
+- Its wildcard grant cannot be removed (`sync_role_permissions` refuses a set
+  without `*`).
+- The last active `SUPER_ADMIN` holder cannot be unassigned, deactivated or
+  deleted (`_assert_super_admin_remains`).
+- The built-in system administrator *account* (`system_identity =
+  DEFAULT_SYSTEM_ADMIN`) additionally cannot be deleted or deactivated, and its
+  role cannot be changed.
 
-Granting a page/action also enables the API source permissions shown below.
-`-` means the page code has no additional source mapping. For master-data
-collections the page code is itself checked by the collection router, so it
-is still an API guard even when no extra source is listed.
+## 8. Enforcement
 
-| Page permission | Implied API source permissions |
-|---|---|
-| `admin.archive.delete` | `archive.view`, `archive.hard_delete` |
-| `admin.archive.edit` | `archive.view`, `archive.restore` |
-| `admin.archive.export` | `report.export` |
-| `admin.archive.restore` | `archive.restore` |
-| `admin.archive.view` | `archive.view` |
-| `admin.audit_logs.export` | `report.export` |
-| `admin.audit_logs.view` | `audit_log.read` |
-| `admin.document_sequences.create` | `document_sequence.create` |
-| `admin.document_sequences.delete` | `document_sequence.delete` |
-| `admin.document_sequences.edit` | `document_sequence.update` |
-| `admin.document_sequences.export` | `report.export` |
-| `admin.document_sequences.update` | `document_sequence.update` |
-| `admin.document_sequences.view` | `document_sequence.read` |
-| `admin.roles.create` | `role.manage` |
-| `admin.roles.delete` | `role.manage` |
-| `admin.roles.edit` | `role.manage` |
-| `admin.roles.export` | `report.export` |
-| `admin.roles.update` | `role.manage` |
-| `admin.roles.view` | `role.read` |
-| `admin.users.create` | `user.manage` |
-| `admin.users.delete` | `user.manage` |
-| `admin.users.edit` | `user.manage` |
-| `admin.users.export` | `report.export` |
-| `admin.users.update` | `user.manage` |
-| `admin.users.view` | `user.read` |
-| `configuration.create` | `configuration.manage` |
-| `configuration.delete` | `configuration.manage` |
-| `configuration.edit` | `configuration.manage`, `configuration.configure`, `service_order_config.publish`, `configuration.publish`, `configuration.activate`, `configuration.rollback` |
-| `configuration.export` | `report.export` |
-| `configuration.update` | `configuration.manage`, `configuration.configure`, `service_order_config.publish`, `configuration.publish`, `configuration.activate`, `configuration.rollback` |
-| `configuration.view` | `configuration.manage`, `service_order_config.view`, `configuration.read`, `configuration.compare` |
-| `dashboard.export` | `report.export` |
-| `dashboard.summary` | `dashboard.summary` |
-| `dashboard.view` | - |
-| `finance.accounting.create` | `journal_entry.create`, `chart_of_accounts.create`, `financial_account.create` |
-| `finance.accounting.delete` | `journal_entry.create`, `journal_entry.delete`, `chart_of_accounts.delete`, `financial_account.delete` |
-| `finance.accounting.edit` | `journal_entry.post`, `journal_entry.update`, `accounting_period.close`, `accounting_period.update`, `chart_of_accounts.manage`, `chart_of_accounts.create`, `chart_of_accounts.update`, `chart_of_accounts.delete`, `financial_account.create`, `financial_account.update`, `financial_account.delete` |
-| `finance.accounting.export` | `report.export` |
-| `finance.accounting.view` | `journal_entry.read`, `accounting_period.read`, `chart_of_accounts.read`, `financial_account.read` |
-| `finance.accounting_periods.export` | `report.export` |
-| `finance.accounting_periods.update` | `accounting_period.update`, `accounting_period.close` |
-| `finance.accounting_periods.view` | `accounting_period.read` |
-| `finance.accounts_payable.view` | `report.read` |
-| `finance.accounts_receivable.view` | `report.read` |
-| `finance.chart_of_accounts.create` | `chart_of_accounts.create` |
-| `finance.chart_of_accounts.delete` | `chart_of_accounts.delete` |
-| `finance.chart_of_accounts.export` | `report.export` |
-| `finance.chart_of_accounts.update` | `chart_of_accounts.update` |
-| `finance.chart_of_accounts.view` | `journal_entry.read`, `chart_of_accounts.read` |
-| `finance.customer_payments.view` | `master.reference.view` |
-| `finance.debit_notes.view` | `master.reference.view` |
-| `finance.financial_accounts.create` | `financial_account.create` |
-| `finance.financial_accounts.delete` | `financial_account.delete` |
-| `finance.financial_accounts.export` | `report.export` |
-| `finance.financial_accounts.update` | `financial_account.update` |
-| `finance.financial_accounts.view` | `journal_entry.read`, `financial_account.read` |
-| `finance.financial_documents.create` | `financial_document.create` |
-| `finance.financial_documents.delete` | `financial_document.delete` |
-| `finance.financial_documents.edit` | `financial_document.update_draft`, `financial_document.update`, `financial_document.delete`, `financial_document.post`, `financial_document.submit`, `financial_document.reverse`, `financial_document.allocate`, `attachment.upload`, `attachment.delete` |
-| `finance.financial_documents.export` | `report.export` |
-| `finance.financial_documents.submit` | `financial_document.submit` |
-| `finance.financial_documents.update` | `financial_document.update`, `attachment.upload`, `attachment.delete` |
-| `finance.financial_documents.view` | `financial_document.read`, `attachment.read` |
-| `finance.job_charges.view` | `master.reference.view` |
-| `finance.job_profitability.view` | `report.read` |
-| `finance.journal_entries.create` | `journal_entry.create` |
-| `finance.journal_entries.delete` | `journal_entry.delete` |
-| `finance.journal_entries.export` | `report.export` |
-| `finance.journal_entries.update` | `journal_entry.update` |
-| `finance.journal_entries.view` | `journal_entry.read` |
-| `finance.posting_rules.create` | `posting_rule.create` |
-| `finance.posting_rules.delete` | `posting_rule.delete` |
-| `finance.posting_rules.edit` | `posting_rule.manage`, `posting_rule.create`, `posting_rule.update`, `posting_rule.delete` |
-| `finance.posting_rules.export` | `report.export` |
-| `finance.posting_rules.update` | `posting_rule.update` |
-| `finance.posting_rules.view` | `posting_rule.read` |
-| `finance.reports.export` | `reports.revenue_expense.export`, `reports.accounts_receivable.export`, `reports.accounts_payable.export`, `reports.general_ledger.export`, `reports.trial_balance.export`, `reports.profit_loss.export`, `reports.balance_sheet.export`, `reports.cash_flow.export` |
-| `finance.reports.view` | `reports.revenue_expense.view`, `reports.accounts_receivable.view`, `reports.accounts_payable.view`, `reports.general_ledger.view`, `reports.trial_balance.view`, `reports.profit_loss.view`, `reports.balance_sheet.view`, `reports.cash_flow.view` |
-| `finance.service_charges.create` | `service_charge.create` |
-| `finance.service_charges.delete` | `service_charge.delete` |
-| `finance.service_charges.edit` | `service_charge.create`, `service_charge.update`, `service_charge.issue`, `service_charge.submit`, `service_charge.convert_to_invoice` |
-| `finance.service_charges.export` | `report.export` |
-| `finance.service_charges.submit` | `service_charge.submit` |
-| `finance.service_charges.update` | `service_charge.update` |
-| `finance.service_charges.view` | `service_charge.read` |
-| `finance.supplier_costs.view` | `master.reference.view` |
-| `finance.supplier_payments.view` | `master.reference.view` |
-| `master.business_parties.create` | - |
-| `master.business_parties.delete` | - |
-| `master.business_parties.export` | `report.export` |
-| `master.business_parties.update` | - |
-| `master.business_parties.view` | - |
-| `master.container_types.create` | - |
-| `master.container_types.delete` | - |
-| `master.container_types.export` | `report.export` |
-| `master.container_types.update` | - |
-| `master.container_types.view` | - |
-| `master.currencies.create` | - |
-| `master.currencies.delete` | - |
-| `master.currencies.export` | `report.export` |
-| `master.currencies.update` | - |
-| `master.currencies.view` | - |
-| `master.fee_types.create` | - |
-| `master.fee_types.delete` | - |
-| `master.fee_types.export` | `report.export` |
-| `master.fee_types.update` | - |
-| `master.fee_types.view` | - |
-| `master.party_roles.create` | - |
-| `master.party_roles.delete` | - |
-| `master.party_roles.export` | `report.export` |
-| `master.party_roles.update` | - |
-| `master.party_roles.view` | - |
-| `master.place_roles.create` | - |
-| `master.place_roles.delete` | - |
-| `master.place_roles.export` | `report.export` |
-| `master.place_roles.update` | - |
-| `master.place_roles.view` | - |
-| `master.reference.create` | `master.reference.manage` |
-| `master.reference.delete` | `master.reference.manage` |
-| `master.reference.edit` | `master.reference.manage`, `customs_credential.retrieve` |
-| `master.reference.export` | `report.export` |
-| `master.reference.view` | `master.reference.view` |
-| `master.trade_directions.create` | - |
-| `master.trade_directions.delete` | - |
-| `master.trade_directions.export` | `report.export` |
-| `master.trade_directions.update` | - |
-| `master.trade_directions.view` | - |
-| `master.transport_assets.create` | - |
-| `master.transport_assets.delete` | - |
-| `master.transport_assets.export` | `report.export` |
-| `master.transport_assets.update` | - |
-| `master.transport_assets.view` | - |
-| `master.transport_types.create` | - |
-| `master.transport_types.delete` | - |
-| `master.transport_types.export` | `report.export` |
-| `master.transport_types.update` | - |
-| `master.transport_types.view` | - |
-| `operations.customs.view` | `master.reference.view` |
-| `operations.deliveries.view` | `master.reference.view` |
-| `operations.documents.view` | `master.reference.view` |
-| `operations.jobs.view` | `master.reference.view` |
-| `operations.reports.export` | `reports.service_order_register.export`, `reports.service_order_status.export`, `reports.service_order_containers.export`, `reports.service_order_profitability.export` |
-| `operations.reports.view` | `reports.service_order_register.view`, `reports.service_order_status.view`, `reports.service_order_containers.view`, `reports.service_order_profitability.view` |
-| `operations.service_orders.create` | `service_order.create`, `service_order_config.create` |
-| `operations.service_orders.delete` | `service_order.delete`, `service_order_config.delete` |
-| `operations.service_orders.edit` | `service_order.update`, `service_order.complete`, `service_order.delete`, `service_order.submit`, `service_order_config.create`, `service_order_config.update`, `service_order_config.delete`, `attachment.upload` |
-| `operations.service_orders.export` | `report.export` |
-| `operations.service_orders.submit` | `service_order.submit` |
-| `operations.service_orders.update` | `service_order.update`, `service_order_config.create`, `service_order_config.update`, `attachment.upload` |
-| `operations.service_orders.view` | `service_order.read`, `service_order_config.view`, `attachment.read` |
-| `operations.shipments.view` | `master.reference.view` |
-| `reports.accounts_payable.export` | `report.export` |
-| `reports.accounts_payable.view` | - |
-| `reports.accounts_receivable.export` | `report.export` |
-| `reports.accounts_receivable.view` | - |
-| `reports.balance_sheet.export` | `report.export` |
-| `reports.balance_sheet.view` | - |
-| `reports.cash_flow.export` | `report.export` |
-| `reports.cash_flow.view` | - |
-| `reports.general_ledger.export` | `report.export` |
-| `reports.general_ledger.view` | - |
-| `reports.profit_loss.export` | `report.export` |
-| `reports.profit_loss.view` | - |
-| `reports.revenue_expense.export` | `report.export` |
-| `reports.revenue_expense.view` | - |
-| `reports.service_order_containers.export` | `report.export` |
-| `reports.service_order_containers.view` | - |
-| `reports.service_order_profitability.export` | `report.export` |
-| `reports.service_order_profitability.view` | - |
-| `reports.service_order_register.export` | `report.export` |
-| `reports.service_order_register.view` | - |
-| `reports.service_order_status.export` | `report.export` |
-| `reports.service_order_status.view` | - |
-| `reports.trial_balance.export` | `report.export` |
-| `reports.trial_balance.view` | - |
-| `reports.view` | `report.read` |
-| `sales.companies.view` | `master.reference.view` |
-| `sales.quotations.create` | `quotation.create` |
-| `sales.quotations.delete` | `quotation.delete` |
-| `sales.quotations.edit` | `quotation.update`, `quotation.update_draft`, `quotation.send`, `quotation.accept`, `quotation.convert`, `quotation.delete`, `quotation.submit`, `quotation.revise`, `attachment.upload` |
-| `sales.quotations.export` | `report.export` |
-| `sales.quotations.quotation` | `quotation.send` |
-| `sales.quotations.re_quotation` | `quotation.revise` |
-| `sales.quotations.submit` | `quotation.submit` |
-| `sales.quotations.update` | `quotation.update`, `quotation.update_draft`, `attachment.upload` |
-| `sales.quotations.view` | `quotation.read`, `attachment.read` |
-| `settings.app_config.edit` | - |
-| `settings.app_config.update` | - |
-| `settings.app_config.view` | - |
-| `settings.backup.create` | `backup.manage` |
-| `settings.backup.edit` | `backup.manage` |
-| `settings.backup.update` | `backup.manage` |
-| `settings.backup.view` | `backup.read` |
-| `settings.manage` | `settings.app_config.view`, `settings.app_config.update`, `settings.backup.view`, `settings.backup.create`, `settings.backup.update` |
+### 8.1 Dependencies
 
-Notes:
+```python
+from app.core.deps import require_permission, require_any_permission
 
-- Posting rules are their own page rather than part of Accounting: which
-  accounts a document posts through is a distinct decision from the accounts
-  themselves, and an auditor should be able to read the rules without being
-  able to rewrite them. `posting_rule.manage` is deliberately **not** implied
-  by `finance.accounting.edit`, so granting "edit accounting" does not
-  silently grant the ability to redirect where a document posts.
-- The master-data collections use their page code directly: for example
-  `master.party_roles.view` guards `GET /partyRoles`, and
-  `master.party_roles.update` guards `PUT /partyRoles/{id}`. The coarse
-  `master.reference.view` / `master.reference.manage` fallback remains for
-  roles created before the granular pages existed.
-- Setting another account's password (`POST /users/{id}/password`) is gated
-  on `user.manage`, not a permission of its own. Only a platform administrator
-  may reset the built-in administrator, enforced by
-  `_assert_can_manage_platform_admin`.
-- Archive hard delete is backend-only. The matrix offers view, export, and
-  restore; `archive.hard_delete` is never exposed as a page action. Legacy
-  `admin.archive.edit` and `admin.archive.delete` codes are still accepted for
-  existing roles but are not offered to new roles.
+@router.get("/quotations", dependencies=[Depends(require_permission("quotation.read"))])
+async def list_quotations(): ...
 
-## 3. Role Definitions
-
-Roles are defined in code in `ROLE_DEFINITIONS`. Only **PLATFORM_ADMIN** is
-provisioned automatically (`BUILTIN_ROLE_CODES`); every other defined role is a
-convenience template that must be created manually from Roles & Permissions, and
-the platform administrator can also create entirely custom roles.
-
-| Code | Name | Provisioned at setup | Description |
-|---|---|---|---|
-| PLATFORM_ADMIN | Platform Administrator | Yes | Full platform administration (all permission codes) |
-| ADMINISTRATOR | Administrator | No | System administration |
-| OPERATIONS_MANAGER | Operations Manager | No | Operations and review |
-| SALES_OFFICER | Sales Officer | No | Quotation and commercial work |
-| OPERATIONS_OFFICER | Operations Officer | No | Service-order operations |
-| FINANCE_OFFICER | Finance Officer | No | Financial drafts, payments, and allocations |
-| FINANCE_MANAGER | Finance Manager | No | Posting, periods, journals, and reversals |
-| AUDITOR | Auditor | No | Read-only review |
-
-### 3.1 Platform Administrator
-
-All permission codes in the catalog (`ALL_PERMISSION_CODES`), including every
-source, page and matrix permission. This role is built in and is the super-admin
-role used for first-run provisioning; it cannot be locked out.
-
-### 3.2 Administrator
-
-Source permissions:
-
-```text
-user.read, user.manage, role.read, role.manage,
-quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
-service_order.read, service_order.create, service_order.update, service_order.complete,
-service_order_config.view, service_order_config.create, service_order_config.update, service_order_config.delete,
-service_charge.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
-financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate,
-journal_entry.read, journal_entry.create, journal_entry.post,
-accounting_period.read, accounting_period.close, chart_of_accounts.manage, posting_rule.read, posting_rule.manage,
-attachment.read, attachment.upload, attachment.delete, audit_log.read, report.read,
-archive.view, archive.restore, archive.hard_delete,
-master.reference.view, master.reference.manage,
-configuration.manage, configuration.read, configuration.publish, configuration.activate,
-configuration.rollback, configuration.compare,
-admin.user_manage, admin.role_manage, settings.manage, backup.read, backup.manage
+@router.get("/settings", dependencies=[Depends(require_any_permission("settings.app_config.view", "configuration.manage"))])
+async def read_settings(): ...
 ```
 
-### 3.3 Operations Manager
+- `require_permission(*codes)` requires **every** code.
+- `require_any_permission(*codes)` requires **at least one**.
+- Missing or invalid credentials answer `401` (`AUTH_REQUIRED`,
+  `ACCESS_TOKEN_EXPIRED`, `SESSION_REVOKED`, `SESSION_EXPIRED`). An authenticated
+  caller without the permission answers `403 ACCESS_DENIED`.
+- The dependency calls `context.has_permission(code)`, which asks Casbin
+  directly. There is no per-request permission cache in the decision path.
 
-```text
-user.read, role.read,
-quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
-service_order.read, service_order.create, service_order.update, service_order.complete,
-service_order_config.view, service_order_config.update,
-service_charge.read, service_charge.create, service_charge.issue,
-financial_document.read, attachment.read, attachment.upload, audit_log.read, report.read,
-master.reference.view, master.reference.manage
+Inline business guards (ownership, record scope, "only the creator may edit a
+draft") stay in the service layer and run **after** the Casbin check. They
+narrow access; they never widen it.
+
+### 8.2 Denied requests are audited centrally
+
+Every `AccessDenied` (HTTP 403) is recorded once, by
+`app/core/database.py::record_denial`, from the request's own session: the failed
+transaction is rolled back, the `AUTHORIZATION_DENIED` event is written (action =
+the missing code, `metadata.path`, `metadata.method`) and committed, then the
+refusal continues to the error handler. Route dependencies, the master-data inline
+guards and service-level refusals are all covered without each call site
+remembering to log, and an audit failure never turns a refusal into a 500.
+
+`RequestContext.has_permission` is the only permission primitive in the request
+path; `access_modes` (maintenance / read-only), search, reports and master data use
+it too, so there is one decision point, not one per module.
+
+### 8.3 Modules covered
+
+Every registered router is protected: `auth` (users, roles, permissions),
+`quotations`, `operations`, `finance`, `reports`, `master-data`, `settings`,
+`telegram`, `backup`, `excel-io`, `audit`, `archive`. A dependency-graph inventory
+of the 396 registered routes finds exactly 13 without a guard, and all 13 are
+deliberate: `/health`, `/health/ready`, `/`, the login/refresh/setup/password-
+recovery routes, and the Telegram webhook (authenticated by its own secret
+header). Everything else reaches `get_current_context` plus a Casbin decision.
+
+Two endpoints intentionally rely on an inline decision rather than a dependency:
+the settings GETs return a redacted config to every signed-in user (the Settings
+page itself needs `settings.app_config.view`), and the Excel module catalog is
+filtered to the modules the caller may view or manage.
+
+## 9. Policy synchronization
+
+```
+Admin saves a role ──► rows written to casbin_rule ──► commit
+                        └─► cache.bump("auth")             (Redis version +1)
+                        └─► reload()                        (this worker, immediately)
+Other worker, next request ──► ensure_current() sees the new version ──► reload()
 ```
 
-### 3.4 Sales Officer
+- The enforcer keeps a compiled in-memory copy; a decision costs a matcher
+  evaluation, not a query.
+- `reload()` reads the published version **before** the policy rows. A change
+  committed while the rows are being read therefore leaves a newer version than
+  the one recorded, and the next request reloads instead of trusting a copy that
+  missed it.
+- `CASBIN_RELOAD_INTERVAL_SECONDS` (default `30`) is the backstop: the copy is
+  re-read from PostgreSQL at least that often, so `REDIS_ENABLED=false` or a Redis
+  outage cannot freeze a stale policy set.
+- **Fail closed.** If the policy table cannot be read, the in-memory copy is
+  dropped and the request is refused with `503 AUTHORIZATION_UNAVAILABLE` until a
+  reload succeeds. A policy update that cannot be published does not silently keep
+  serving the old decision.
+- Disabled roles are excluded at load time: a `p` or `g` row whose `role:<code>`
+  is `INACTIVE` (or whose role row was deleted) never reaches the enforcer.
+- Assignments are rows: removing one bumps the version every worker watches, so a
+  revoked role cannot outlive the next request.
 
-```text
-quotation.read, quotation.create, quotation.update_draft, quotation.send, quotation.accept, quotation.convert,
-service_order.read, service_charge.read, service_charge.create, service_charge.issue,
-attachment.read, attachment.upload, report.read, master.reference.view
+## 9.1 Startup seeding and an existing database
+
+`ensure_permission_catalog` adds missing catalog rows, the seven roles and any
+grant a role lacks, then publishes the new policy version. It never removes a grant
+and never rewrites a role's stored codes, so an administrator's edits survive a
+restart. The consequence is that a grant written by an *older* compiler keeps its
+old capabilities until that role is saved again from the Roles screen — the current
+build's page grants are correct, and re-saving the role recomputes them.
+
+For a database that needs every role recomputed at once there is a development
+command (it refuses to run against a production environment):
+
+```bash
+cd backend
+uv run python scripts/rebuild_role_permissions.py           # dry run: per-role diff
+uv run python scripts/rebuild_role_permissions.py --apply   # write + publish
 ```
 
-### 3.5 Operations Officer
+It rebuilds each role from the page codes it holds plus any capability no page can
+produce, writes only that role's `p` rows (never users, sessions, `g` rows or
+business data) and is idempotent: a second run reports no changes. Because the page
+selection is the authority, a capability some page could produce but that the role
+holds without that page counts as stale and is removed — the dry run lists every
+removal first.
 
-```text
-quotation.read, quotation.convert,
-service_order.read, service_order.create, service_order.update, service_order.complete,
-service_charge.read, service_charge.create, service_charge.issue,
-attachment.read, attachment.upload, report.read, master.reference.view
-```
+Redis-unavailable behaviour, verified in isolation: a committed policy change is not
+seen until the reload interval elapses, then the next request reloads and the
+revocation applies; if the policy table cannot be read, the request is refused with
+`503 AUTHORIZATION_UNAVAILABLE` and every permission check denies (fail closed).
+See `docs/10_testing_and_quality.md` for the probe outcome.
 
-### 3.6 Finance Officer
+## 10. Administration APIs
 
-```text
-service_order.read, service_charge.read, service_charge.create, service_charge.issue, service_charge.convert_to_invoice,
-financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.allocate,
-journal_entry.read, journal_entry.create, journal_entry.post,
-accounting_period.read, attachment.read, attachment.upload, report.read,
-master.reference.view, finance.view
-```
+All under `/api/v1`, all returning the standard `{"data": ...}` envelope.
 
-### 3.7 Finance Manager
+| Method and path | Permission | Purpose |
+|---|---|---|
+| `GET /users` | `user.read` | Paginated, searchable, filterable list with the assigned role (a bare list, unchanged) |
+| `POST /users` | `user.manage` | Create a user with its one assigned role |
+| `GET /users/{id}` | `user.read` | Detail, assigned role and effective permissions |
+| `PATCH`,`PUT /users/{id}` | `user.manage` | Update fields, assigned role and status |
+| `POST /users/{id}/password` | `user.manage` | Administrator password reset |
+| `POST /users/{id}/revoke-sessions` | `user.manage` | Force logout |
+| `DELETE /users` | `user.manage` | Bulk delete (inactive only) |
+| `GET /users/{id}/role-assignments` | `role.read` | The role currently held (zero or one) |
+| `POST /users/{id}/role-assignments` | `role.manage` | **Replace** the assigned role (`role_id` or `role_code`) |
+| `DELETE /users/{id}/role-assignments/{roleCode}` | `role.manage` | Remove the role (the user then holds none) |
+| `GET /users/{id}/effective-permissions` | `role.read` | Every code the assigned role grants |
+| `GET /roles` | `role.read` | Paginated list with counts |
+| `POST /roles` | `role.manage` | Create (direct grants) |
+| `GET /roles/{id}` | `role.read` | Detail: grants, users |
+| `PUT /roles/{id}` | `role.manage` | Rename, describe, activate/deactivate, replace grants |
+| `POST /roles/{id}/duplicate` | `role.manage` | Copy a role |
+| `DELETE /roles` | `role.manage` | Bulk delete (inactive, unassigned only) |
+| `PUT`,`POST`,`DELETE /roles/{id}/permissions` | `role.manage` | Replace / grant / revoke codes |
+| `GET /permissions` | `role.read` | Flat catalog |
+| `GET /permissions/catalog` | `role.read` | Matrix metadata: pages, actions, groups, roles, modules |
 
-```text
-service_charge.read,
-financial_document.read, financial_document.create, financial_document.update_draft, financial_document.post, financial_document.reverse, financial_document.allocate,
-journal_entry.read, journal_entry.create, journal_entry.post,
-accounting_period.read, accounting_period.close, chart_of_accounts.manage,
-posting_rule.read, posting_rule.manage,
-audit_log.read, attachment.read, report.read, master.reference.view, finance.view, report.export
-```
+Payload notes:
 
-### 3.8 Auditor
+- The user endpoints accept a single `role_code` (aliases `roleCode` / `role`);
+  the role-assignment endpoint accepts `role_id` or `role_code`. A `roles` /
+  `role_ids` array is refused with `422` — a user holds exactly one role.
+- `GET /users` keeps its bare-list contract (the SPA reads it directly) and each
+  row carries the assigned `role`, the display label and `pagePermissions` — the
+  pages that account can open. Responses still carry `roles` as a list, which now
+  holds at most one code.
+- `permissions` on the role endpoints is the *page/capability selection*; the
+  server compiles it (see §4.1) and returns the resulting concrete codes. A
+  revoke removes the codes the selection uniquely supplied, not only the literal
+  code named in the request.
+- Role rows and the role detail both carry `isProtected`, so the UI can disable
+  editing without hardcoding the role code.
 
-```text
-user.read, role.read,
-quotation.read, service_order.read, service_charge.read,
-financial_document.read, journal_entry.read, accounting_period.read, posting_rule.read,
-attachment.read, audit_log.read, report.read, master.reference.view, finance.view
-```
+## 11. Delegation safety
 
-## 4. Role-Permission Matrix
+- A non-super administrator cannot grant a code it does not itself hold
+  (`_assert_can_grant_permissions`, checked against the compiled set).
+- A non-super administrator cannot touch the `SUPER_ADMIN` role, nor change a
+  `SUPER_ADMIN` holder's roles or status.
+- Nobody can change their own roles or deactivate their own account.
+- Unknown or disabled roles are refused with `422`/`409`, never silently ignored.
+- Duplicate role codes answer `409 DUPLICATE_ROLE`; unknown permission codes
+  answer `422 VALIDATION_ERROR`; a role that still has active users answers
+  `409 ROLE_IN_USE` and cannot be deactivated or deleted.
 
-Legend: `Y` = granted, `-` = not granted. `ALL` = every permission code.
+## 12. Frontend
 
-| Capability | Platform Admin | Admin | Ops Manager | Sales Officer | Ops Officer | Finance Officer | Finance Manager | Auditor |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Users read | ALL | Y | Y | - | - | - | - | Y |
-| Users manage | ALL | Y | - | - | - | - | - | - |
-| Roles read | ALL | Y | Y | - | - | - | - | Y |
-| Roles manage | ALL | Y | - | - | - | - | - | - |
-| Quotation create/edit | ALL | Y | Y | Y | - | - | - | - |
-| Quotation send/accept/convert | ALL | Y | Y | Y | convert only | - | - | - |
-| Service-order create/update | ALL | Y | Y | - | Y | - | - | - |
-| Service-order complete | ALL | Y | Y | - | Y | - | - | - |
-| Service-order config | ALL | Y | view/update | - | - | - | - | - |
-| Service-charge create/issue | ALL | Y | Y | Y | Y | Y | - | - |
-| Service-charge convert to invoice | ALL | Y | - | - | - | Y | - | - |
-| Financial-document read | ALL | Y | Y | - | - | Y | Y | Y |
-| Financial-document create/draft | ALL | Y | - | - | - | Y | Y | - |
-| Financial-document post | ALL | Y | - | - | - | Y | Y | - |
-| Financial-document allocate | ALL | Y | - | - | - | Y | Y | - |
-| Financial-document reverse | ALL | Y | - | - | - | - | Y | - |
-| Journal read | ALL | Y | - | - | - | Y | Y | Y |
-| Journal create/post | ALL | Y | - | - | - | Y | Y | - |
-| Accounting-period close | ALL | Y | - | - | - | - | Y | - |
-| Chart of accounts manage | ALL | Y | - | - | - | - | Y | - |
-| Posting-rule read | ALL | Y | - | - | - | - | Y | Y |
-| Posting-rule manage | ALL | Y | - | - | - | - | Y | - |
-| Master data view | ALL | Y | Y | Y | Y | Y | Y | Y |
-| Master data manage | ALL | Y | Y | - | - | - | - | - |
-| Configuration | ALL | Y | - | - | - | - | - | - |
-| Attachments | ALL | read/upload/delete | read/upload | read/upload | read/upload | read/upload | read | read |
-| Archive view/export/restore | ALL | Y | - | - | - | - | - | - |
-| Audit log read | ALL | Y | Y | - | - | - | Y | Y |
-| Reports | ALL | Y | Y | Y | Y | Y | Y | Y |
-| Report export | ALL | - | - | - | - | - | Y | - |
-| Backup read/manage | ALL | Y | - | - | - | - | - | - |
-| Settings manage | ALL | Y | - | - | - | - | - | - |
-| Finance view | ALL | - | - | - | - | Y | Y | Y |
+- `/auth/me` and the login/refresh payloads return `roles`, `permissions`
+  (page codes), `pageAccess` (same list) and `sourcePermissions` (capability
+  codes). `ALL_PAGES` marks a super administrator.
+- `middleware/auth.global.ts` and `app/utils/freight/permissions.ts` read those
+  codes to hide routes, menu entries and buttons. `useAuthStore` refreshes the
+  snapshot after a role or permission change.
+- The matrix (`AppRolePermissionMatrix.vue`) renders the **page catalog from
+  `/permissions/catalog`**, falling back to the built-in list while the request
+  is in flight. It sends page codes; the server compiles them.
+- The users form assigns the role with a searchable single-select dropdown
+  (`role` — "Assigned Role") and shows the pages the account can open
+  (`pagePermissions`) read-only. A protected role renders its matrix read-only.
+- The role form collects name, description and the direct permission matrix;
+  there are no inheritance controls and no computed effective-permission field.
+- An authorization refusal on a save lands in the form's page-level message (the
+  backend message, e.g. "Missing permission: role.manage"), not in a toast.
+- The frontend holds no permission implication table. It used to: an extensive
+  `SOURCE_PERMISSION_PAGE_ACTIONS` graph duplicated the backend mapping and could
+  disagree with it. It was removed.
 
-## 5. Separation of Duties
+## 13. Validation, audit and security rules
 
-Recommended restrictions (not enforced by the catalog itself; apply through
-role design):
+- Every policy change is audited: `ROLE_CREATED`, `ROLE_UPDATED`,
+  `ROLE_PERMISSIONS_CHANGED`, `ROLE_PERMISSIONS_GRANTED`,
+  `ROLE_PERMISSIONS_REVOKED`, `ROLE_ASSIGNED`,
+  `ROLE_UNASSIGNED`, `ROLE_DELETED`, `ROLE_DUPLICATE`.
+- Every refusal is audited as `AUTHORIZATION_DENIED` with the missing code and
+  the request path.
+- A role save and its policy rows commit together; a failure leaves neither.
+- Concurrent edits: the role row is locked (`SELECT ... FOR UPDATE`) and a user's
+  assignments are serialized, so two requests cannot interleave a partial grant
+  set.
+- Disabled users cannot authenticate; disabled roles grant nothing.
 
-- A finance officer may prepare and post only when organizational policy permits.
-- Reversal requires the finance-manager role (`financial_document.reverse`).
-- Chart-of-accounts management is separate from ordinary posting.
-- Period closure requires the finance-manager role (`accounting_period.close`).
-- `customs_credential.retrieve` is reserved for a future dedicated
-  customs-password retrieval workflow; no route currently checks it. Grant it
-  sparingly when that workflow is implemented.
-- A user should not approve their own high-risk transaction when an approval
-  workflow is enabled.
+## 14. Development database
 
-## 6. Scope and Assignment Rules
+- The database ships empty. First login is `/auth/setup` →
+  `POST /api/v1/auth/setup/initialize`, which creates the first account with
+  `SUPER_ADMIN` and seeds document sequences, currencies, the role vocabulary and
+  the permission catalog. No password is hardcoded: the operator supplies it.
+- Startup (`lifespan`) calls `ensure_permission_catalog()`: missing permission
+  rows, the seven roles and the missing Casbin grants are added, then the enforcer
+  is reloaded and the `auth` cache version bumped.
+- `reset_all_data` preserves `users`, `user_credentials`, `user_sessions`,
+  `used_refresh_tokens`, `roles`, `permissions`, `casbin_rule`, `audit_events` and
+  `import_jobs` — an administrative reset must never delete the administrator or
+  reopen the public setup endpoint.
+- Development authorization data may be dropped and recreated; nothing in the
+  schema depends on it.
 
-- There is no organization/branch scope. A granted permission applies to all
-  records of that module.
-- A user has exactly one active role assignment. Replaced assignments are
-  expired for history, and expired assignments do not contribute permissions.
-- The API is authoritative: the UI hides unavailable actions, but every
-  protected endpoint re-checks the permission server-side.
-- The Platform Administrator role is built in (`is_system_role = true`) and
-  always resolves to all permission codes; it cannot be reduced below the
-  bootstrap administrator.
+## 15. Known limits
 
-## 7. Protected System Administrator
+- There is no tenant dimension yet. The model reserves `v3`–`v5`, so a `dom`
+  column can be added without reshaping the policy table.
+- **Role assignments have no expiry.** The old `user_role_assignments.expires_at`
+  column went away with that table: an assignment is a `g` row and time-limited
+  access is revoked by removing the role, which publishes a new policy version on
+  the next request. No current workflow depended on scheduled expiry.
+- There is no automated route-inventory gate. The dependency-graph audit that
+  produced the 396/13 figures in §8.3 was run by hand; a new router must add its
+  guard consciously, and `docs/10_testing_and_quality.md` records this gap.
+- Two coarse capabilities (`configuration.manage`, `master.reference.manage`) and
+  `customs_credential.retrieve` are not granted by any matrix page. The first two
+  are fallbacks the guards still accept for roles created before the matrix; the
+  third belongs to a feature without an endpoint yet.
 
-The account created by first-run setup is permanently identified by
-`users.system_identity = 'DEFAULT_SYSTEM_ADMIN'`. This machine identifier is
-unique, is never accepted from an API request, and is independent of mutable
-username, email, display name, and user code.
-
-Backend rules return HTTP 403 and write a rejected audit event when an operation
-attempts to:
-
-- delete the protected account, including a mixed bulk deletion;
-- deactivate it;
-- replace or clear its Platform Administrator role;
-- deactivate or delete the built-in Platform Administrator role; or
-- remove any catalog permission from that role.
-
-The account's ordinary profile fields remain editable. The UI marks protected
-records from the backend-provided flags, hides destructive row/detail actions,
-disables bulk destructive actions containing a protected record, and makes the
-protected role and permission matrix read-only. These UI controls are only a
-convenience; service-layer checks are authoritative.
-
-Administrative business-data reset preserves users, credentials, roles,
-permissions, assignments, sessions, and audit history. It therefore cannot
-delete the protected account or reopen first-run setup.
-
-### Access recovery
-
-Recovery requires production-host/database administrator access; there is no
-HTTP bypass. Find the protected account by `system_identity`, then restore its
-credential through the forgot-password flow (`/auth/forgot-password/...` email
-codes) with that account's email, or by direct database/administrator-assisted
-password entry. Rotate exposed credentials, inspect rejected/successful
-administrative audit events, and revoke active sessions after recovery.
-
-## 8. Role Administration and Delegation Safety
-
-- `GET /api/v1/roles` supports search, status filtering, stable sorting and the
-  standard paginated `{items, meta}` envelope. Each row includes the number of
-  currently assigned users; role detail also includes their identifiers and
-  display names.
-- `POST /api/v1/roles/{role_id}/duplicate` creates an active custom copy with a
-  distinct code and an audit event. The Roles & Permissions page exposes this
-  operation from the record action menu.
-- A delegated role manager may grant or assign only capabilities already held
-  by that manager. Page-level matrix permissions are evaluated through their
-  implied API permissions, preventing a custom role from being used as a
-  privilege-escalation bridge.
-- No user, including a Platform Administrator, may replace their own role.
-- A role assigned to an active user cannot be deactivated. Reassign those users
-  first. The built-in Platform Administrator role remains non-deletable and
-  cannot lose catalog permissions.
-- Role replacement locks the user row, permission updates lock the role row,
-  and last-Platform-Administrator checks lock the built-in role. PostgreSQL's
-  partial unique index remains the final concurrency backstop.
-- The permission matrix supports module/action filtering, search, applicable
-  Select All/Clear All operations, and an unsaved-change indicator.
-
-Migration `a2b3c4d5e6f7` normalizes every current assignment into the
-non-expiring form covered by the unique index. Any legacy active user without a
-role is mapped to the active, zero-permission `MIGRATED_NO_ACCESS` role. This is
-an explicit least-privilege mapping; administrators must review and reassign
-those users after deployment.
-
-## 9. Enforcement in the Frontend
-
-- `middleware/auth.global.ts` checks `definePageMeta.permission` before rendering a
-  protected page. The page guard is a UX gate; the API check is authoritative.
-- `useAuthStore().canAccessPage(pageId)` and `useMenu` decide whether a navigation
-  entry is visible. The page ids come from the same metadata catalogue that the
-  Roles & Permissions matrix edits.
-- Buttons and row actions call `can('permission.code')` (or the module action
-  helper) before rendering. A hidden button is not a security control; every
-  protected route re-checks on the backend.
-- The Role editor renders `AppRolePermissionMatrix`, which supports module/action
-  filtering, search, select-all/clear-all, an unsaved-change indicator, and the
-  protected-role read-only state.
-- Client-side validation never grants access. A user who forges a request reaches
-  the same `require_permission` dependency as the UI.
-- The UI marks protected users/roles from backend flags and disables destructive
-  actions; the service layer still rejects the operation.
-
-## 10. Permission Validation, Audit, and Security Rules
-
-- `ensure_permission_catalog` runs on startup and inserts missing permission
-  codes. Code is the source of truth; the `permissions` table is a projection used
-  for joins and administration.
-- A role may contain only known codes. Assigning or updating a role resolves the
-  submitted codes against the catalog and rejects unknown codes with a field
-  error.
-- A delegated role manager may grant or assign only capabilities the manager
-  already holds. Page-level matrix permissions are evaluated through their implied
-  API permissions, so a custom role cannot become a privilege-escalation bridge.
-- A user cannot replace their own role. A role assigned to an active user cannot
-  be deactivated or deleted until the user is reassigned.
-- The built-in Platform Administrator role is `is_system_role`, always resolves to
-  all permission codes, and cannot be reduced, deactivated, or deleted.
-- User, role, assignment, password, and session administration writes an audit
-  event with actor, action, target, result, and request id. Rejected attempts to
-  modify the protected administrator are audited too.
-- Passwords are Argon2id hashes and are never returned. Administrator-set
-  passwords set `must_change_password`, revoke existing sessions, and restrict the
-  next token to `auth/change-password`, `auth/logout`, `auth/refresh`, and
-  `auth/me` until the password is replaced.
-- Refresh tokens rotate on a stable PostgreSQL session; consumed hashes detect
-  replay and revoke that session. Browser cookie sessions use HttpOnly cookies,
-  signed double-submit CSRF and trusted Origin validation. Every protected
-  request checks the JWT session ID, idle/absolute deadlines, account status
-  and token version, so logout immediately denies its existing access tokens.
-  Refresh and identity endpoints require a valid session rather than a role
-  permission; existing business endpoints retain their permission dependencies.
-- Permission changes take effect for new requests. Revoking a session or changing
-  a password invalidates the old access path immediately; the frontend refreshes
-  `/auth/me` after a permission-sensitive operation.

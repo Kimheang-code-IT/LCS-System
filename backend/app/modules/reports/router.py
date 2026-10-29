@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.context import RequestContext
 from app.core.database import get_session
 from app.core.deps import require_any_permission
 from app.core.rate_limit import enforce_rate_limit
-from app.modules.reports import service
+from app.modules.reports import engine, service
+from app.modules.reports.schemas import (
+    GeneralLedgerExportFilters,
+    GeneralLedgerFilters,
+    GeneralLedgerReport,
+    TrialBalanceExportFilters,
+    TrialBalanceFilters,
+    TrialBalanceReport,
+)
 
 router = APIRouter()
 
@@ -158,6 +167,83 @@ async def ledger_lines(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return {"data": await service.ledger_lines(session, context)}
+
+
+# --- On-demand report generation ---------------------------------------------
+# A report page posts its filters and receives one page plus the metadata that
+# produced it. Nothing is fetched until the user asks for a report.
+@router.post("/reports/trial-balance/generate")
+async def generate_trial_balance(
+    payload: TrialBalanceFilters | None = Body(default=None),
+    context: RequestContext = Depends(report_access(engine.permission_for("trial-balance"))),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Debit/credit movement per account for a period, from POSTED journals.
+
+    Opening balances carry the movement before ``fromDate`` so a mid-history
+    period still opens at a real position. The response reports a difference
+    instead of hiding one.
+    """
+    report = await engine.generate(session, context, "trial-balance", payload or TrialBalanceFilters())
+    return {"data": TrialBalanceReport.model_validate(report).model_dump()}
+
+
+@router.post("/reports/general-ledger/generate")
+async def generate_general_ledger(
+    payload: GeneralLedgerFilters | None = Body(default=None),
+    context: RequestContext = Depends(report_access(engine.permission_for("general-ledger"))),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Posted ledger lines in deterministic order, one server-paginated page at a time.
+
+    Each row carries the running balance for its account, continued from that
+    account's opening balance before ``fromDate``.
+    """
+    report = await engine.generate(session, context, "general-ledger", payload or GeneralLedgerFilters())
+    return {"data": GeneralLedgerReport.model_validate(report).model_dump()}
+
+
+# --- Full-result exports ------------------------------------------------------
+# Same filters, permission and calculation as Generate; the response streams every
+# matching row instead of one page, so an export is never limited to what the
+# table happened to show.
+def _csv_response(key: str, stream) -> StreamingResponse:
+    return StreamingResponse(
+        stream,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{engine.export_filename(key)}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post("/reports/trial-balance/export")
+async def export_trial_balance(
+    payload: TrialBalanceExportFilters | None = Body(default=None),
+    context: RequestContext = Depends(report_access(engine.permission_for("trial-balance"))),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """Every account in the filtered trial balance as CSV, with its totals row."""
+    request = payload or TrialBalanceExportFilters()
+    return _csv_response(
+        "trial-balance",
+        engine.export_csv(session, context, "trial-balance", request),
+    )
+
+
+@router.post("/reports/general-ledger/export")
+async def export_general_ledger(
+    payload: GeneralLedgerExportFilters | None = Body(default=None),
+    context: RequestContext = Depends(report_access(engine.permission_for("general-ledger"))),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    """Every matching ledger line as CSV, streamed, with its totals row."""
+    request = payload or GeneralLedgerExportFilters()
+    return _csv_response(
+        "general-ledger",
+        engine.export_csv(session, context, "general-ledger", request),
+    )
 
 
 @router.get("/reports/financial-summary")
