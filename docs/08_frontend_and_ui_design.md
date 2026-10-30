@@ -399,6 +399,33 @@ the ERPNext report pattern and keeps a large ledger off the page-load path.
 | `components/layout/` | `AppHeader`, `AppHeaderPageActions`, `AppSlidebar`, `AppUserProfileDialog`, `AppAboutDialog` |
 | `components/dashboard/` | `AppSummaryCard`, `AppChartGrid` |
 
+### Editable grids must not re-create a focused control
+
+`AppLineTable` is the single renderer for every editable grid (document line
+tables, dynamic component tables, `AppSaveGrid`). Its column definitions carry
+the cell renderers, and TanStack mounts a cell renderer as a functional
+component — so a *new* renderer replaces the cell's DOM, and the input the user
+is typing in loses focus and caret after one character.
+
+The document form recompiles its tab tree from the record
+(`moduleDocumentTabs(..., { record: model.value })`) and `lineTableField` spreads
+a fresh table object on each pass, so a host hands over a new-but-equal
+descriptor on every keystroke. `AppLineTable` therefore memoises its column
+array on the descriptor's **shape** (`tableColumnSignature`,
+`app/utils/table/table-shape.ts`) plus the props that affect the column set, and
+returns the identical array while the shape holds. Inputs are patched in place
+instead of being re-created.
+
+Rules that follow from it:
+
+- Never render a control behind a value-dependent `v-if` or a value-derived
+  `:key`; tabs use `v-show` so a hidden panel keeps its inputs.
+- A repeatable row's identity is its array position (`get-row-id` is
+  `_rowIndex`), never a generated or value-derived id.
+- `e2e/form-typing.spec.ts` locks this in: it types character by character and
+  asserts the same DOM element stays focused.
+
+
 ## 10. Internationalisation, Formatting, and Print
 
 - Locale bundles live in `i18n/locales/{en,km,zh}.json` and must stay

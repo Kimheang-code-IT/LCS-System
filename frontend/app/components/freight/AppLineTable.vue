@@ -14,6 +14,7 @@ import { fileTypeIcon } from '~/utils/file-icon'
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '~/utils/format/format-service'
 import { freightTableUiCompactReadonly, freightTableUiLine } from '~/utils/table/theme'
 import { isMoneyColumnKey, lineTableColumnCellClass, lineTableColumnMetrics, lineTableNumericColumnKeys } from '~/utils/table/line-table-columns'
+import { tableColumnSignature } from '~/utils/table/table-shape'
 import { applyLineAdjustments, lineSubtotal } from '~/utils/table/line-adjustments'
 import { referenceItemForValue, referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 
@@ -511,7 +512,16 @@ function moveRow(index: number, direction: -1 | 1) {
   props.onReorder?.(next)
 }
 
-const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
+/**
+ * Column definitions for one table descriptor.
+ *
+ * The definitions own the cell renderers, so rebuilding them for a descriptor
+ * that only changed identity re-creates every cell's content and destroys the
+ * `<input>` the user is typing in. The document form recompiles its tabs from
+ * the record, so it hands over a new-but-equal descriptor on every keystroke;
+ * `columns` below reuses the definitions while the descriptor's shape holds.
+ */
+function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>[] {
   const cols: TableColumn<Record<string, unknown>>[] = [
     {
       id: 'rowNumber',
@@ -520,7 +530,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
       enableSorting: false,
       meta: iconOnlyColumnMeta,
     },
-    ...props.table.columns.filter(column => !isMenuOnlyColumn(column)).map(column => ({
+    ...table.columns.filter(column => !isMenuOnlyColumn(column)).map(column => ({
       accessorKey: column.key,
       header: () => columnHeader(column),
       enableSorting: false,
@@ -672,7 +682,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             onSelect: item.onSelect,
           })
         }
-        for (const column of props.table.columns.filter(item => item.type === 'action')) {
+        for (const column of table.columns.filter(item => item.type === 'action')) {
           const action = props.rowActions?.(column.action || column.key, row.original)
           if (!action) continue
           actions.push({
@@ -682,7 +692,7 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
             onSelect: action.onSelect,
           })
         }
-        if (props.table.lineDetails && !props.disabled && !rowLocked(row.original)) {
+        if (table.lineDetails && !props.disabled && !rowLocked(row.original)) {
           actions.push({
             label: t('freight.ui.additionalDetails'),
             icon: 'i-lucide-sliders-horizontal',
@@ -755,6 +765,28 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     })
   }
   return cols
+}
+
+/**
+ * Memoised on the descriptor's *shape*, not its identity: an equal-but-new
+ * descriptor (rebuilt by the host on every keystroke) must keep the same column
+ * array, or TanStack mounts a new cell renderer, re-creates the cell content
+ * and the caret goes with it.
+ */
+let cachedColumns: { key: string, columns: TableColumn<Record<string, unknown>>[] } | null = null
+
+const columns = computed(() => {
+  const key = [
+    tableColumnSignature(props.table),
+    props.compact,
+    props.viewOnlyActions,
+    Boolean(props.extraRowMenuItems),
+    Boolean(props.rowActions),
+    Boolean(props.rowInlineActions),
+  ].join('|')
+  if (cachedColumns?.key === key) return cachedColumns.columns
+  cachedColumns = { key, columns: buildColumns(props.table) }
+  return cachedColumns.columns
 })
 </script>
 
