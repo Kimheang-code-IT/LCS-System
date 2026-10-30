@@ -3604,7 +3604,8 @@
     "passwordSpecialGeneric": "密码必须至少包含一个特殊字符。",
     "commonPassword": "该密码太容易被猜出，请另选一个。",
     "commonPasswordGeneric": "该密码太容易被猜出，请另选一个。",
-    "duplicateAssetCode": "资产代码 {code} 已被使用。"
+    "duplicateAssetCode": "资产代码 {code} 已被使用。",
+    "passwordsMatch": "两次密码一致"
   },
   "fields": {
     "feeTypeId": "费用类型",

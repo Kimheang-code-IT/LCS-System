@@ -3604,7 +3604,8 @@
     "passwordSpecialGeneric": "Password must contain at least one special character.",
     "commonPassword": "That password is too easy to guess. Choose another.",
     "commonPasswordGeneric": "That password is too easy to guess. Choose another.",
-    "duplicateAssetCode": "Asset code {code} is already in use."
+    "duplicateAssetCode": "Asset code {code} is already in use.",
+    "passwordsMatch": "Passwords match"
   },
   "fields": {
     "feeTypeId": "Fee Type",

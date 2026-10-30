@@ -35,11 +35,12 @@ const passwordForm = useTemplateRef<{
   state?: { currentPassword: string, password: string, passwordConfirmation: string }
 }>('passwordForm')
 
-/** UAuthForm types field-slot props as `{}`; this reads the state safely. */
-function slotPassword(slot: unknown): string {
-  const state = (slot as { state?: { password?: string } }).state
-  return String(state?.password ?? '')
-}
+ /**
+  * `UAuthForm`'s `#<name>-help` slot re-exports its content without props, so
+  * the checklist binds to the exposed reactive `state` — the same source the
+  * submit gate reads — instead of an empty slot payload.
+  */
+const password = computed(() => passwordForm.value?.state?.password ?? '')
 
 /**
  * The submit button is disabled while a rule fails, so without these the reason
@@ -196,8 +197,8 @@ async function signOut() {
       }"
       @submit="onSubmit"
     >
-      <template #password-help="slot">
-        <CommonAppPasswordRequirements :value="slotPassword(slot)" />
+      <template #password-help>
+        <CommonAppPasswordRequirements :value="password" />
         <p v-if="passwordHint" class="mt-1 text-xs text-error" role="alert">
           {{ passwordHint }}
         </p>
