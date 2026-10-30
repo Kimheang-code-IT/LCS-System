@@ -14,9 +14,14 @@ permissions:
   contents: read
 
 concurrency:
-  # github.head_ref is set for pull_request events, github.ref_name for pushes,
-  # so runs for the same source branch share one group and obsolete runs cancel.
-  group: dev-ci-${{ github.head_ref || github.ref_name }}
+  # github.head_ref is set for pull_request events, github.ref_name for pushes.
+  # The event name is part of the group on purpose: a push to `dev` and a PR
+  # from `dev` targeting `main` are *different* checks of the same branch, and
+  # the branch ruleset on `main` requires the pull_request run of `Dev CI`. Let
+  # one of them cancel the other and the required check turns up
+  # cancelled/failed on an otherwise-green head, which blocks the merge.
+  # Only same-branch, same-event runs are "outdated" and may cancel.
+  group: dev-ci-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:

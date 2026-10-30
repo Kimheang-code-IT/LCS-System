@@ -20,7 +20,7 @@ fi
 
 DUMP_FILE=$1
 TARGET_DB=$2
-COMPOSE_FILE=${COMPOSE_FILE:-/opt/lcs/compose.yml}
+COMPOSE_FILE=${COMPOSE_FILE:-/opt/lcs/docker-compose.prod.yml}
 POSTGRES_SERVICE=${POSTGRES_SERVICE:-postgres}
 
 if [ ! -s "$DUMP_FILE" ]; then

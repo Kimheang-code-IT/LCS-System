@@ -249,7 +249,7 @@ Verified against the current code and focused tests:
 | Off-host PostgreSQL backup/WAL | Partial (optional pre-deployment S3 SSE-KMS upload; no WAL/PITR) |
 | Monitoring/alerting | Missing |
 | Movements/milestones UI, quotation comparison UI | Missing |
-| Browser E2E | Partial: normal `frontend/e2e` smoke coverage stays read-only. `reports-generate.spec.ts` (7) runs the on-demand report journeys including a real CSV download, and `auth-renewal.spec.ts` additionally writes only to an explicitly opted-in disposable stack (`LCS_AUTH_E2E_ISOLATED=1`); none of these are a CI gate |
+| Browser E2E | Partial: normal `frontend/e2e` smoke coverage stays read-only. `reports-generate.spec.ts` (7) runs the on-demand report journeys including a real CSV download, `auth-renewal.spec.ts` additionally writes only to an explicitly opted-in disposable stack (`LCS_AUTH_E2E_ISOLATED=1`), and `form-typing.spec.ts` (4) types character by character and asserts the same DOM element keeps focus — including a document line-table cell, which fails without the `AppLineTable` column memoisation; none of these are a CI gate |
 | CI PostgreSQL guard run | Missing |
 
 ### Authentication renewal verification — 2026-10-24

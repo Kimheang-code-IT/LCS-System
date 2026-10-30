@@ -26,6 +26,11 @@ on:
         type: boolean
         required: false
         default: false
+      wipe_data:
+        description: 'After a healthy deploy runs factory-reset: verified dump, then wipe DB/Redis/attachments; app returns to first-run /auth/setup. DESTRUCTIVE'
+        type: boolean
+        required: false
+        default: false
 
 # Least privilege by default; only the build job may publish images.
 permissions:
@@ -372,7 +377,7 @@ jobs:
           username: ${{ vars.AWS_USER || secrets.AWS_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
-          source: "infrastructure/docker-compose.prod.yml,infrastructure/restore-db.sh"
+          source: "infrastructure/docker-compose.prod.yml,infrastructure/restore-db.sh,infrastructure/factory-reset.sh,infrastructure/bootstrap-host.sh"
           target: /opt/lcs
           strip_components: 1
           overwrite: true
@@ -402,6 +407,7 @@ jobs:
           IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
           IMAGE_PREFIX: ghcr.io/${{ github.repository }}
           SKIP_MIGRATIONS: ${{ github.event.inputs.skip_migrations || 'false' }}
+          WIPE_DATA: ${{ github.event.inputs.wipe_data || 'false' }}
           BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET || '' }}
           BACKUP_S3_KMS_KEY_ID: ${{ vars.BACKUP_S3_KMS_KEY_ID || '' }}
           POSTGRES_DB: ${{ vars.POSTGRES_DB || 'freight' }}
@@ -425,13 +431,15 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
           script: |
             set -eu
             cd "$DEPLOY_DIR"
             # scp may not preserve the executable bit; the restore helper is
             # invoked directly during a drill.
             chmod 700 "$DEPLOY_DIR/restore-db.sh" 2>/dev/null || true
+            chmod 700 "$DEPLOY_DIR/factory-reset.sh" 2>/dev/null || true
+            chmod 700 "$DEPLOY_DIR/bootstrap-host.sh" 2>/dev/null || true
 
             # Docker command (docker group, else sudo fallback).
             if docker info >/dev/null 2>&1; then DOCKER="docker"; else DOCKER="sudo -E docker"; fi
@@ -733,3 +741,14 @@ jobs:
               | grep -v ":$ROLLBACK_TAG" \
               | xargs -r -n1 $DOCKER rmi >/dev/null 2>&1 || true
             echo "Deployment complete. Previous release remains available as rollback-*:${ROLLBACK_TAG}."
+
+            if [ "${WIPE_DATA:-false}" = "true" ]; then
+              echo "WIPE_DATA=true: running the guarded factory reset on the verified stack."
+              echo "This takes a fresh dump, drops the schema, re-migrates and empties Redis/attachments."
+              if ! "$DEPLOY_DIR/factory-reset.sh" --yes; then
+                echo "Factory reset FAILED; the stack is up on the new code but data state is unclear." >&2
+                echo "Do not trust the attached data. Inspect: docker compose logs backend" >&2
+                exit 1
+              fi
+              echo "Wipe complete: requiresSetup=true, a first-run administrator must be created at /auth/setup."
+            fi
