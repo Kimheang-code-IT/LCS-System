@@ -4,6 +4,7 @@ Modular-monolith freight forwarding, operations and double-entry finance system.
 
 - **Frontend:** Nuxt 4 static SPA (`frontend/`) — built with `nuxt generate`, served by nginx.
 - **Backend:** FastAPI + SQLAlchemy 2.x + Alembic (`backend/`).
+- **Database and authorization:** PostgreSQL with Casbin RBAC and session-bound authentication.
 - **Storage:** MinIO (S3-compatible) for attachments.
 - **Infrastructure:** Compose, env files and nginx config (`infrastructure/`).
 
@@ -12,11 +13,10 @@ Modular-monolith freight forwarding, operations and double-entry finance system.
 - **Reports & dashboard are backend-driven** — dashboard KPIs and all report
   tables are served by `/api/v1/reports/*` instead of being computed in the
   browser from cached store data.
-- **First-run setup** — an empty database redirects to `/setup`, which
-  provisions the organization, administrator and a minimal finance baseline.
-- **Simplified navigation** — the Organizations, Branches and Posting Rules
-  screens were removed from the UI, and the role form now captures only name and
-  permissions (no code/status/scope/level).
+- **First-run setup** — an empty database redirects to `/auth/setup`, which
+  provisions the administrator and baseline reference/configuration records.
+- **Approved navigation** — 44 business pages, including Posting Rules. Organizations
+  and Branches are outside the current single-tenant scope.
 - **Standard host ports** — backend `8000`, frontend `80`, PostgreSQL `5432`,
   Redis `6379`, MinIO `9000` / `9001`.
 
@@ -60,23 +60,23 @@ vars without rebuilding.
 The **local development** backend container waits for PostgreSQL, Redis and MinIO
 to become healthy, then runs `alembic upgrade head`. Production images start
 Uvicorn only: the production workflow runs Alembic explicitly with the new image
-while the old stack is still serving. **No data is seeded** - the database starts
-empty, so the first login requires a user to be provisioned (see below).
+while the old stack is still serving. A fresh database requires first-run administrator
+setup (see below); setup creates baseline configuration, not business transactions.
 
 The frontend is a static SPA served by nginx, which also reverse-proxies `/api/`
 to the backend, so the browser uses a single origin (no CORS, no Node runtime).
 Only nginx, the FastAPI backend and the datastores run in production; this is
-sized for small internal teams (well under ~15 concurrent users).
+intended for a small-to-medium business. Capacity is unverified; 10–30 concurrent users is a preliminary planning assumption only.
 
 ### Empty database / first login
 
-Because all seeding was removed, a freshly migrated database has no users. Open
+A freshly migrated database has no users. Open
 the app and it redirects to the **first-run setup page** (`/auth/setup`), where you
-create the first organization and administrator in the browser. The setup page
-provisions the permission catalog, roles, organization, head-office branch,
-admin user/credential and a minimal finance baseline (chart of accounts, posting
-rules, financial accounts, sequences, current periods) so the system is usable
-immediately. Setup is accepted only while no user exists (guarded by
+create the first administrator in the browser. The setup page
+provisions the permission catalog, protected system role, administrator and baseline
+reference/configuration records, including currencies, role vocabularies and current-year
+document sequences. It does not seed business transactions, accounts or accounting periods.
+Setup is accepted only while no user exists (guarded by
 `GET /api/v1/auth/setup/status` / `POST /api/v1/auth/setup/initialize`).
 
 ### Reset business data
@@ -89,23 +89,22 @@ users, credentials, roles, permissions, role assignments, sessions, and audit
 history are not deleted, so the protected System Administrator remains usable
 and first-run setup is not reopened.
 
-Attachments are stored in MinIO (`STORAGE_PROVIDER=s3`); the backend signs
-uploads/downloads with the public endpoint (`S3_PUBLIC_ENDPOINT_URL`) so the
-browser can open files at `http://localhost:9000/...`. Set
-`STORAGE_PROVIDER=local` to fall back to the `freight_uploads` volume.
+Attachments use the existing S3-compatible storage interface, configured for MinIO in
+Compose. Upload/download behavior follows the configured provider and authorization path;
+production disables presigned uploads. Local storage remains an existing alternative.
+See the operations and security references before changing storage configuration.
 
 ## Modules
 
 ```text
 backend/app/modules/
 ├── auth/          users, roles, permissions, sessions, single-role RBAC
-├── master_data/   business parties, places, types, currencies/FX, component/tab configuration, configuration versions
+├── master_data/   business parties, role vocabularies, types, currencies/FX, component/tab configuration, versions
 ├── quotations/    quotations, immutable revisions, comparison, conversion
 ├── operations/    service orders, containers, movements, milestones, dynamic tabs, charges, files
 ├── finance/       financial documents, posting, allocation, journals, accounts, periods
 ├── reports/       server-side dashboard, operational, accounting and financial-statement reports
 ├── settings/      branding, localization, app config, global search, reset-all-data
-├── setup/         first-run admin/finance provisioning
 ├── backup/        Google Sheets replication and its scheduler
 ├── archive/       soft-delete tombstones, restore, guarded hard delete
 └── audit/         append-only audit trail
@@ -113,21 +112,35 @@ backend/app/modules/
 
 ## Documentation map
 
-| Document | Read it for |
-|---|---|
-| `AGENTS.md` | Commands, conventions, financial-integrity rules, Definition of Done |
-| `docs/01_business_requirements.md` | Business goals, scope, actors, requirements |
-| `docs/02_software_requirements.md` | Functional and non-functional requirements |
-| `docs/03_business_process_and_sop.md` | Operational procedures and controls |
-| `docs/04_functional_design.md` | Use cases, posting rules, error catalogue, and Mermaid diagrams |
-| `docs/05_solution_architecture.md` | Architecture, layering, module boundaries |
-| `docs/06_database_design.sql` | Generated schema: DDL with a description for every table and column |
-| `docs/07_api_documentation.md` | API conventions, endpoint catalogue, dynamic collections, errors |
-| `docs/08_frontend_and_ui_design.md` | Routes, metadata-driven pages, forms, validation, i18n |
-| `docs/09_roles_and_permissions.md` | Permission catalog, role templates, page mapping, enforcement |
-| `docs/10_testing_and_quality.md` | Test architecture, gates, coverage gaps, status, open risks |
-| `docs/11_deployment_and_security.md` | Deploy, CI/CD, migrations, backup/restore, rollback, hardening |
-| `docs/12_feature_status.md` | Feature status matrix, module assessments, production readiness, backlog |
+The approved foundation follows [system-design-prompt.md](docs/system-design-prompt.md).
+Scope: exactly **44 business pages**, with supporting routes excluded.
+
+- [00-agent-handbook.md](docs/00-agent-handbook.md)
+- [01-system-architecture.md](docs/01-system-architecture.md)
+- [02-data-model.md](docs/02-data-model.md)
+- [03-security-access-control.md](docs/03-security-access-control.md)
+- [04-record-workflow-lifecycle.md](docs/04-record-workflow-lifecycle.md)
+- [05-api-specification.md](docs/05-api-specification.md)
+- [06-operations-runbook.md](docs/06-operations-runbook.md)
+- [07-adr-log.md](docs/07-adr-log.md)
+- [08-app-flow.md](docs/08-app-flow.md)
+- [09-design-brief.md](docs/09-design-brief.md)
+- [10-coding-conventions.md](docs/10-coding-conventions.md)
+- [11-testing-and-quality.md](docs/11-testing-and-quality.md)
+- [12-documentation-standards.md](docs/12-documentation-standards.md)
+- [13-git-workflow.md](docs/13-git-workflow.md)
+
+- [Master roadmap](docs/plans/MASTER-ROADMAP.md)
+- [Plan template](docs/plans/PLAN-0001-template.md)
+- [Active S01 plan](docs/plans/PLAN-0002-access-and-page-authorization.md)
+- [Handoff guide](docs/handoff/README.md)
+
+The [44-page inventory](docs/09-design-brief.md#approved-44-page-inventory) and stable requirements
+are consolidated into the canonical foundation. [Feature status](docs/12_feature_status.md)
+and [generated schema](docs/06_database_design.sql) remain required tooling references.
+The [cleanup inventory](docs/12-documentation-standards.md#documentation-cleanup-inventory)
+lists retained dependency/review exceptions, not competing requirement authorities.
+S01 is planned only; this foundation does not establish production readiness.
 
 Reusable agent workflows live in `.opencode/skills/` (`lcs-development` is the
 umbrella; `database-migration`, `fastapi-backend`, `nuxt-frontend`,
@@ -165,5 +178,5 @@ nginx.
 
 ```bash
 cd backend && uv run alembic upgrade head && uv run pytest -q && uv run ruff check .
-cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm generate
+cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm i18n:check && pnpm generate
 ```

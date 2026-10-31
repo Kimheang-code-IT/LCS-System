@@ -63,8 +63,6 @@ export function useMenu() {
     '/master-data/container-types': 'master.reference.view',
     '/master-data/transport-types': 'master.reference.view',
     '/master-data/transport-assets': 'master.reference.view',
-    '/master-data/asset-identity-types': 'master.reference.view',
-  '/master-data/capacity-units': 'master.reference.view',
     '/master-data/fee-types': 'master.reference.view',
     '/master-data/document-types': 'master.reference.view',
     '/configuration/component-attributes': 'configuration.view',

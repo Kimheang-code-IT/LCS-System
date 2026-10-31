@@ -3,23 +3,32 @@ import { useAppHeader } from '~/composables/layout/useAppHeader'
 
 const { displayTitle, breadcrumbs, badges, hasBreadcrumbs, actions } = useAppHeader()
 
-/** Spin on every click — page `refreshing` alone misses synchronous refreshes. */
-const refreshSpin = ref(false)
-let refreshSpinTimer: ReturnType<typeof setTimeout> | null = null
-const refreshSpinning = computed(() => Boolean(actions.value?.refreshing) || refreshSpin.value)
+/**
+ * The header icon spins while the page's refresh handler actually runs.
+ * Handlers either return their pending promise directly (dashboard, reports,
+ * archive, document pages) or update their own `refreshing` state while
+ * running (list pages), so spinning follows the real request — no simulated
+ * timeouts. Awaiting the handler also serialises rapid clicks.
+ */
+const refreshAwaiting = ref(false)
+const refreshSpinning = computed(() => Boolean(actions.value?.refreshing) || refreshAwaiting.value)
 
-function onHeaderRefresh() {
+async function onHeaderRefresh() {
   const handler = actions.value?.onRefresh
-  if (!handler) return
-  if (refreshSpinTimer) clearTimeout(refreshSpinTimer)
-  refreshSpin.value = true
+  if (!handler || refreshAwaiting.value) return
+  refreshAwaiting.value = true
   try {
-    handler()
+    await handler()
+  }
+  catch (error) {
+    // Failure feedback stays in the app's notification channels: useApi toasts
+    // transport failures and pages render their own inline alerts, so the
+    // header must not add a second toast (notification policy test) — it only
+    // records a rejection that would otherwise vanish unhandled.
+    console.error('[refresh]', error)
   }
   finally {
-    refreshSpinTimer = setTimeout(() => {
-      refreshSpin.value = false
-    }, 450)
+    refreshAwaiting.value = false
   }
 }
 </script>
@@ -119,14 +128,12 @@ function onHeaderRefresh() {
         />
 
         <template v-if="actions">
-          <UButton
-            color="neutral"
-            variant="soft"
+          <CommonAppDocumentActionButton
             icon="i-lucide-refresh-cw"
+            color="secondary"
             square
-            :class="refreshSpinning ? 'animate-spin' : ''"
+            :spin-icon="refreshSpinning"
             :disabled="refreshSpinning"
-            class="rounded-md"
             :aria-label="$t('lcs.actions.refresh')"
             @click="onHeaderRefresh"
           />
@@ -136,13 +143,11 @@ function onHeaderRefresh() {
             :items="actions.moreItems"
             :content="{ align: 'end' }"
           >
-            <UButton
-              color="neutral"
-              variant="soft"
+            <CommonAppDocumentActionButton
               icon="i-lucide-ellipsis"
+              color="secondary"
               square
-              class="rounded-md"
-              :aria-label="$t('common.actions')"
+              :aria-label="$t('common.moreActions')"
             />
           </UDropdownMenu>
         </template>
@@ -152,20 +157,16 @@ function onHeaderRefresh() {
           class="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2"
         />
 
-        <UButton
+        <CommonAppDocumentActionButton
           v-if="actions?.cancel?.to"
-          color="neutral"
-          variant="ghost"
+          color="secondary"
           :to="actions.cancel.to"
           :label="actions.cancel.label"
-          class="rounded-md"
         />
-        <UButton
+        <CommonAppDocumentActionButton
           v-else-if="actions?.cancel"
-          color="neutral"
-          variant="ghost"
+          color="secondary"
           :label="actions.cancel.label"
-          class="rounded-md"
           @click="actions.cancel.onClick?.()"
         />
         <CommonAppDocumentActionButton

@@ -41,17 +41,17 @@ export function useQuotationCommands(options: {
     if (quotationDomainStatus(model.value.status) !== 'DRAFT' || !guardSaved()) return
     const ok = await confirm({
       kind: 'submit',
-      title: t('freight.ui.quotationSendTitle'),
-      description: t('freight.ui.quotationSendDescription'),
-      confirmLabel: t('freight.ui.send'),
+      title: t('freight.ui.quotationSubmitTitle'),
+      description: t('freight.ui.quotationSubmitDescription'),
+      confirmLabel: t('freight.ui.submit'),
     })
     if (!ok) return
-    const saved = await lcs.runCommand('quotation.send', revisionId(), keyValue =>
-      lcs.quotations.send(revisionId(), keyValue),
+    const saved = await lcs.runCommand('quotation.submit', revisionId(), keyValue =>
+      lcs.quotations.submit(revisionId(), keyValue),
     )
     model.value = saved
     store.reload()
-    toast({ title: t('freight.ui.quotationSent'), color: 'success' })
+    toast({ title: t('freight.ui.quotationSubmitted'), color: 'success' })
   }
 
   async function submit() {

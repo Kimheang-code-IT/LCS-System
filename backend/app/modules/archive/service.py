@@ -37,6 +37,7 @@ def _registry() -> dict[str, ArchiveAdapter]:
         CapacityUnit,
         ContainerType,
         Currency,
+        DocumentType,
         FeeType,
         PartyRole,
         PlaceRole,
@@ -58,6 +59,11 @@ def _registry() -> dict[str, ArchiveAdapter]:
         ArchiveAdapter("transportAssets", TransportAsset, "identity", "Transport Asset"),
         ArchiveAdapter("feeTypes", FeeType, "name", "Fee Type"),
         ArchiveAdapter("currencies", Currency, "name", "Currency"),
+        # Document types archive through the collection's own guards: the
+        # master-data service refuses active rows (REFERENCE_ACTIVE) and the
+        # canonical seeded types (SYSTEM_DOCUMENT_TYPE) before this module
+        # soft-deletes them, so only a deactivated custom type can land here.
+        ArchiveAdapter("documentTypes", DocumentType, "name", "Document Type"),
     )
     return {adapter.entity_type: adapter for adapter in adapters}
 

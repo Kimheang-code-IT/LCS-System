@@ -63,6 +63,7 @@ import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
 import { validatePasswordStrength } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
+import { pageActionPermission } from '~/utils/freight/page-access'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
@@ -327,7 +328,12 @@ const readOnly = computed(() => {
     if ((module.value.collection === 'chartOfAccounts' || module.value.collection === 'financialAccounts') && !lcs.can('chart_of_accounts.manage')) return true
     if (module.value.collection === 'users' && !lcs.can('user.manage')) return true
     if (module.value.collection === 'roles' && !lcs.can('role.manage')) return true
-    if (module.value.group === 'master' && !lcs.can('master.reference.manage')) return true
+    if (module.value.group === 'master' && !lcs.can('master.reference.manage')) {
+      // Narrow matrix roles save through their screen's update code (the
+      // transport-assets code covers identity types and capacity units too).
+      const updateCode = pageActionPermission(module.value.permission, 'update')
+      if (!(updateCode && auth.canAccessPage(updateCode))) return true
+    }
     if (module.value.group === 'configuration' && !auth.canAccessPage('configuration.manage')) return true
   }
   if (isRecordReadOnly(module.value.collection, model.value)) return true
@@ -398,8 +404,7 @@ const quotationAvailability = computed(() => quotationActionAvailability(
   model.value.status,
   {
     updateDraft: lcs.can('quotation.update_draft'),
-    send: lcs.can('quotation.send'),
-    accept: lcs.can('quotation.accept'),
+    submit: lcs.can('quotation.submit'),
     convert: lcs.can('quotation.convert'),
   },
   { hasServiceOrder: Boolean(relatedServiceOrder()) },
@@ -412,8 +417,7 @@ const quotationAvailability = computed(() => quotationActionAvailability(
  */
 function transitionsAvailableForQuotation(transition: RecordStatusTransition): boolean {
   const availability = quotationAvailability.value
-  if (transition.action === 'send') return availability.send && !quotationDraftDirty.value
-  if (transition.action === 'accept') return availability.accept && !quotationDraftDirty.value
+  if (transition.action === 'submit') return availability.submit && !quotationDraftDirty.value
   if (transition.action === 'convert') return availability.convert && !quotationDraftDirty.value
   if (transition.action === 'reject') return lcs.can('quotation.accept')
   if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
@@ -434,17 +438,16 @@ const quotationHeaderActions = computed<FreightAction[]>(() => {
     }
     return actions
   }
-  if (availability.send) {
-    actions.push({ key: 'send', label: t('freight.ui.send'), icon: 'i-lucide-send' })
-  }
-  if (availability.accept) {
-    actions.push({ key: 'accept', label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success' })
-  }
-  if (availability.revise) {
-    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
+  if (availability.submit) {
+    actions.push({ key: 'send', label: t('freight.ui.submit'), icon: 'i-lucide-send' })
   }
   if (availability.convert) {
     actions.push({ key: 'convertJob', label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', color: 'primary' })
+  }
+  // Re-quotation is offered on everything but an editable draft (a draft is its
+  // own next revision) — Submitted, Converted and the legacy statuses.
+  if (availability.revise && !availability.edit) {
+    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
   }
   return actions
 })
@@ -522,16 +525,22 @@ const documentSaveLabel = computed(() => {
 })
 
 /**
- * Creating a user chooses that account's password, so Save stays disabled until
- * the initial password satisfies the shared policy. Other modules are unaffected.
+ * Creating a user chooses that account's initial password, so their save waits
+ * until it satisfies the shared policy. Everything else may save.
  */
-const canSave = computed(() => {
-  if (readOnly.value || module.value?.collection === 'quotations') return false
+const canRunSave = computed(() => {
+  if (readOnly.value) return false
   if (isCreate.value && module.value?.collection === 'users') {
     return !validatePasswordStrength(String(model.value?.password ?? ''))
   }
   return true
 })
+
+/**
+ * The inline save grid stays off for quotations: their header Save action runs
+ * the same save() function, so a second save button would duplicate it.
+ */
+const canSave = computed(() => canRunSave.value && module.value?.collection !== 'quotations')
 
 /** Role names from the Roles & Permissions page, used by the users role picker. */
 const roleFieldOptions = computed(() => store.list('roles')
@@ -1215,7 +1224,7 @@ async function save(status?: string) {
   if (!module.value || readOnly.value) return
   // Creating a user must not bypass the password policy through Enter or a
   // programmatic call while the Save button is disabled.
-  if (!canSave.value) return
+  if (!canRunSave.value) return
   // Guard against a double click / repeated Enter while the request is pending.
   if (saving.value) return
   saving.value = true

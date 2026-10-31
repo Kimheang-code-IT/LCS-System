@@ -4,16 +4,28 @@ import type {
   SearchQueryOptions,
 } from '~/types/search'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
+import { createClientId } from '~/utils/client-id'
 
 export function useSearch() {
   const api = useApi()
+  // A palette must not cancel requests owned by another mounted consumer.
+  const requestKey = createClientId('search')
+
+  function cancelSearch() {
+    api.cancelRequest(`${requestKey}:keyword`)
+    api.cancelRequest(`${requestKey}:semantic`)
+  }
+
+  function cancelAsk() {
+    api.cancelRequest(`${requestKey}:ask`)
+  }
 
   async function searchKeyword(query: string, options: SearchQueryOptions = {}) {
     const limit = options.limit ?? 12
     try {
       const response = await api.get<{ data: SearchHit[] }>(ApiEndpoints.SEARCH, {
         query: { q: query, mode: 'keyword', limit },
-        requestKey: 'search-keyword',
+        requestKey: `${requestKey}:keyword`,
         cancelPrevious: true,
         suppressErrorToast: true,
       })
@@ -29,7 +41,7 @@ export function useSearch() {
     try {
       const response = await api.get<{ data: SearchHit[] }>(ApiEndpoints.SEARCH, {
         query: { q: query, mode: 'semantic', limit },
-        requestKey: 'search-semantic',
+        requestKey: `${requestKey}:semantic`,
         cancelPrevious: true,
         suppressErrorToast: true,
       })
@@ -46,7 +58,7 @@ export function useSearch() {
         q: query,
         hitIds: hits.map(h => h.id),
       }, {
-        requestKey: 'search-ask',
+        requestKey: `${requestKey}:ask`,
         cancelPrevious: true,
         suppressErrorToast: true,
       })
@@ -61,5 +73,7 @@ export function useSearch() {
     searchKeyword,
     searchSemantic,
     askAi,
+    cancelSearch,
+    cancelAsk,
   }
 }

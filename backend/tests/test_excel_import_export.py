@@ -79,6 +79,30 @@ async def test_module_catalog_lists_master_data(client):
         assert expected in keys
 
 
+async def test_unsupported_import_mode_is_rejected_without_writes(client, session_factory):
+    from sqlalchemy import func, select
+
+    from app.modules.excel_io.models import ImportSession
+    from app.modules.excel_io.service import get_module
+    from app.modules.master_data import service as master_data
+
+    headers = await login(client)
+    model = master_data.get_spec(get_module("feeTypes").key).model
+    async with session_factory() as session:
+        before_records = await session.scalar(select(func.count()).select_from(model))
+        before_sessions = await session.scalar(select(func.count()).select_from(ImportSession))
+
+    response = await _validate(
+        client, headers, "feeTypes", _workbook_bytes("feeTypes", []), mode="UNSUPPORTED"
+    )
+
+    assert response.status_code == 422, response.text
+    assert "mode" in response.json()["field_errors"]
+    async with session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(model)) == before_records
+        assert await session.scalar(select(func.count()).select_from(ImportSession)) == before_sessions
+
+
 async def test_template_has_instructions_examples_and_reference_sheets(client):
     headers = await login(client)
     response = await client.get("/api/v1/excel/currencies/template", headers=headers)

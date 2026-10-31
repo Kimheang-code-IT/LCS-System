@@ -6,7 +6,7 @@ import secrets
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, inspect, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.context import RequestContext
@@ -59,6 +59,11 @@ async def test_atomic_reset_and_disjoint_claims_and_schema():
 
         results = await asyncio.gather(reset(), reset())
         assert sorted(results) == ["rejected", "reset"]
+        async with factory() as session:
+            # A successful reset enqueues its own PRIVATE outbox row; clear the
+            # queue so the claim phase sees exactly the 8 rows it seeds.
+            await session.execute(delete(NotificationOutbox))
+            await session.commit()
         async with factory() as session:
             for i in range(8):
                 session.add(NotificationOutbox(event_type="PG_TEST", category="system", severity="INFO", destination_type="ADMIN", destination_reference=-1, payload={"text": "Test"}, expires_at=utcnow() + timedelta(hours=1), deduplication_key=f"pg:{secrets.token_hex(16)}:{i}"))

@@ -93,7 +93,7 @@ class QuotationRepository:
             select(QuotationRevision).where(
                 QuotationRevision.quotation_id == quotation_id,
                 QuotationRevision.id != revision_id,
-                QuotationRevision.status.in_(("SENT", "ACCEPTED")),
+                QuotationRevision.status.in_(("SENT", "ACCEPTED", "SUBMITTED")),
             )
         )
         return list(result.scalars().all())

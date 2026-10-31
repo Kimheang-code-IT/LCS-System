@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from sqlalchemy import select
 
+from app.modules.master_data.models import ContainerType
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
@@ -198,6 +200,83 @@ async def test_conversion_prepares_pending_actual_containers(client):
     )
     assert blocked.status_code == 409, blocked.text
     assert blocked.json()["code"] == "CONTAINER_IN_USE"
+
+
+async def test_actual_containers_are_user_added_not_line_derived(client, session_factory):
+    """Rows are physical containers typed by number, never inferred from lines.
+
+    A quotation's pricing-line container types and billing quantities, and its
+    fee lines, must not create actual-container rows: conversion leaves the
+    table empty and the operator adds each box. Numbers are unique after case
+    normalisation, and the same type may repeat with distinct numbers.
+    """
+
+    async with session_factory() as session:
+        exists = await session.scalar(select(ContainerType.id).where(ContainerType.code == "40HC"))
+        if exists is None:
+            session.add(ContainerType(code="40HC", name="40 Foot High Cube"))
+            await session.commit()
+        type_id = int(await session.scalar(select(ContainerType.id).where(ContainerType.code == "40HC")))
+
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Line Type Customer",
+            "direction": "Import",
+            "currency": "USD",
+            "amount": 100,
+            "pricingLines": [
+                {"description": "Trucking", "quantity": 10, "unitPrice": 10, "containerType": "40HC"},
+                {"description": "Delivery", "quantity": 2, "unitPrice": 5, "containerType": "40HC"},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    revision_id = created.json()["data"]["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    order_id = converted.json()["data"]["serviceOrderId"]
+
+    detail = await client.get(f"/api/v1/service-orders/{order_id}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    # Ten billed trucking units create no boxes; the operator adds each one.
+    assert "actualContainers" not in detail.json()["data"]
+
+    async def _add(payload: dict):
+        return await client.post(
+            f"/api/v1/service-orders/{order_id}/containers", headers=headers, json=payload
+        )
+
+    # Two physical boxes of the same type with distinct numbers both stick, and
+    # the entered number is stored normalised (trimmed, uppercase).
+    first = await _add({"containerTypeId": type_id, "containerNumber": "mscu1234567", "sealSerial": "SEAL-1"})
+    assert first.status_code == 201, first.text
+    assert first.json()["data"]["containerNumber"] == "MSCU1234567"
+    second = await _add({"containerTypeId": type_id, "containerNumber": "  MSCU7654321 "})
+    assert second.status_code == 201, second.text
+
+    duplicate = await _add({"containerTypeId": type_id, "containerNumber": "MSCU1234567"})
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["code"] == "DUPLICATE_NUMBER"
+    same_other_case = await _add({"containerTypeId": type_id, "containerNumber": "mscu7654321"})
+    assert same_other_case.status_code == 409, same_other_case.text
+
+    # Save and reload: both rows persist with their stored values.
+    reloaded = (await client.get(f"/api/v1/service-orders/{order_id}/containers", headers=headers)).json()["data"]
+    assert [row["containerNumber"] for row in reloaded] == ["MSCU1234567", "MSCU7654321"]
+    assert reloaded[0]["sealSerial"] == "SEAL-1"
+
+    # An update edits the row in place instead of creating a duplicate.
+    updated = await _add({"id": reloaded[1]["id"], "containerNumber": "MSCU7654321", "sealSerial": "SEAL-2"})
+    assert updated.status_code == 201, updated.text
+    again = (await client.get(f"/api/v1/service-orders/{order_id}/containers", headers=headers)).json()["data"]
+    assert len(again) == 2
+    assert again[1]["sealSerial"] == "SEAL-2"
 
 
 async def test_service_order_components_and_containers(client):

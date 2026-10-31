@@ -31,7 +31,7 @@ export const SERVICE_TYPES = [
 ] as const
 
 export const CUSTOMS_STATUS = ['Preparing', 'Submitted', 'Processing', 'On Hold', 'Cleared'] as const
-export const QUOTATION_STATUS = ['Draft', 'Sent', 'Accepted', 'Converted', 'Rejected', 'Superseded', 'Expired', 'Cancelled'] as const
+export const QUOTATION_STATUS = ['Draft', 'Submitted', 'Sent', 'Accepted', 'Converted', 'Rejected', 'Superseded', 'Expired', 'Cancelled'] as const
 export const DEBIT_NOTE_STATUS = ['Draft', 'Posted', 'Reversed', 'Cancelled'] as const
 export const SERVICE_CHARGE_STATUS = ['Draft', 'Issued'] as const
 export const SHIPMENT_STATUS = ['Scheduled', 'Registered', 'In Transit', 'Arrived', 'Completed'] as const

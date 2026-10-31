@@ -1,0 +1,8 @@
+id: frontend-console-log
+language: TypeScript
+severity: hint
+message: console.log left in app code — remove before commit (only intentional debug+gitignore or tests may keep it).
+files:
+- frontend/app/**
+rule:
+  pattern: console.log($$$ARGS)

@@ -1,44 +1,61 @@
-# Business Process and Standard Operating Procedures
+# Application Flow
 
-## 1. Purpose and Control Principles
+## Main user journeys
 
-This SOP defines the operational steps, responsible roles, approvals, exceptions, and evidence required for the platform.
+1. Administrator completes first-run setup on an empty deployment and manages roles/reference
+   configuration through existing pages. Setup does not establish finance readiness by itself.
+2. Sales prepares a quotation, sends it, records acceptance, and explicitly converts it.
+3. Operations receives the service order with snapshots, records actual containers and dynamic
+   components, and attaches authorized documents.
+4. Operations issues service charges. Finance explicitly creates/reviews the financial draft.
+5. Finance posts invoices/bills; authorized receipt/payment posting and allocation settle them.
+6. Finance uses reversals/adjustments for corrections, reconciles accounts and closes periods.
+7. Managers/auditors review permitted operational and posted financial reporting.
 
-The system follows:
+## System flows and boundaries
 
-```text
-Operational record
-    → customer-facing service charge
-        → optional financial document
-            → accounting journal
-```
+Quotation → Service Order → Operational Execution → Service Charges → Financial Documents
+→ Payment/Allocation → Accounting → Reports.
 
-Issuing a service charge does not post accounting. Accounting begins only when an authorized user posts a financial document or manual journal.
+This business journey does not imply that accounting waits until payment: invoice and
+receipt/payment posting each produce their appropriate accounting effects.
+Charge issue alone has no journal effect. Financial-draft creation is distinct from posting.
+Reports distinguish operational/quoted/draft amounts from posted accounting results.
+Source relationships and historical snapshots preserve traceability throughout.
 
-The runtime is single-tenant: there is no organization or branch scope. Access is
-governed entirely by users, roles and permissions. A granted permission applies to
-all records of that module.
+Login/session → page/action visibility → API authentication and Casbin guard → service
+validation/transaction → response → localized field/page messages or confirmed success.
+Access through a direct URL or API must enforce the same underlying permissions.
 
-## 2. Roles and Responsibilities
+## Supporting routes and exceptional paths
 
-Roles are defined in code (`backend/app/core/permissions.py`). Only the Platform
-Administrator is provisioned at first-run setup; every other role below is a
-template that an administrator creates from Roles & Permissions.
+Authentication/recovery, create/edit/detail, print and error routes support the 44-page scope.
+They are not new business pages. Preserve them during documentation migration.
+Refused actions, invalid fields, duplicate commands, missing references, closed periods,
+over-allocation and immutable-record changes have explicit persistent errors.
+State guards are in [lifecycle](04-record-workflow-lifecycle.md), API errors in
+[API specification](05-api-specification.md), and detailed SOP in
+[business process](08-app-flow.md#operating-procedures).
 
-| Role (code) | Main responsibilities |
-|---|---|
-| Super Administrator (`SUPER_ADMIN`) | Full platform administration; protected built-in role |
-| Administrator (`ADMINISTRATOR`) | Users, roles, configuration, reference data, settings, backup |
-| Operations Manager (`OPERATIONS_MANAGER`) | Service-order and quotation review, configuration |
-| Sales Officer (`SALES_OFFICER`) | Quotations, revisions, customer communication |
-| Operations Officer (`OPERATIONS_OFFICER`) | Service orders, containers, components, documents, milestones |
-| Finance Officer (`FINANCE_OFFICER`) | Financial drafts, receipts, payments, allocations, journals |
-| Finance Manager (`FINANCE_MANAGER`) | Posting, reversals, chart of accounts, periods, approvals |
-| Auditor (`AUDITOR`) | Read-only review and evidence collection |
+## Localization and print journey
 
-## 3. First-Run Setup
+English, Khmer and Simplified Chinese apply to navigation, forms, tables, dialogs and
+understandable validation/errors. Language switching must not corrupt in-progress workflows.
+Applicable business documents print English–Khmer independent of UI language, with correct
+company/customer details, amounts, fonts, wrapping and no clipping/overlap.
+Historical tax references do not expand the approved tax-workflow scope.
 
-### First-run setup (empty database)
+## Operating procedures
+
+Consolidated from the reviewed SOP. Role names describe responsibilities; existing Casbin
+capabilities govern each action. No new approval workflow is introduced. Source checks:
+`quotations/service.py:1013` (retry distinctions), `operations/service.py:438` (snapshot copying
+and prepared containers), `core/bootstrap.py` (baseline setup), `core/permissions.py` (single role).
+The procedure remains a verification specification; cleanup does not establish acceptance.
+
+### 3. First-Run Setup
+
+#### First-run setup (empty database)
 
 1. On a freshly migrated database there are no users, so the app redirects to the
    first-run setup page (`/auth/setup`).
@@ -54,13 +71,13 @@ template that an administrator creates from Roles & Permissions.
 
 Lost administrator access is recovered through the forgot-password flow
 (`/auth/forgot-password/...` email codes) or by an administrator setting the
-password per user (`POST /api/v1/auth/users/{user_id}/password`).
+password per user (`POST /api/v1/users/{user_id}/password`).
 
 Additional users, roles and role assignments are administered from the UI or API
 afterwards. Posting rules are configured in the Posting Rules screen; the service
 layer falls back to `DEFAULT_ACCOUNTS` only when no rule matches.
 
-### Control points
+#### Control points
 
 - Setup can run only while no user exists.
 - User codes, usernames and emails are unique.
@@ -70,24 +87,24 @@ layer falls back to `DEFAULT_ACCOUNTS` only when no rule matches.
 - The Super Administrator role cannot be reduced below the bootstrap
   administrator, and its wildcard grant cannot be removed.
 
-## 4. User and Permission Administration
+### 4. User and Permission Administration
 
-### Create user
+#### Create user
 
 1. Administrator opens Users and creates the user (code, username, email, display
    name, locale, timezone).
 2. Administrator sets the initial password (stored as an Argon2id hash).
-3. Administrator assigns one or more roles (at least one is required).
+3. Administrator assigns the user exactly one active role.
 4. User logs in and can change their own password.
 
-### Change access
+#### Change access
 
 1. Administrator reviews the requested change.
-2. Administrator replaces the user's role; the system expires the previous assignment and keeps it as history.
+2. Administrator replaces the user's single Casbin role assignment; preserve the audit evidence of the change.
 3. System records the actor and assignment metadata.
 4. Existing sessions can be revoked for security-sensitive changes.
 
-### Disable user
+#### Disable user
 
 1. Administrator changes the user status to `DISABLED`.
 2. System refuses authentication and active access.
@@ -97,7 +114,7 @@ Role administration uses a dedicated form: a role records a name and the
 permission actions it grants; per-role scope/level and code/status columns are not
 used. Permissions are enforced by the API.
 
-## 5. Master Data Procedure
+### 5. Master Data Procedure
 
 1. Authorized user opens the relevant master-data screen.
 2. User creates or edits the record.
@@ -108,10 +125,10 @@ used. Permissions are enforced by the API.
 6. The API refuses to delete an active reference record; deactivate it first.
    Status is not entered on the record form.
 
-The same activate-before-delete rule applies to **service orders**, which use a
+The same deactivate-before-delete rule applies to **service orders**, which use a
 simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 
-### Party Roles
+#### Party Roles
 
 1. Authorized user opens **Master Data > Party Roles**.
 2. User creates a role with a unique code, a unique name, an optional description,
@@ -125,7 +142,7 @@ simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 6. A role assigned to at least one party cannot be deleted. Deactivate it instead;
    existing assignments remain readable.
 
-## 6. Component Template Procedure
+### 6. Component Template Procedure
 
 1. Administrator creates a component group.
 2. Administrator creates a template with a code and version.
@@ -136,9 +153,9 @@ simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
 7. When the structure changes, administrator creates a new template version.
 8. Existing service components retain their original version.
 
-## 7. Quotation Procedure
+### 7. Quotation Procedure
 
-### Create or edit the draft
+#### Create or edit the draft
 
 1. Sales officer selects the customer and trade direction.
 2. User enters route stops, transport options, container requirements, and lines.
@@ -148,38 +165,36 @@ simple `ACTIVE` / `INACTIVE` status instead of a draft/closed lifecycle.
    the only action is **Save changes**.
 6. The saved draft stays editable and can be deleted from its row action menu.
 
-### Send and accept
+#### Send and accept
 
 1. Once the draft has no unsaved changes, the primary action becomes **Send**
    (Save changes and Send are never shown at the same time).
 2. User sends the revision (`DRAFT → SENT`).
 3. After the customer decision, a user with `quotation.accept` selects **Accept**
    (`SENT → ACCEPTED`).
-4. Acceptance locks the revision for editing.
+4. The sent revision is already immutable; acceptance records the customer decision.
 
-### Convert to service order
+#### Convert to service order
 
 1. A user with `quotation.convert` selects **Convert** on the accepted revision.
 2. System locks the revision, creates the service order and its required
    components, copies the commercial and operational snapshots, and records the
    conversion (`ACCEPTED → CONVERTED`).
 3. System opens the created service order.
-4. Repeating the conversion rejects with `DUPLICATE_CONVERSION` and opens the
-   existing service order.
+4. A replay with the same idempotency key returns the existing order; another duplicate is refused with `DUPLICATE_CONVERSION`. The client must not infer an existing-order payload from that error.
 
-### API-level steps
+#### API-level steps
 
 The UI calls the revision state machine directly: `send` → `accept` → `convert`.
 
-### Exceptions
+#### Exceptions
 
 - Rejected, expired, or cancelled revisions cannot be converted.
-- A duplicate conversion attempt is rejected with `DUPLICATE_CONVERSION`; the
-  existing service order is opened instead.
+- Same-key replays return the original conversion. Another duplicate returns `DUPLICATE_CONVERSION`; do not create another order.
 - A sent revision cannot be edited directly; create a new revision first.
 - A customer change after acceptance requires a new revision; the accepted revision remains immutable.
 
-## 8. Service-Order Procedure
+### 8. Service-Order Procedure
 
 1. Operations officer reviews the converted order.
 2. User confirms customer, direction, and operational route stops. Each stop uses
@@ -201,7 +216,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
     can be deleted.
 11. Activity feeds and comments are not shown on service-order documents or lists.
 
-## 9. Service-Charge Procedure
+### 9. Service-Charge Procedure
 
 1. User opens a service order and selects `New Service Charge`.
 2. User selects document type and currency.
@@ -214,7 +229,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 9. Issuing the charge does not create a finance draft and does not post accounting.
 10. An authorized finance user may select `Create Finance Invoice` to create the draft.
 
-### Convert to finance invoice
+#### Convert to finance invoice
 
 1. An authorized user selects `Create Finance Invoice` on an issued charge.
 2. System copies the charge into a draft financial document only when one does not already exist.
@@ -222,7 +237,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 4. Finance user reviews and may edit the draft.
 5. Finance user posts it separately.
 
-### Automatic service-order finance reporting
+#### Automatic service-order finance reporting
 
 1. The accepted quotation provides the quoted commercial value.
 2. Issued service charges provide confirmed charge value; drafts are reported separately.
@@ -231,9 +246,9 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 5. Posted supplier bills provide recognized job cost.
 6. The system calculates gross profit, margin, and uninvoiced issued charges without browser-side aggregation.
 
-## 10. Financial Document Procedure
+### 10. Financial Document Procedure
 
-### Create manual document
+#### Create manual document
 
 1. Finance user selects a document type.
 2. User selects party, currency, date, and optional service order.
@@ -242,7 +257,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 5. System calculates the total.
 6. User saves the draft.
 
-### Post document
+#### Post document
 
 1. Finance user validates the draft.
 2. System resolves an open accounting period.
@@ -254,7 +269,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 8. System creates the journal and audit event.
 9. System marks the document `POSTED`.
 
-### Receipt or payment
+#### Receipt or payment
 
 1. User creates a `CUSTOMER_RECEIPT` or `SUPPLIER_PAYMENT`.
 2. User enters payment method, financial account, value date, and external reference.
@@ -262,7 +277,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 4. System records the cash/bank journal effect.
 5. User allocates the payment to invoices or bills.
 
-### Allocation
+#### Allocation
 
 1. User selects a posted payment.
 2. User selects one or more eligible posted target documents.
@@ -272,7 +287,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 6. System saves allocations.
 7. System updates settlement reporting.
 
-### Reversal
+#### Reversal
 
 1. Finance manager selects a posted document.
 2. Manager enters a reason.
@@ -280,7 +295,7 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 4. Original document remains immutable.
 5. System records the relationship and audit event.
 
-## 11. Accounting Period Procedure
+### 11. Accounting Period Procedure
 
 1. Finance manager opens the accounting period.
 2. Finance users post transactions during the period.
@@ -290,34 +305,34 @@ The UI calls the revision state machine directly: `send` → `accept` → `conve
 6. System rejects future posting into the closed period (`PERIOD_CLOSED`).
 7. Reopening requires elevated permission and an audit event.
 
-## 12. Exception Handling
+### 12. Exception Handling
 
-### Missing required document
+#### Missing required document
 
-Keep the component pending or on hold. Record the missing document and notify the responsible user.
+Do not complete a component with missing required values/documents. Report the missing evidence to the responsible user without inventing a new hold status or mandatory notification integration.
 
-### Incorrect container number
+#### Incorrect container number
 
 Do not overwrite historical movement evidence. Correct using a controlled correction record or documented update policy.
 
-### Failed posting
+#### Failed posting
 
-Keep the financial document in draft or an error state. No partial journal may remain.
+Keep the unposted document in its existing draft state. No partial journal may remain; do not invent a new error status.
 
-### Unbalanced journal
+#### Unbalanced journal
 
 Do not post. Display the imbalance and affected lines to the finance user
 (`JOURNAL_UNBALANCED`).
 
-### Overpayment
+#### Overpayment
 
-Keep the excess as unapplied balance or create a refund/credit process according to accounting policy. Do not silently allocate beyond the target balance (`ALLOCATION_EXCEEDS_BALANCE`).
+Keep excess unapplied or use an existing authorized correction/refund mechanism where applicable; do not invent an unapproved workflow. Do not silently allocate beyond the target balance (`ALLOCATION_EXCEEDS_BALANCE`).
 
-### Duplicate request
+#### Duplicate request
 
-Return the original idempotent result when the same command key is reused.
+Use the command-specific retry contract: same-key quotation conversion returns the original result; other commands may use explicit duplicate guards. Never promise universal key support.
 
-## 13. Evidence and Records
+### 13. Evidence and Records
 
 Required evidence includes:
 

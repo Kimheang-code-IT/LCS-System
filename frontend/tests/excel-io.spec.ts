@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 const workspace = readFileSync(resolve(__dirname, '../app/components/freight/WorkspaceView.vue'), 'utf8')
 const dialog = readFileSync(resolve(__dirname, '../app/components/excel/ImportExportDialog.vue'), 'utf8')
 const client = readFileSync(resolve(__dirname, '../app/composables/useExcelIo.ts'), 'utf8')
+const headerActions = readFileSync(resolve(__dirname, '../app/components/layout/AppHeaderPageActions.vue'), 'utf8')
 
 describe('Excel import/export wiring', () => {
   it('list pages host the shared dialog and offer import/export from the header menu', () => {
@@ -13,15 +14,26 @@ describe('Excel import/export wiring', () => {
     expect(workspace).toContain('excelModule')
     // The actions are header ⋯ menu items, not table-toolbar buttons.
     expect(workspace).toMatch(/onSelect: \(\) => \{ importOpen\.value = true \}/)
-    expect(workspace).toContain("t('freight.excel.import')")
+    expect(workspace).toContain("t('actions.importData')")
+    expect(workspace).toContain("t('actions.exportData')")
+    // One icon per action across the system: export always downloads, import uploads.
+    expect(workspace).toContain("icon: 'i-lucide-download'")
+    expect(workspace).toContain("icon: 'i-lucide-upload'")
+  })
+
+  it('field-picker export uses the same combined-menu entry as Excel export', () => {
+    expect(headerActions).toContain("t('actions.exportData')")
+    expect(headerActions).toContain("icon: 'i-lucide-download'")
   })
 
   it('keeps the New button in the header while Import/Export stay in the menu', () => {
-    // Creating is a primary action; import/export moved off the table toolbar.
+    // Creating is a primary header action; import/export moved off the table
+    // toolbar, and the in-table empty state must not duplicate the New button
+    // (it already stands in the page header).
     expect(workspace).toContain(':can-create="canCreate"')
     expect(workspace).toContain('@create="openCreate"')
     expect(workspace).not.toContain('excelExportLabel }}</UButton>')
-    expect(workspace).toContain(':empty-actions="canCreate')
+    expect(workspace).not.toContain(':empty-actions=')
   })
 
   it('the import dialog drives the template → validate → confirm workflow', () => {

@@ -60,6 +60,21 @@ const useBackend = computed(() => backendSlugs.includes(slug.value))
 const isStatement = computed(() => Boolean(report.value.statement))
 const serverPaged = computed(() => isGeneratedReport(slug.value))
 
+/**
+ * The four operations reports are read-only pages that load and refresh on
+ * their own: the data comes either from the shared operational store (whose
+ * collections every record mutation reloads) or from the read-only
+ * profitability endpoint. Filters are applied client-side to the loaded rows,
+ * so results recompute live and no manual Generate/Rebuild step exists.
+ */
+const OPS_REPORT_SLUGS = ['service-orders', 'service-order-status', 'containers', 'profitability']
+const autoLoad = computed(() => OPS_REPORT_SLUGS.includes(slug.value))
+const OPS_REPORT_COLLECTIONS: Record<string, string[]> = {
+  'service-orders': ['jobs', 'actualContainers', 'serviceComponents', 'jobCharges', 'debitNotes'],
+  'service-order-status': ['jobs', 'actualContainers', 'serviceComponents', 'jobCharges', 'debitNotes'],
+  'containers': ['actualContainers', 'jobs'],
+}
+
 // --- Generate-on-demand state ---------------------------------------------
 // Nothing is requested until the user presses Generate: opening a report page
 // must never pull the ledger.
@@ -133,9 +148,22 @@ function resetResults() {
   backendLedgerLines.value = []
 }
 
+/**
+ * A slug change (auto-load or a fast user) must not be swallowed by an
+ * in-flight run, and a superseded run must never write its results over the
+ * newer one's. The newest run owns the screen; older runs abandon theirs.
+ *
+ * Declared before the immediate slug watcher: that callback runs during
+ * setup, and the loader reads this token.
+ */
+const runToken = ref(0)
+
 watch(slug, (next) => {
   resetResults()
   applyFilters(FILTER_MEMORY.get(next))
+  // Auto-load: opening a report fetches it immediately with the remembered (or
+  // default) period, so no manual Generate is needed to see existing data.
+  void generateReport()
 }, { immediate: true })
 
 function errorMessage(error: unknown) {
@@ -167,9 +195,12 @@ async function loadBackendReport() {
   backendRows.value = data
 }
 
+/**
+ * A slug change must not let an older run overwrite a newer one's results.
+ * The newest run owns the screen; older runs abandon theirs.
+ */
 async function generateReport() {
-  // Repeated clicks must not queue repeated report runs.
-  if (generating.value) return
+  const token = ++runToken.value
   generating.value = true
   generateError.value = ''
   try {
@@ -182,6 +213,7 @@ async function generateReport() {
       ) || {}
       if (slug.value === 'trial-balance') {
         const result = await reports.generateTrialBalance(body)
+        if (token !== runToken.value) return
         backendRows.value = result.items
         trialBalanceTotals.value = result.totals
         trialBalanceBalanced.value = result.balanced
@@ -191,6 +223,7 @@ async function generateReport() {
       }
       else {
         const result = await reports.generateGeneralLedger(body)
+        if (token !== runToken.value) return
         backendRows.value = result.items
         trialBalanceTotals.value = null
         reportWarnings.value = result.meta.warnings
@@ -200,30 +233,42 @@ async function generateReport() {
     }
     else if (useBackend.value) {
       await loadBackendReport()
+      if (token !== runToken.value) return
       reportTotal.value = backendRows.value.length
       generatedAt.value = new Date().toISOString()
       reportWarnings.value = []
     }
     else {
-      // Operational reports are derived from the store, whose fetch this call
-      // triggers; rows appear when the store revision bumps.
+      // Operational reports read the shared store: fetch the collections the
+      // report needs (cached and request-deduped by the store) so the loading
+      // state covers the load, then let the rows derive reactively from it.
+      await Promise.all((OPS_REPORT_COLLECTIONS[slug.value] ?? []).map(collection => store.ensure(collection)))
+      if (token !== runToken.value) return
       reportTotal.value = 0
       generatedAt.value = new Date().toISOString()
       reportWarnings.value = []
     }
+    if (token !== runToken.value) return
     generated.value = true
     stale.value = false
   }
   catch (error) {
+    if (token !== runToken.value) return
     // Keep the previous result visible but never present it as current.
     generateError.value = errorMessage(error)
     stale.value = generated.value
   }
   finally {
-    generating.value = false
+    if (token === runToken.value) generating.value = false
   }
 }
 
+/**
+ * Rebuild: force a fresh calculation from the original source records. The
+ * backend engine is uncached and read-only, so a rebuild is a re-run of the
+ * same permission-guarded query — it never writes, duplicates or alters
+ * financial records. Operational reports also refresh the store cache first.
+ */
 async function refreshReport() {
   if (!useBackend.value) store.reload()
   await generateReport()
@@ -259,6 +304,9 @@ const filtered = computed(() => {
 watch([q, party, status, currency, dateFrom, dateTo, extraFilters, slug, sort], () => {
   rowSelection.value = {}
   pagination.value = { ...pagination.value, pageIndex: 0 }
+  // The operations reports recompute from loaded rows, so filters apply live;
+  // a manual re-run (and the stale banner) does not exist on those pages.
+  if (autoLoad.value) return
   if (generated.value) stale.value = true
 }, { deep: true })
 // Server pagination is a request, not a client slice: fetch the page the user
@@ -400,13 +448,22 @@ const emptyTitle = computed(() => {
 const emptyDescription = computed(() => generated.value
   ? t('freight.reportCatalog.emptyResultDescription')
   : t('freight.reportCatalog.emptyDescription'))
-const emptyActions = computed(() => (generated.value
-  ? []
-  : [{
-      icon: 'i-lucide-play',
-      label: t('freight.reportCatalog.generate'),
-      onClick: () => { void generateReport() },
-    }]))
+const emptyActions = computed(() => {
+  if (autoLoad.value) {
+    // The page loads itself; only a failed load leaves a retry control, and
+    // the header Refresh always remains available.
+    return generateError.value
+      ? [{ icon: 'i-lucide-refresh-cw', label: t('session.retry'), onClick: () => { void generateReport() } }]
+      : []
+  }
+  return (generated.value
+    ? []
+    : [{
+        icon: 'i-lucide-play',
+        label: t('freight.reportCatalog.generate'),
+        onClick: () => { void generateReport() },
+      }])
+})
 const generatedAtLabel = computed(() => generatedAt.value
   ? t('freight.reportCatalog.generatedAt', { at: new Date(generatedAt.value).toLocaleString() })
   : '')
@@ -438,14 +495,24 @@ async function exportCsv(request:{fieldCodes:string[]}){
       @refresh="refreshReport"
       @export="exportCsv"
     >
-      <UButton
-        :label="t('freight.reportCatalog.generate')"
-        icon="i-lucide-play"
-        size="sm"
-        :loading="generating"
-        :disabled="generating"
-        @click="generateReport"
-      />
+      <!-- Generate/Rebuild remain only on the reports that need them (financial
+           ledger pages); the operations reports load and refresh themselves. -->
+      <template v-if="!autoLoad">
+        <CommonAppDocumentActionButton
+          :label="t('freight.reportCatalog.generate')"
+          icon="i-lucide-play"
+          :loading="generating"
+          :disabled="generating"
+          @click="generateReport"
+        />
+        <CommonAppDocumentActionButton
+          :label="t('freight.reportCatalog.rebuild')"
+          color="secondary"
+          icon="i-lucide-refresh-cw"
+          :disabled="generating"
+          @click="refreshReport"
+        />
+      </template>
     </LayoutAppHeaderPageActions>
 
     <div v-if="generateError || reportWarnings.length || stale || trialBalanceTotals" class="space-y-1.5 px-1.5 pt-1.5">
@@ -454,6 +521,15 @@ async function exportCsv(request:{fieldCodes:string[]}){
         color="error"
         :title="t('freight.reportCatalog.generateFailedTitle')"
         :description="generateError"
+      />
+      <UButton
+        v-if="generateError && autoLoad"
+        icon="i-lucide-refresh-cw"
+        :label="t('session.retry')"
+        variant="outline"
+        size="sm"
+        class="shrink-0"
+        @click="generateReport"
       />
       <UAlert
         v-for="warning in reportWarnings"
@@ -498,7 +574,6 @@ async function exportCsv(request:{fieldCodes:string[]}){
         :server-total="reportTotal"
         :empty-title="emptyTitle"
         :empty-description="emptyDescription"
-        :empty-actions="emptyActions"
       >
       <template #filters="{ compact }">
         <CommonAppFilterSelect

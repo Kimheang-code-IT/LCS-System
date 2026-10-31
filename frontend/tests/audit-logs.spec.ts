@@ -47,6 +47,9 @@ describe('audit log table logic', () => {
     // Money is still formatted as money.
     expect(formatFreightCell(46, 'amount', 'USD')).not.toBe('46')
     expect(formatFreightCell(46, 'amount', 'USD')).toMatch(/46/)
+    // Datetimes render as datetimes even without the At/Timestamp suffix
+    // (regression: the users list printed the raw IS0-8601 string).
+    expect(formatFreightCell('2026-10-31T03:43:09.617190+00:00', 'lastLogin')).not.toContain('T03')
   })
 
   it('keeps the shared status manager from probing a missing policy', () => {

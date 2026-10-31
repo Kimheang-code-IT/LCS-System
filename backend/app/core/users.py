@@ -34,7 +34,10 @@ async def creator_names_from_audit(
     """Map entity id -> actor display name from its creation audit event.
 
     This is the only creator evidence for tables that do not store a creator
-    column. Rows created before auditing existed simply stay unmapped (`—`).
+    column. A system-created record (bootstrap seed) has an event with no
+    actor: it renders as ``System``. A row created before auditing existed
+    has no event at all and stays unmapped, which the caller renders as an
+    em dash — a creator is never invented for evidence that does not exist.
     """
     from app.modules.audit.models import AuditEvent
 
@@ -43,8 +46,8 @@ async def creator_names_from_audit(
         return {}
     rows = (
         await session.execute(
-            select(AuditEvent.entity_id, User.display_name, AuditEvent.occurred_at)
-            .join(User, User.id == AuditEvent.actor_user_id)
+            select(AuditEvent.entity_id, User.display_name, AuditEvent.actor_user_id)
+            .join(User, User.id == AuditEvent.actor_user_id, isouter=True)
             .where(
                 AuditEvent.entity_type == entity_type,
                 AuditEvent.event_type == event_type,
@@ -54,6 +57,9 @@ async def creator_names_from_audit(
         )
     ).all()
     creators: dict[int, str] = {}
-    for entity_id, name, _occurred in rows:
-        creators.setdefault(int(entity_id), str(name or ""))
+    for entity_id, name, actor_id in rows:
+        creators.setdefault(
+            int(entity_id),
+            str(name or "System") if actor_id is None else str(name or ""),
+        )
     return creators
