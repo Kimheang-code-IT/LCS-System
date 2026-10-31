@@ -38,9 +38,13 @@ from app.modules.quotations.schemas import (
 )
 from app.modules.settings.service import get_default_currency
 
-IMMUTABLE_STATUSES = {"SENT", "ACCEPTED", "CONVERTED", "SUPERSEDED", "REJECTED", "EXPIRED", "CANCELLED"}
+# The active quotation workflow is DRAFT -> SUBMITTED -> CONVERTED. SENT and
+# ACCEPTED are legacy statuses kept readable and convertible (older rows keep
+# their meaning), but no longer part of the active flow.
+IMMUTABLE_STATUSES = {"SENT", "ACCEPTED", "SUBMITTED", "CONVERTED", "SUPERSEDED", "REJECTED", "EXPIRED", "CANCELLED"}
 STATUS_MAP = {
     "draft": "DRAFT",
+    "submitted": "SUBMITTED",
     "sent": "SENT",
     "accepted": "ACCEPTED",
     "converted": "CONVERTED",
@@ -783,14 +787,20 @@ async def send_revision(session: AsyncSession, context: RequestContext, revision
 
 
 async def submit_revision(session: AsyncSession, context: RequestContext, revision_id: int) -> dict:
+    """DRAFT -> SUBMITTED, the active workflow's submission step.
+
+    A repeat submission of the same revision is a replay and returns the record;
+    legacy SENT revisions are accepted as already-submitted so older data keeps
+    working without being rewritten.
+    """
     quotation, revision = await _revision_with_quotation(session, revision_id)
-    if revision.status == "SENT":
+    if revision.status in {"SUBMITTED", "SENT"}:
         return quotation_record(quotation, revision, quotation.data or {})
     if revision.status != "DRAFT":
         raise InvalidState(f"Cannot submit a revision in status {revision.status}.")
-    revision.status = "SENT"
+    revision.status = "SUBMITTED"
     revision.sent_at = revision.sent_at or datetime.now(UTC)
-    quotation.status = "SENT"
+    quotation.status = "SUBMITTED"
     await session.commit()
     return quotation_record(quotation, revision, quotation.data or {})
 
@@ -820,14 +830,14 @@ async def reject_revision(session: AsyncSession, context: RequestContext, revisi
     quotation, revision = await _revision_with_quotation(session, revision_id)
     if revision.status == "REJECTED":
         return quotation_record(quotation, revision, quotation.data or {})
-    if revision.status not in {"SENT", "DRAFT"}:
+    if revision.status not in {"SUBMITTED", "SENT", "DRAFT"}:
         raise InvalidState(f"Cannot reject a revision in status {revision.status}.")
     revision.status = "REJECTED"
     revision.rejected_at = datetime.now(UTC)
     if reason:
         revision.data = jsonable({**(revision.data or {}), "rejectionReason": reason})
     if quotation.current_revision_no == revision.revision_no and not any(
-        other.status in {"DRAFT", "SENT", "ACCEPTED"}
+        other.status in {"DRAFT", "SENT", "ACCEPTED", "SUBMITTED"}
         for other in await QuotationRepository(session).revisions(quotation.id)
         if other.id != revision.id
     ):
@@ -842,7 +852,8 @@ async def cancel_revision(session: AsyncSession, context: RequestContext, revisi
     """Withdraw a revision the seller no longer offers.
 
     Cancelling differs from rejecting: nobody declined the offer, it was pulled
-    back before a decision. Only a draft or a sent revision can be withdrawn, and
+    back before a decision. Only a draft, submitted or legacy sent revision can be
+    withdrawn, and
     the header mirrors it only when no other revision is still live — the same
     rule the rejection path uses, so a cancelled revision cannot hide a live
     offer. The revision's terms stay frozen, exactly as after a rejection.
@@ -850,13 +861,13 @@ async def cancel_revision(session: AsyncSession, context: RequestContext, revisi
     quotation, revision = await _revision_with_quotation(session, revision_id)
     if revision.status == "CANCELLED":
         return quotation_record(quotation, revision, quotation.data or {})
-    if revision.status not in {"DRAFT", "SENT"}:
+    if revision.status not in {"DRAFT", "SENT", "SUBMITTED"}:
         raise InvalidState(f"Cannot cancel a revision in status {revision.status}.")
     revision.status = "CANCELLED"
     if reason:
         revision.data = jsonable({**(revision.data or {}), "cancellationReason": reason})
     if quotation.current_revision_no == revision.revision_no and not any(
-        other.status in {"DRAFT", "SENT", "ACCEPTED"}
+        other.status in {"DRAFT", "SENT", "ACCEPTED", "SUBMITTED"}
         for other in await QuotationRepository(session).revisions(quotation.id)
         if other.id != revision.id
     ):
@@ -1025,8 +1036,10 @@ async def convert_revision(
     prior_conversion = await QuotationRepository(session).conversion_for_quotation(quotation.id)
     if prior_conversion is not None:
         raise Conflict("DUPLICATE_CONVERSION", "This quotation was already converted to a service order.")
-    if revision.status != "ACCEPTED":
-        raise InvalidState("Only an accepted revision can be converted to a service order.")
+    # Submitted is the active source of conversion; SENT/ACCEPTED are legacy
+    # statuses that were converted historically and keep working.
+    if revision.status not in {"SUBMITTED", "SENT", "ACCEPTED"}:
+        raise InvalidState("Only a submitted revision can be converted to a service order.")
     service_order = await create_service_order_from_quotation(session, context, quotation, revision)
     session.add(
         QuotationConversion(

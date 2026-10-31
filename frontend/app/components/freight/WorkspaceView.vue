@@ -24,6 +24,7 @@ import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceS
 import { enrichJobListRows } from '~/utils/freight/job-list'
 import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/filter/values'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
+import { pageActionPermission } from '~/utils/freight/page-access'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
 import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
 import { type ListSortKind, type ListSortSelection, listSortKindFor } from '~/utils/table/list-sort'
@@ -152,22 +153,44 @@ const result = computed(() => {
   return { rows: all, total: all.length, all }
 })
 const isTableOnly = computed(() => Boolean(current.value?.tableOnly))
+/**
+ * Master Data write gate. Narrow matrix roles hold per-screen action codes
+ * (`master.party_roles.create`, `master.transport_assets.update` — the latter
+ * also covers the asset identity types and capacity units pages, mirroring the
+ * backend collection map); the legacy coarse aggregate stays accepted. The
+ * backend guards remain authoritative — a UI without the codes only hides
+ * actions it could not perform.
+ */
+function canMasterAction(action: 'create' | 'update' | 'delete'): boolean {
+  if (auth.user?.pageAccess?.includes('ALL_PAGES')) return true
+  const module = current.value
+  if (!module || module.group !== 'master') return false
+  if (lcs.can('master.reference.manage')) return true
+  return pageActionPermission(module.permission, action) !== ''
+    && auth.canAccessPage(pageActionPermission(module.permission, action))
+}
 const canManageModule = computed(() => {
   if (!current.value) return false
   if (auth.user?.pageAccess?.includes('ALL_PAGES')) return true
   if (current.value.collection === 'chartOfAccounts' || current.value.collection === 'financialAccounts') return lcs.can('chart_of_accounts.manage')
   if (current.value.collection === 'users') return lcs.can('user.manage')
   if (current.value.collection === 'roles') return lcs.can('role.manage')
-  if (current.value.group === 'master') return lcs.can('master.reference.manage')
+  if (current.value.group === 'master') return canMasterAction('create') || canMasterAction('update') || canMasterAction('delete')
   if (current.value.group === 'configuration') return auth.canAccessPage('configuration.manage')
   return true
 })
 const canCreate = computed(() => {
-  if (!current.value?.canCreate || current.value.readOnly || !canManageModule.value) return false
+  if (!current.value?.canCreate || current.value.readOnly) return false
   if (isJobList.value) return lcs.can('service_order.create')
+  if (current.value.group === 'master') return canMasterAction('create')
+  if (!canManageModule.value) return false
   return true
 })
-const canMutate = computed(() => Boolean(current.value) && !current.value?.readOnly && canManageModule.value)
+const canMutate = computed(() => {
+  if (!current.value || current.value.readOnly || !canManageModule.value) return false
+  if (current.value.group !== 'master') return true
+  return canMasterAction('update') || canMasterAction('delete')
+})
 const deactivationOnly = computed(() => current.value?.group === 'master' || current.value?.collection === 'documentSequences')
 
 const selectedIds = computed(() => listTableSelectedIds(rowSelection.value))
@@ -185,6 +208,8 @@ const bulkAction = computed<{ kind: 'delete' | 'deactivate', label: string, icon
   const statuses = rows.map(recordStatusValue)
   const statusBased = rows.length > 0 && statuses.every(status => status === 'ACTIVE' || status === 'INACTIVE')
   if (statusBased && statuses.some(status => status === 'ACTIVE')) {
+    // Deactivating is a status update; a delete-only grant must not be offered it.
+    if (current.value?.group === 'master' && !canMasterAction('update')) return null
     return { kind: 'deactivate', label: t('freight.ui.deactivate'), icon: 'i-lucide-circle-off', color: 'warning' }
   }
   if (statusBased) {
@@ -288,10 +313,10 @@ const headerMenuItems = computed<DropdownMenuItem[][]>(() => {
   const module_ = excelModule.value
   const io: DropdownMenuItem[] = []
   if (module_?.exportEnabled && lcs.can(module_.viewPermission as never)) {
-    io.push({ label: t('actions.export'), icon: 'i-lucide-file-down', onSelect: () => { exportOpen.value = true } })
+    io.push({ label: t('actions.exportData'), icon: 'i-lucide-download', onSelect: () => { exportOpen.value = true } })
   }
   if (module_?.importEnabled && lcs.can(module_.managePermission as never)) {
-    io.push({ label: t('freight.excel.import'), icon: 'i-lucide-upload', onSelect: () => { importOpen.value = true } })
+    io.push({ label: t('actions.importData'), icon: 'i-lucide-upload', onSelect: () => { importOpen.value = true } })
   }
   return io.length ? [io] : []
 })
@@ -443,8 +468,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
       row.status,
       {
         updateDraft: lcs.can('quotation.update_draft'),
-        send: lcs.can('quotation.send'),
-        accept: lcs.can('quotation.accept'),
+        submit: lcs.can('quotation.submit'),
         convert: lcs.can('quotation.convert'),
       },
       { hasServiceOrder: Boolean(relatedJob) },
@@ -452,15 +476,17 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (availability.edit) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     }
-    // Send / Accept / Reject / Convert are the quotation's status transitions;
-    // they come from the shared policy, gated by the quotation availability
-    // rules (a converted quotation must not offer Convert again).
+    // Submit / Convert are the active quotation transitions; they come from the
+    // shared policy, gated by the quotation availability rules (a converted
+    // quotation must not offer Convert again, and legacy SENT/ACCEPTED rows
+    // only ever convert).
     const statusItem = statusMenuItem(row, {
       allowTransition: (transition) => {
-        if (transition.action === 'send') return availability.send
-        if (transition.action === 'accept') return availability.accept
+        if (transition.action === 'send') return false
+        if (transition.action === 'accept') return false
+        if (transition.action === 'submit') return availability.submit
         if (transition.action === 'convert') return availability.convert
-        if (transition.action === 'reject') return lcs.can('quotation.accept')
+        if (transition.action === 'reject') return false
         if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
         return true
       },
@@ -806,7 +832,6 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       :loading="pending"
       :show-date-range="Boolean(dateField)"
       :filters-active="hasActiveFilters"
-      :empty-actions="canCreate ? [{ icon: 'i-lucide-plus', label: t('freight.ui.newEntity', { entity: moduleSingular(current) }), onClick: openCreate }] : []"
       @select="onRowSelect"
     >
       <template #filters="{ compact }">

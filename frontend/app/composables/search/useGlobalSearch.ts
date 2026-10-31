@@ -9,7 +9,7 @@ import { useSearch } from '~/composables/search/useSearch'
 export function useGlobalSearch() {
   const { t } = useI18n()
   const { links, close: closeSidebar } = useMenu()
-  const { askAi, searchKeyword, searchSemantic } = useSearch()
+  const { askAi, searchKeyword, searchSemantic, cancelSearch, cancelAsk } = useSearch()
 
   const open = ref(false)
   const searchTerm = ref('')
@@ -19,6 +19,24 @@ export function useGlobalSearch() {
   const hits = ref<SearchHit[]>([])
   const aiAnswer = ref<string | null>(null)
   const aiCitations = ref<SearchHit[]>([])
+  let generation = 0
+  let disposed = false
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+  const isCurrent = (version: number) => !disposed && version === generation
+
+  function invalidate() {
+    generation++
+    if (debounceTimer !== null) clearTimeout(debounceTimer)
+    debounceTimer = null
+    cancelSearch()
+    cancelAsk()
+    hits.value = []
+    aiAnswer.value = null
+    aiCitations.value = []
+    loading.value = false
+    asking.value = false
+  }
 
   const navItems = computed<CommandPaletteItem[]>(() => {
     const items: CommandPaletteItem[] = []
@@ -52,53 +70,52 @@ export function useGlobalSearch() {
     return items
   })
 
-  async function runSearch(q: string) {
-    const query = q.trim()
-    aiAnswer.value = null
-    aiCitations.value = []
-    if (!query) {
-      hits.value = []
-      loading.value = false
-      return
-    }
+  async function runSearch(query: string, searchMode: SearchMode, version: number) {
+    if (!isCurrent(version)) return
     loading.value = true
     try {
-      hits.value = mode.value === 'semantic'
+      const results = searchMode === 'semantic'
         ? await searchSemantic(query, { limit: 12 })
         : await searchKeyword(query, { limit: 12 })
+      if (isCurrent(version)) hits.value = results
     }
     catch {
-      hits.value = []
+      if (isCurrent(version)) hits.value = []
     }
     finally {
-      loading.value = false
+      if (isCurrent(version)) loading.value = false
     }
   }
 
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null
-  watch([searchTerm, mode], ([q]) => {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => runSearch(String(q || '')), 120)
-  })
+  watch([() => searchTerm.value.trim(), mode, open], ([query, searchMode, isOpen]) => {
+    // Invalidate immediately, not 120 ms later: the previous response may arrive meanwhile.
+    invalidate()
+    if (!query || !isOpen || disposed) return
+    const version = generation
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null
+      void runSearch(query, searchMode, version)
+    }, 120)
+  }, { flush: 'sync' })
 
-  watch(open, (isOpen) => {
-    if (!isOpen) {
-      aiAnswer.value = null
-      aiCitations.value = []
-    }
+  onScopeDispose(() => {
+    disposed = true
+    invalidate()
   })
 
   async function onAskAi() {
     const q = searchTerm.value.trim()
-    if (!q || asking.value) return
+    if (!q || asking.value || !open.value || disposed) return
+    const version = generation
     asking.value = true
     try {
       const res = await askAi(q, hits.value)
+      if (!isCurrent(version)) return
       aiAnswer.value = res.answer
       aiCitations.value = res.citations
     }
     finally {
-      asking.value = false
+      if (isCurrent(version)) asking.value = false
     }
   }
 

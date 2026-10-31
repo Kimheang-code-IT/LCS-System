@@ -56,6 +56,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await encrypt_legacy_credentials(session)
     except Exception:
         logger.warning("Telegram credential migration deferred until settings are available.")
+    # The seeded record vocabularies never pass through the API, so without
+    # this attribution their rows show no creator in the master-data lists.
+    # Idempotent: rows that already carry a creation event are skipped.
+    try:
+        from app.modules.master_data.service import ensure_vocabulary_creation_audit
+
+        async with SessionLocal() as session:
+            await ensure_vocabulary_creation_audit(session)
+            await session.commit()
+    except Exception:
+        logger.warning("Vocabulary creator attribution deferred until the database is available.")
     start_scheduler()
     start_worker()
     try:

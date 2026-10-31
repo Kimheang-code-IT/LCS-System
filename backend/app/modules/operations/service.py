@@ -529,6 +529,8 @@ async def create_service_order_from_quotation(
         # actually collected, so the row starts with no identifier rather than a
         # fabricated one. Re-conversion cannot duplicate these because a quotation
         # converts once (idempotency key + duplicate guard in the quotation service).
+        # Pricing-line types and quantities are deliberately never turned into
+        # rows here: a line's quantity is a billing unit count, not a box count.
         for _ in range(max(1, int(source.quantity or 1))):
             prepared.append(
                 ServiceOrderContainer(
@@ -644,27 +646,20 @@ async def list_containers(session: AsyncSession, context: RequestContext, identi
     return [_container_payload(row, labels.get(int(row.container_type_id))) for row in rows]
 
 
-async def add_container(session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]) -> dict:
-    """Create a container, or update the prepared row when ``id`` is supplied.
+def _container_input(data: dict[str, Any], existing: ServiceOrderContainer | None) -> tuple[dict[str, str], str, Any, Any, date | None, date | None]:
+    """Parse and validate one container row from add/update payloads.
 
-    A row prepared from a quotation requirement starts with no number; supplying
-    the number later updates that same row instead of creating a second one.
+    Accepts both camelCase form keys and the snake_case keys that survive in
+    stored data blobs. Returns ``(errors, container_number, net_weight,
+    gross_weight, pickup_date, return_date)``; ``errors`` non-empty aborts the
+    caller. Kept separate from persistence so add_container stays readable.
     """
-    order = await resolve_order(session, context, identifier)
-    if order.status == "INACTIVE":
-        raise InvalidState("Cannot add containers to an inactive service order.")
     from app.core.validation import parse_decimal
 
-    data = CONTAINER_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
-    existing: ServiceOrderContainer | None = None
-    container_id = _int_or_none(data.get("id"))
-    if container_id is not None:
-        existing = await session.get(ServiceOrderContainer, container_id)
-        if existing is None or existing.service_order_id != order.id:
-            raise NotFound("Container not found.")
-
     errors: dict[str, str] = {}
-    container_number = str(data.get("containerNumber") or data.get("container_number") or data.get("containerNo") or "").strip()
+    # A container identifier is an ISO 6346 code: stored and compared uppercase,
+    # so "abcu1234567" and "ABCU1234567" are the same box on the same order.
+    container_number = str(data.get("containerNumber") or data.get("container_number") or data.get("containerNo") or "").strip().upper()
     if not container_number:
         # Only a prepared row may stay unnumbered; a manually added box must be identified.
         if existing is None:
@@ -689,12 +684,33 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
         errors["returnDate"] = "Enter a valid date."
     if pickup_date and return_date and return_date < pickup_date:
         errors["returnDate"] = "Cannot be before the pickup date."
+    return errors, container_number, net_weight, gross_weight, pickup_date, return_date
+
+
+async def add_container(session: AsyncSession, context: RequestContext, identifier: str, data: dict[str, Any]) -> dict:
+    """Create a container, or update the prepared row when ``id`` is supplied.
+
+    A row prepared from a quotation requirement starts with no number; supplying
+    the number later updates that same row instead of creating a second one.
+    """
+    order = await resolve_order(session, context, identifier)
+    if order.status == "INACTIVE":
+        raise InvalidState("Cannot add containers to an inactive service order.")
+    data = CONTAINER_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
+    existing: ServiceOrderContainer | None = None
+    container_id = _int_or_none(data.get("id"))
+    if container_id is not None:
+        existing = await session.get(ServiceOrderContainer, container_id)
+        if existing is None or existing.service_order_id != order.id:
+            raise NotFound("Container not found.")
+
+    errors, container_number, net_weight, gross_weight, pickup_date, return_date = _container_input(data, existing)
     if errors:
         raise ValidationFailed("Please correct the container details.", errors)
     if container_number:
         clash = (
             await session.execute(
-                select(ServiceOrderContainer).where(ServiceOrderContainer.container_number == container_number)
+                select(ServiceOrderContainer).where(func.upper(ServiceOrderContainer.container_number) == container_number)
             )
         ).scalars().first()
         if clash is not None and (existing is None or clash.id != existing.id):

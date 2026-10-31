@@ -1,4 +1,6 @@
 import { normalizeRoutePath } from '~/utils/auth/session'
+import { FREIGHT_REPORTS, freightReportPath } from '~/config/freight-reports'
+import { reportRoutePermission } from '~/utils/freight/report-access'
 
 /**
  * Canonical page permission for every routed screen. The route guard checks
@@ -35,6 +37,11 @@ export const PAGE_ROUTE_PERMISSIONS: Readonly<Record<string, string>> = {
   '/master-data/transport-types/new': 'master.transport_types.create',
   '/master-data/transport-assets': 'master.transport_assets.view',
   '/master-data/transport-assets/new': 'master.transport_assets.create',
+  // The transport-asset vocabulary shares its matrix page (mirrors the backend
+  // collection map); the legacy `master.reference.view` code stays accepted.
+  '/master-data/asset-identity-types': 'master.transport_assets.view',
+  '/master-data/capacity-units': 'master.transport_assets.view',
+  '/master-data/party-roles': 'master.party_roles.view',
   '/master-data/fee-types': 'master.fee_types.view',
   '/master-data/fee-types/new': 'master.fee_types.create',
   '/master-data/currencies': 'master.currencies.view',
@@ -139,6 +146,20 @@ export function pagePermissionCandidatesForPath(path: string): string[] {
   const canonical = requiredPagePermissionForPath(path)
   if (!canonical) return []
   return [...new Set([canonical, ...legacyPermissionsFor(canonical)])]
+}
+
+/**
+ * First routed screen the account may open, walked in the canonical (menu) order:
+ * dashboard, business pages, master data, configuration, administration, reports.
+ * The post-login landing and the direct-URL denial fallback use it so an account
+ * without any of the privileged landing screens can still reach its own pages.
+ */
+export function firstPermittedPagePath(canAccessPage: (code: string) => boolean): string | undefined {
+  for (const [route, permission] of Object.entries(PAGE_ROUTE_PERMISSIONS)) {
+    if (canAccessPage(permission)) return route
+  }
+  const report = FREIGHT_REPORTS.find(item => canAccessPage(reportRoutePermission(item)))
+  return report ? freightReportPath(report) : undefined
 }
 
 /** Page action code for a `<prefix>.view` page permission, e.g. `master.place_roles.update`. */

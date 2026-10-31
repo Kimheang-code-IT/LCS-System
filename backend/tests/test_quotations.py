@@ -761,3 +761,79 @@ async def test_conversion_replays_the_same_idempotency_key(client):
 
     assert replay.status_code == 201, replay.text
     assert replay.json()["data"]["serviceOrderId"] == first.json()["data"]["serviceOrderId"]
+
+
+async def test_submitted_workflow_converts_without_send_or_accept(client):
+    """DRAFT -> SUBMITTED -> CONVERTED is the whole active workflow.
+
+    Submit is idempotent, conversion runs straight from SUBMITTED (no Sent or
+    Accepted step any more), and a repeated conversion is still refused.
+    """
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(client, headers, {"customerPartyId": party["id"]})
+
+    submitted = await client.post(
+        f"/api/v1/quotation-revisions/{created['revisionId']}/submit", headers=headers, json={}
+    )
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["data"]["status"] == "Submitted"
+    assert submitted.json()["data"]["revisionStatus"] == "SUBMITTED"
+
+    # A repeated submission is a replay, not a second transition.
+    replayed = await client.post(
+        f"/api/v1/quotation-revisions/{created['revisionId']}/submit", headers=headers, json={}
+    )
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json()["data"]["revisionStatus"] == "SUBMITTED"
+
+    converted = await client.post(
+        f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={}
+    )
+    assert converted.status_code == 201, converted.text
+    assert converted.json()["data"]["status"] == "Converted"
+
+    duplicate = await client.post(
+        f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={}
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["code"] == "DUPLICATE_CONVERSION"
+
+
+async def test_submit_and_convert_need_their_permissions(client):
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(client, headers, {"customerPartyId": party["id"]})
+    viewer = await login(client, "ops.pp")
+
+    refused = await client.post(
+        f"/api/v1/quotation-revisions/{created['revisionId']}/submit", headers=viewer, json={}
+    )
+    assert refused.status_code == 403, refused.text
+
+    # The published policy is filtered to the caller, so the row menu offers
+    # nothing a view-only account could run.
+    policy = (await client.get("/api/v1/quotations/status-policy", headers=viewer)).json()["data"]
+    assert policy["transitions"] == {}
+
+    fetched = await client.get(f"/api/v1/quotations/{created['id']}", headers=headers)
+    assert fetched.json()["data"]["status"] == "Draft"
+
+
+async def test_a_submitted_revision_rejects_other_transitions(client):
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(client, headers, {"customerPartyId": party["id"]})
+    revision_id = created["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/submit", headers=headers, json={})
+
+    # A submitted revision is frozen: only convert (or cancel/legacy send-accept
+    # paths) run on it; editing in place is refused by the same immutability rule.
+    sent = await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    assert sent.status_code == 409, sent.text
+
+    # Editing in place is refused: the immutability rule clones a fresh draft
+    # revision instead of touching the submitted (historical) one.
+    edited = await client.put(f"/api/v1/quotations/{created['id']}", headers=headers, json={"description": "x"})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["data"]["revisionStatus"] == "DRAFT"

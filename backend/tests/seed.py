@@ -207,6 +207,11 @@ async def seed_demo_data(session: AsyncSession) -> None:
     await seed_transport_asset_identity_types(session, (await session.execute(select(TransportType))).scalars().all())
     # Capacity units (KG, CBM, Pallets, ...) back the capacity select the same way.
     await seed_capacity_units(session)
+    # Attributing the seeded vocabulary mirrors production provisioning: the
+    # lists' creator column shows "System" for these rows.
+    from app.modules.master_data.service import ensure_vocabulary_creation_audit
+
+    await ensure_vocabulary_creation_audit(session)
 
     for code, name, size, kind, iso_code, length in [
         ("20DV", "20-foot Dry Van", "20FT", "DRY", "22G1", 20),

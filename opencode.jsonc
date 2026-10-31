@@ -24,7 +24,8 @@
     "servers": {
       "playwright": {
         "type": "local",
-        "enabled": true,
+        // token-opt: off by default; flip to false only for interactive UI checks.
+        "disabled": true,
         "command": [
           "npx",
           "-y",
@@ -98,6 +99,23 @@
     //   { "action": "shell", "resource": "*", "effect": "ask" },
   ],
 
+  // token-opt: summarize earlier instead of re-sending a full history on every
+  // step. `buffer` keeps 20% of each model's window free (compaction starts at
+  // 80%); `keep` keeps the last 12k tokens verbatim beside the summary. Raise
+  // `keep.tokens` only when exact recent detail (long diffs, test output) matters.
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 12000 },
+    "buffer": "20%"
+  },
+
+  // token-opt: truncate oversized tool output before it enters the model
+  // context; the full text is still written to disk and referenced by path.
+  "tool_output": {
+    "max_lines": 800,
+    "max_bytes": 32768
+  },
+
   // Build output and caches must not trigger file-watch churn on every gate run.
   "watcher": {
     "ignore": [
@@ -111,7 +129,12 @@
       "**/.ruff_cache/**",
       "**/coverage/**",
       "backend/storage/**",
-      "backups/**"
+      "backups/**",
+      // token-opt: tool caches and generated graphs are not source.
+      ".opencode/node_modules/**",
+      "graphify-out/**",
+      ".playwright-mcp/**",
+      ".serena/**"
     ]
   }
 }

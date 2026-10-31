@@ -317,15 +317,12 @@ onMounted(refreshAll)
         </UBadge>
       </template>
       <template #default>
-        <UButton
+        <CommonAppDocumentActionButton
           v-if="showPublishLive"
-          color="primary"
-          size="sm"
           icon="i-lucide-upload-cloud"
+          label="Publish live configuration"
           @click="openNew()"
-        >
-          Publish live configuration
-        </UButton>
+        />
       </template>
     </LayoutAppHeaderPageActions>
 
@@ -354,7 +351,6 @@ onMounted(refreshAll)
       empty-icon="i-lucide-history"
       empty-title="No configuration versions yet"
       empty-description="Publish the live configuration to start the version history."
-      :empty-actions="canPublish ? [{ icon: 'i-lucide-plus', label: 'New Version', onClick: openNew }] : []"
       @select="onRowSelect"
     >
       <template #filters>

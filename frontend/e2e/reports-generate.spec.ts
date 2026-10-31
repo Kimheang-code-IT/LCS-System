@@ -42,24 +42,18 @@ test.describe('on-demand trial balance', () => {
     await signIn(page)
   })
 
-  test('opening the page requests no report data, Generate does', async ({ page }) => {
+  test('opening the page loads the report automatically', async ({ page }) => {
     const bodies: string[] = []
     page.on('request', (request) => {
       if (GENERATE_URL.test(request.url())) bodies.push(request.postData() || '')
     })
 
     await page.goto(TRIAL_BALANCE)
-    await expect(page.getByText(EMPTY_TITLE)).toBeVisible()
-    // Give an accidental page-load fetch every chance to happen before asserting.
-    await page.waitForTimeout(1500)
-    expect(bodies, 'a report must not be fetched on page load').toHaveLength(0)
-
-    await generate(page)
     await expect(page.getByText('Totals').first()).toBeVisible()
-    expect(bodies).toHaveLength(1)
-    expect(JSON.parse(bodies[0]!)).toMatchObject({ page: 1, pageSize: 20 })
     await expect(page.getByRole('cell', { name: '1100', exact: true })).toBeVisible()
-    await expect(page.getByText('No report generated yet')).toHaveCount(0)
+    expect(bodies.length, 'the report is generated on open').toBeGreaterThan(0)
+    expect(JSON.parse(bodies[0]!)).toMatchObject({ page: 1, pageSize: 20 })
+    await expect(page.getByText(EMPTY_TITLE)).toHaveCount(0)
   })
 
   test('a filter change marks the result stale and Reset clears the filters', async ({ page }) => {
@@ -129,8 +123,8 @@ test.describe('on-demand trial balance', () => {
     await expect(page.getByText('Totals').first()).toBeVisible()
 
     // The header menu, not a row's overflow menu.
-    await page.getByRole('button', { name: 'Actions' }).first().click()
-    await page.getByRole('menuitem', { name: 'Export' }).click()
+    await page.getByRole('button', { name: 'More actions' }).first().click()
+    await page.getByRole('menuitem', { name: 'Export Data' }).click()
     const downloadPromise = page.waitForEvent('download')
     await page.getByRole('button', { name: 'Export', exact: true }).click()
     const download = await downloadPromise
@@ -157,9 +151,8 @@ test.describe('on-demand trial balance on a phone', () => {
   test('generates, marks stale and resets from the compact toolbar', async ({ page }) => {
     await signIn(page)
     await page.goto(TRIAL_BALANCE)
-    await expect(page.getByText(EMPTY_TITLE)).toBeVisible()
-
-    await generate(page)
+    // The trial balance auto-loads with its default period; no manual
+    // generate is needed before the filter journey below.
     await expect(page.getByText('Totals').first()).toBeVisible()
     await expect(page.getByRole('cell', { name: '1100', exact: true })).toBeVisible()
 

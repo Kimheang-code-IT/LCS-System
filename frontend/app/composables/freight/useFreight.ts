@@ -246,7 +246,8 @@ export function formatFreightCell(value: unknown, key: string, currency?: string
   }
   if (isMoneyKey(key)) return formatMoney(value, currency)
   if (/date$/i.test(key) || key === 'date') return formatDateValue(value)
-  if (/(?:At|Activity|Timestamp|DateTime)$/i.test(key)) return formatDateTimeValue(value)
+  // `lastLogin` is a datetime column that does not carry the At/Timestamp suffix.
+  if (/(?:At|Activity|Timestamp|DateTime|Login)$/i.test(key)) return formatDateTimeValue(value)
   if (typeof value === 'number') return formatNumberValue(value)
   if (Array.isArray(value)) return value.map(item => String(item ?? '').trim()).filter(Boolean).join(', ') || '—'
   const text = String(value ?? '').trim()
