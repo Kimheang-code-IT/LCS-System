@@ -428,8 +428,9 @@ async function deleteDocument(id: string) {
       <div class="space-y-4">
         <div class="grid gap-3 sm:grid-cols-2">
           <UFormField :label="t('freight.ui.cols.type')" required :error="fieldErrors.documentType">
-            <USelect
+            <CommonAppReferenceSelect
               v-model="draft.documentType"
+              reference-key="documentType"
               :items="typeItems"
               :disabled="Boolean(editingId)"
               class="w-full" />
@@ -452,7 +453,11 @@ async function deleteDocument(id: string) {
 
         <div class="grid gap-3 sm:grid-cols-2">
           <UFormField :label="t('freight.fields.businessParty')" required :error="fieldErrors.partyId">
-            <USelect v-model="draft.partyId" :items="partyItems" class="w-full" />
+            <CommonAppReferenceSelect
+v-model="draft.partyId"
+reference-key="partyId"
+:items="partyItems"
+class="w-full" />
           </UFormField>
           <UFormField :label="t('freight.ui.cols.amount')" required :error="fieldErrors.amount">
             <UInputNumber
@@ -468,16 +473,28 @@ async function deleteDocument(id: string) {
 
         <div class="grid gap-3 sm:grid-cols-2">
           <UFormField :label="t('freight.ui.cols.currency')" required :error="fieldErrors.currency">
-            <USelect v-model="draft.currency" :items="currencyItems" class="w-full" />
+            <CommonAppReferenceSelect
+v-model="draft.currency"
+reference-key="currency"
+:items="currencyItems"
+class="w-full" />
           </UFormField>
           <UFormField :label="t('freight.fields.feeType')">
-            <USelect v-model="draft.feeTypeId" :items="feeTypeItems" class="w-full" />
+            <CommonAppReferenceSelect
+v-model="draft.feeTypeId"
+reference-key="feeTypeId"
+:items="feeTypeItems"
+class="w-full" />
           </UFormField>
         </div>
 
         <template v-if="needsSettlement">
           <UFormField :label="t('freight.fields.financialAccount')" required :error="fieldErrors.financialAccountId">
-            <USelect v-model="draft.financialAccountId" :items="accountItems" class="w-full" />
+            <CommonAppReferenceSelect
+v-model="draft.financialAccountId"
+reference-key="financialAccountId"
+:items="accountItems"
+class="w-full" />
           </UFormField>
         </template>
 

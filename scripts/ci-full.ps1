@@ -88,10 +88,13 @@ if ($dirty.Count -gt 0) {
 
 Invoke-Step 'Secret Patterns (tree)' -Command {
     $hits = (git grep -n -I -E $secretPattern -- . 2>$null)
-    if ($hits) {
+    $code = $LASTEXITCODE
+    # git grep exit code: 0 = matches found, 1 = no matches (clean).
+    if ($code -eq 0) {
         Write-Host ($hits | Select-Object -First 10) -ForegroundColor Red
         throw 'A likely credential or private key is committed in the current tree.'
     }
+    if ($code -gt 1) { throw "secret scan could not run (git grep exit $code)" }
 }
 
 Invoke-Step 'Secret Patterns (history)' -Command {
@@ -109,9 +112,10 @@ Invoke-Step 'Backend Env (uv sync --frozen)' -Command { uv sync --frozen --extra
 Invoke-Step 'Backend Ruff' -Command { uv run ruff check . } -WorkingDirectory $backendDir
 Invoke-Step 'Backend Bandit' -Command { uv run bandit -r app -q --severity-level medium } -WorkingDirectory $backendDir
 Invoke-Step 'Backend pip-audit' -Command {
-    uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file requirements-audit.txt
+    $auditFile = Join-Path ([System.IO.Path]::GetTempPath()) 'lcs-requirements-audit.txt'
+    $null = uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file $auditFile 2>&1
     if ($LASTEXITCODE -ne 0) { throw 'uv export failed' }
-    uv run pip-audit -r requirements-audit.txt
+    uv run --no-sync pip-audit -r $auditFile
     if ($LASTEXITCODE -ne 0) {
         throw 'pip-audit reported a vulnerability (e.g. a pyasn1 < 0.6.5 class finding). Raise it to the fixed version and re-lock.'
     }

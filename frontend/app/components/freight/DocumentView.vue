@@ -960,6 +960,11 @@ const quotationCommands = useQuotationCommands({
   quotationDraftDirty,
   relatedServiceOrder: () => relatedServiceOrder() as FreightRecord | null | undefined,
   onError: message => validation.addFormError(message),
+  // A command is a save: the response becomes the pristine snapshot too, or the
+  // dirty check flags the state transition as an unsaved edit.
+  syncOriginal: record => {
+    originalModel.value = { ...record } as FreightRecord
+  },
 })
 
 const financeCommands = useFinanceCommands({

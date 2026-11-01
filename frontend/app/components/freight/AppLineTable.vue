@@ -237,9 +237,10 @@ function displayValue(column: FreightLineColumn, value: unknown, row?: Record<st
   if (column.type === 'date') return formatDate(value)
   if (column.type === 'datetime') return formatDateTime(value)
   if (column.type === 'select') {
-    const items = column.optionItems?.length
-      ? column.optionItems
-      : referenceItemsFor(column, row)
+    const live = liveColumn(column.key) || column
+    const items = live.optionItems?.length
+      ? live.optionItems
+      : referenceItemsFor(live, row)
     const match = items.find(item => item.value === String(value))
     if (match) return match.label
   }
@@ -252,6 +253,16 @@ function lineDateGranularity(column: FreightLineColumn): DatePickerGranularity |
   if (/At$|Time$/i.test(column.key)) return 'minute'
   if (/Date$/i.test(column.key)) return 'day'
   return null
+}
+
+/**
+ * The cached column definition is stable per shape; its `optionItems` are
+ * not: hosts derive them from the rows being edited (e.g. the container-number
+ * select lists the boxes just typed). Resolve the item list through the live
+ * descriptor so choices update without rebuilding the cell renderer.
+ */
+function liveColumn(key: string): FreightLineColumn | undefined {
+  return props.table.columns.find(column => column.key === key)
 }
 
 function columnHeader(column: FreightLineColumn) {
@@ -562,12 +573,13 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
           }))
         }
         if (column.type === 'select') {
-          const referenceItems = referenceItemsFor(column, row.original)
-          const items = column.optionItems?.length
-            ? column.optionItems
+          const live = liveColumn(column.key) || column
+          const referenceItems = referenceItemsFor(live, row.original)
+          const items = live.optionItems?.length
+            ? live.optionItems
             : referenceItems.length
               ? referenceItems
-              : (column.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
+              : (live.options || []).filter(Boolean).map(option => ({ label: option, value: option }))
           return cellWithError(index, column.key, extra => h(TableReferenceSelect, {
             'modelValue': String(row.original[column.key] || '') || undefined,
             'items': items,

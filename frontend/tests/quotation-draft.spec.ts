@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   canCreateReference,
-  referenceCreateDialog,
-  referenceCreateTarget,
+  referenceCreateModule,
+  referenceCreatePayload,
+  referenceCreateValueField,
 } from '../app/utils/freight/reference-create'
 import {
   clearRecordDraft,
@@ -24,31 +25,61 @@ function memoryStorage(): Storage {
   } as Storage
 }
 
-describe('reference-create dialog targets', () => {
-  it('offers the small dialog only for masters whose spec needs a code and a name', () => {
-    for (const key of ['feeType', 'feeTypeId', 'containerType', 'placeRoleId', 'roleIds', 'direction', 'transportBy', 'currency']) {
-      const dialog = referenceCreateDialog(key)
-      expect(dialog, key).not.toBeNull()
-      expect(dialog!.fields.map(field => field.key).sort()).toEqual(['code', 'name'])
+describe('quick entry module resolution', () => {
+  it('resolves a creatable module for every referenced master field', () => {
+    // Document forms, line tables and the finance entry dialog all rely on the
+    // same registry: a key without a module shows no Add New.
+    const fields = [
+      'feeType', 'feeTypeId', 'containerType', 'placeRoleId', 'roleIds', 'roles',
+      'direction', 'tradeDirection', 'transportBy', 'currency', 'fromCurrencyCode',
+      'toCurrencyCode', 'documentType', 'documentTypeId', 'partyId', 'customerPartyId',
+      'ownerParty', 'operatorParty', 'capacityUnit', 'identityType',
+      'debitAccount', 'creditAccount', 'taxAccount', 'financialAccountId',
+    ]
+    for (const key of fields) {
+      expect(referenceCreateModule(key), key).not.toBeNull()
     }
   })
 
-  it('keeps complex masters on the full Master Data page flow', () => {
-    // Business parties need roles/codes, document types need behaviour +
-    // availability: both must not open the tiny dialog.
-    expect(referenceCreateDialog('customerPartyId')).toBeNull()
-    expect(referenceCreateDialog('documentType')).toBeNull()
-    expect(referenceCreateDialog('documentTypeId')).toBeNull()
+  it('uses the module declared by the master, not a per-field copy', () => {
+    expect(referenceCreateModule('feeType')?.collection).toBe('feeTypes')
+    expect(referenceCreateModule('partyId')?.collection).toBe('businessParties')
+    expect(referenceCreateModule('debitAccount')?.collection).toBe('chartOfAccounts')
+    expect(referenceCreateModule('identityType')?.collection).toBe('transportAssetIdentityTypes')
+    // Fields are the ones the full Master Data page renders.
+    expect(referenceCreateModule('partyId')?.fields.map(field => field.key)).toEqual(
+      expect.arrayContaining(['partyCode', 'legalName', 'roleIds']),
+    )
   })
 
-  it('keeps the legacy master-data page target as the fallback', () => {
-    expect(referenceCreateTarget('documentType')?.path).toBe('/master-data/document-types/new')
+  it('refuses static selects, unknown keys and non-creatable modules', () => {
+    expect(referenceCreateModule('status')).toBeNull()
+    expect(referenceCreateModule('notAReference')).toBeNull()
+    expect(referenceCreateModule('periodId')).toBeNull()
   })
 
-  it('selects the value field the quotation form stores', () => {
+  it('selects the value field the parent form stores', () => {
     // Place roles are stored by id; trade directions by name.
-    expect(referenceCreateDialog('placeRoleId')?.valueField).toBe('id')
-    expect(referenceCreateDialog('direction')?.valueField).toBe('name')
+    expect(referenceCreateValueField('placeRoleId')).toBe('id')
+    expect(referenceCreateValueField('direction')).toBe('name')
+    expect(referenceCreateValueField('currency')).toBe('code')
+  })
+
+  it('posts the module form values without the id or computed fields', () => {
+    const module = referenceCreateModule('documentType')!
+    const payload = referenceCreatePayload(module, {
+      id: '',
+      code: 'CUSTOM',
+      name: 'Custom Document',
+      availableIn: ['sales'],
+      postingRequired: 'No',
+    })
+    expect(payload).toEqual({
+      code: 'CUSTOM',
+      name: 'Custom Document',
+      availableIn: ['sales'],
+      postingRequired: 'No',
+    })
   })
 })
 

@@ -356,6 +356,14 @@ function quotationTabs(module: FreightModule, options: ModuleDocumentTabsOptions
       sections: [{ id: 'pricing', fields: [lineTableField(tableOrThrow(module, 'pricingLines'), options)] }],
     },
     {
+      // The configured container-requirements grid: quantities here are what a
+      // conversion turns into prepared actual-container rows on the order.
+      id: 'containers',
+      labelKey: 'freight.quotationTabs.containers',
+      label: tableOrThrow(module, 'containerRequirements').title,
+      sections: [{ id: 'containers', fields: [lineTableField(tableOrThrow(module, 'containerRequirements'), options)] }],
+    },
+    {
       id: 'files',
       labelKey: 'freight.quotationTabs.files',
       sections: [{ id: 'files', fields: [lineTableField(tableOrThrow(module, 'attachments'), options)] }],

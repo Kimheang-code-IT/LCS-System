@@ -97,6 +97,7 @@ describe('moduleDocumentTabs', () => {
       'overview',
       'route',
       'pricing',
+      'containers',
       'files',
       'revisions',
     ])
@@ -112,6 +113,11 @@ describe('moduleDocumentTabs', () => {
     expect(tabs.find(tab => tab.id === 'pricing')?.sections[0]?.fields[0]).toMatchObject({
       type: 'line-table',
       key: 'pricingLines',
+    })
+    // The container requirements grid feeds the conversion's prepared boxes.
+    expect(tabs.find(tab => tab.id === 'containers')?.sections[0]?.fields[0]).toMatchObject({
+      type: 'line-table',
+      key: 'containerRequirements',
     })
   })
 

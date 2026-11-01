@@ -596,3 +596,62 @@ async def test_consistency_guardrails(client):
     audit = await client.get("/api/v1/audit-events", headers=headers)
     assert audit.status_code == 200
     assert audit.json()["data"]["meta"]["total"] > 0
+
+
+async def test_service_order_with_finances_cannot_be_hard_deleted(client):
+    """An order backed by financial documents keeps its audit trail: the delete
+    returns a clean 409 conflict instead of surfacing the FK violation as a 500."""
+    headers = await login(client)
+    created = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Finance History Customer",
+            "direction": "Import",
+            "currency": "USD",
+            "amount": 500,
+        },
+    )
+    assert created.status_code == 201, created.text
+    quotation = created.json()["data"]
+    revision_id = quotation["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    order_id = converted.json()["data"]["serviceOrderId"]
+
+    charged = await client.post(
+        f"/api/v1/service-orders/{order_id}/charges",
+        headers=headers,
+        json={"currency": "USD", "lines": [{"description": "Freight", "quantity": 1, "unitPrice": 500}]},
+    )
+    assert charged.status_code == 201, charged.text
+    charge_id = charged.json()["data"]["id"]
+
+    # A charge blocks deletion on its own, with a clean conflict.
+    deactivated = await client.put(
+        f"/api/v1/service-orders/{order_id}", headers=headers, json={"id": order_id, "status": "INACTIVE"}
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    blocked_by_charge = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert blocked_by_charge.status_code == 409, blocked_by_charge.text
+    assert blocked_by_charge.json()["code"] == "ORDER_HAS_SERVICE_CHARGES"
+
+    invoiced = await client.post(f"/api/v1/service-orders/{order_id}/invoice", headers=headers)
+    assert invoiced.status_code == 201, invoiced.text
+    document_id = invoiced.json()["data"]["id"]
+
+    deleted = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert deleted.status_code == 409, deleted.text
+    assert deleted.json()["code"] == "ORDER_HAS_FINANCIAL_DOCUMENTS"
+
+    # With the document and charges removed the order is deletable again.
+    removed_doc = await client.request("DELETE", "/api/v1/financial-documents", headers=headers, json={"ids": [str(document_id)]})
+    assert removed_doc.status_code == 200, removed_doc.text
+    removed_charge = await client.request("DELETE", "/api/v1/service-charges", headers=headers, json={"ids": [str(charge_id)]})
+    assert removed_charge.status_code == 200, removed_charge.text
+    free_delete = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert free_delete.status_code == 200, free_delete.text
+    assert free_delete.json()["data"]["removed"] == 1

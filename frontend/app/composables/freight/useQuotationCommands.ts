@@ -21,8 +21,11 @@ export function useQuotationCommands(options: {
    * next to the form instead of as a toast.
    */
   onError: (message: string) => void
+  /** Sync the command's response back into the pristine snapshot the dirty
+   * check compares against; without it every state command reads as unsaved. */
+  syncOriginal: (record: FreightRecord) => void
 }) {
-  const { lcs, model, store, confirm, toast, t, quotationDraftDirty, relatedServiceOrder, onError } = options
+  const { lcs, model, store, confirm, toast, t, quotationDraftDirty, relatedServiceOrder, onError, syncOriginal } = options
 
   // One command in flight at a time: a double-click on Submit/Convert must not
   // queue a second request (the backend guards duplicates; this keeps the UI
@@ -66,6 +69,7 @@ export function useQuotationCommands(options: {
         lcs.quotations.submit(revisionId(), keyValue),
       )
       model.value = saved
+      syncOriginal(saved)
       store.reload()
       toast({ title: t('freight.ui.quotationSubmitted'), color: 'success' })
     })
@@ -90,6 +94,7 @@ export function useQuotationCommands(options: {
         lcs.quotations.accept(revisionId(), keyValue),
       )
       model.value = saved
+      syncOriginal(saved)
       store.reload()
       toast({ title: t('freight.ui.quotationAccepted'), color: 'success' })
     })
@@ -111,6 +116,7 @@ export function useQuotationCommands(options: {
       toast({ title: t('freight.ui.revisionCreated'), color: 'success' })
       await navigateTo(`/quotations/${String(created.id || model.value.id)}`)
       model.value = created
+      syncOriginal(created)
     })
   }
 
@@ -141,6 +147,7 @@ export function useQuotationCommands(options: {
         lcs.quotations.convert(revisionId(), keyValue),
       )
       model.value = { ...model.value, ...job }
+      syncOriginal(model.value)
       store.reload()
       toast({ title: t('freight.ui.convertedToJob'), color: 'success' })
       await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)

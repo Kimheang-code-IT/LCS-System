@@ -1,22 +1,30 @@
 <script setup lang="ts">
 /**
- * Small inline "Add New" dialog for a Master Data reference select.
+ * Quick Entry: one reusable "New <Master Data>" modal.
  *
- * It exists so a user can create a simple master record (fee type, container
- * type, …) without leaving the document that needs it — the old flow navigated
- * to the Master Data page and back, which destroyed unsaved editing state.
- * Only the fields the backend's creation spec actually requires are shown,
- * duplicates are refused by the backend as field errors (the dialog stays open
- * with every entered value), and on success the new record lands in the store
- * so the select offers it immediately and selects it.
+ * The form is not hand-built per master. It renders the module's own declared
+ * fields (`freight-modules.ts`) with the shared field grid, validates them with
+ * the shared rules, and posts to the same `/api/v1/<collection>` endpoint the
+ * full Master Data page uses. A new master declaration therefore gets Quick
+ * Entry everywhere without touching this file.
+ *
+ * The parent form is never touched: the modal is an overlay, cancelling leaves
+ * every entered value of the document alone, and a refused save keeps the modal
+ * open with its own values intact.
  */
-import { normalizeApiError } from '~/utils/validation/api-error'
+import { emptyFreightRecord, useFreightLabel } from '~/composables/freight/useFreight'
+import { useFormValidation } from '~/composables/common/useFormValidation'
 import { unwrapApiData } from '~/repositories/http/response'
-import { canCreateReference, referenceCreateDialog } from '~/utils/freight/reference-create'
+import {
+  canCreateReference,
+  referenceCreateModule,
+  referenceCreateValueField,
+} from '~/utils/freight/reference-create'
+import { validateDraftFields } from '~/utils/validation/record-validation'
+import type { FreightField } from '~/config/freight-modules'
 
 const props = defineProps<{
   referenceKey: string
-  rowIndex?: number
   disabled?: boolean
   readonly?: boolean
 }>()
@@ -26,64 +34,103 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { fieldLabel, moduleSingular } = useFreightLabel()
 const auth = useAuthStore()
 const api = useApi()
 const store = useFreightStore()
 
 const visible = ref(false)
-const saving = ref(false)
-const values = reactive<Record<string, string>>({ code: '', name: '' })
-const fieldErrors = ref<Record<string, string>>({})
-const formError = ref('')
+const model = ref<Record<string, unknown>>({})
 
-const config = computed(() => props.referenceKey ? referenceCreateDialog(props.referenceKey) : null)
+const createModule = computed(() =>
+  props.referenceKey ? referenceCreateModule(props.referenceKey) : null,
+)
+/** Computed fields are rendered disabled by the grid, so they need no width. */
+const fields = computed<FreightField[]>(() =>
+  (createModule.value?.fields || []).filter(field => !field.computed),
+)
 const allowed = computed(() =>
   canCreateReference(auth.user?.sourcePermissions, auth.user?.pageAccess, props.referenceKey),
 )
-const canOpen = computed(() => Boolean(config.value) && allowed.value && !props.disabled && !props.readonly)
+const canOpen = computed(() =>
+  Boolean(createModule.value) && allowed.value && !props.disabled && !props.readonly,
+)
+const title = computed(() => {
+  const target = createModule.value
+  return target
+    ? t('freight.ui.newEntity', { entity: moduleSingular(target) })
+    : ''
+})
+
+const validation = useFormValidation({
+  t,
+  label: fieldLabelOf,
+  order: () => fields.value.map(field => field.key),
+})
+
+function fieldLabelOf(key: string) {
+  const field = fields.value.find(item => item.key === key)
+  return fieldLabel(field || { key, label: key, labelKm: '' })
+}
 
 function open() {
-  if (!canOpen.value) return
-  values.code = ''
-  values.name = ''
-  fieldErrors.value = {}
-  formError.value = ''
+  const target = createModule.value
+  if (!canOpen.value || !target) return
+  // Defaults come from the same helper the full page uses (status, dates,
+  // numbers, multiselects), so both entry points start identical.
+  model.value = emptyFreightRecord(target)
+  validation.reset()
   visible.value = true
 }
 
 function close() {
-  // Creation failed or was cancelled: every typed value stays for the next try
-  // because only `open` resets them.
+  // Cancel keeps nothing to restore: the parent form was never unmounted.
   visible.value = false
 }
 
+function onUpdate(key: string, value: unknown) {
+  model.value = { ...model.value, [key]: value }
+  validation.clearFieldError(key)
+}
+
 async function create() {
-  const target = config.value
-  if (!target || saving.value) return
-  saving.value = true
-  fieldErrors.value = {}
-  formError.value = ''
+  const target = createModule.value
+  if (!target || validation.submitting.value) return
+  const failures = validateDraftFields(model.value, fields.value, fieldLabelOf)
+  if (failures.length) {
+    validation.applyFailures(failures)
+    return
+  }
+  validation.reset()
+  validation.submitting.value = true
   try {
+    // Computed fields are derived by the backend on create; sending them would
+    // pin values the user never typed.
+    const payload = referenceCreatePayload(target, model.value)
     const created = unwrapApiData(await api.post<ApiResponse<FreightRecord>>(
       `/api/v1/${target.collection}`,
-      { ...values, status: 'Active' },
+      payload,
     )) as Record<string, unknown>
     // The record joins the store's collection, so the select's option list
     // (built from that store) offers it without a reload.
     store.save(target.collection, created as never)
-    const value = String(created[target.valueField] ?? created.code ?? created.name ?? '')
+    const value = String(
+      created[referenceCreateValueField(props.referenceKey)]
+      ?? created.code
+      ?? created.name
+      ?? created.id
+      ?? '',
+    )
     emit('created', value)
     visible.value = false
   }
   catch (error: unknown) {
-    // A duplicate code (or any other field refusal) keeps the dialog open with
-    // every entered value so nothing has to be retyped.
-    const normalized = normalizeApiError(error)
-    fieldErrors.value = { ...normalized.fieldErrors }
-    formError.value = normalized.message || ''
+    // A duplicate code (or any other backend refusal) keeps the modal open with
+    // every entered value, and the field errors land on the inputs.
+    validation.applyServerError(error)
   }
   finally {
-    saving.value = false
+    validation.submitting.value = false
   }
 }
 
@@ -91,45 +138,46 @@ defineExpose({ open })
 </script>
 
 <template>
-  <UModal v-model:open="visible" :title="t('freight.ui.newEntity', { entity: t(config?.entityKey || '') })">
-    <template #content>
-      <UCard>
-        <p class="mb-4 text-sm text-muted">
-          {{ t('freight.ui.referenceCreateHint', { entity: t(config?.entityKey || '') }) }}
-        </p>
-        <div class="space-y-4">
-          <UFormField
-            v-for="field in config?.fields || []"
-            :key="field.key"
-            :label="t(field.labelKey)"
-            :error="fieldErrors[field.key]"
-            required
-          >
-            <UInput
-              v-model="values[field.key]"
-              :maxlength="field.maxLength"
-              :disabled="saving"
-              class="w-full"
-              @update:model-value="fieldErrors[field.key] = ''"
-            />
-          </UFormField>
-          <p v-if="formError" class="text-sm text-error" role="alert">{{ formError }}</p>
-        </div>
-        <template #footer>
-          <div class="flex justify-end gap-2">
-            <UButton
-color="neutral"
-variant="ghost"
-:disabled="saving"
-@click="close">
-              {{ t('freight.ui.cancel') }}
-            </UButton>
-            <UButton color="primary" :loading="saving" @click="create">
-              {{ t('freight.ui.save') }}
-            </UButton>
-          </div>
-        </template>
-      </UCard>
+  <!--
+    Nuxt UI's own header/body/footer slots keep the title and Close pinned while
+    only the body scrolls. The width is set once here for every Quick Entry form.
+  -->
+  <UModal
+    v-model:open="visible"
+    :title="title"
+    :ui="{ content: 'w-[calc(100vw-2rem)] max-w-[1005px] sm:max-w-[1005px]' }"
+  >
+    <template #body>
+      <DocumentAppFieldGrid
+        :fields="fields"
+        :model="model"
+        :field-errors="validation.fieldErrors.value"
+        :disabled="validation.submitting.value"
+        key-prefix="quick-entry-"
+        @update="onUpdate"
+      />
+      <p
+        v-for="message in validation.formErrors.value"
+        :key="message"
+        class="mt-4 text-sm text-error"
+        role="alert"
+      >
+        {{ message }}
+      </p>
+    </template>
+    <template #footer>
+      <div class="flex w-full justify-end gap-2">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :disabled="validation.submitting.value"
+          @click="close">
+          {{ t('freight.ui.cancel') }}
+        </UButton>
+        <UButton color="primary" :loading="validation.submitting.value" @click="create">
+          {{ t('freight.ui.saveAndSelect') }}
+        </UButton>
+      </div>
     </template>
   </UModal>
 </template>
