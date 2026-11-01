@@ -14,18 +14,23 @@ import type { FreightTable } from '~/config/freight-modules'
  * the few hooks they carry (`computeRow`, `rowDefaults`) are stable module-level
  * functions.
  */
-function serialisable(value: unknown): unknown {
+function serialisable(value: unknown, skipVolatile = false): unknown {
   if (typeof value === 'function') return String(value)
-  if (Array.isArray(value)) return value.map(serialisable)
+  if (Array.isArray(value)) return value.map(item => serialisable(item, skipVolatile))
   if (value && typeof value === 'object') {
     const source = value as Record<string, unknown>
     return Object.keys(source)
       .sort()
-      .map(key => [key, serialisable(source[key])])
+      .map(key => [key, key === 'optionItems' ? undefined : serialisable(source[key], skipVolatile)])
   }
   return value
 }
 
 export function tableColumnSignature(table: FreightTable): string {
+  // `optionItems` are live data (e.g. an actual-container select bound to the
+  // rows being typed), not structure: including their contents makes the
+  // signature change on every keystroke, which rebuilds the cell renderers,
+  // remounts the focused input and eats typed characters. Cells must read the
+  // items through the live descriptor instead.
   return JSON.stringify(serialisable(table))
 }

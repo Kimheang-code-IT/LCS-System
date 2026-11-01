@@ -567,6 +567,15 @@ async def test_delete_is_blocked_once_quotation_has_service_order(client):
     assert blocked.status_code == 409, blocked.text
     assert blocked.json()["code"] == "QUOTATION_HAS_SERVICE_ORDER"
 
+    # Once the linked order itself is deleted the quote is ordinary data again.
+    order_id = converted.json()["data"]["serviceOrderId"]
+    await client.put(f"/api/v1/service-orders/{order_id}", headers=headers, json={"id": order_id, "status": "INACTIVE"})
+    removed_order = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert removed_order.status_code == 200, removed_order.text
+    deletable = await client.request("DELETE", "/api/v1/quotations", headers=headers, json={"ids": [created["id"]]})
+    assert deletable.status_code == 200, deletable.text
+    assert deletable.json()["data"]["removed"] == 1
+
 
 async def test_draft_quotation_can_be_deleted(client):
     headers = await login(client)

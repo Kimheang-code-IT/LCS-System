@@ -1188,16 +1188,41 @@ async def create_quotation_from_service_order(
 
 
 async def delete_quotations(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
+    from sqlalchemy import delete as sql_delete
+
+    from app.modules.operations.models import ServiceOrder
+    from app.modules.operations.repository import OperationsRepository
+
     for quotation_id in ids:
         quotation = await session.get(Quotation, quotation_id)
         if quotation is None:
             continue
         conversion = await QuotationRepository(session).conversion_for_quotation(quotation.id)
-        if conversion is not None or quotation.status == "CONVERTED":
-            # A converted quotation is the audit trail behind a service order.
+        converted = conversion is not None and bool(
+            await OperationsRepository(session).orders_by_ids([conversion.service_order_id])
+        )
+        if converted:
+            # A converted quotation is the audit trail behind a *living* service
+            # order.
             raise Conflict(
                 "QUOTATION_HAS_SERVICE_ORDER",
                 f"{quotation.quotation_no} is linked to a service order and cannot be deleted.",
+            )
+        # Otherwise clear the dangling conversion links so the revision cascade
+        # is not refused by rows whose order is already gone.
+        revision_ids = [
+            row.id for row in (
+                await session.execute(
+                    select(QuotationRevision.id).where(QuotationRevision.quotation_id == quotation.id)
+                )
+            ).all()
+        ]
+        if revision_ids:
+            await session.execute(
+                sql_delete(QuotationConversion).where(
+                    QuotationConversion.quotation_revision_id.in_(revision_ids),
+                    QuotationConversion.service_order_id.not_in(select(ServiceOrder.id)),
+                )
             )
         await session.delete(quotation)
     await session.commit()

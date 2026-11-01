@@ -19,7 +19,6 @@ import {
   jobContainerPaymentRows,
   jobContainerPaymentTotals,
   jobContainerRequirements,
-  normalizeActualContainer,
   persistableActuals,
   persistablePayments,
   persistableRequirements,
@@ -226,9 +225,33 @@ async function persist() {
   if (!props.isCreate && props.job.id) {
     try {
       actuals = await syncActualContainers(actuals)
-      // Keep the server-assigned ids so a second edit updates the same rows
-      // instead of creating duplicates.
-      actualRows.value = actuals.map(row => normalizeActualContainer(row))
+      // Mutate the existing row objects in place so Vue does not rebuild the
+      // table rows: keystrokes typed while a write was in flight used to be
+      // wiped by the row replacement. Only the server-owned fields (id, type,
+      // pending) are synced; whatever the operator typed stays on the row.
+      const savedById = new Map(actuals.map(row => [String(row.id || ''), row]))
+      for (let index = 0; index < actualRows.value.length; index += 1) {
+        const row = actualRows.value[index]!
+        const saved = savedById.get(String(row.id || '')) || savedById.get(String((row as Record<string, unknown>).previousId || ''))
+        if (!saved) continue
+        if (saved.id) row.id = String(saved.id)
+        row.containerTypeId = saved.containerTypeId ?? row.containerTypeId
+        row.containerType = String(saved.containerType || row.containerType || '')
+        row.pending = false
+      }
+      void divergeCheck()
+      function divergeCheck() {
+        // Typing may have advanced past what was written; one trailing write
+        // guarantees the stored number ends up the full entered value.
+        for (const row of actualRows.value) {
+          const typed = String(row.containerNo || '').trim()
+          const saved = savedById.get(String(row.id || ''))
+          if (typed && saved && typed !== String(saved.containerNo ?? saved.containerNumber ?? '').trim()) {
+            schedulePersist()
+            return
+          }
+        }
+      }
       paymentRows.value = syncPaymentContainerReferences(paymentRows.value, actuals)
     }
     catch (error) {
@@ -287,17 +310,21 @@ function validateActualRows(rows: Array<Record<string, unknown>>) {
 }
 
 async function setActuals(value: Array<Record<string, unknown>>) {
-  const next = withIds(value, 'ac').map((row) => {
-    if (row.containerType || row.containerRequirementId) return row
+  // Patch the child's row objects in place when a prepared row needs its
+  // requirement default: rebuilding the rows array per keystroke re-renders
+  // the table and drops the focused input's in-flight typing.
+  let structural = false
+  for (const row of value) {
+    if (row.containerType || row.containerRequirementId) continue
     const open = firstOpenRequirement(requirementDisplayRows.value)
-    if (!open) return { ...row, status: row.status || 'Expected' }
-    return {
-      ...row,
-      containerType: open.containerType,
-      containerRequirementId: open.id,
-      status: row.status || 'Expected',
+    if (open) {
+      row.containerType = open.containerType
+      row.containerRequirementId = open.id
+      structural = true
     }
-  })
+    if (!row.status) row.status = 'Expected'
+  }
+  const next = structural ? [...value] : value
   const errors = validateActualRows(next)
   // Block the write: the invalid row stays on screen with its message and no
   // valid row is discarded. This grid only renders inside the Containers tab,
@@ -307,12 +334,20 @@ async function setActuals(value: Array<Record<string, unknown>>) {
     return
   }
   actualRows.value = next
-  await persist()
+  schedulePersist()
+}
+
+/** Trailing write: keystrokes coalesce into one POST instead of racing each
+ * other's in-flight responses back onto the rows. */
+let persistHandle: ReturnType<typeof setTimeout> | null = null
+function schedulePersist() {
+  if (persistHandle) clearTimeout(persistHandle)
+  persistHandle = setTimeout(() => { void persist() }, 400)
 }
 
 async function setPayments(value: Array<Record<string, unknown>>) {
   paymentRows.value = withIds(value, 'cp')
-  await persist()
+  schedulePersist()
 }
 
 function debitInvoicePrintRoute(containerIndex: number) {

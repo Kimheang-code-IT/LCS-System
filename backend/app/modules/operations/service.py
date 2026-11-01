@@ -241,6 +241,18 @@ async def get_service_order(session: AsyncSession, context: RequestContext, iden
         ]
     if route:
         extra["places"] = route
+    # The quote link must survive a deep link or refresh: the workspace derives
+    # its container payment rows from the source quotation (same as the list).
+    if order.quotation_revision_id:
+        link = (
+            await session.execute(
+                select(QuotationRevision.id, Quotation.id, Quotation.quotation_no)
+                .join(Quotation, Quotation.id == QuotationRevision.quotation_id)
+                .where(QuotationRevision.id == order.quotation_revision_id)
+            )
+        ).first()
+        if link:
+            extra["quotationId"], extra["quotationNo"] = str(link[1]), link[2]
     return order_record(order, order.data or {}, extra)
 
 
@@ -428,6 +440,40 @@ async def delete_service_orders(session: AsyncSession, ids: list[int]) -> int:
     orders = await OperationsRepository(session).orders_by_ids(ids)
     if any(str(order.status).upper() != "INACTIVE" for order in orders):
         raise Conflict("ORDER_ACTIVE", "Active service orders cannot be deleted. Deactivate the order first.")
+    # An order that already has financial history stays an auditable record;
+    # refusing with a clean conflict here keeps the FK violation out of the 500 path.
+    from app.modules.finance.models import FinancialDocument, JournalEntryLine
+
+    financed = (
+        await session.execute(
+            select(FinancialDocument.service_order_id).where(FinancialDocument.service_order_id.in_(ids)).distinct()
+        )
+    ).scalars().all()
+    if financed:
+        raise Conflict(
+            "ORDER_HAS_FINANCIAL_DOCUMENTS",
+            "Service orders with financial documents cannot be deleted. Delete the documents first.",
+        )
+    journaled = (
+        await session.execute(
+            select(JournalEntryLine.service_order_id).where(JournalEntryLine.service_order_id.in_(ids)).distinct()
+        )
+    ).scalars().all()
+    if journaled:
+        raise Conflict(
+            "ORDER_HAS_JOURNAL_ENTRIES",
+            "Service orders with posted journal entries cannot be deleted. Keep the order for audit history.",
+        )
+    charged = (
+        await session.execute(
+            select(ServiceOrderCharge.service_order_id).where(ServiceOrderCharge.service_order_id.in_(ids)).distinct()
+        )
+    ).scalars().all()
+    if charged:
+        raise Conflict(
+            "ORDER_HAS_SERVICE_CHARGES",
+            "Service orders with service charges cannot be deleted. Delete the charges first.",
+        )
     for order in orders:
         await session.delete(order)
     await session.commit()
