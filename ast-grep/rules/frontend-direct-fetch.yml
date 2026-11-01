@@ -1,0 +1,13 @@
+id: frontend-direct-fetch
+language: TypeScript
+severity: warning
+message: HTTP must go through app/repositories/http (AGENTS.md); no ad-hoc fetch/fetchRaw.
+files:
+- frontend/app/**
+ignores:
+- frontend/app/repositories/**
+- frontend/app/types/**
+- frontend/app/config/**
+- frontend/app/utils/api/**
+rule:
+  pattern: fetch($$$ARGS)

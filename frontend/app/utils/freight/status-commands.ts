@@ -16,7 +16,7 @@ import type {
  * "command" transition in the backend policy.
  */
 export type StatusCommandRepositories = {
-  quotations: Pick<QuotationRepository, 'send' | 'accept' | 'reject' | 'cancel' | 'convert'>
+  quotations: Pick<QuotationRepository, 'send' | 'submit' | 'accept' | 'reject' | 'cancel' | 'convert'>
   jobs: Pick<JobRepository, 'finish'>
   charges: Pick<ServiceChargeRepository, 'issue'>
   finance: Pick<FinanceRepository, 'post' | 'reverse' | 'postJournal' | 'closePeriod'>
@@ -47,6 +47,7 @@ export const STATUS_COMMANDS: Record<string, StatusCommandRunner> = {
   'supplierPayments:post': ({ id, key, repositories }) => repositories.finance.post(id, key),
   'supplierPayments:reverse': ({ id, reason, key, repositories }) => repositories.finance.reverse(id, reason || '', key),
   'quotations:send': ({ revisionId, key, repositories }) => repositories.quotations.send(revisionId, key),
+  'quotations:submit': ({ revisionId, key, repositories }) => repositories.quotations.submit(revisionId, key),
   'quotations:accept': ({ revisionId, key, repositories }) => repositories.quotations.accept(revisionId, key),
   'quotations:reject': ({ revisionId, reason, key, repositories }) =>
     repositories.quotations.reject(revisionId, reason || '', key),

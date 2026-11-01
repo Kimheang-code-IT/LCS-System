@@ -28,6 +28,10 @@ from dataclasses import dataclass
 #: at least one of them; platform administrators bypass the check entirely.
 REFERENCE_WRITE = ("master.reference.manage", "configuration.manage")
 PARTY_ROLE_WRITE = ("master.party_roles.update", "master.reference.manage")
+#: Asset Identity Types and Capacity Units share the transport-assets matrix
+#: page (see ``master_data.router._COLLECTION_PAGE_PREFIX``), so that page's
+#: update code applies before the legacy coarse code — same pattern as party roles.
+ASSET_VOCABULARY_WRITE = ("master.transport_assets.update", *REFERENCE_WRITE)
 ACCOUNT_WRITE = ("chart_of_accounts.manage",)
 POSTING_RULE_WRITE = ("posting_rule.manage",)
 SEQUENCE_WRITE = ("configuration.manage",)
@@ -37,8 +41,10 @@ CHARGE_WRITE = ("service_charge.issue",)
 DOCUMENT_POST = ("financial_document.post",)
 DOCUMENT_REVERSE = ("financial_document.reverse",)
 JOURNAL_POST = ("journal_entry.post",)
-QUOTATION_SEND = ("quotation.send",)
-QUOTATION_ACCEPT = ("quotation.accept",)
+# The active quotation workflow: DRAFT -> SUBMITTED -> CONVERTED. SENT and
+# ACCEPTED are legacy statuses kept for historical rows; from them an order was
+# or can still be converted, but no further workflow step is offered.
+QUOTATION_SUBMIT = ("quotation.submit",)
 QUOTATION_CONVERT = ("quotation.convert",)
 QUOTATION_EDIT = ("quotation.update_draft",)
 USER_WRITE = ("user.manage",)
@@ -134,6 +140,9 @@ _REFERENCE_COLLECTIONS = (
     "capacityUnits",
     "feeTypes",
     "currencies",
+    # Document types are deactivated, never removed: historical documents keep
+    # their type, and new-document forms already offer ACTIVE types only.
+    "documentTypes",
 )
 
 _ACTIVE_STATUSES = ("ACTIVE", "INACTIVE")
@@ -159,14 +168,17 @@ _GENERIC_VOCABULARIES: dict[str, tuple[str, ...]] = {
 
 _QUOTATION_TRANSITIONS: dict[str, tuple[StatusTransition, ...]] = {
     "DRAFT": (
-        StatusTransition(to="SENT", action="send", permissions=QUOTATION_SEND, kind="command", confirm=True),
-        StatusTransition(to="REJECTED", action="reject", permissions=QUOTATION_ACCEPT, kind="command", confirm=True),
+        StatusTransition(to="SUBMITTED", action="submit", permissions=QUOTATION_SUBMIT, kind="command", confirm=True),
+        StatusTransition(to="CANCELLED", action="cancel", permissions=QUOTATION_EDIT, kind="command", confirm=True),
+    ),
+    # SENT / ACCEPTED stay listed because historical rows hold them and can
+    # still be converted; the active workflow never writes them again.
+    "SUBMITTED": (
+        StatusTransition(to="CONVERTED", action="convert", permissions=QUOTATION_CONVERT, kind="command", confirm=True),
         StatusTransition(to="CANCELLED", action="cancel", permissions=QUOTATION_EDIT, kind="command", confirm=True),
     ),
     "SENT": (
-        StatusTransition(to="ACCEPTED", action="accept", permissions=QUOTATION_ACCEPT, kind="command", confirm=True),
-        StatusTransition(to="REJECTED", action="reject", permissions=QUOTATION_ACCEPT, kind="command", confirm=True),
-        StatusTransition(to="CANCELLED", action="cancel", permissions=QUOTATION_EDIT, kind="command", confirm=True),
+        StatusTransition(to="CONVERTED", action="convert", permissions=QUOTATION_CONVERT, kind="command", confirm=True),
     ),
     "ACCEPTED": (
         StatusTransition(to="CONVERTED", action="convert", permissions=QUOTATION_CONVERT, kind="command", confirm=True),
@@ -248,6 +260,16 @@ def _policies() -> dict[str, StatusPolicy]:
         transitions=_toggle_transitions(permissions=PARTY_ROLE_WRITE),
     )
 
+    # The transport-asset vocabulary collections share their matrix page's
+    # update code, like party roles; this overrides the coarse reference toggle.
+    for collection in ("transportAssetIdentityTypes", "capacityUnits"):
+        policies[collection] = StatusPolicy(
+            entity_type=collection,
+            store="reference",
+            statuses=_ACTIVE_STATUSES,
+            transitions=_toggle_transitions(permissions=ASSET_VOCABULARY_WRITE),
+        )
+
     for collection, vocabulary in _GENERIC_VOCABULARIES.items():
         # A plain Active/Inactive pair reads as activate/deactivate; the longer
         # progress vocabularies read as "Mark as <value>".
@@ -326,10 +348,10 @@ def _policies() -> dict[str, StatusPolicy]:
     policies["quotations"] = StatusPolicy(
         entity_type="quotation_revision",
         store="quotation",
-        # The vocabulary a revision can hold, including the two the workflow
-        # writes itself: SUPERSEDED when a competing revision is accepted and
-        # CANCELLED when the offer is withdrawn.
-        statuses=("DRAFT", "SENT", "ACCEPTED", "REJECTED", "CONVERTED", "SUPERSEDED", "CANCELLED"),
+        # The vocabulary a revision can hold, including the ones the workflow
+        # writes itself: SUBMITTED when the draft is submitted, SUPERSEDED when
+        # a competing revision wins, and CANCELLED when the offer is withdrawn.
+        statuses=("DRAFT", "SUBMITTED", "SENT", "ACCEPTED", "REJECTED", "CONVERTED", "SUPERSEDED", "CANCELLED"),
         transitions=_QUOTATION_TRANSITIONS,
     )
 

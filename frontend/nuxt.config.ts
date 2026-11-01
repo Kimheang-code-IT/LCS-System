@@ -56,35 +56,30 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  // Google Fonts via @nuxt/fonts — Inter (Latin), Noto Sans Khmer (Khmer script),
+  // Self-hosted fonts via @nuxt/fonts + fontsource packages (installed from npm),
+  // so the build resolves fonts offline — the google provider fetches fonts.gstatic.com
+  // at build time and fails in Docker. Inter (Latin), Noto Sans Khmer (Khmer script),
   // Noto Sans SC (Simplified Chinese). Each script's font is `global: true` so the
   // correct family applies no matter which language is selected.
   fonts: {
-    provider: 'google',
+    provider: 'fontsource',
     defaults: {
       weights: [400, 500, 600, 700],
       styles: ['normal'],
-      subsets: ['latin', 'latin-ext'],
     },
     families: [
       {
         name: 'Inter',
-        provider: 'google',
         weights: [400, 500, 600, 700],
-        subsets: ['latin', 'latin-ext'],
       },
       {
         name: 'Noto Sans Khmer',
-        provider: 'google',
         weights: [400, 500, 600, 700],
-        subsets: ['khmer'],
         global: true,
       },
       {
         name: 'Noto Sans SC',
-        provider: 'google',
         weights: [400, 500, 600, 700],
-        subsets: ['chinese-simplified'],
         global: true,
       },
     ],

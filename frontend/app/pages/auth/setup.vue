@@ -6,7 +6,7 @@ import { useAuth } from '~/composables/auth/useAuth'
 import { usePageSeo } from '~/composables/usePageSeo'
 import { apiErrorDetails } from '~/utils/freight/errors'
 import { PASSWORD_MAX_LENGTH, validatePasswordStrength } from '~/utils/validation/field-rules'
-import { passwordIssueMessage, strongPasswordSchema } from '~/utils/validation/password-schema'
+import { isEmailLike, passwordConfirmationState, strongPasswordSchema } from '~/utils/validation/password-schema'
 
 definePageMeta({
   layout: 'auth',
@@ -27,40 +27,33 @@ const setupForm = useTemplateRef<{
   state?: { name: string, email: string, password: string, passwordConfirmation: string }
 }>('setupForm')
 
-/** UAuthForm types field-slot props as `{}`; this reads the state safely. */
-function slotPassword(slot: unknown): string {
-  const state = (slot as { state?: { password?: string } }).state
-  return String(state?.password ?? '')
-}
+/** True once the user has typed something into the confirmation field. */
+const confirmationTouched = computed(() =>
+  Boolean(setupForm.value?.state?.passwordConfirmation))
+
+const state = computed(() => setupForm.value?.state)
+
+/** UAuthForm keeps `state` reactive, so every rule re-renders per keystroke. */
+const password = computed(() => state.value?.password ?? '')
 
 /**
- * The submit button is disabled while a rule fails, so without these the reason
- * would never be visible: they render the shared policy message under the
- * password field (and the mismatch under the confirmation field) while typing.
- * Both stay empty on fresh fields so the form does not scold untouched inputs.
+ * Confirmation feedback driven like the checklist: green `check-circle-2` +
+ * "Passwords match" once the two fields agree on a valid password; the red
+ * mismatch appears only after the user edits the confirmation, so an
+ * untouched half-typed password never scolds.
  */
-const passwordHint = computed(() => {
-  const state = setupForm.value?.state
-  return state?.password
-    ? passwordIssueMessage(t, state.password, t('pages.setup.password'))
-    : ''
-})
-
-const confirmationHint = computed(() => {
-  const state = setupForm.value?.state
-  return state?.passwordConfirmation
-    && state.password !== state.passwordConfirmation
-    ? t('validation.passwordMismatch')
-    : ''
-})
+const confirmationFeedback = computed<'match' | 'mismatch' | ''>(() =>
+  passwordConfirmationState(password.value, state.value?.passwordConfirmation ?? '', confirmationTouched.value),)
 
 /** Enter, or the submit button, is refused until every rule and the match pass. */
 const passwordsValid = computed(() => {
-  const state = setupForm.value?.state
+  const current = state.value
   return Boolean(
-    state
-    && !validatePasswordStrength(state.password)
-    && state.password === state.passwordConfirmation,
+    current
+    && String(current.name ?? '').trim()
+    && isEmailLike(String(current.email ?? ''))
+    && !validatePasswordStrength(current.password)
+    && current.password === current.passwordConfirmation,
   )
 })
 
@@ -109,7 +102,7 @@ const fields = computed<AuthFormField[]>(() => [
     size: 'lg',
     label: t('pages.setup.adminName'),
     placeholder: t('pages.setup.adminNamePlaceholder'),
-    required: false,
+    required: true,
     autocomplete: 'name',
   },
   {
@@ -162,14 +155,15 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
 
   submitting.value = true
   try {
+    const normalizedEmail = data.email.trim().toLowerCase()
     await setup.initialize({
-      email: data.email.trim(),
+      email: normalizedEmail,
       password: data.password,
       name: data.name.trim(),
     })
 
     try {
-      const result = await loginWithCredentials(data.email.trim(), data.password)
+      const result = await loginWithCredentials(normalizedEmail, data.password)
       const user = result.data?.user
       if (user) {
         auth.login(user)
@@ -209,15 +203,25 @@ async function onSubmit(payload: FormSubmitEvent<Schema>) {
       }"
       @submit="onSubmit"
     >
-      <template #password-help="slot">
-        <CommonAppPasswordRequirements :value="slotPassword(slot)" />
-        <p v-if="passwordHint" class="mt-1 text-xs text-error" role="alert">
-          {{ passwordHint }}
-        </p>
+      <template #password-help>
+        <CommonAppPasswordRequirements :value="password" />
       </template>
       <template #passwordConfirmation-help>
-        <p v-if="confirmationHint" class="text-xs text-error" role="alert">
-          {{ confirmationHint }}
+        <p
+          v-if="confirmationFeedback"
+          class="flex items-center gap-1 text-xs"
+          :class="confirmationFeedback === 'match' ? 'text-success' : 'text-error'"
+          role="alert"
+        >
+          <UIcon
+            :name="confirmationFeedback === 'match' ? 'i-lucide-check-circle-2' : 'i-lucide-circle'"
+            class="size-3.5 shrink-0"
+            aria-hidden="true" />
+          <span>
+            {{ confirmationFeedback === 'match'
+              ? t('validation.passwordsMatch')
+              : t('validation.passwordMismatch') }}
+          </span>
         </p>
       </template>
       <template #leading>

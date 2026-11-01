@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import type { DocumentTabSchema } from '~/types/common'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   tabs: DocumentTabSchema[]
   activeTab: string
-}>()
+  /** Field-error count per tab id; a non-zero count shows a small red badge. */
+  errors?: Record<string, number>
+}>(), {
+  errors: () => ({}),
+})
 
 const emit = defineEmits<{
   'update:activeTab': [string]
@@ -62,7 +66,22 @@ function onWheel(event: WheelEvent) {
           indicator: 'hidden',
         }"
         @update:model-value="(value: string | number) => emit('update:activeTab', String(value))"
-      />
+      >
+        <!-- The trigger's label slot; the badge sits beside the tab's text. -->
+        <template #default="{ item }">
+          <span class="flex items-center gap-1.5">{{ item.label }}
+            <UBadge
+              v-if="(props.errors[item.value as string] || 0) > 0"
+              color="error"
+variant="subtle"
+size="sm"
+              :aria-label="t('validation.formError')"
+            >
+              {{ props.errors[item.value as string] }}
+            </UBadge>
+          </span>
+        </template>
+      </UTabs>
     </div>
   </div>
 </template>

@@ -4,19 +4,16 @@ import { quotationDomainStatus } from '~/utils/freight/states'
 export type QuotationPermissionInput = {
   /** `quotation.update_draft` — edit, delete, re-quote. */
   updateDraft: boolean
-  /** `quotation.send` — draft -> sent. */
-  send: boolean
-  /** `quotation.accept` — sent -> accepted. */
-  accept: boolean
-  /** `quotation.convert` — accepted -> service order. */
+  /** `quotation.submit` — draft -> submitted (the active workflow step). */
+  submit: boolean
+  /** `quotation.convert` — submitted (or legacy sent/accepted) -> service order. */
   convert: boolean
 }
 
 export type QuotationActionAvailability = {
   status: QuotationRevisionStatus
   edit: boolean
-  send: boolean
-  accept: boolean
+  submit: boolean
   convert: boolean
   revise: boolean
   delete: boolean
@@ -24,9 +21,10 @@ export type QuotationActionAvailability = {
 }
 
 /**
- * Single source of truth for quotation action availability. Mirrors the backend
- * rules: only DRAFT is editable, only SENT can be accepted, only ACCEPTED can be
- * converted, and a quotation linked to a service order can never be deleted.
+ * Single source of truth for quotation action availability. The active workflow
+ * is DRAFT -> SUBMITTED -> CONVERTED with a re-quote on every step; SENT and
+ * ACCEPTED are legacy statuses that stay convertible but offer no action of
+ * their own, and a quotation linked to a service order can never be deleted.
  */
 export function quotationActionAvailability(
   status: unknown,
@@ -36,18 +34,19 @@ export function quotationActionAvailability(
   const domain = quotationDomainStatus(status)
   const hasServiceOrder = Boolean(options.hasServiceOrder)
   const draft = domain === 'DRAFT'
-  const sent = domain === 'SENT'
-  const accepted = domain === 'ACCEPTED'
+  const legacySent = domain === 'SENT'
+  const legacyAccepted = domain === 'ACCEPTED'
   const converted = domain === 'CONVERTED' || hasServiceOrder
 
   return {
     status: domain,
     edit: draft && can.updateDraft,
-    send: draft && can.send,
-    accept: sent && can.accept,
-    convert: accepted && can.convert,
+    submit: draft && can.submit,
+    convert: !converted && (domain === 'SUBMITTED' || legacySent || legacyAccepted) && can.convert,
     revise: can.updateDraft,
-    delete: can.updateDraft && (draft || sent) && !converted,
+    // A submitted offer is a formal commitment like a sent one was: withdrawal
+    // is a cancel, so deletion stays limited to drafts and legacy sent rows.
+    delete: can.updateDraft && (draft || legacySent) && !converted,
     openServiceOrder: converted,
   }
 }

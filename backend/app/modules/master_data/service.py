@@ -455,6 +455,74 @@ async def seed_capacity_units(session: AsyncSession) -> None:
         session.add(CapacityUnit(code=code, name=name, status="ACTIVE"))
 
 
+async def ensure_vocabulary_creation_audit(session: AsyncSession) -> None:
+    """Record who created the seeded vocabulary rows: the system.
+
+    The seeds never pass through the API, so without a creation event the
+    master-data lists cannot show their creator and the column stays empty.
+    Attribution is deliberately narrow: only rows matching the known default
+    codes/names are attributed, and only when they carry no creation event
+    at all — a row a human created before auditing existed is never
+    misattributed, it keeps showing no creator. Idempotent: a restart never
+    writes a second event for the same record.
+    """
+    from app.core.bootstrap import DEFAULT_PARTY_ROLES, DEFAULT_PLACE_ROLES
+    from app.core.localization import SUPPORTED_CURRENCIES
+    from app.modules.audit.models import AuditEvent
+    from app.modules.audit.service import write_audit
+
+    groups = (
+        ("currencies", Currency, Currency.code, SUPPORTED_CURRENCIES),
+        ("placeRoles", PlaceRole, PlaceRole.code, [code for code, *_ in DEFAULT_PLACE_ROLES]),
+        ("partyRoles", PartyRole, PartyRole.code, [code for code, *_ in DEFAULT_PARTY_ROLES]),
+        (
+            "transportAssetIdentityTypes",
+            TransportAssetIdentityType,
+            TransportAssetIdentityType.name,
+            [name for name, *_ in DEFAULT_IDENTITY_TYPES],
+        ),
+        ("capacityUnits", CapacityUnit, CapacityUnit.code, [code for code, _ in DEFAULT_CAPACITY_UNITS]),
+        # The document-type seed is the canonical behaviour list (migration
+        # f0b1c2d3e4f5), so those rows are the verified system rows.
+        ("documentTypes", DocumentType, DocumentType.code, list(CANONICAL_DOCUMENT_BEHAVIORS)),
+    )
+    wrote = False
+    for collection, model, column, values in groups:
+        rows = (
+            await session.execute(select(model.id).where(column.in_(values), model.deleted_at.is_(None)))
+        ).scalars().all()
+        if not rows:
+            continue
+        attributed = set(
+            (
+                await session.execute(
+                    select(AuditEvent.entity_id).where(
+                        AuditEvent.entity_type == f"master_data:{collection}",
+                        AuditEvent.event_type == "MASTER_DATA_CREATED",
+                        AuditEvent.entity_id.in_(rows),
+                    )
+                )
+            ).scalars().all()
+        )
+        for entity_id in rows:
+            if entity_id in attributed:
+                continue
+            # actor_user_id stays None: the system created this row, not a person.
+            await write_audit(
+                session,
+                None,
+                event_type="MASTER_DATA_CREATED",
+                entity_type=f"master_data:{collection}",
+                entity_id=entity_id,
+                action="create",
+                metadata={"source": "bootstrap"},
+            )
+            wrote = True
+    if wrote:
+        # Lists cache their creator column; drop stale cached entries.
+        await cache.bump("master_data")
+
+
 def _asset_transform(data: dict[str, Any]) -> dict[str, Any]:
     """Normalise a transport asset before it is written.
 

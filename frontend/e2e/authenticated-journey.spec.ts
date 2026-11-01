@@ -36,7 +36,7 @@ test.describe('signed-in navigation', () => {
 
     // The account menu lives in the app header; the trigger is labelled with the
     // signed-in user's name, so it is located by role rather than by copy.
-    await page.getByRole('button', { name: new RegExp(username!, 'i') }).click()
+    await page.getByRole('button', { name: new RegExp(process.env.E2E_DISPLAY_NAME || username!, 'i') }).click()
     await page.getByRole('menuitem', { name: /sign out|log out/i }).click()
 
     await expect(page).toHaveURL(/\/auth\/login/)

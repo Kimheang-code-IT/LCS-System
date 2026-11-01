@@ -52,17 +52,20 @@ trailing-icon="i-lucide-arrow-up-right">
           {{ t('freight.ui.viewAll') }}
         </UButton>
       </div>
-      <div v-if="group.rows.length" class="overflow-x-auto">
+      <div class="overflow-x-auto">
+        <!-- Headers stay mounted with zero rows: the empty state lives in the body. -->
         <UTable
-:data="group.rows.slice(0, 20)"
-:columns="columns"
+          :data="group.rows.slice(0, 20)"
+          :columns="columns"
           :get-row-id="(row: FreightRecord) => row.id"
-class="freight-table freight-table-compact min-w-max"
+          class="freight-table freight-table-compact min-w-max"
           :ui="freightTableUiCompact"
-@select="openRelated(group.path)" />
-      </div>
-      <div v-else class="rounded-md border border-dashed border-default px-3 py-4 text-sm text-muted">
-        {{ t('freight.ui.noRelated') }}
+          @select="openRelated(group.path)"
+        >
+          <template #empty>
+            <p class="py-4 text-center text-sm text-muted">{{ t('freight.ui.noRelated') }}</p>
+          </template>
+        </UTable>
       </div>
     </section>
   </div>

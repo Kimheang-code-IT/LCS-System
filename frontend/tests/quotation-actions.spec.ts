@@ -1,51 +1,56 @@
 import { describe, expect, it } from 'vitest'
 import { quotationActionAvailability, serviceOrderRequotationAvailability } from '../app/utils/freight/quotation-actions'
 
-const allAllowed = { updateDraft: true, send: true, accept: true, convert: true }
-const readOnly = { updateDraft: false, send: false, accept: false, convert: false }
+const allAllowed = { updateDraft: true, submit: true, convert: true }
+const readOnly = { updateDraft: false, submit: false, convert: false }
 
 describe('quotationActionAvailability', () => {
-  it('offers save/send/delete/requote on a draft and nothing else', () => {
+  it('offers save/submit/delete on a draft and nothing else', () => {
     const availability = quotationActionAvailability('Draft', allAllowed)
     expect(availability.status).toBe('DRAFT')
     expect(availability).toMatchObject({
       edit: true,
-      send: true,
-      accept: false,
+      submit: true,
       convert: false,
-      revise: true,
       delete: true,
       openServiceOrder: false,
     })
   })
 
-  it('accepts a sent quotation; deletion stays restricted to draft/sent', () => {
-    const availability = quotationActionAvailability('Sent', allAllowed)
+  it('converts a submitted quotation directly; no Sent or Accepted step', () => {
+    const availability = quotationActionAvailability('Submitted', allAllowed)
     expect(availability).toMatchObject({
       edit: false,
-      send: false,
-      accept: true,
-      convert: false,
-      revise: true,
-      delete: true,
-    })
-  })
-
-  it('converts an accepted quotation and keeps re-quotation available', () => {
-    const availability = quotationActionAvailability('Accepted', allAllowed)
-    expect(availability).toMatchObject({
-      edit: false,
-      send: false,
-      accept: false,
+      submit: false,
       convert: true,
-      revise: true,
       delete: false,
+      revise: true,
+      openServiceOrder: false,
     })
   })
 
-  it('treats a converted quotation as linked to a service order', () => {
+  it('keeps legacy sent and accepted quotations convertible without actions of their own', () => {
+    for (const legacy of ['Sent', 'Accepted']) {
+      const availability = quotationActionAvailability(legacy, allAllowed)
+      expect(availability).toMatchObject({
+        edit: false,
+        submit: false,
+        convert: true,
+        revise: true,
+        openServiceOrder: false,
+      })
+    }
+    // A legacy sent offer was deletable before the simplification; a submitted
+    // one is not — submission is a commitment, its withdrawal is a cancel.
+    expect(quotationActionAvailability('Sent', allAllowed).delete).toBe(true)
+    expect(quotationActionAvailability('Accepted', allAllowed).delete).toBe(false)
+  })
+
+  it('treats a converted quotation as linked to a service order and offers re-quotation only', () => {
     const availability = quotationActionAvailability('Converted', allAllowed)
     expect(availability).toMatchObject({
+      edit: false,
+      submit: false,
       convert: false,
       revise: true,
       delete: false,
@@ -53,19 +58,18 @@ describe('quotationActionAvailability', () => {
     })
   })
 
-  it('hides delete once a service order exists even while the quotation is draft again', () => {
-    const availability = quotationActionAvailability('Draft', allAllowed, { hasServiceOrder: true })
+  it('hides delete once a service order exists', () => {
+    const availability = quotationActionAvailability('Submitted', allAllowed, { hasServiceOrder: true })
     expect(availability.openServiceOrder).toBe(true)
     expect(availability.delete).toBe(false)
-    expect(availability.send).toBe(true)
+    expect(availability.convert).toBe(false)
   })
 
-  it('withholds every transition without the source permission', () => {
-    const availability = quotationActionAvailability('Draft', readOnly)
+  it('withholds every action without the source permissions', () => {
+    const availability = quotationActionAvailability('Submitted', readOnly)
     expect(availability).toMatchObject({
       edit: false,
-      send: false,
-      accept: false,
+      submit: false,
       convert: false,
       revise: false,
       delete: false,

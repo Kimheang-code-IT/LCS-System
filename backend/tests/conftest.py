@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -52,6 +53,34 @@ def isolate_process_state():
     rate_limit_module._fallback.clear()
 
 
+_DDL_CACHE: list[str] | None = None
+
+
+def _precompiled_ddl() -> list[str]:
+    """Compile SQLite DDL for the whole metadata once, reuse across tests.
+
+    Base.metadata.create_all around the schema on every test costs ~0.35s
+    mostly in table sorting and dialect setup; precompiled statements cut the
+    per-test schema build to plain CREATE TABLE/INDEX execution. Regenerated
+    automatically when the process restarts, so a model change is picked up.
+    """
+    global _DDL_CACHE
+    if _DDL_CACHE is None:
+        from sqlalchemy.dialects import sqlite as sa_sqlite
+        from sqlalchemy.schema import CreateIndex, CreateTable
+
+        dialect = sa_sqlite.dialect()
+        _DDL_CACHE = [
+            str(CreateTable(table).compile(dialect=dialect))
+            for table in Base.metadata.sorted_tables
+        ] + [
+            str(CreateIndex(index).compile(dialect=dialect))
+            for table in Base.metadata.sorted_tables
+            for index in table.indexes
+        ]
+    return _DDL_CACHE
+
+
 @pytest_asyncio.fixture
 async def engine():
     engine = create_async_engine(
@@ -60,7 +89,8 @@ async def engine():
         poolclass=StaticPool,
     )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        for statement in _precompiled_ddl():
+            await conn.execute(text(statement))
     yield engine
     await engine.dispose()
 
@@ -83,12 +113,12 @@ async def seeded(session_factory):
     return True
 
 
-@pytest_asyncio.fixture
-async def client(session_factory, seeded):
+def _session_override(session_factory):
+    """Mirrors ``app.core.database.get_session`` against the test database: a
+    refused request must leave the same AUTHORIZATION_DENIED trail it does in
+    production, or the audit assertions would pass without anything writing."""
+
     async def override_get_session(request: Request):
-        # Mirrors ``app.core.database.get_session`` against the test database: a
-        # refused request must leave the same AUTHORIZATION_DENIED trail it does in
-        # production, or the audit assertions would pass without anything writing.
         async with session_factory() as session:
             try:
                 yield session
@@ -102,7 +132,22 @@ async def client(session_factory, seeded):
                 await session.rollback()
                 raise
 
-    app.dependency_overrides[get_session] = override_get_session
+    return override_get_session
+
+
+@pytest_asyncio.fixture
+async def client(session_factory, seeded):
+    app.dependency_overrides[get_session] = _session_override(session_factory)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
+        yield http_client
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def client_fresh(session_factory):
+    """HTTP client against an empty database; `/auth/setup` is still pending."""
+    app.dependency_overrides[get_session] = _session_override(session_factory)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as http_client:
         yield http_client

@@ -16,10 +16,25 @@ frontend has no mock data layer: every business read and write goes through
 
 - `layouts/default.vue` mounts the sidebar (`useMenu`), the header
   (`LayoutAppHeader` + `LayoutAppHeaderPageActions`), the global search entry
-  point, and the content area. Every header action button — Save, New/Create and
-  the document workflow buttons (Submit, Send, Accept…) — renders through the
-  shared `CommonAppDocumentActionButton`, so one style rule
-  (`utils/layout/document-action-button.ts`) governs every page.
+  point, and the content area. **Every** header action button — Save,
+  New/Create, the document workflow buttons (Submit, Send, Accept…), Refresh,
+  the ⋯ export/menu trigger, Cancel, and page-supplied actions such as
+  Generate, Rebuild, Publish, Rollback and Compare — renders through the shared
+  `CommonAppDocumentActionButton` (the list header's create-button geometry:
+  `rounded-md`, default size, natural width), so one style rule
+  (`utils/layout/document-action-button.ts`) governs every page. It has three
+  variants, selected by the button's `color` prop: **primary** (dark solid on
+  `--ui-bg-inverted`) for New/Create/Generate/Save/Submit; **secondary** (solid
+  grey `#E5E7EB`, text/icons `#374151`) for Refresh, Rebuild, Export/Import
+  (the ⋯ trigger), Print, Cancel and other supporting actions; and
+  **destructive** (solid red `#DC2626`, white text) for Delete/Remove
+  (`color="error"`). The header Refresh follows the shared spin pattern: while
+  a page reports `refreshing` (or briefly after a synchronous refresh click) it
+  is disabled and only its RefreshCw icon rotates (`motion-safe:animate-spin`,
+  ~800 ms per revolution, honouring `prefers-reduced-motion`) — the grey
+  secondary fill, label and geometry never animate, and a superseded request
+  cannot be triggered while one runs. Navigation buttons (List view, previous/next) and form,
+  table-row, table-toolbar and dialog-footer buttons are out of scope.
 - `layouts/auth.vue` is the unauthenticated shell; `layouts/print.vue` removes
   application chrome from print routes.
 - `middleware/auth.global.ts` enforces session state, first-run setup, forced
@@ -163,7 +178,16 @@ Tables use `AppListTable` / `DynamicDataTable`, with:
 - sort by a whitelisted column and direction;
 - a status badge column and a row “…” menu;
 - permission-filtered actions, confirmation for destructive actions, and a
-  success toast only after the API confirms.
+  success toast only after the API confirms;
+- **empty tables keep their full structure**: `AppListTable` (and
+  `AppRelatedRecords`) never unmount `UTable` at zero rows — headers, toolbar,
+  borders and the pagination footer stay visible, and the empty state renders
+  inside one body row spanning all visible columns (UTable's `#empty` slot):
+  inbox icon, "No records" / "No matching records" (active search or filters),
+  description, and `0` in the pager. No create action is duplicated inside the
+  empty state — the header carries it. Loading renders inside the table (the
+  `loading` skeleton) with headers unchanged; API errors stay page-level
+  alerts/retry banners above the unchanged table.
 
 The Business Parties form loads active Party Roles from the database and stores a
 `roleIds` array. Party Roles themselves are a standard reference collection:
@@ -354,12 +378,17 @@ One shared pipeline covers every form; no page implements its own.
 - The frontend never computes financial balances. Report screens render backend
   `/reports/*` data through `ReportsRepository`.
 
-### Report pages generate on demand
+### Report pages load automatically
 
-Opening `/reports/:area/:slug` loads no report rows. `ReportsView.vue` shows the
-title, the filter controls and an empty state; only **Generate** (header action,
-empty-state action, or the header Refresh control) requests data. This follows
-the ERPNext report pattern and keeps a large ledger off the page-load path.
+Opening `/reports/:area/:slug` fetches the report immediately with the period
+remembered for it (or the backend default period on first visit) and shows a
+loading state, then the rows or an explicit empty state. No manual Generate is
+required to view existing data. **Generate** (header action, empty-state action
+or the header Refresh control) re-runs the report with the currently selected
+filters; **Rebuild** forces a fresh calculation from the original source
+records. Both are read-only: the reporting engine is uncached and posts to no
+financial record, so generation and rebuild cannot duplicate or alter journal
+entries.
 
 - `Trial Balance` and `General Ledger` post their filters to
   `/reports/trial-balance/generate` and `/reports/general-ledger/generate`
@@ -367,13 +396,13 @@ the ERPNext report pattern and keeps a large ledger off the page-load path.
   is a pure, unit-tested function. Both are server-paginated: the table's page
   controls request the page the user asked for and `meta.total` drives the
   pager.
-- Every other catalogued report requests its existing endpoint only after
-  Generate; operational registers still derive their rows from the freight store.
-- States are explicit: idle empty state, loading, generated empty state, success,
-  and an error alert carrying the backend `message`. Changing any filter marks
-  the current result **stale** instead of silently showing it as current;
-  regenerating clears the marker. Repeated Generate clicks are ignored while a
-  request is in flight.
+- Every other catalogued report requests its existing endpoint on open;
+  operational registers still derive their rows from the freight store.
+- States are explicit: loading, generated empty state, success, and an error
+  alert carrying the backend `message`. Changing any filter marks the current
+  result **stale** instead of silently showing it as current; regenerating
+  clears the marker. Concurrent runs are token-guarded: a newer run supersedes
+  an older one and a superseded run never overwrites the newer result.
 - Trial Balance shows period debit/credit and closing debit/credit totals above
   the table, plus an error badge when the backend reports an imbalance.
 - **Export** for these two reports asks the backend for the whole filtered
@@ -457,12 +486,17 @@ Rules that follow from it:
 ### Excel Import & Export actions (`app/components/excel/ImportExportDialog.vue`)
 
 Eligible list pages (the backend catalog `GET /api/v1/excel/modules` is the single
-source of support) offer **Export** and **Import** as items in the page-header
-**⋯** menu — not as buttons above the table. The header keeps its primary
-**New/Create** button for the modules that allow creating a record. Export needs
-the module's view permission; import validate/commit need its manage permission
-and are refused (`403`) otherwise.
-A view-only caller therefore sees Export only. Export sends the selected rows,
+source of support) offer **Export Data** (download icon) and **Import Data**
+(upload icon) as `actions.exportData` / `actions.importData` items in the
+page-header **⋯** button — a single grey-secondary, icon-only trigger rendered
+by `CommonAppDocumentActionButton`, right-aligned with `align: 'end'`, the same
+New Job geometry — never as separate buttons above the table. The header keeps
+its primary **New/Create** button for the modules that allow creating a record.
+Export needs the module's view permission; import validate/commit need its
+manage permission and are refused (`403`) otherwise; items the caller may not
+perform are simply not listed. The menu closes on selection, an outside click
+or Escape (Nuxt UI default). A view-only caller therefore sees Export only.
+Export sends the selected rows,
 or every filtered row when nothing is selected — never just the current table
 page. Choosing Import opens the shared dialog, which drives the workflow:
 download template → pick mode (Create Only default) → upload `.xlsx` → backend

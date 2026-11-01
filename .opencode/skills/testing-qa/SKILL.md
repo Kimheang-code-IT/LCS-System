@@ -25,8 +25,8 @@ looks right — it is done when the applicable check has actually run and passed
 
 | Document | Use it for |
 |---|---|
-| `AGENTS.md` §Commands, §Tests | Canonical commands and the test harness |
-| `docs/02_software_requirements.md` | Acceptance criteria to test against |
+| `AGENTS.md`, `docs/11-testing-and-quality.md` | Agent rules, canonical commands and test harness |
+| `docs/09-design-brief.md#legacy-requirement-traceability` | Acceptance criteria to test against |
 | `docs/11_deployment_and_security.md` §8, §12 | Migration verification and the backup/restore drill |
 | `backend/tests/sql/integrity_guards.sql` | Executable PostgreSQL invariant checks |
 | `backend/tests/sql/pre_migration_counts.sql` | Row-count and financial-total reconciliation |
@@ -51,6 +51,26 @@ Consequences you must design around:
   numbers, no duplicate allocation) instead.
 - The test client retains the login cookie. Clear `client.cookies` before asserting
   that an anonymous request is rejected, or the assertion is vacuous.
+
+## Backend test map — pick the narrowest file
+
+Flat directory on purpose (node IDs are referenced by `docs/10`); select by file or
+`-k`, not by moving files. Fastest selective run: the file, or `-k "<word>"`.
+The `/test-fast` command holds the diff→tests matrix; `/test-backend` holds run modes.
+
+| Module area | Test files |
+|---|---|
+| Auth & authorization | `test_auth_rbac.py`, `test_auth_sessions.py`, `test_auth_remember_me.py`, `test_lockout_policy.py`, `test_password_policy.py`, `test_password_reset.py`, `test_rate_limit.py`, `test_security_hardening.py`, `test_setup.py` |
+| Authorization decisions | `test_role_permissions.py`, `test_single_role_rbac.py`, `test_access_enforcement.py`, `test_route_authorization.py`, `test_authorization_wildcard.py`, `test_audit_logs.py` |
+| Finance & accounting | `test_posting_rules.py`, `test_financial_documents_module.py`, `test_finance_automation.py`, `test_job_finance_entries.py`, `test_charge_tax_round_trip.py` |
+| Quotations | `test_quotations.py`, `test_quotation_versions.py`, `test_quotation_postgres.py` |
+| Service orders & operations | `test_workflows.py`, `test_component_attributes.py`, `test_component_layouts.py`, `test_movements_and_milestones.py`, `test_transport_assets.py`, `test_record_status.py`, `test_archive.py` |
+| Master data | `test_container_types.py`, `test_currencies_and_fx.py`, `test_document_types.py`, `test_party_roles.py`, `test_place_roles.py`, `test_deletion_policy.py`, `test_created_by.py` |
+| System configuration | `test_config_versions.py`, `test_config_compare.py`, `test_config_version_lifecycle.py`, `test_settings_validation.py`, `test_localization_settings.py`, `test_validation_schema.py` |
+| Reporting | `test_report_accounting.py`, `test_report_generation.py`, `test_report_export.py`, `test_reports_dashboard.py`, `test_reporting_values.py` |
+| Integrations | `test_excel_import_export.py`, `test_attachments.py`, `test_upload_policy.py`, `test_backup.py`, `test_telegram.py`, `test_telegram_client.py`, `test_telegram_monitor.py`, `test_telegram_outbox.py`, `test_telegram_recovery.py`, `test_redis_integration.py` |
+| Database & migrations | `test_migration_chain.py`, `test_schema_integrity.py`, `test_schema_docs.py`, `test_auth_postgres.py`, `test_postgres_places_migration.py`, `test_telegram_postgres.py`, `test_quotation_postgres.py` |
+| Cross-module workflows | `test_workflows.py`, `test_multi_currency.py`, `test_request_schemas.py`, `test_api_completeness.py`, `test_frontend_api_contract.py`, `test_page_api_integration.py`, `test_write_validation.py`, `test_sorting.py`, `test_repository_queries.py` |
 
 **Frontend** — `frontend/tests/**/*.spec.ts`, plain Vitest, `environment: node`,
 `import.meta.client = false`, alias `~ -> app`. The Nuxt runtime is **not** mounted,

@@ -1,4 +1,4 @@
 <script setup lang="ts">
-definePageMeta({ titleKey: 'freight.pages.assetIdentityTypes', permission: 'master.reference.view' })
+definePageMeta({ titleKey: 'freight.pages.assetIdentityTypes', permission: 'master.transport_assets.view' })
 </script>
 <template><FreightWorkspaceView /></template>

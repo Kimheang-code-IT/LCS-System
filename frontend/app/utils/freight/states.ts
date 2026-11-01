@@ -3,6 +3,8 @@ import type { FinancialDocumentStatus, QuotationRevisionStatus, ServiceChargeSta
 const QUOTATION_LABEL: Record<string, QuotationRevisionStatus> = {
   Draft: 'DRAFT',
   DRAFT: 'DRAFT',
+  Submitted: 'SUBMITTED',
+  SUBMITTED: 'SUBMITTED',
   Sent: 'SENT',
   SENT: 'SENT',
   Accepted: 'ACCEPTED',

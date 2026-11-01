@@ -1,6 +1,6 @@
 import { useSetup } from '~/composables/auth/useSetup'
+import { firstPermittedPagePath, pagePermissionCandidatesForPath } from '~/utils/freight/page-access'
 import { normalizeRoutePath, safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
-import { pagePermissionCandidatesForPath } from '~/utils/freight/page-access'
 
 const PERMITTED_LANDING_ROUTES = [
   ['/', 'dashboard.view'],
@@ -99,11 +99,18 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
   const canEnforcePermissions = !import.meta.server || sessionHasPermissionData(auth.user)
   if (canEnforcePermissions && auth.isLoggedIn && permissions.length && !auth.canAccessAnyPage(permissions)) {
     // Keep the current authorized page when denial happens during navigation.
-    if (from.matched.length && from.path !== to.path) return abortNavigation()
+    // A public page is not "authorized", so leaving it must fall through to the
+    // landing redirect instead of aborting and stranding the sign-in flow.
+    const fromPath = normalizeRoutePath(from.path)
+    const fromIsAuthorized = from.matched.length !== 0 && !publicPaths.includes(fromPath) && fromPath !== SETUP_PATH
+    if (fromIsAuthorized && from.path !== to.path) return abortNavigation()
 
-    // A direct URL needs an authorized page underneath.
+    // A direct URL needs an authorized page underneath. The approved landing
+    // list comes first; an account without any of those pages may still have
+    // its own permitted pages, so fall back to the first menu page it may open.
     const landing = PERMITTED_LANDING_ROUTES.find(([, required]) => auth.canAccessPage(required))
-    if (landing) return navigateTo(landing[0], { replace: true })
+    const firstPermitted = landing?.[0] ?? firstPermittedPagePath(code => auth.canAccessPage(code))
+    if (firstPermitted) return navigateTo(firstPermitted, { replace: true })
 
     // An account with no usable page returns to sign-in without creating a denial page.
     auth.clearSession()

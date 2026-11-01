@@ -1,8 +1,8 @@
 /**
  * Filters a report page collects before it generates anything.
  *
- * Kept out of the component so the request body is testable: a report never
- * asks the backend for data until the user presses Generate.
+ * Kept out of the component so the request body is testable: a report auto-loads
+ * when opened and re-runs these filters on Generate or Rebuild.
  */
 export type ReportFilterValues = {
   dateFrom: string

@@ -277,49 +277,37 @@ watch(versionId, () => { void load() }, { immediate: true })
       @save="save"
     >
       <template #default>
-        <UButton
+        <CommonAppDocumentActionButton
           v-if="canPublishVersion"
-          color="primary"
-          size="sm"
           icon="i-lucide-check-circle-2"
+          label="Publish"
           :loading="saving"
           @click="publish"
-        >
-          Publish
-        </UButton>
-        <UButton
+        />
+        <CommonAppDocumentActionButton
           v-if="canRollbackVersion"
-          color="warning"
-          variant="soft"
-          size="sm"
+          color="secondary"
           icon="i-lucide-undo-2"
+          label="Rollback"
           :disabled="saving"
           @click="requestRollback"
-        >
-          Rollback
-        </UButton>
-        <UButton
+        />
+        <CommonAppDocumentActionButton
           v-if="canCompare"
-          color="neutral"
-          variant="outline"
-          size="sm"
+          color="secondary"
           icon="i-lucide-git-compare"
+          label="Compare"
           :disabled="saving"
           @click="openCompare"
-        >
-          Compare
-        </UButton>
-        <UButton
+        />
+        <CommonAppDocumentActionButton
           v-if="canDelete"
           color="error"
-          variant="soft"
-          size="sm"
           icon="i-lucide-trash-2"
+          :label="t('actions.delete')"
           :disabled="saving"
           @click="remove"
-        >
-          {{ t('actions.delete') }}
-        </UButton>
+        />
       </template>
     </LayoutAppHeaderPageActions>
 

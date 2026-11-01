@@ -22,6 +22,8 @@ const props = withDefaults(defineProps<{
   canSave?: boolean
   saveLabel?: string
   fieldErrors?: Record<string, string>
+  /** Field-error count per tab id — renders a red badge on the tab strip. */
+  tabErrors?: Record<string, number>
   /** Host hook so an edit can drop that field's (or cell's) error at once. */
   onFieldEdit?: (key: string) => void
   /** Host hook that validates one field when the user leaves it. */
@@ -59,6 +61,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   saveLabel: '',
   fieldErrors: () => ({}),
+  tabErrors: () => ({}),
   onFieldEdit: undefined,
   onFieldBlur: undefined,
   formErrors: () => [],
@@ -222,6 +225,7 @@ v-if="pending"
 v-if="showTabs && showForm && !notFound && !error"
 :tabs="tabs"
             :active-tab="activeTab"
+            :errors="tabErrors"
 @update:active-tab="selectTab" />
 
           <div ref="scrollEl" class="min-h-0 min-w-0 flex-1 overflow-auto" @scroll.passive="onFormScroll">

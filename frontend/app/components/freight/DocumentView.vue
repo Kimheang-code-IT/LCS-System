@@ -58,11 +58,19 @@ import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import { useFormValidation } from '~/composables/common/useFormValidation'
 import { validateDocumentFields, validateTableRows } from '~/utils/validation/record-validation'
 import { focusField } from '~/utils/validation/focus'
+import {
+  clearRecordDraft,
+  draftAppliesTo,
+  readRecordDraft,
+  recordDraftKey,
+  writeRecordDraft,
+} from '~/composables/common/useRecordDraft'
 import { parseRowKey } from '~/utils/validation/error-paths'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
 import { validatePasswordStrength } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
+import { pageActionPermission } from '~/utils/freight/page-access'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
@@ -172,6 +180,20 @@ const validation = useFormValidation({
 
 const fieldErrors = validation.fieldErrors
 
+/** Field-error count per tab id, for the red badge on the tab strip. */
+const tabErrorCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  if (!validation.hasFieldErrors.value) return counts
+  for (const key of validation.orderedErrorKeys.value) {
+    const owner = findFieldOwner(key)
+    // A key no tab owns (form-level) is skipped here; the summary already
+    // shows it.
+    if (!owner) continue
+    counts[owner.tab.id] = (counts[owner.tab.id] || 0) + 1
+  }
+  return counts
+})
+
 function clearFieldError(key: string) {
   validation.clearFieldError(key)
 }
@@ -248,6 +270,12 @@ async function load() {
     if (module.value.collection === 'debitNotes' && !model.value.documentType) {
       model.value.documentType = FINANCIAL_DOCUMENT_TYPES[0]
     }
+    if (module.value.collection === 'quotations') {
+      quotationEmptySnapshot.value = quotationDraftSnapshot(model.value)
+      // Unsaved edits from a previous visit (refresh, accidental navigation)
+      // come back exactly as they were left.
+      applyQuotationDraft()
+    }
     applyRoleMatrix()
     return
   }
@@ -263,6 +291,7 @@ async function load() {
       : found
     model.value = { ...normalized } as FreightRecord
     originalModel.value = { ...normalized } as FreightRecord
+    if (module.value.collection === 'quotations') applyQuotationDraft()
   }
   catch {
     notFound.value = true
@@ -312,7 +341,12 @@ watch([title, () => module.value, () => model.value.status], () => {
   setBadges(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
 }, { immediate: true })
 
-onBeforeUnmount(clear)
+onBeforeUnmount(() => {
+  clear()
+  window.removeEventListener('beforeunload', beforeUnloadWarning)
+  if (draftTimer.value) clearTimeout(draftTimer.value)
+})
+onMounted(() => window.addEventListener('beforeunload', beforeUnloadWarning))
 usePageSeo({ title: () => title.value })
 
 /** Comments & activity are only shown on quotations, service orders and service charges. */
@@ -327,7 +361,12 @@ const readOnly = computed(() => {
     if ((module.value.collection === 'chartOfAccounts' || module.value.collection === 'financialAccounts') && !lcs.can('chart_of_accounts.manage')) return true
     if (module.value.collection === 'users' && !lcs.can('user.manage')) return true
     if (module.value.collection === 'roles' && !lcs.can('role.manage')) return true
-    if (module.value.group === 'master' && !lcs.can('master.reference.manage')) return true
+    if (module.value.group === 'master' && !lcs.can('master.reference.manage')) {
+      // Narrow matrix roles save through their screen's update code (the
+      // transport-assets code covers identity types and capacity units too).
+      const updateCode = pageActionPermission(module.value.permission, 'update')
+      if (!(updateCode && auth.canAccessPage(updateCode))) return true
+    }
     if (module.value.group === 'configuration' && !auth.canAccessPage('configuration.manage')) return true
   }
   if (isRecordReadOnly(module.value.collection, model.value)) return true
@@ -391,6 +430,75 @@ const quotationDraftDirty = computed(() => {
   return quotationDraftSnapshot(model.value) !== quotationDraftSnapshot(originalModel.value)
 })
 
+// --- Unsaved-quotation draft --------------------------------------------------
+//
+// The quotation form holds its state in this component's `model` ref, which
+// dies with the route: navigation to Master Data (the legacy Add New round
+// trip), a tab strip, an accidental refresh or an API failure used to throw
+// everything the operator typed away. The draft below keeps a versioned copy
+// in sessionStorage and restores it on the next mount; the server copy stays
+// authoritative whenever it changed since the draft was written.
+
+const draftKey = computed(() => module.value?.collection === 'quotations'
+  ? recordDraftKey(String(auth.user?.id || auth.user?.name || 'anon'), 'quotations', isCreate.value ? '' : recordId.value)
+  : '')
+const draftTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+/** Snapshot of the pristine new-quotation form; any difference means content. */
+const quotationEmptySnapshot = ref<string | null>(null)
+
+function clearQuotationDrafts() {
+  const user = String(auth.user?.id || auth.user?.name || 'anon')
+  clearRecordDraft(recordDraftKey(user, 'quotations', ''))
+  if (recordId.value) clearRecordDraft(recordDraftKey(user, 'quotations', recordId.value))
+}
+
+function applyQuotationDraft() {
+  const key = draftKey.value
+  if (!key) return
+  const draft = readRecordDraft(key)
+  if (!draft || !draftAppliesTo(draft, isCreate.value ? '' : recordId.value, model.value.updatedAt)) return
+  model.value = { ...model.value, ...draft.model } as FreightRecord
+}
+
+watch(
+  [draftKey, quotationDraftDirty, () => quotationDraftSnapshot(model.value)],
+  ([key, dirty, snapshot]) => {
+    if (!key) return
+    if (draftTimer.value) clearTimeout(draftTimer.value)
+    // A saved quotation without edits must not keep a stale local copy, and a
+    // record that has left DRAFT (submitted, converted) is not editable here:
+    // the server response is what comes back next time.
+    if (!isCreate.value && String(model.value.status || '').toLowerCase() !== 'draft') {
+      clearRecordDraft(key)
+      return
+    }
+    if (isCreate.value && quotationEmptySnapshot.value !== null) {
+      // A pristine new form is not a draft; only real edits are kept.
+      if (snapshot === quotationEmptySnapshot.value) {
+        clearRecordDraft(key)
+        return
+      }
+    }
+    else if (!dirty) {
+      // The saved quotation response is authoritative — no local copy should
+      // survive a clean comparison.
+      clearRecordDraft(key)
+      return
+    }
+    draftTimer.value = setTimeout(() => writeRecordDraft(key, {
+      recordId: isCreate.value ? '' : recordId.value,
+      baseUpdatedAt: String(model.value.updatedAt || ''),
+      model: JSON.parse(snapshot) as Record<string, unknown>,
+    }), 400)
+  },
+)
+
+function beforeUnloadWarning(event: BeforeUnloadEvent) {
+  if (module.value?.collection !== 'quotations' || !quotationDraftDirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
 // Quotation workflow: Draft -> Sent (send) -> Accepted (accept) -> Service
 // Order (convert). Re-quotation clones the latest revision into a new draft.
 // A dirty draft only offers Save so every transition runs on persisted data.
@@ -398,8 +506,7 @@ const quotationAvailability = computed(() => quotationActionAvailability(
   model.value.status,
   {
     updateDraft: lcs.can('quotation.update_draft'),
-    send: lcs.can('quotation.send'),
-    accept: lcs.can('quotation.accept'),
+    submit: lcs.can('quotation.submit'),
     convert: lcs.can('quotation.convert'),
   },
   { hasServiceOrder: Boolean(relatedServiceOrder()) },
@@ -412,8 +519,7 @@ const quotationAvailability = computed(() => quotationActionAvailability(
  */
 function transitionsAvailableForQuotation(transition: RecordStatusTransition): boolean {
   const availability = quotationAvailability.value
-  if (transition.action === 'send') return availability.send && !quotationDraftDirty.value
-  if (transition.action === 'accept') return availability.accept && !quotationDraftDirty.value
+  if (transition.action === 'submit') return availability.submit && !quotationDraftDirty.value
   if (transition.action === 'convert') return availability.convert && !quotationDraftDirty.value
   if (transition.action === 'reject') return lcs.can('quotation.accept')
   if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
@@ -434,17 +540,16 @@ const quotationHeaderActions = computed<FreightAction[]>(() => {
     }
     return actions
   }
-  if (availability.send) {
-    actions.push({ key: 'send', label: t('freight.ui.send'), icon: 'i-lucide-send' })
-  }
-  if (availability.accept) {
-    actions.push({ key: 'accept', label: t('freight.ui.accept'), icon: 'i-lucide-check', color: 'success' })
-  }
-  if (availability.revise) {
-    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
+  if (availability.submit) {
+    actions.push({ key: 'send', label: t('freight.ui.submit'), icon: 'i-lucide-send' })
   }
   if (availability.convert) {
     actions.push({ key: 'convertJob', label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', color: 'primary' })
+  }
+  // Re-quotation is offered on everything but an editable draft (a draft is its
+  // own next revision) — Submitted, Converted and the legacy statuses.
+  if (availability.revise && !availability.edit) {
+    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
   }
   return actions
 })
@@ -522,16 +627,22 @@ const documentSaveLabel = computed(() => {
 })
 
 /**
- * Creating a user chooses that account's password, so Save stays disabled until
- * the initial password satisfies the shared policy. Other modules are unaffected.
+ * Creating a user chooses that account's initial password, so their save waits
+ * until it satisfies the shared policy. Everything else may save.
  */
-const canSave = computed(() => {
-  if (readOnly.value || module.value?.collection === 'quotations') return false
+const canRunSave = computed(() => {
+  if (readOnly.value) return false
   if (isCreate.value && module.value?.collection === 'users') {
     return !validatePasswordStrength(String(model.value?.password ?? ''))
   }
   return true
 })
+
+/**
+ * The inline save grid stays off for quotations: their header Save action runs
+ * the same save() function, so a second save button would duplicate it.
+ */
+const canSave = computed(() => canRunSave.value && module.value?.collection !== 'quotations')
 
 /** Role names from the Roles & Permissions page, used by the users role picker. */
 const roleFieldOptions = computed(() => store.list('roles')
@@ -1215,7 +1326,7 @@ async function save(status?: string) {
   if (!module.value || readOnly.value) return
   // Creating a user must not bypass the password policy through Enter or a
   // programmatic call while the Save button is disabled.
-  if (!canSave.value) return
+  if (!canRunSave.value) return
   // Guard against a double click / repeated Enter while the request is pending.
   if (saving.value) return
   saving.value = true
@@ -1321,6 +1432,11 @@ async function save(status?: string) {
     }
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
+    if (module.value.collection === 'quotations') {
+      // Persisted: the server copy is authoritative, so no local draft may
+      // survive to resurrect older edits on the next visit.
+      clearQuotationDrafts()
+    }
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     // A newly created account's password cannot be read back afterwards — the
     // server keeps only a digest — so it is shown once, here, before leaving the
@@ -1529,6 +1645,7 @@ async function confirmReverse() {
 :saving="saving"
 :read-only="readOnly"
 :field-errors="fieldErrors"
+      :tab-errors="tabErrorCounts"
       :on-field-edit="clearFieldError"
       :on-field-blur="validateFieldOnBlur"
       :form-errors="validation.formErrors.value"

@@ -47,3 +47,6 @@ Thumbs.db
 *.log
 .vscode/*
 !.vscode/settings.json
+
+# Local knowledge-graph artifacts (graphify); not for Git unless reviewed.
+graphify-out/

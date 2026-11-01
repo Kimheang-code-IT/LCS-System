@@ -18,7 +18,7 @@ import { join } from "path";
 // ';' not '&&' — Windows PowerShell 5.1 rejects '&&' as a statement
 // separator, breaking the first shell command of the session (#1646).
 const REMINDER =
-  'echo "[graphify] knowledge graph at graphify-out/. For focused questions, run graphify query with your question (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context." ; ';
+  'echo "[graphify] knowledge graph at graphify-out/. For cross-module questions or when the right file is not already known, consider graphify query with your question (scoped subgraph, usually much smaller than GRAPH_REPORT.md). Read GRAPH_REPORT.md only for broad architecture context." ; ';
 
 const hasGraph = (directory) => existsSync(join(directory, "graphify-out", "graph.json"));
 

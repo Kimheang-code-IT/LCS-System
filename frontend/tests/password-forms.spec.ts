@@ -68,13 +68,19 @@ describe('the disabled save button shows its reason under the password field', (
   })
 
   it.each([
-    'pages/auth/setup.vue',
     'pages/auth/change-password.vue',
     'components/freight/UserPasswordDialog.vue',
   ])('%s renders password policy errors under the field while typing', (file) => {
     const text = source(file)
     expect(text).toContain('passwordIssueMessage')
     expect(text).toMatch(/role="alert"/)
+  })
+
+  it('the setup form presents the live checklist instead of a policy text dump', () => {
+    const setup = source('pages/auth/setup.vue')
+    expect(setup).toContain('CommonAppPasswordRequirements')
+    expect(setup).not.toContain('passwordIssueMessage')
+    expect(setup).toMatch(/role="alert"/)
   })
 
   it('the mismatch message is also live on the confirmation field', () => {

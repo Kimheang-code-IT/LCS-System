@@ -18,12 +18,6 @@ import {
 } from '~/utils/table/list-sort'
 import { freightTableFillUi } from '~/utils/table/theme'
 
-export type ListTableEmptyAction = {
-  icon?: string
-  label: string
-  onClick: () => void
-}
-
 /** Icons live here because `app/utils` is outside the icon client-bundle scan. */
 const LIST_SORT_ICONS = {
   idle: 'i-lucide-arrow-up-down',
@@ -55,7 +49,6 @@ const props = withDefaults(defineProps<{
   emptyIcon?: string
   emptyTitle?: string
   emptyDescription?: string
-  emptyActions?: ListTableEmptyAction[]
   /** Total row count supplied by a server-paginated endpoint. */
   serverTotal?: number
   serverSide?: boolean
@@ -70,7 +63,6 @@ const props = withDefaults(defineProps<{
   emptyIcon: 'i-lucide-inbox',
   emptyTitle: '',
   emptyDescription: '',
-  emptyActions: () => [],
   serverTotal: 0,
   serverSide: false,
 })
@@ -160,8 +152,22 @@ const visibleTotal = computed(() => props.data.length)
 const virtualize = computed(() => listTableVirtualize(visibleTotal.value, pagination.value.pageSize))
 const searchPlaceholderText = computed(() => props.searchPlaceholder || t('freight.ui.search'))
 const dateLabelText = computed(() => props.dateLabel || t('freight.ui.date'))
-const emptyTitleText = computed(() => props.emptyTitle || t('freight.ui.noRecords'))
-const emptyDescriptionText = computed(() => props.emptyDescription || t('freight.ui.noRecordsHint'))
+/** The table distinguishes an empty database from an empty filtered result. */
+const hasSearchTerm = computed(() => Boolean(
+  search.value.trim()
+  || dateStart.value
+  || dateEnd.value
+  || props.filtersActive,
+))
+const emptyTitleText = computed(() => props.emptyTitle
+  // A page that supplies its own title keeps it (e.g. a report's distinct
+  // states); otherwise the search/filters distinguish "empty database" from
+  // "no matching records".
+  || (hasSearchTerm.value ? t('freight.ui.noMatchingRecords') : t('freight.ui.noRecords')))
+const emptyDescriptionText = computed(() => props.emptyDescription
+  || (hasSearchTerm.value
+    ? t('freight.ui.noMatchingRecordsHint')
+    : t('freight.ui.noRecordsHint')))
 const pageSizeItems = TABLE_PAGE_SIZES.map(value => ({ label: String(value), value: String(value) }))
 
 function rowId(row: T) {
@@ -230,8 +236,12 @@ function onSelect(event: Event, row: TableRow<T>) {
       </div>
 
       <div class="min-h-0 flex-1 overflow-hidden">
+        <!--
+          The table structure (headers, borders, selection, loading) is always
+          mounted; with zero rows UTable renders one body row spanning all
+          visible columns carrying the empty state, so headers never disappear.
+        -->
         <UTable
-          v-if="visibleTotal"
           v-model:row-selection="rowSelection"
           v-model:pagination="pagination"
           v-model:sorting="sorting"
@@ -245,16 +255,21 @@ function onSelect(event: Event, row: TableRow<T>) {
           class="freight-table h-full min-h-0"
           :ui="freightTableFillUi"
           @select="onSelect"
-        />
-        <UEmpty
-          v-else
-          variant="naked"
-          :icon="emptyIcon"
-          :title="emptyTitleText"
-          :description="emptyDescriptionText"
-          :actions="emptyActions.length ? emptyActions : undefined"
-          class="py-16"
-        />
+        >
+          <template #empty>
+            <div class="flex flex-col items-center justify-center gap-1.5 px-6 py-10 text-center">
+              <UIcon :name="props.emptyIcon" class="size-5 text-muted" aria-hidden="true" />
+              <p class="text-sm font-medium text-highlighted">{{ emptyTitleText }}</p>
+              <p class="text-xs text-muted">{{ emptyDescriptionText }}</p>
+            </div>
+          </template>
+          <template #loading>
+            <div class="flex items-center justify-center gap-2 py-10 text-sm text-muted" role="status">
+              <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" aria-hidden="true" />
+              <span>{{ t('common.loading') }}</span>
+            </div>
+          </template>
+        </UTable>
       </div>
 
       <div class="flex items-center justify-between gap-2 border-t border-default px-2 py-1.5">

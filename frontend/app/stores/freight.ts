@@ -246,6 +246,8 @@ export const useFreightStore = defineStore('freight', () => {
     create,
     remove,
     related,
+    /** Await the (cached, request-deduped) fetch of one collection. */
+    ensure: ensureRemote,
     lastError,
     clearError,
   }

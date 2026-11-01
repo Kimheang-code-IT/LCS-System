@@ -294,6 +294,9 @@ async def provision_baseline(session: AsyncSession) -> None:
             session.add(ModuleRecord(collection=collection, record_no=SETTINGS_RECORD_NO, data=deepcopy(defaults)))
 
     await session.flush()
+    from app.modules.master_data.service import ensure_vocabulary_creation_audit
+
+    await ensure_vocabulary_creation_audit(session)
 
 
 async def provision_admin(

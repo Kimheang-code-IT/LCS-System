@@ -1,6 +1,6 @@
 ---
 name: graphify
-description: "Use for any question about a codebase, its architecture, file relationships, or project content — especially when graphify-out/ exists, where the question should be treated as a graphify query first. Turns any input (code, docs, papers, images, videos) into a persistent knowledge graph with god nodes, community detection, and query/path/explain tools."
+description: "Build or query the dependency/knowledge graph in graphify-out/ (god nodes, communities, query/path/explain). Use only when the user asks for a graph, a dependency or cross-module map, or graphify itself - not for ordinary code questions."
 ---
 
 # /graphify

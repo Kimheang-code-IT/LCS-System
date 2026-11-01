@@ -12,4 +12,10 @@ describe('protected system management records', () => {
     expect(isProtectedManagementRecord('roles', { isSystemRole: false })).toBe(false)
     expect(isProtectedManagementRecord('businessParties', { isSystemRole: true })).toBe(false)
   })
+
+  it('hides archive for canonical document types only', () => {
+    expect(isProtectedManagementRecord('documentTypes', { code: 'CUSTOMER_INVOICE' })).toBe(true)
+    expect(isProtectedManagementRecord('documentTypes', { code: 'MY_CUSTOM_TYPE' })).toBe(false)
+    expect(isProtectedManagementRecord('documentTypes', {})).toBe(false)
+  })
 })

@@ -148,7 +148,7 @@ async def submit_revision(
     before = await service.revision_status(session, revision_id)
     record = await service.submit_revision(session, context, revision_id)
     await _record_revision_status_change(
-        session, context, revision_id, before, record, "QUOTATION_SENT", "submit",
+        session, context, revision_id, before, record, "QUOTATION_SUBMITTED", "submit",
     )
     return {"data": record}
 

@@ -1,4 +1,4 @@
 ﻿<script setup lang="ts">
-definePageMeta({ titleKey: 'freight.pages.capacityUnits', permission: 'master.reference.view' })
+definePageMeta({ titleKey: 'freight.pages.capacityUnits', permission: 'master.transport_assets.view' })
 </script>
 <template><FreightModulePage /></template>

@@ -25,10 +25,20 @@ const filters = (overrides: Partial<typeof EMPTY_REPORT_FILTERS> = {}) => ({
 })
 
 describe('report generation request', () => {
-  it('asks the backend for nothing on a page that has not been generated', () => {
-    expect(SOURCE).not.toContain('watch(slug, loadBackendReport, { immediate: true })')
-    expect(SOURCE).toContain('async function generateReport()')
-    expect(SOURCE).toContain('if (generating.value) return')
+  it('auto-loads a report when its page opens', () => {
+    // The slug watcher (immediate) resets, applies remembered filters and runs
+    // the same guarded generate path.
+    expect(SOURCE).toContain('void generateReport()')
+    expect(SOURCE.match(/watch\(slug, \(next\) => \{[\s\S]*?void generateReport\(\)/)).toBeTruthy()
+  })
+
+  it('never lets a superseded run overwrite a newer result or queue duplicate requests', () => {
+    expect(SOURCE).toContain('const token = ++runToken.value')
+    // The run token is declared before the immediate slug watcher: that
+    // callback runs during setup, and the loader reads the token.
+    expect(SOURCE.indexOf('const runToken = ref(0)')).toBeLessThan(SOURCE.indexOf('watch(slug'))
+    expect(SOURCE).toContain('if (token !== runToken.value) return')
+    expect(SOURCE).toContain('finally {\n    if (token === runToken.value) generating.value = false')
   })
 
   it('only builds a body for reports with a generate endpoint', () => {
@@ -36,6 +46,46 @@ describe('report generation request', () => {
     expect(isGeneratedReport('general-ledger')).toBe(true)
     expect(isGeneratedReport('service-orders')).toBe(false)
     expect(reportGenerateBody('service-orders', filters(), 1, 20)).toBeNull()
+  })
+
+  it('offers Rebuild as a forced recalculation that never writes financial data', () => {
+    expect(SOURCE).toContain("t('freight.reportCatalog.rebuild')")
+    expect(SOURCE).toContain('@click="refreshReport"')
+    // Operational reports refresh their store cache; the rebuild path itself
+    // only reads: generate/export requests, never a POST to a financial record.
+    expect(SOURCE).toContain('if (!useBackend.value) store.reload()')
+    expect(SOURCE).not.toContain('rebuildReport')
+  })
+
+  it('loads the four operations reports automatically with no Generate or Rebuild step', () => {
+    expect(SOURCE).toContain("OPS_REPORT_SLUGS = ['service-orders', 'service-order-status', 'containers', 'profitability']")
+    // The manual actions are hidden on the auto-loading pages (they remain on
+    // the financial ledger reports that still need them).
+    expect(SOURCE).toContain('<template v-if="!autoLoad">')
+    // The empty state on an auto-loading page never offers Generate.
+    expect(SOURCE).toMatch(/if \(autoLoad\.value\) \{[\s\S]*?generateError\.value[\s\S]*?\]/)
+  })
+
+  it('applies operations-report filters live instead of flagging results stale', () => {
+    expect(SOURCE).toMatch(
+      /watch\(\[q, party, status, currency, dateFrom, dateTo, extraFilters, slug, sort\], \(\) => \{[\s\S]*?if \(autoLoad\.value\) return/,
+    )
+  })
+
+  it('waits for the report collections so the loading state covers an operational load', () => {
+    expect(SOURCE).toContain('store.ensure(collection)')
+  })
+
+  it('offers a retry beside the error alert after a failed automatic load', () => {
+    expect(SOURCE).toContain(`t('session.retry')`)
+  })
+
+  it('does not poll in the background', () => {
+    expect(SOURCE).not.toContain('setInterval')
+  })
+
+  it('keeps reading the profitability rows from the read-only endpoint', () => {
+    expect(SOURCE).toContain('reports.profitability()')
   })
 
   it('sends the trial balance period, account range and fiscal year', () => {

@@ -31,7 +31,7 @@ from app.core.config import settings
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "a9b8c7d6e5f4"
-HEAD_REVISION = "d4e5f6a7b8c9"
+HEAD_REVISION = "b4c5d6e7f8a9"
 
 EXPECTED_PLACES_FKS = {
     "fk_place_role_places_place_id_places",

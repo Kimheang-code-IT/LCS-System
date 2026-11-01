@@ -25,8 +25,6 @@ MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 2_000
 SESSION_TTL_SECONDS = 30 * 60
 
-IMPORT_MODES = ("CREATE_ONLY", "CREATE_AND_UPDATE", "VALIDATE_ONLY")
-
 
 @dataclass(frozen=True)
 class ColumnSpec:
@@ -54,9 +52,6 @@ class ImportModule:
     #: Keys a Create-and-Update import may not change: match keys and identity
     #: columns stay out, so an import can never rename a stable business code.
     fixed_keys: tuple[str, ...] = ()
-
-    def is_known_mode(self, mode: str) -> bool:
-        return mode in IMPORT_MODES
 
     def may_update(self, key: str) -> bool:
         return key not in self.fixed_keys and any(column.key == key and column.updatable for column in self.columns)

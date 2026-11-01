@@ -1,5 +1,6 @@
 export type QuotationRevisionStatus =
   | 'DRAFT'
+  | 'SUBMITTED'
   | 'SENT'
   | 'ACCEPTED'
   | 'CONVERTED'

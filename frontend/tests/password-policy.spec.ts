@@ -7,6 +7,7 @@ import {
   validatePasswordStrength,
 } from '../app/utils/validation/field-rules'
 import { issueMessage, ISSUE_KEYS } from '../app/utils/validation/messages'
+import { isEmailLike, passwordConfirmationState } from '../app/utils/validation/password-schema'
 import { compactAuthUser } from '../app/utils/auth/session'
 
 /**
@@ -54,6 +55,53 @@ describe('password policy', () => {
     })
     const complete = passwordRequirements('Abc@1234')
     expect(Object.values(complete).every(Boolean)).toBe(true)
+  })
+
+  it('keeps a rule neutral while its class is missing, green only when met', () => {
+    // 4-row matrix: each row flips exactly one requirement.
+    expect(passwordRequirements('ab!123xy')).toMatchObject({ uppercase: false, lowercase: true, number: true, special: true })
+    expect(passwordRequirements('AB!123XY')).toMatchObject({ lowercase: false, uppercase: true, number: true, special: true })
+    expect(passwordRequirements('Ab!awxyz')).toMatchObject({ number: false, uppercase: true, lowercase: true, special: true })
+    expect(passwordRequirements('Abc123xy')).toMatchObject({ special: false, uppercase: true, lowercase: true })
+    expect(passwordRequirements('Abc@1234')).toMatchObject({
+      minLength: true,
+      uppercase: true,
+      lowercase: true,
+      number: true,
+      special: true,
+    })
+  })
+
+  it('never reports a match for an empty or unconfirmed confirmation field', () => {
+    expect(passwordConfirmationState('Abc@1234', '')).toBe('')
+    expect(passwordConfirmationState('Abc@1234', '')).not.toBe('match')
+  })
+
+  it('reports the confirmation as matching only with a strong password', () => {
+    expect(passwordConfirmationState('Abc@1234', 'Abc@1234')).toBe('match')
+    expect(passwordConfirmationState('Abc@1234', 'Abc@1234', false)).toBe('')
+    // A confirmation that agrees with a weak password must stay silent - the
+    // checklist, not the confirmation, owns that message.
+    expect(passwordConfirmationState('weakpass', 'weakpass')).toBe('')
+  })
+
+  it('reports a mismatch only once the user edited the confirmation', () => {
+    expect(passwordConfirmationState('Abc@1234', 'Abc@1235', true)).toBe('mismatch')
+    expect(passwordConfirmationState('Abc@1234', 'Abc@1235', false)).toBe('')
+    // Changing the original password and coming back revalidates automatically
+    // because the state is pure over both fields.
+    expect(passwordConfirmationState('Abc@1235', 'Abc@1235', true)).toBe('match')
+  })
+
+  it('accepts an address the backend would still validate further', () => {
+    expect(isEmailLike('ops@example.test')).toBe(true)
+    expect(isEmailLike('ops@example.test ')
+
+    ).toBe(true)
+    expect(isEmailLike('ops@@')).toBe(false)
+    expect(isEmailLike(' 不 spaces@')).toBe(false)
+    expect(isEmailLike('ops@')).toBe(false)
+    expect(isEmailLike('')).toBe(false)
   })
 
   it('refuses a password above the maximum', () => {

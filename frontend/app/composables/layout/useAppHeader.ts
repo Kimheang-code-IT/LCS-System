@@ -57,7 +57,7 @@ export type AppHeaderActionsConfig = {
   save?: AppHeaderSaveConfig
   cancel?: AppHeaderCancelConfig
   onCreate?: () => void
-  onRefresh?: () => void
+  onRefresh?: () => void | Promise<void>
 }
 
 /**

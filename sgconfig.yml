@@ -1,0 +1,8 @@
+# ast-grep configuration for the LCS Freight Forwarding System.
+# Run: ast-grep scan            (from repo root; scans all supported files)
+#      ast-grep scan <path>     (scoped)
+# Only .py/.ts/.js and other native parsers are scanned; .vue SFCs are NOT
+# supported by this ast-grep build — for SFCs use Serena (vue LSP) or grep.
+# Scan is read-only; never delete code based on these rules alone.
+ruleDirs:
+- ast-grep/rules

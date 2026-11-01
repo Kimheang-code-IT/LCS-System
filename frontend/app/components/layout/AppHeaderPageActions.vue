@@ -87,7 +87,7 @@ const defaultMoreItems = computed<DropdownMenuItem[][]>(() => {
   if (!props.exportFields?.length) return [[]]
   return [[
     {
-      label: t('actions.export'),
+      label: t('actions.exportData'),
       icon: 'i-lucide-download',
       onSelect: () => { exportOpen.value = true },
     },
