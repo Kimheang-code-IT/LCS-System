@@ -1,0 +1,6 @@
+#!/bin/sh
+# Git pre-push hook for the LCS Freight Forwarding System.
+# Installs into .git/hooks by scripts/install-hooks.ps1 (never automatic).
+# Blocks the push when the fast local CI (scripts/ci-fast.ps1) fails.
+repo_root="$(git rev-parse --show-toplevel)" || exit 1
+exec pwsh -NoProfile -ExecutionPolicy Bypass -File "$repo_root/scripts/ci-fast.ps1"

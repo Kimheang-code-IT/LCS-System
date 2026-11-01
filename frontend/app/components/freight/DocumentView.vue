@@ -1646,7 +1646,6 @@ async function confirmReverse() {
 :read-only="readOnly"
 :field-errors="fieldErrors"
       :tab-errors="tabErrorCounts"
-      :unsaved="quotationDraftDirty"
       :on-field-edit="clearFieldError"
       :on-field-blur="validateFieldOnBlur"
       :form-errors="validation.formErrors.value"

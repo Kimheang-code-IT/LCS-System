@@ -123,6 +123,7 @@ onMounted(() => {
     :size="size"
     :clear="clear"
     :search-input="searchInput"
+    class="w-full"
     @update:model-value="onUpdate"
   >
     <template v-if="createTarget || dialogTarget" #content-bottom>

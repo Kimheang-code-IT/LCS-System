@@ -1359,7 +1359,6 @@
       "fileTypeRejected": "This file type is not allowed.",
       "addNew": "Add new",
       "referenceCreateHint": "Create a new {entity}. It becomes available in this form immediately after saving.",
-      "unsavedChanges": "Unsaved changes — save before leaving to keep your edits",
       "supplierExpenses": "Supplier Expenses",
       "addExpense": "Add expense",
       "financeLines": "Finance Lines",
