@@ -1,98 +1,50 @@
+import type { FreightModule } from '~/config/freight-modules'
 import { freightModules } from '~/config/freight-modules'
 import { referenceOptionSource } from '~/utils/freight/reference-options'
 
-export type ReferenceCreateTarget = {
-  /** Master Data module path, e.g. `/master-data/container-types`. */
-  path: string
-  /** Field stored as the select value on the created record. */
-  valueField: string
-}
-
 /**
- * Resolve the Master Data create page for a reference-backed select field.
- * Returns null for static selects, missing modules or non-creatable modules.
+ * The Master Data module that creates rows for a reference-backed select field,
+ * or null when the field is not referenced from a creatable module.
+ *
+ * Every module that can create records already declares its form fields, so the
+ * Quick Entry modal renders that same declaration instead of a per-master copy.
  */
-export function referenceCreateTarget(key: string): ReferenceCreateTarget | null {
+export function referenceCreateModule(key: string): FreightModule | null {
   const source = referenceOptionSource(key)
   if (!source) return null
   const module = freightModules.find(item =>
     item.collection === source.collection
-    && item.group === 'master'
-    && item.canCreate !== false,
+    && item.canCreate !== false
+    && !item.readOnly,
   )
-  if (!module) return null
-  return {
-    path: `${module.path.replace(/\/$/, '')}/new`,
-    valueField: source.valueField || 'code',
-  }
+  return module ?? null
 }
 
-/** One form field of the inline Add New dialog. Only simple text fields. */
-export type ReferenceCreateField = {
-  key: 'code' | 'name'
-  /** Reuses the shared `freight.fields.*` labels. */
-  labelKey: string
-  required: boolean
-  maxLength: number
+/** The module a reference select creates rows in (for permissions + titles). */
+export function referenceModuleFor(key: string): FreightModule | null {
+  const source = referenceOptionSource(key)
+  if (!source) return null
+  return freightModules.find(item => item.collection === source.collection) ?? null
 }
 
-export type ReferenceCreateDialog = {
-  collection: string
-  /** The select value stored back into the quotation field. */
-  valueField: string
-  entityKey: string
-  fields: ReferenceCreateField[]
+/** The record field stored as the select value (falls back to the label side). */
+export function referenceCreateValueField(key: string): string {
+  return referenceOptionSource(key)?.valueField || 'code'
 }
 
 /**
- * Master collections whose backend creation spec needs only a code and a name.
- * These open the small in-form Add New dialog instead of navigating away, so an
- * unsaved quotation is never left behind. Complex masters (business parties,
- * document types with their behaviour/module requirements) keep the dedicated
- * Master Data page flow.
+ * Payload for a Quick Entry create: the module's own form model minus the id and
+ * every computed field (the backend derives those on create; sending them would
+ * pin values the user never typed).
  */
-const REFERENCE_CREATE_DIALOGS: Record<string, ReferenceCreateDialog> = {
-  feeTypes: dialog('feeTypes', 'code'),
-  containerTypes: dialog('containerTypes', 'code'),
-  partyRoles: dialog('partyRoles', 'id'),
-  placeRoles: dialog('placeRoles', 'id'),
-  tradeDirections: dialog('tradeDirections', 'name'),
-  transportTypes: dialog('transportTypes', 'name'),
-  capacityUnits: dialog('capacityUnits', 'code'),
-  currencies: dialog('currencies', 'code'),
-}
-
-function dialog(collection: string, valueField: string): ReferenceCreateDialog {
-  return {
-    collection,
-    valueField,
-    entityKey: `freight.pages.${collection.charAt(0).toLowerCase()}${collection.slice(1)}`,
-    fields: [
-      { key: 'code', labelKey: 'freight.fields.code', required: true, maxLength: 64 },
-      { key: 'name', labelKey: 'freight.fields.name', required: true, maxLength: 255 },
-    ],
-  }
-}
-
-/**
- * The simple-reference dialog config for a select field, or null when the
- * field's master needs its full page (or is not creatable at all).
- */
-export function referenceCreateDialog(key: string): ReferenceCreateDialog | null {
-  const source = referenceOptionSource(key)
-  if (!source) return null
-  const config = REFERENCE_CREATE_DIALOGS[source.collection]
-  if (!config) return null
-  const module = freightModules.find(item => item.collection === source.collection && item.group === 'master')
-  if (!module || module.canCreate === false) return null
-  return { ...config, valueField: source.valueField === 'id' ? 'id' : config.valueField }
-}
-
-/** The module a reference select creates rows in (for the API + titles). */
-export function referenceModuleFor(key: string) {
-  const source = referenceOptionSource(key)
-  if (!source) return null
-  return freightModules.find(item => item.collection === source.collection && item.group === 'master') ?? null
+export function referenceCreatePayload(
+  module: FreightModule,
+  model: Record<string, unknown>,
+): Record<string, unknown> {
+  const computedKeys = new Set(module.fields.filter(field => field.computed).map(field => field.key))
+  return Object.fromEntries(
+    Object.entries(model).filter(([key]) => key !== 'id' && !computedKeys.has(key)),
+  )
 }
 
 /**

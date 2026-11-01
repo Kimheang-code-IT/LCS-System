@@ -1358,7 +1358,7 @@
       "uploading": "Uploading...",
       "fileTypeRejected": "This file type is not allowed.",
       "addNew": "Add new",
-      "referenceCreateHint": "Create a new {entity}. It becomes available in this form immediately after saving.",
+      "saveAndSelect": "Save & Select",
       "supplierExpenses": "Supplier Expenses",
       "addExpense": "Add expense",
       "financeLines": "Finance Lines",

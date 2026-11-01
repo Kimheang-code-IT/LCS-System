@@ -1,13 +1,12 @@
 <script setup lang="ts">
 /**
  * Searchable select for Master Data reference fields. When the field maps to a
- * creatable Master Data page, an "Add new" action is shown in the dropdown:
- * simple masters open an in-form dialog (the quotation keeps its unsaved state
- * and the created record is selected immediately), complex ones navigate to the
- * full Master Data page and return the value via the pick query.
+ * creatable Master Data module, an "Add new" action is shown in the dropdown: it
+ * opens the shared Quick Entry modal, so the parent form keeps every typed value
+ * and the created record is selected immediately.
  */
 import { getFilterSearchInputConfig } from '~/utils/filter/select-ui'
-import { canCreateReference, referenceCreateDialog, referenceCreateTarget } from '~/utils/freight/reference-create'
+import { canCreateReference, referenceCreateModule } from '~/utils/freight/reference-create'
 import { useReferencePick } from '~/composables/freight/useReferencePick'
 
 const props = withDefaults(defineProps<{
@@ -36,44 +35,27 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const route = useRoute()
-const router = useRouter()
 const auth = useAuthStore()
 const searchInput = computed(() => getFilterSearchInputConfig(t))
 
 const dialogCreate = useTemplateRef('dialogCreate')
+const menuOpen = ref(false)
 
 const createAllowed = computed(() =>
   canCreateReference(auth.user?.sourcePermissions, auth.user?.pageAccess, props.referenceKey),
 )
 
-const dialogTarget = computed(() =>
+const createModule = computed(() =>
   createAllowed.value && !props.disabled && !props.readonly && props.referenceKey
-    ? referenceCreateDialog(props.referenceKey)
-    : null,
-)
-
-const createTarget = computed(() =>
-  !props.disabled && !props.readonly && !dialogTarget.value && createAllowed.value && props.referenceKey
-    ? referenceCreateTarget(props.referenceKey)
+    ? referenceCreateModule(props.referenceKey)
     : null,
 )
 
 function openCreate() {
-  if (dialogTarget.value) {
-    void dialogCreate.value?.open()
-    return
-  }
-  const target = createTarget.value
-  if (!target) return
-  void router.push({
-    path: target.path,
-    query: {
-      returnTo: route.fullPath,
-      pickField: props.referenceKey,
-      ...(props.rowIndex !== undefined ? { pickRow: String(props.rowIndex) } : {}),
-    },
-  })
+  // Close the dropdown first so its popover cannot sit on top of the modal.
+  menuOpen.value = false
+  if (!createModule.value) return
+  void dialogCreate.value?.open()
 }
 
 function onCreated(value: string) {
@@ -114,6 +96,7 @@ onMounted(() => {
 
 <template>
   <USelectMenu
+    v-model:open="menuOpen"
     :model-value="selectModel"
     :items="items"
     value-key="value"
@@ -126,7 +109,7 @@ onMounted(() => {
     class="w-full"
     @update:model-value="onUpdate"
   >
-    <template v-if="createTarget || dialogTarget" #content-bottom>
+    <template v-if="createModule" #content-bottom>
       <UButton
         block
         color="primary"
@@ -140,7 +123,6 @@ onMounted(() => {
   <CommonAppReferenceCreateDialog
     ref="dialogCreate"
     :reference-key="referenceKey"
-    :row-index="rowIndex"
     @created="onCreated"
   />
 </template>
