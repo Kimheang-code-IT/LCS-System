@@ -308,6 +308,8 @@
       "uploading": "正在上传...",
       "fileTypeRejected": "不允许此文件类型。",
       "addNew": "新建",
+      "referenceCreateHint": "创建新的{entity}，保存后即可在当前表单中使用。",
+      "unsavedChanges": "有未保存的更改 — 离开前请保存，以免丢失数据",
       "supplierExpenses": "供应商费用",
       "addExpense": "新增费用",
       "financeLines": "财务行",

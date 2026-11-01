@@ -3,6 +3,12 @@ name: Dev CI
 # Development/integration validation.
 # Runs on pushes to `dev` and on pull requests targeting the protected `main`.
 # It never deploys, never SSHes to EC2 and never publishes images to GHCR.
+#
+# The `changes` job classifies what a push touched and the component jobs are
+# skipped when their area did not change (a docs-only push finishes in about a
+# minute instead of running the whole backend suite). Skipping is explicit and
+# the aggregate `Dev CI` job still fails when a component that *should* have
+# run fails, so branch protection keeps its single required status check.
 on:
   push:
     branches: [dev]
@@ -25,8 +31,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Classify changed files
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - '.github/workflows/dev-ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/dev-ci.yml'
+            docker:
+              - 'backend/Dockerfile'
+              - 'backend/.dockerignore'
+              - 'backend/uv.lock'
+              - 'backend/pyproject.toml'
+              - 'frontend/Dockerfile'
+              - 'frontend/.dockerignore'
+              - 'frontend/package.json'
+              - 'frontend/pnpm-lock.yaml'
+              - 'infrastructure/docker-compose.yml'
+              - 'infrastructure/docker-compose.prod.yml'
+              - 'infrastructure/nginx/**'
+              - '.github/workflows/dev-ci.yml'
+
   backend:
     name: Backend (pytest + ruff + security)
+    needs: [changes]
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -39,14 +83,21 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - run: uv python install 3.12
       - run: uv sync --extra dev
-      - run: uv run pytest -q
+      # The suite is sharded across CPU cores (pytest-xdist): the tests are
+      # independent — each one builds its own database — so this divides the
+      # wall-clock time without touching the tests themselves.
+      - run: uv run pytest -q -n auto
       - run: uv run ruff check .
+      # Dependency and source audits run in the scheduled `Security audit`
+      # workflow (weekly and on PRs into `main`); duplicating pip-audit on
+      # every dev push added minutes without adding a check the scheduled run
+      # would miss.
       - run: uv run bandit -r app -q --severity-level medium
-      - run: uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file requirements-audit.txt
-      - run: uv run pip-audit -r requirements-audit.txt
 
   frontend:
     name: Frontend (lint + typecheck + test)
+    needs: [changes]
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -65,7 +116,6 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm audit:security
 
   secrets:
     name: Secret scanning
@@ -88,9 +138,12 @@ jobs:
             exit 1
           fi
 
-  # Verify both images build (no push, no registry login).
+  # Verify both images build (no push, no registry login). Only relevant when an
+  # image's inputs (Dockerfile, manifest, compose, nginx) changed.
   docker:
     name: Docker build validation
+    needs: [changes]
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -118,25 +171,37 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   # Single aggregate check to require in the `main` branch protection ruleset
-  # (status check name: "Dev CI").
+  # (status check name: "Dev CI"). A component job is allowed to be `skipped`
+  # only when the change classification says its area did not change.
   dev-ci-ok:
     name: Dev CI
-    needs: [backend, frontend, secrets, docker]
+    needs: [changes, backend, frontend, secrets, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         run: |
           set -euo pipefail
-          echo "backend=${{ needs.backend.result }} frontend=${{ needs.frontend.result }} secrets=${{ needs.secrets.result }} docker=${{ needs.docker.result }}"
-          for result in \
-            "${{ needs.backend.result }}" \
-            "${{ needs.frontend.result }}" \
-            "${{ needs.secrets.result }}" \
-            "${{ needs.docker.result }}"; do
-            if [ "$result" != "success" ]; then
-              echo "::error::A required Dev CI job did not succeed."
+          echo "backend=${{ needs.backend.result }} (changed=${{ needs.changes.outputs.backend }}) frontend=${{ needs.frontend.result }} (changed=${{ needs.changes.outputs.frontend }}) secrets=${{ needs.secrets.result }} docker=${{ needs.docker.result }} (changed=${{ needs.changes.outputs.docker }})"
+
+          check() {
+            job_result="$1"
+            area_changed="$2"
+            job_name="$3"
+            if [ "$job_result" != "success" ]; then
+              if [ "$job_result" = "skipped" ] && [ "$area_changed" != "true" ]; then
+                return 0
+              fi
+              echo "::error::Required Dev CI job did not succeed: $job_name ($job_result)."
               exit 1
             fi
-          done
+          }
+
+          check "${{ needs.backend.result }}" "${{ needs.changes.outputs.backend }}" "backend"
+          check "${{ needs.frontend.result }}" "${{ needs.changes.outputs.frontend }}" "frontend"
+          check "${{ needs.docker.result }}" "${{ needs.changes.outputs.docker }}" "docker"
+          if [ "${{ needs.secrets.result }}" != "success" ]; then
+            echo "::error::Required Dev CI job did not succeed: secrets."
+            exit 1
+          fi
           echo "All Dev CI checks passed."

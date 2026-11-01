@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
  * Searchable select for Master Data reference fields. When the field maps to a
- * creatable Master Data page, an "Add new" action is shown in the dropdown; it
- * opens that page and, after saving, the created value is auto-selected back.
+ * creatable Master Data page, an "Add new" action is shown in the dropdown:
+ * simple masters open an in-form dialog (the quotation keeps its unsaved state
+ * and the created record is selected immediately), complex ones navigate to the
+ * full Master Data page and return the value via the pick query.
  */
 import { getFilterSearchInputConfig } from '~/utils/filter/select-ui'
-import { referenceCreateTarget } from '~/utils/freight/reference-create'
+import { canCreateReference, referenceCreateDialog, referenceCreateTarget } from '~/utils/freight/reference-create'
 import { useReferencePick } from '~/composables/freight/useReferencePick'
 
 const props = withDefaults(defineProps<{
@@ -36,13 +38,32 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
 const searchInput = computed(() => getFilterSearchInputConfig(t))
 
+const dialogCreate = useTemplateRef('dialogCreate')
+
+const createAllowed = computed(() =>
+  canCreateReference(auth.user?.sourcePermissions, auth.user?.pageAccess, props.referenceKey),
+)
+
+const dialogTarget = computed(() =>
+  createAllowed.value && !props.disabled && !props.readonly && props.referenceKey
+    ? referenceCreateDialog(props.referenceKey)
+    : null,
+)
+
 const createTarget = computed(() =>
-  props.disabled || props.readonly || !props.referenceKey ? null : referenceCreateTarget(props.referenceKey),
+  !props.disabled && !props.readonly && !dialogTarget.value && createAllowed.value && props.referenceKey
+    ? referenceCreateTarget(props.referenceKey)
+    : null,
 )
 
 function openCreate() {
+  if (dialogTarget.value) {
+    void dialogCreate.value?.open()
+    return
+  }
   const target = createTarget.value
   if (!target) return
   void router.push({
@@ -53,6 +74,16 @@ function openCreate() {
       ...(props.rowIndex !== undefined ? { pickRow: String(props.rowIndex) } : {}),
     },
   })
+}
+
+function onCreated(value: string) {
+  if (!value) return
+  if (props.multiple) {
+    const current = Array.isArray(props.modelValue) ? props.modelValue.map(String) : []
+    emit('update:modelValue', current.includes(value) ? current : [...current, value])
+    return
+  }
+  emit('update:modelValue', value)
 }
 
 const selectModel = computed<string | string[] | undefined>(() => {
@@ -94,7 +125,7 @@ onMounted(() => {
     :search-input="searchInput"
     @update:model-value="onUpdate"
   >
-    <template v-if="createTarget" #content-bottom>
+    <template v-if="createTarget || dialogTarget" #content-bottom>
       <UButton
         block
         color="primary"
@@ -105,4 +136,10 @@ onMounted(() => {
       />
     </template>
   </USelectMenu>
+  <CommonAppReferenceCreateDialog
+    ref="dialogCreate"
+    :reference-key="referenceKey"
+    :row-index="rowIndex"
+    @created="onCreated"
+  />
 </template>

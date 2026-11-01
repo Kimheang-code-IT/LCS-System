@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import event, select
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.core import cache
-from app.core import authorization
+from app.core import authorization, cache
 from app.core.config import settings
 from app.core.database import Base, get_session
 from app.main import app

@@ -282,7 +282,10 @@ confirmed before mutation. No runtime acceptance evidence has been produced by f
   with exactly Save Changes / Submit / Convert / Re-Quotation: submit targets `SUBMITTED`
   (idempotent, `QUOTATION_SUBMITTED` audit), conversion runs from SUBMITTED with legacy
   SENT/ACCEPTED kept readable and convertible, no historical record rewritten, and no new
-  Send or Accept action is exposed (E18).
+  Send or Accept action is exposed (E18), and the quotation form became safe against
+  data loss: in-form master-data Add New dialog, versioned session-draft recovery with an
+  Unsaved-changes indicator + beforeunload guard, per-tab validation error badges, and a
+  double-submission guard (E19).
 - Remaining work: (1) per-page in-browser action-button gating for the pages E12 did not cover —
   the "action" half of each MOD-*-AUTH row (E12 pattern: `WorkspaceView`/`DocumentView`
   per-page action codes + one browser scenario per page; next the document pages'
@@ -298,7 +301,7 @@ confirmed before mutation. No runtime acceptance evidence has been produced by f
   s01.e2e.pages / s01.e2e.actions, all password `Passw0rd!`, the repo's standard test-fixture
   password; browser sign-in uses the accounts' email addresses because the login form validates
   an email-shaped value).
-- Relevant files and commands: Evidence E09–E18 in the checklist; the spec above; the matrix
+- Relevant files and commands: Evidence E09–E19 in the checklist; the spec above; the matrix
   table in this plan; frontend gates `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm i18n:check`;
   browser requires the local dev compose stack (`docker compose up -d --build postgres redis
   backend frontend` from infrastructure/ — rebuild backend/frontend when their source changes)

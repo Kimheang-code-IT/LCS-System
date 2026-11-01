@@ -22,6 +22,10 @@ const props = withDefaults(defineProps<{
   canSave?: boolean
   saveLabel?: string
   fieldErrors?: Record<string, string>
+  /** Field-error count per tab id — renders a red badge on the tab strip. */
+  tabErrors?: Record<string, number>
+  /** Show the "Unsaved changes" indicator below the error summary. */
+  unsaved?: boolean
   /** Host hook so an edit can drop that field's (or cell's) error at once. */
   onFieldEdit?: (key: string) => void
   /** Host hook that validates one field when the user leaves it. */
@@ -59,6 +63,8 @@ const props = withDefaults(defineProps<{
 }>(), {
   saveLabel: '',
   fieldErrors: () => ({}),
+  tabErrors: () => ({}),
+  unsaved: false,
   onFieldEdit: undefined,
   onFieldBlur: undefined,
   formErrors: () => [],
@@ -222,6 +228,7 @@ v-if="pending"
 v-if="showTabs && showForm && !notFound && !error"
 :tabs="tabs"
             :active-tab="activeTab"
+            :errors="tabErrors"
 @update:active-tab="selectTab" />
 
           <div ref="scrollEl" class="min-h-0 min-w-0 flex-1 overflow-auto" @scroll.passive="onFormScroll">
@@ -251,6 +258,19 @@ color="error"
                   : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
                 :form-errors="formErrors"
               />
+              <div
+                v-if="unsaved"
+                class="mx-auto mt-4 w-full px-4 sm:px-6 lg:px-10"
+                :class="contentWide ? 'w-[95%] max-w-[1800px]' : 'max-w-2xl sm:max-w-3xl lg:max-w-4xl'"
+              >
+                <UBadge
+icon="i-lucide-pencil-line"
+color="warning"
+variant="subtle"
+size="md">
+                  {{ t('freight.ui.unsavedChanges') }}
+                </UBadge>
+              </div>
 
               <slot name="before-form" />
 

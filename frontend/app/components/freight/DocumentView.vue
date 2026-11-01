@@ -58,6 +58,13 @@ import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import { useFormValidation } from '~/composables/common/useFormValidation'
 import { validateDocumentFields, validateTableRows } from '~/utils/validation/record-validation'
 import { focusField } from '~/utils/validation/focus'
+import {
+  clearRecordDraft,
+  draftAppliesTo,
+  readRecordDraft,
+  recordDraftKey,
+  writeRecordDraft,
+} from '~/composables/common/useRecordDraft'
 import { parseRowKey } from '~/utils/validation/error-paths'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
@@ -173,6 +180,20 @@ const validation = useFormValidation({
 
 const fieldErrors = validation.fieldErrors
 
+/** Field-error count per tab id, for the red badge on the tab strip. */
+const tabErrorCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  if (!validation.hasFieldErrors.value) return counts
+  for (const key of validation.orderedErrorKeys.value) {
+    const owner = findFieldOwner(key)
+    // A key no tab owns (form-level) is skipped here; the summary already
+    // shows it.
+    if (!owner) continue
+    counts[owner.tab.id] = (counts[owner.tab.id] || 0) + 1
+  }
+  return counts
+})
+
 function clearFieldError(key: string) {
   validation.clearFieldError(key)
 }
@@ -249,6 +270,12 @@ async function load() {
     if (module.value.collection === 'debitNotes' && !model.value.documentType) {
       model.value.documentType = FINANCIAL_DOCUMENT_TYPES[0]
     }
+    if (module.value.collection === 'quotations') {
+      quotationEmptySnapshot.value = quotationDraftSnapshot(model.value)
+      // Unsaved edits from a previous visit (refresh, accidental navigation)
+      // come back exactly as they were left.
+      applyQuotationDraft()
+    }
     applyRoleMatrix()
     return
   }
@@ -264,6 +291,7 @@ async function load() {
       : found
     model.value = { ...normalized } as FreightRecord
     originalModel.value = { ...normalized } as FreightRecord
+    if (module.value.collection === 'quotations') applyQuotationDraft()
   }
   catch {
     notFound.value = true
@@ -313,7 +341,12 @@ watch([title, () => module.value, () => model.value.status], () => {
   setBadges(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
 }, { immediate: true })
 
-onBeforeUnmount(clear)
+onBeforeUnmount(() => {
+  clear()
+  window.removeEventListener('beforeunload', beforeUnloadWarning)
+  if (draftTimer.value) clearTimeout(draftTimer.value)
+})
+onMounted(() => window.addEventListener('beforeunload', beforeUnloadWarning))
 usePageSeo({ title: () => title.value })
 
 /** Comments & activity are only shown on quotations, service orders and service charges. */
@@ -396,6 +429,75 @@ const quotationDraftDirty = computed(() => {
   if (isCreate.value || !originalModel.value) return true
   return quotationDraftSnapshot(model.value) !== quotationDraftSnapshot(originalModel.value)
 })
+
+// --- Unsaved-quotation draft --------------------------------------------------
+//
+// The quotation form holds its state in this component's `model` ref, which
+// dies with the route: navigation to Master Data (the legacy Add New round
+// trip), a tab strip, an accidental refresh or an API failure used to throw
+// everything the operator typed away. The draft below keeps a versioned copy
+// in sessionStorage and restores it on the next mount; the server copy stays
+// authoritative whenever it changed since the draft was written.
+
+const draftKey = computed(() => module.value?.collection === 'quotations'
+  ? recordDraftKey(String(auth.user?.id || auth.user?.name || 'anon'), 'quotations', isCreate.value ? '' : recordId.value)
+  : '')
+const draftTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+/** Snapshot of the pristine new-quotation form; any difference means content. */
+const quotationEmptySnapshot = ref<string | null>(null)
+
+function clearQuotationDrafts() {
+  const user = String(auth.user?.id || auth.user?.name || 'anon')
+  clearRecordDraft(recordDraftKey(user, 'quotations', ''))
+  if (recordId.value) clearRecordDraft(recordDraftKey(user, 'quotations', recordId.value))
+}
+
+function applyQuotationDraft() {
+  const key = draftKey.value
+  if (!key) return
+  const draft = readRecordDraft(key)
+  if (!draft || !draftAppliesTo(draft, isCreate.value ? '' : recordId.value, model.value.updatedAt)) return
+  model.value = { ...model.value, ...draft.model } as FreightRecord
+}
+
+watch(
+  [draftKey, quotationDraftDirty, () => quotationDraftSnapshot(model.value)],
+  ([key, dirty, snapshot]) => {
+    if (!key) return
+    if (draftTimer.value) clearTimeout(draftTimer.value)
+    // A saved quotation without edits must not keep a stale local copy, and a
+    // record that has left DRAFT (submitted, converted) is not editable here:
+    // the server response is what comes back next time.
+    if (!isCreate.value && String(model.value.status || '').toLowerCase() !== 'draft') {
+      clearRecordDraft(key)
+      return
+    }
+    if (isCreate.value && quotationEmptySnapshot.value !== null) {
+      // A pristine new form is not a draft; only real edits are kept.
+      if (snapshot === quotationEmptySnapshot.value) {
+        clearRecordDraft(key)
+        return
+      }
+    }
+    else if (!dirty) {
+      // The saved quotation response is authoritative — no local copy should
+      // survive a clean comparison.
+      clearRecordDraft(key)
+      return
+    }
+    draftTimer.value = setTimeout(() => writeRecordDraft(key, {
+      recordId: isCreate.value ? '' : recordId.value,
+      baseUpdatedAt: String(model.value.updatedAt || ''),
+      model: JSON.parse(snapshot) as Record<string, unknown>,
+    }), 400)
+  },
+)
+
+function beforeUnloadWarning(event: BeforeUnloadEvent) {
+  if (module.value?.collection !== 'quotations' || !quotationDraftDirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
 
 // Quotation workflow: Draft -> Sent (send) -> Accepted (accept) -> Service
 // Order (convert). Re-quotation clones the latest revision into a new draft.
@@ -1330,6 +1432,11 @@ async function save(status?: string) {
     }
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
+    if (module.value.collection === 'quotations') {
+      // Persisted: the server copy is authoritative, so no local draft may
+      // survive to resurrect older edits on the next visit.
+      clearQuotationDrafts()
+    }
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     // A newly created account's password cannot be read back afterwards — the
     // server keeps only a digest — so it is shown once, here, before leaving the
@@ -1538,6 +1645,8 @@ async function confirmReverse() {
 :saving="saving"
 :read-only="readOnly"
 :field-errors="fieldErrors"
+      :tab-errors="tabErrorCounts"
+      :unsaved="quotationDraftDirty"
       :on-field-edit="clearFieldError"
       :on-field-blur="validateFieldOnBlur"
       :form-errors="validation.formErrors.value"

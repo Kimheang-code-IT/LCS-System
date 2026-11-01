@@ -432,10 +432,15 @@ Production never deploys from `dev`; the merge to `main` is manual.
 - `dev-ci.yml` (`Dev CI`) — runs on pushes to `dev` and on pull requests
   targeting `main`. Branch-aware concurrency
   (`github.head_ref || github.ref_name`, `cancel-in-progress: true`) cancels
-  outdated runs. Runs backend ruff + pytest, dependency and static security
-  scans, frontend lint + typecheck + test, secret scanning, and Docker build
-  validation for both images. It never deploys, never SSHes to EC2 and never
-  pushes images to GHCR.
+  outdated runs. A path-classification job (`changes`) gates the component
+  jobs: a backend job (pytest across CPU workers `pytest -n auto`, ruff,
+  bandit), a frontend job (lint + typecheck + test), secret scanning, and
+  Docker build validation for both images. Jobs are skipped when their area
+  did not change, and the aggregate `Dev CI` job fails a `skipped` component
+  unless the change classification accounts for the skip, so the required
+  status check is never weaker. Dependency audits (pip-audit, pnpm audit) run
+  in the scheduled/PR `Security audit` workflow instead of on every push. It
+  never deploys, never SSHes to EC2 and never pushes images to GHCR.
 - `production.yml` (`Production`) — runs only on pushes to `main` or manual
   dispatch. Validates, builds `sha-<short>` images, pushes to GHCR, transfers the
   runtime bundle to `/opt/lcs`, pre-pulls both images, takes and verifies a
