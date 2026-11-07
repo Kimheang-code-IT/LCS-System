@@ -74,6 +74,10 @@ PRICING_LINE_SCHEMA = RecordSchema(
         # carry the name, which the service resolves without rewriting unknown
         # values, so an old line stays editable.
         FieldSpec("transportBy", kind="reference", max_length=255, aliases=("transport_by", "transportTypeId", "transport_type_id")),
+        # A line with a Container Type bills per container: the service derives
+        # the Service Order's container requirements from Container Type + Qty.
+        FieldSpec("containerTypeId", kind="reference", aliases=("container_type_id",)),
+        FieldSpec("containerType", kind="reference", max_length=64),
         FieldSpec("description", max_length=1_000, aliases=("serviceDescription", "service_description")),
         FieldSpec("quantity", kind="decimal", minimum=0, decimal_places=3),
         FieldSpec("unitPrice", kind="decimal", aliases=("unit_price", "unitAmount", "unit_amount")),

@@ -20,6 +20,9 @@ export function safeFilePreviewUrl(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''
   if (!raw) return null
   if (FILE_DATA_URL.test(raw)) return raw
+  // A leading-slash relative URL is same-origin by construction; `new URL(raw)`
+  // would throw for it, which silently dropped persisted storage-key previews.
+  if (raw.startsWith('/') && !raw.startsWith('//')) return raw
   try {
     const parsed = new URL(raw)
     if (parsed.protocol === 'blob:') return parsed.toString()

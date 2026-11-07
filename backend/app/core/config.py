@@ -68,23 +68,17 @@ class Settings(BaseSettings):
     csrf_header_name: str = Field(default="X-CSRF-Token", alias="CSRF_HEADER_NAME")
 
     # Background Google Sheets backup scheduler (in-process asyncio loop).
+    force_maintenance: bool = Field(default=False, alias="LCS_FORCE_MAINTENANCE")
     backup_scheduler_enabled: bool = Field(default=True, alias="BACKUP_SCHEDULER_ENABLED")
     backup_scheduler_tick_seconds: int = Field(default=60, alias="BACKUP_SCHEDULER_TICK_SECONDS")
     telegram_public_app_url: str = ""
     telegram_worker_enabled: bool = True
     telegram_api_health_url: str = "http://127.0.0.1:8000/health"
 
-    storage_provider: str = Field(default="local", alias="STORAGE_PROVIDER")
-    storage_local_path: str = Field(default="./storage", alias="STORAGE_LOCAL_PATH")
+    # File attachment storage (Cloudflare R2 / Google Drive) is configured in
+    # Settings → Storage & Backup. Uploaded objects are processed in memory and
+    # written directly to the cloud; no local disk provider exists.
     storage_public_base_url: str = Field(default="/api/v1/attachments/file", alias="STORAGE_PUBLIC_BASE_URL")
-
-    s3_endpoint_url: str | None = Field(default=None, alias="S3_ENDPOINT_URL")
-    s3_public_endpoint_url: str | None = Field(default=None, alias="S3_PUBLIC_ENDPOINT_URL")
-    s3_access_key: str = Field(default="minioadmin", alias="S3_ACCESS_KEY")
-    s3_secret_key: str = Field(default="minioadmin", alias="S3_SECRET_KEY")
-    s3_bucket: str = Field(default="freight-attachments", alias="S3_BUCKET")
-    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
-    s3_use_ssl: bool = Field(default=False, alias="S3_USE_SSL")
 
     storage_presigned_uploads_enabled: bool = Field(default=True, alias="STORAGE_PRESIGNED_UPLOADS_ENABLED")
     upload_max_size_mb: int = Field(default=20, alias="UPLOAD_MAX_SIZE_MB")

@@ -1,32 +1,23 @@
 ---
-description: Run the full Definition-of-Done verification for the current change set
+description: Verify the requested change using risk-based Definition-of-Done gates
 ---
 
-Verify the uncommitted change against `AGENTS.md` → Definition of Done. Classify the
-change set first, run only the gates it can affect, and stop reporting as soon as a gate
-fails.
+Scope is the current task delta, not all preexisting dirty files. Read the handbook DoD
+and docs/03-development/testing-guide.md. Derive acceptance, touched layers and risk first.
 
-1. **Change set** — `git status --porcelain`, `git diff --stat` and `git diff --cached
-   --stat`. Confirm it is what you expect and contains no secret, dump, log or throwaway
-   file. Derive the changed paths; untracked files count.
-2. **Backend** (`backend/**`) — `uv run ruff check .`. Tests: use `/test-fast` when every
-   changed path belongs to one module row; run `uv run pytest -q` when the diff touches
-   `app/core/**`, `app/api/**`, `models.py`, `alembic/versions/**`, dependency manifests,
-   several modules, or a path `/test-fast` does not cover. If no test ran, prove imports
-   with `uv run python -c "import app.main"`.
-3. **Frontend** (`frontend/**`) — `pnpm lint`, `pnpm typecheck`, `pnpm test`; add
-   `pnpm i18n:check` only for `i18n/locales/**` or language constants. A production build
-   is `/build-fast`, not this command.
-4. **Schema** (`models.py`, `alembic/versions/**`, `backend/scripts/schema_descriptions.py`)
-   — from `backend/` run `uv run python scripts/generate_schema_docs.py --check --strict`
-   (never hand-edit `docs/06_database_design.sql`) and confirm the revision has a working
-   `downgrade()`.
-5. **Docs** — apply the `/docs-check` checklist (`.opencode/commands/docs-check.md`):
-   generated SQL, status/risk, permissions, architecture, deploy, and dead references.
-6. **Authorization and money** — a new endpoint has a permission code and a test proving
-   the denial path; a money path has a balanced journal and `Decimal` arithmetic.
-7. **Build** only when the diff can break it (see `/build-fast`); Docker only for a
-   Dockerfile, dependency manifest, `infrastructure/**` or `infrastructure/docker-compose.prod.yml` change.
+1. Review status/diff/untracked paths and timestamps; preserve other sessions' edits.
+2. FAST documentation: /docs-check only; simple UI: focused review/manual check.
+3. STANDARD code: scoped lint/types and relevant behavior tests/manual journey. Use existing
+   selectors; add meaningful missing regressions, not broad fixtures.
+4. DEEP: affected integration/regression/denial/boundary and transaction/rollback/retry/race
+   checks as applicable, plus independent read-only review. Include backend API-contract
+   and route-authorization tests for protected/shared-contract changes. PostgreSQL behavior
+   requires an isolated disposable target; SQLite is insufficient for triggers/locks.
+5. Schema: additive migration/downgrade review and existing generator --check --strict only
+   when schema actually changes. No live migration/reset by this verification command.
+6. Build/browser/Docker/full suites only for demonstrated shared/build/visual/release impact
+   or explicit request. No blanket trigger from every models.py/core/UI edit.
+7. Update affected docs, task evidence and Handoff. Never weaken a failing gate.
 
-Finish with: gates run, their observed results, anything still unverified (say so
-explicitly), and the changed files.
+If a required gate fails, fix only in scope or report it incomplete; do not claim completion.
+Report changed files, exact commands/results, manual checks and limitations; stop.

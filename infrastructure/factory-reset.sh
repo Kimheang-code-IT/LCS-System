@@ -5,8 +5,8 @@
 # (.env, images, TLS certificates, docker-compose file) intact:
 #   * PostgreSQL: verified pre-reset dump, then schema dropped and re-migrated
 #   * Redis: all keys flushed
-#   * MinIO: every object in the attachment bucket deleted
-#   * backend /app/storage volume: emptied
+#   * upload volume: emptied (file attachment objects live in R2/Drive;
+#     the cloud buckets are NOT touched by this script)
 #
 # The app then reports requiresSetup=true, so the first-run /auth/setup flow
 # creates a fresh administrator. Identities and history are NOT preserved -
@@ -63,8 +63,7 @@ Factory reset plan (nothing was changed):
   runtime          $DEPLOY_DIR
   database         DROP SCHEMA public CASCADE, recreate, alembic upgrade head
   redis            FLUSHALL
-  attachments      delete every object in bucket \$S3_BUCKET
-  uploads          empty the backend /app/storage volume
+  uploads          uploaded objects live in Cloudflare R2 / Google Drive (never touched)
   pre-reset dump   $BACKUP_DIR/freight-<timestamp>.dump (verified)
 
 The stack is then restarted and must report requiresSetup=true.
@@ -91,7 +90,7 @@ wait_healthy() {
 
 # --- 1. data services up ----------------------------------------------------
 echo "==> Ensuring data services are running"
-$COMPOSE up -d postgres redis minio
+$COMPOSE up -d postgres redis
 if ! wait_healthy postgres; then
     echo "PostgreSQL is not healthy; aborting before any deletion." >&2
     exit 1
@@ -143,26 +142,9 @@ echo "    schema at $CURRENT_HEAD"
 echo "==> Flushing Redis"
 $COMPOSE exec -T redis redis-cli FLUSHALL >/dev/null
 
-# --- 6. Attachments ---------------------------------------------------------
-echo "==> Purging the attachment bucket"
-$COMPOSE run -T --rm --no-deps --entrypoint sh minio-init -c '
-    mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-    mc rm -r --force "local/$S3_BUCKET" >/dev/null 2>&1 || true
-    mc mb --ignore-existing "local/$S3_BUCKET" >/dev/null
-'
-
-echo "==> Emptying the uploads volume"
-UPLOADS_VOLUME="$($COMPOSE ps -q backend >/dev/null 2>&1 || true)"
-BACKEND_ID="$($COMPOSE ps -a -q backend 2>/dev/null | head -n 1 || true)"
-if [ -n "$BACKEND_ID" ]; then
-    UPLOADS_VOLUME="$($DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/app/storage"}}{{.Name}}{{end}}{{end}}' "$BACKEND_ID" 2>/dev/null || true)"
-fi
-if [ -n "$UPLOADS_VOLUME" ]; then
-    $DOCKER run --rm -v "$UPLOADS_VOLUME:/data" alpine:3.20 sh -c 'find /data -mindepth 1 -delete'
-    echo "    emptied volume $UPLOADS_VOLUME"
-else
-    echo "    uploads volume not found (stack never started?); skipping"
-fi
+# --- 6. Uploaded objects ----------------------------------------------------
+# Uploaded objects live in Cloudflare R2 / Google Drive; the old uploads volume
+# is gone. Nothing to purge here — cloud buckets are never touched by a reset.
 
 # --- 7. start and verify ----------------------------------------------------
 echo "==> Starting the stack"

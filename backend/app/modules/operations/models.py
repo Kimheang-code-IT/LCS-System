@@ -36,6 +36,10 @@ class ServiceOrder(PKMixin, TimestampMixin, Base):
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
     description: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
+    #: Stamp recorded by the Finish action; financial settlement may continue
+    #: after this point, normal operational edits may not.
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     # Pins the Service Order to the published dynamic-configuration version it
     # was created under, so a later configuration change cannot re-render or
     # re-interpret its saved component rows.
@@ -162,6 +166,9 @@ class ServiceOrderMovement(PKMixin, TimestampMixin, Base):
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     transport_type_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_types.id"))
     transport_asset_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("transport_assets.id"))
+    __table_args__ = (
+        UniqueConstraint("service_order_id", "sequence_no", name="uq_service_order_movements_sequence"),
+    )
     # Legacy Places references retained for historical movement rows.
     origin_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))
     destination_place_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("places.id"))

@@ -184,6 +184,18 @@ COMMIT;
 \echo '    expected: DELETE 1 then COMMIT, no ERROR'
 
 \echo ''
+\echo '=== G17: a period overlapping an existing one  (must FAIL: no overlap) ==='
+INSERT INTO accounting_periods (period_year, period_month, start_date, end_date, status)
+    VALUES (2026, 12, '2026-01-05', '2026-03-31', 'OPEN');
+\echo '    expected: ERROR uq_periods_no_overlap on accounting_periods'
+
+\echo ''
+\echo '=== G18: a DRAFT period still exists physically (guard lives at the service) ==='
+INSERT INTO accounting_periods (period_year, period_month, start_date, end_date, status)
+    VALUES (2027, 1, '2027-01-01', '2027-01-31', 'DRAFT');
+\echo '    expected: INSERT 0 1 (Postgres guards closed books; DRAFT gating is service-level)'
+
+\echo ''
 \echo '=== FINAL STATE ==='
 \echo '    expected: JE-OK gone; only the audit row remains, unmodified'
 SELECT entry_no, status FROM journal_entries ORDER BY id;

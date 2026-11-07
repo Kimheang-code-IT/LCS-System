@@ -77,6 +77,7 @@ export interface ServiceChargeRepository {
 }
 
 export interface FinanceRepository {
+  getPrintData: (id: string, template: string, containerId?: string) => Promise<import('~/utils/freight/financial-print').FinancialPrintData>
   listDocuments: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
   getDocument: (id: string) => Promise<FreightRecord>
   createDocument: (input: CreateRecordInput) => Promise<FreightRecord>
@@ -91,6 +92,9 @@ export interface FinanceRepository {
   postJournal: (journalId: string, idempotencyKey: string) => Promise<FreightRecord>
   listPeriods: () => Promise<FreightRecord[]>
   closePeriod: (periodId: string, idempotencyKey: string) => Promise<FreightRecord>
+  reopenPeriod: (periodId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
+  closingValidation: (periodId: string) => Promise<FreightRecord>
+  closingHistory: (periodId: string) => Promise<FreightRecord>
 }
 
 export interface AuditRepository {

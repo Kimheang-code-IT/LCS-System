@@ -61,6 +61,7 @@ class QuotationRepository:
             .join(QuotationConversion, QuotationConversion.quotation_revision_id == QuotationRevision.id)
             .join(ServiceOrder, ServiceOrder.id == QuotationConversion.service_order_id)
             .where(QuotationRevision.quotation_id.in_(quotation_ids))
+            .order_by(QuotationConversion.id)
         )
         return {quotation_id: (str(order_id), order_no) for quotation_id, order_id, order_no in result.all()}
 

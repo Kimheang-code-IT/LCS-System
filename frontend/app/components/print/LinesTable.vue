@@ -36,7 +36,13 @@ const tableUi = computed(() => ({
 :deep(table) {
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
+  width: 100%;
+  table-layout: fixed;
 }
+
+:deep(thead) { display: table-header-group; }
+:deep(tr) { break-inside: avoid; }
+:deep(th), :deep(td) { overflow-wrap: anywhere; white-space: pre-wrap; }
 
 .print-table--tax :deep(table) {
   table-layout: fixed;

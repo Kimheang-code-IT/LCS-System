@@ -89,6 +89,7 @@ export const SOURCE_PERMISSIONS = [
   'journal_entry.post',
   'accounting_period.read',
   'accounting_period.close',
+  'accounting_period.reopen',
   'chart_of_accounts.manage',
   'customs_credential.retrieve',
   'attachment.read',

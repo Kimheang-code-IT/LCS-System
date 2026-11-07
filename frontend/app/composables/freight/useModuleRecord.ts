@@ -23,13 +23,13 @@ export function useModuleRecord(module: Ref<FreightModule | undefined>) {
     }
   }
 
-  async function create(input: Record<string, unknown>) {
+  async function create(input: Record<string, unknown>, idempotencyKey?: string) {
     if (!module.value) throw new Error('Module is not available')
     pending.value = true
     error.value = null
     try {
       const repository = useModuleRepository(module.value)
-      const record = await repository.create(input)
+      const record = await repository.create(input, idempotencyKey)
       useFreightStore().reload()
       return record
     }

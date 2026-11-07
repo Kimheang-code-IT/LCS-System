@@ -112,8 +112,10 @@ class QuotationRevisionLine(PKMixin, Base):
 class QuotationConversion(PKMixin, Base):
     __tablename__ = "quotation_conversions"
 
+    #: One revision can produce many service orders (the quotation is a reusable
+    #: commercial reference); the idempotency key keeps a retried request a replay.
     quotation_revision_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("quotation_revisions.id"), nullable=False, unique=True
+        BigInteger, ForeignKey("quotation_revisions.id"), nullable=False, index=True
     )
     service_order_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
     converted_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))

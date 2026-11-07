@@ -47,6 +47,10 @@ async def maybe_run_due() -> None:
     if service.active_run_id() is not None:
         return
     async with SessionLocal() as session:
+        from app.modules.settings.maintenance import jobs_paused, tick
+        await tick(session)
+        if await jobs_paused(session):
+            return
         config = await service._load_backup_config(session)
         if not config.get("enabled"):
             return

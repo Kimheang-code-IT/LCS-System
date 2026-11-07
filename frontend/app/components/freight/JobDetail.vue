@@ -49,8 +49,10 @@ const model = ref<FreightRecord>({} as FreightRecord)
 const notFound = ref(false)
 
 const domainStatus = computed(() => jobDomainStatus(model.value))
+// Finish locks operational editing: an editable page and a FINISHED record no
+// longer mix (finance settlement continues on the Finance tab).
 const canEdit = computed(() =>
-  !isCreate.value && lcs.can('service_order.update'))
+  !isCreate.value && domainStatus.value !== 'FINISHED' && lcs.can('service_order.update'))
 const canEditPayments = computed(() =>
   !isCreate.value && lcs.can('service_order.update'))
 
@@ -78,14 +80,6 @@ const {
   navigateNext,
   attachments,
   setChromeField,
-  commentBody,
-  submittingComment,
-  currentUser,
-  comments,
-  activity,
-  submitComment,
-  updateComment,
-  deleteComment,
 } = useFreightRecordChrome({ module, isCreate, recordId, model })
 
 const jobNo = computed(() => String(model.value.jobNo || ''))
@@ -356,6 +350,26 @@ function patchJob(patch: Record<string, unknown>) {
   model.value = { ...model.value, ...patch }
 }
 
+/**
+ * Selecting a quotation populates the reusable commercial data: business party,
+ * trade direction, currency, dates, description. Route, containers and pricing
+ * lines are copied server-side on save, so the order stays its own record.
+ */
+watch(() => model.value.quotationId, (id) => {
+  if (!isCreate.value || !id) return
+  const quotation = store.list('quotations').find(row => String(row.id) === String(id))
+  if (!quotation) return
+  patchJob({
+    customer: quotation.customer,
+    customerPartyId: quotation.customerPartyId,
+    direction: quotation.direction,
+    currency: quotation.currency,
+    date: quotation.date,
+    validUntil: quotation.validUntil,
+    description: quotation.description || model.value.description,
+  })
+})
+
 function fieldValue(key: string) {
   return model.value[key]
 }
@@ -376,14 +390,34 @@ async function save() {
   validation.reset()
   try {
     const failures = validateOrder()
+    // Quotation selection is mandatory for a new Service Order; the backend
+    // refuses with a field error too, but the form should say so up front.
+    if (isCreate.value && !String(model.value.quotationId || '').trim()) {
+      failures.push({ key: 'quotationId', code: 'required', label: fieldLabel({ key: 'quotationId', label: 'Quotation' }) })
+    }
     if (failures.length) {
       validation.applyFailures(failures)
       await validation.focusFirstInvalid()
       return
     }
     const payload = { ...model.value }
-    if (isCreate.value || !payload.id) await moduleRecord.create(payload)
-    else await moduleRecord.update(String(payload.id), payload)
+    if (isCreate.value || !payload.id) {
+      if (isCreate.value) {
+        // A retried create is a replay for the backend: the idempotency key
+        // answers with the already-created order instead of a duplicate copy.
+        await lcs.runCommand(
+          'service_order.create',
+          String(payload.quotationId || 'new'),
+          key => moduleRecord.create(payload, key),
+        )
+      }
+      else {
+        await moduleRecord.create(payload)
+      }
+    }
+    else {
+      await moduleRecord.update(String(payload.id), payload)
+    }
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     // Return to the service-order list after saving.
     await navigateTo(module.value.path)
@@ -417,13 +451,21 @@ function openQuotation() {
 }
 
 const jobSaveLabel = computed(() =>
-  isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges'),
+  isCreate.value ? 'Save' : t('freight.ui.saveChanges'),
 )
 
 const finishing = ref(false)
 
 async function finishJob() {
   if (!model.value.id) return
+  const ok = await confirm({
+    kind: 'submit',
+    title: t('freight.ui.finishConfirmTitle'),
+    description: t('freight.ui.finishConfirmDescription'),
+    confirmLabel: t('freight.ui.finish'),
+    confirmColor: 'primary',
+  })
+  if (!ok) return
   finishing.value = true
   try {
     const saved = await lcs.runCommand('service_order.finish', String(model.value.id), key =>
@@ -491,23 +533,12 @@ function onTabChange(value: string) {
     :list-to="listTo"
     :is-create="isCreate"
     :attachments="attachments"
-    show-comments
-    :can-comment="!isCreate"
-    :comments="comments"
-    :activity="activity"
-    :comment-body="commentBody"
-    :submitting-comment="submittingComment"
-    :current-user="currentUser"
     :more-items="moreItems"
     :can-export="false"
     @update:active-tab="onTabChange"
     @update:attachments="setChromeField('attachments', $event)"
     @save="save"
     @refresh="load"
-    @update:comment-body="commentBody = $event"
-    @submit-comment="submitComment"
-    @update-comment="updateComment"
-    @delete-comment="deleteComment"
     @navigate-previous="navigatePrevious"
     @navigate-next="navigateNext"
   >

@@ -55,31 +55,39 @@ def get_module(module: str) -> ImportModule:
 def module_catalog() -> list[dict[str, Any]]:
     from app.modules.master_data import service as md
 
-    return [
-        {
-            "key": module.key,
-            "name": module.name,
-            "importEnabled": module.import_enabled,
-            "exportEnabled": module.export_enabled,
-            "templateVersion": module.template_version,
-            "matchKey": list(module.match_key),
-            "viewPermission": module.view_permission,
-            "managePermission": module.manage_permission,
-            "createdBySupported": hasattr(md.get_spec(module.key).model, "created_by_user_id"),
-            "updatedBySupported": hasattr(md.get_spec(module.key).model, "updated_by_user_id"),
-            "columns": [
-                {
-                    "key": column.key,
-                    "kind": column.kind,
-                    "required": column.required,
-                    "enum": list(column.enum),
-                    "updatable": column.updatable,
-                }
-                for column in module.columns
-            ],
-        }
-        for module in REGISTRY.values()
-    ]
+    items = []
+    for module in REGISTRY.values():
+        if module.pipeline:
+            # Configuration collections: attribution columns are their own module's concern.
+            created_supported = updated_supported = False
+        else:
+            created_supported = hasattr(md.get_spec(module.key).model, "created_by_user_id")
+            updated_supported = hasattr(md.get_spec(module.key).model, "updated_by_user_id")
+        items.append(
+            {
+                "key": module.key,
+                "name": module.name,
+                "importEnabled": module.import_enabled,
+                "exportEnabled": module.export_enabled,
+                "templateVersion": module.template_version,
+                "matchKey": list(module.match_key),
+                "viewPermission": module.view_permission,
+                "managePermission": module.manage_permission,
+                "createdBySupported": created_supported,
+                "updatedBySupported": updated_supported,
+                "columns": [
+                    {
+                        "key": column.key,
+                        "kind": column.kind,
+                        "required": column.required,
+                        "enum": list(column.enum),
+                        "updatable": column.updatable,
+                    }
+                    for column in module.columns
+                ],
+            }
+        )
+    return items
 
 
 # --- Workbook parsing --------------------------------------------------------
@@ -380,10 +388,31 @@ async def start_import(
         raise ValidationFailed("The file is too large.", {"file": "File too large"})
     if mode not in ("CREATE_ONLY", "CREATE_AND_UPDATE", "VALIDATE_ONLY"):
         raise ValidationFailed("Unknown import mode.", {"mode": "Unsupported mode"})
-    rows = parse_workbook(content, module)
-    if not rows:
-        raise ValidationFailed("The workbook has no data rows.", {"file": "No data rows"})
-    preview = await validate_rows(db, module, rows, mode)
+    if module.create_only and mode != "CREATE_ONLY":
+        raise ValidationFailed(
+            "This module only accepts Create Only imports: existing records are never overwritten.",
+            {"mode": "Create Only only"},
+        )
+    from app.modules.excel_io import config_io
+
+    rows: list[dict[str, Any]]
+    if module.pipeline == "config_versions":
+        if len(content) == 0:
+            raise ValidationFailed("The uploaded file is empty.", {"file": "Empty file"})
+        parsed = config_io.parse_version_workbook(content, module)
+        if not any(parsed.values()):
+            raise ValidationFailed("The workbook has no data rows.", {"file": "No data rows"})
+        preview = await config_io.validate_version_rows(db, parsed)
+        rows = [parsed]
+    else:
+        rows = parse_workbook(content, module)
+        if not rows:
+            raise ValidationFailed("The workbook has no data rows.", {"file": "No data rows"})
+        preview = (
+            await config_io.validate_rows(db, module, rows, mode)
+            if module.pipeline == "component_config"
+            else await validate_rows(db, module, rows, mode)
+        )
     token = secrets.token_urlsafe(24)
     expires_at = datetime.now(UTC) + timedelta(seconds=SESSION_TTL_SECONDS)
     # One user, one pending import per module: the oldest pending row is
@@ -519,38 +548,54 @@ async def confirm_import(db: AsyncSession, context: RequestContext, token: str) 
         )
     module = get_module(import_session.module)
 
+    from app.modules.excel_io import config_io
     from app.modules.master_data import service as md
 
     failed_summary: dict[str, int] | None = None
     failed_errors: str | None = None
     try:
-        # Revalidate against the live database: rows may have changed since the
-        # preview was generated.
-        preview = await validate_rows(db, module, import_session.rows, import_session.mode)
-        summary = preview_summary(preview)
-        if any(item["action"] == "ERROR" for item in preview):
-            failed_summary, failed_errors = summary, _error_text(preview)
-            raise ValidationFailed(
-                "The workbook no longer validates cleanly. Download the error report.",
-                {"token": "Validation failed at commit time."},
-            )
-        for index, item in enumerate(preview):
-            row = import_session.rows[index]
-            data = _row_data(module, row)
-            if item["action"] == "CREATE":
-                await md.create_reference(db, module.key, data, context, commit=False)
-            elif item["action"] == "UPDATE":
-                existing = await _match_existing(db, module, data)
-                if existing is None:
-                    raise ValidationFailed("The record to update was removed since the preview.")
-                await md.update_reference(
-                    db,
-                    module.key,
-                    int(existing.id),
-                    {key: value for key, value in data.items() if module.may_update(key)},
-                    commit=False,
+        if module.pipeline == "component_config":
+            try:
+                summary = await config_io.confirm_rows(db, module, import_session)
+            except ValidationFailed as exc:
+                failed_summary = {**preview_summary([]), "error": len(import_session.rows)}
+                failed_errors = str(getattr(exc, "message", exc))[:2000]
+                raise
+        elif module.pipeline == "config_versions":
+            try:
+                summary = await config_io.confirm_version(db, context, import_session)
+            except ValidationFailed as exc:
+                failed_summary = {**preview_summary([]), "error": 1}
+                failed_errors = str(getattr(exc, "message", exc))[:2000]
+                raise
+        else:
+            # Revalidate against the live database: rows may have changed since
+            # the preview was generated.
+            preview = await validate_rows(db, module, import_session.rows, import_session.mode)
+            summary = preview_summary(preview)
+            if any(item["action"] == "ERROR" for item in preview):
+                failed_summary, failed_errors = summary, _error_text(preview)
+                raise ValidationFailed(
+                    "The workbook no longer validates cleanly. Download the error report.",
+                    {"token": "Validation failed at commit time."},
                 )
-        await md.cache.bump("master_data")
+            for index, item in enumerate(preview):
+                row = import_session.rows[index]
+                data = _row_data(module, row)
+                if item["action"] == "CREATE":
+                    await md.create_reference(db, module.key, data, context, commit=False)
+                elif item["action"] == "UPDATE":
+                    existing = await _match_existing(db, module, data)
+                    if existing is None:
+                        raise ValidationFailed("The record to update was removed since the preview.")
+                    await md.update_reference(
+                        db,
+                        module.key,
+                        int(existing.id),
+                        {key: value for key, value in data.items() if module.may_update(key)},
+                        commit=False,
+                    )
+            await md.cache.bump("master_data")
         job = _record_job(db, context, module, import_session, "COMPLETED", summary, None)
         await db.commit()
         return {"jobId": str(job.id), "status": "COMPLETED", **summary}
@@ -747,6 +792,12 @@ async def _filtered_export_query(db: AsyncSession, base_query: Any, spec: Any, m
 
 async def export_count(db: AsyncSession, module: ImportModule, filters: dict[str, Any] | None = None) -> int:
     """Number of rows the current export filters would include."""
+    from app.modules.excel_io import config_io
+
+    if module.pipeline == "component_config":
+        return await config_io.export_count(db, module, filters)
+    if module.pipeline == "config_versions":
+        return await config_io.export_versions_count(db, filters)
     from app.modules.master_data import service as md
 
     spec = md.get_spec(module.key)
@@ -765,6 +816,9 @@ def _export_table(module: ImportModule, spec: Any, rows: list[Any]) -> tuple[lis
     data: list[list[Any]] = []
     for row in rows:
         values = {key: getattr(row, attr, None) for key, attr in spec.fields.items()}
+        # Reference columns export the stored id; resolve_reference() accepts it
+        # back, so an exported workbook re-imports losslessly.
+        values.update({key: getattr(row, ref.label, None) for key, ref in spec.refs.items()})
         values["status"] = getattr(row, spec.status_field, None)
         data.append([_export_safe(_display(values.get(header))) for header in headers])
     return headers, data
@@ -789,6 +843,12 @@ async def export_rows(
     """Serialize the module's authorized rows into one formatted workbook."""
     if fmt not in _EXPORT_FORMATS:
         raise ValidationFailed("Unsupported export format.", {"format": "Unsupported format"})
+    from app.modules.excel_io import config_io
+
+    if module.pipeline == "component_config":
+        return await config_io.export_catalog_rows(db, module, ids, filters, fmt)
+    if module.pipeline == "config_versions":
+        return await config_io.export_versions(db, module, ids, filters, fmt)
     from app.modules.master_data import service as md
 
     spec = md.get_spec(module.key)

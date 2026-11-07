@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Body, Depends, Header, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +20,7 @@ from app.modules.finance.posting_rules import (
     POSTING_RULE_ENTITY,
     POSTING_RULE_UPDATED,
 )
+from app.modules.finance.printing import financial_print_data
 from app.modules.finance.schemas import REVERSAL_WRITE_SCHEMA
 
 router = APIRouter()
@@ -132,6 +135,16 @@ async def delete_financial_accounts(
 
 
 # --- Accounting periods ------------------------------------------------------
+@router.post("/accounting-periods/generate", status_code=status.HTTP_201_CREATED)
+@router.post("/accountingPeriods/generate", status_code=status.HTTP_201_CREATED)
+async def generate_periods(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("accounting_period.update")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await service.generate_periods(session, context, payload)}
+
+
 @router.get("/accounting-periods")
 @router.get("/accountingPeriods")
 async def list_periods(
@@ -163,6 +176,29 @@ async def update_period(
     return {"data": await service.update_period(session, context, period_id, payload)}
 
 
+@router.post("/accounting-periods/{period_id}/closing-validation")
+async def run_closing_validation(
+    period_id: EntityId,
+    context: RequestContext = Depends(require_permission("accounting_period.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """The Period Closing page's review: eight structured checks + summary."""
+    from app.modules.finance import period_closing
+
+    return {"data": await period_closing.run_closing_validation(session, context, period_id)}
+
+
+@router.get("/accounting-periods/{period_id}/closing-history")
+async def closing_history(
+    period_id: EntityId,
+    context: RequestContext = Depends(require_permission("accounting_period.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.finance import period_closing
+
+    return {"data": await period_closing.closing_history(session, context, period_id)}
+
+
 @router.post("/accounting-periods/{period_id}/close")
 async def close_period(
     period_id: EntityId,
@@ -184,6 +220,35 @@ async def close_period(
     )
     await session.commit()
     return {"data": period}
+
+
+@router.post("/accounting-periods", status_code=status.HTTP_201_CREATED)
+@router.post("/accountingPeriods", status_code=status.HTTP_201_CREATED)
+async def create_period(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("accounting_period.create")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Create one custom accounting period (any date range).
+
+    The caller does not enter a fiscal year or month: the service derives them
+    from the start date, and the created period can start as DRAFT or OPEN.
+    """
+    return {"data": await service.create_period(session, context, payload)}
+
+
+@router.delete("/accounting-periods")
+@router.delete("/accountingPeriods")
+async def delete_period(
+    payload: dict = Body(default={}),
+    context: RequestContext = Depends(require_permission("accounting_period.delete")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Delete periods only when no journal entry ever posted into them."""
+    ids = validate_id_list(payload)
+    for period_id in ids:
+        await service.delete_period(session, context, period_id)
+    return {"data": {"removed": len(ids)}}
 
 
 # --- Document sequences ------------------------------------------------------
@@ -367,6 +432,17 @@ async def get_financial_document(
     return {"data": await service.get_document(session, context, document_id)}
 
 
+@router.get("/financial-documents/{document_id}/print-data")
+async def get_financial_print_data(
+    document_id: EntityId,
+    template: Literal["tax-invoice", "debit-note"] = "tax-invoice",
+    container_id: int | None = Query(None, ge=1, alias="containerId"),
+    context: RequestContext = Depends(require_permission("financial_document.read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    return {"data": await financial_print_data(session, document_id, template, container_id)}
+
+
 @router.put("/financial-documents/{document_id}")
 async def update_financial_document(
     document_id: EntityId,
@@ -384,17 +460,21 @@ async def post_financial_document(
     context: RequestContext = Depends(require_permission("financial_document.submit")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
+    before = await service.document_status(session, document_id)
     document = await service.post_document(session, context, document_id)
-    await write_audit(
-        session,
-        context,
-        event_type="FINANCIAL_POSTED",
-        entity_type="financial_document",
-        entity_id=document_id,
-        action="post",
-        after={"documentNo": document.get("documentNo")},
-    )
-    await session.commit()
+    if before != "POSTED":
+        # An idempotent replay answers with the posted document again, but only
+        # the DRAFT → POSTED transition leaves one audit event.
+        await write_audit(
+            session,
+            context,
+            event_type="FINANCIAL_POSTED",
+            entity_type="financial_document",
+            entity_id=document_id,
+            action="post",
+            after={"documentNo": document.get("documentNo")},
+        )
+        await session.commit()
     return {"data": document}
 
 
@@ -407,16 +487,19 @@ async def allocate_payment(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     allocation = await service.allocate_payment(session, context, document_id, payload, idempotency_key)
-    await write_audit(
-        session,
-        context,
-        event_type="PAYMENT_ALLOCATED",
-        entity_type="financial_document",
-        entity_id=document_id,
-        action="allocate",
-        after=allocation,
-    )
-    await session.commit()
+    if not allocation.get("idempotentReplay"):
+        # A replayed key answers with its original result; only a new settlement
+        # writes one PAYMENT_ALLOCATED audit event.
+        await write_audit(
+            session,
+            context,
+            event_type="PAYMENT_ALLOCATED",
+            entity_type="financial_document",
+            entity_id=document_id,
+            action="allocate",
+            after=allocation,
+        )
+        await session.commit()
     return {"data": allocation}
 
 

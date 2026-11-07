@@ -75,7 +75,7 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { ...group('finance'), value: 'finance_chart_of_accounts', labelKey: 'freight.pages.chartOfAccounts', permissionPrefix: 'finance.chart_of_accounts', actions: CRUD_ACTIONS },
   { ...group('finance'), value: 'finance_financial_accounts', labelKey: 'freight.pages.financialAccounts', permissionPrefix: 'finance.financial_accounts', actions: CRUD_ACTIONS },
   { ...group('finance'), value: 'finance_journal_entries', labelKey: 'freight.pages.journals', permissionPrefix: 'finance.journal_entries', actions: CRUD_ACTIONS },
-  { ...group('finance'), value: 'finance_accounting_periods', labelKey: 'freight.pages.accountingPeriods', permissionPrefix: 'finance.accounting_periods', actions: ['view', 'update', 'export'] },
+  { ...group('finance'), value: 'finance_accounting_periods', labelKey: 'freight.pages.accountingPeriods', permissionPrefix: 'finance.accounting_periods', actions: ['view', 'create', 'update', 'delete', 'reopen', 'export'] },
   { ...group('finance'), value: 'finance_posting_rules', labelKey: 'freight.pages.postingRules', permissionPrefix: 'finance.posting_rules', actions: CRUD_ACTIONS },
 
   { ...group('reports'), value: 'reports_revenue_expense', labelKey: 'freight.reportCatalog.reports.revenue-expense.title', permissionPrefix: 'reports.revenue_expense', actions: READ_ACTIONS },

@@ -51,6 +51,6 @@ const spinIconUi = computed(() => props.spinIcon
     :to="to"
     :square="square"
     :aria-label="ariaLabel || undefined"
-    @click="emit('click')"
+    @click="emit('click', $event)"
   />
 </template>

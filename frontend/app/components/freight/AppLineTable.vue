@@ -101,6 +101,7 @@ const emit = defineEmits<{
 
 const { t, te } = useI18n()
 const { fieldLabel, tableTitle } = useFreightLabel()
+const attachmentOwner = inject(freightDocumentAttachmentKey, undefined)
 const {
   inputRef,
   openPicker,
@@ -108,7 +109,14 @@ const {
   rejected,
   uploading,
   removeUploaded,
-} = useFileAttachments({ upload: () => props.table.upload })
+} = useFileAttachments({
+  // The page (or Job Files host) decides which persisted record owns uploads.
+  upload: () => {
+    const defined = props.table.upload
+    if (typeof defined === 'function') return defined()
+    return defined ?? attachmentOwner?.() ?? undefined
+  },
+})
 
 const auth = useAuthStore()
 const canEditFileNote = computed(() => hasSourcePermission(auth.user, 'attachment.upload'))
@@ -442,10 +450,8 @@ function addRow() {
   const blank = Object.fromEntries(props.table.columns.filter(column => !FREIGHT_LINE_UTILITY_COLUMN_TYPES.has(column.type)).map((column) => {
     if (column.type === 'number') return [column.key, 0]
     if (column.type === 'checkbox') return [column.key, String(column.options?.[1] ?? 'No')]
-    if (column.type === 'select') {
-      const referenceItems = referenceItemsFor(column)
-      return [column.key, column.optionItems?.[0]?.value || referenceItems?.[0]?.value || column.options?.[0] || '']
-    }
+    // Selects start blank: a user-added line must not silently carry a fee type,
+    // container type or charge basis nobody chose (rowDefaults seeds intent).
     return [column.key, '']
   }))
   for (const column of props.table.columns) {
@@ -719,6 +725,14 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
               const href = filePreviewHref(row.original)
               if (href && import.meta.client) window.open(href, '_blank', 'noopener,noreferrer')
             },
+          })
+        }
+        if (isFileTable.value && !props.disabled && hasSourcePermission(auth.user, 'attachment.delete')) {
+          actions.push({
+            label: t('actions.delete'),
+            icon: 'i-lucide-trash-2',
+            color: 'error',
+            onSelect: () => removeRow(index),
           })
         }
         if (hasReorderColumn.value) {

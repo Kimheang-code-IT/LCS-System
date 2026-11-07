@@ -13,6 +13,7 @@ import type { FieldRule, ValidationFailure } from '~/utils/validation/field-rule
 import type { FreightField } from '~/config/freight-modules'
 import { getByPath, setByPath } from '~/utils/object-path'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+import { useMaintenanceSettings } from '~/composables/settings/useMaintenanceSettings'
 
 const { appConfig, backup } = useSettingsRepositories()
 const { t } = useI18n()
@@ -25,6 +26,10 @@ const canConfigure = canEdit
 const canReset = computed(() => auth.canAccessPage('settings.manage'))
 const canManageBackup = computed(() => auth.canAccessPage('backup.manage'))
 const appLocalization = useAppLocalization()
+const maintenance = useMaintenanceSettings()
+const savedGroups = ref<Record<string, string>>({})
+const storageSavedAt = ref(Date.now())
+const telegramPanel = ref<{ validate: () => boolean } | null>(null)
 
 const runningBackup = ref(false)
 const testingBackup = ref(false)
@@ -149,6 +154,8 @@ async function load() {
   pending.value = true
   try {
     model.value = await appConfig.get()
+    savedGroups.value = Object.fromEntries(Object.entries(model.value).map(([key, value]) => [key, JSON.stringify(value)]))
+    if (canConfigure.value) await maintenance.load()
   }
   catch (e) {
     pageErrors.value = [apiErrorMessage(e, t('lcs.common.loadFailed'))]
@@ -170,22 +177,10 @@ function fieldValue(key: string): unknown {
     return value
   }
 
-  if (key === '__telegramConnection') {
-    const value: ConnectionStatusFieldValue = {
-      status: model.value.telegram.connectionStatus,
-      message: model.value.telegram.lastTestMessage,
-      lastTestedAt: model.value.telegram.lastTestedAt,
-      details: model.value.telegram.botUsername
-        ? [{ label: t('lcs.settings.botUsername'), value: model.value.telegram.botUsername }]
-        : [],
-    }
-    return value
-  }
-
   if (key === '__securityAlert') return null
 
   // Select options use string values; coerce number fields for USelect match.
-  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours') {
+  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours' || key === 'storage.backupIntervalHours') {
     const raw = getByPath(model.value, key)
     return raw == null || raw === '' ? undefined : String(raw)
   }
@@ -196,7 +191,7 @@ function fieldValue(key: string): unknown {
 async function setFieldValue(key: string, value: unknown) {
   if (!model.value) return
 
-  if (key === '__emailConnection' || key === '__telegramConnection' || key === '__securityAlert') {
+  if (key === '__emailConnection' || key === '__securityAlert') {
     return
   }
 
@@ -214,9 +209,21 @@ async function setFieldValue(key: string, value: unknown) {
     return
   }
 
-  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours') {
+  // Switching the primary provider needs an explicit explanation: new files go
+  // to the new provider, historical files stay where they are.
+  if (key === 'storage.primaryProvider' && value && value !== model.value.storage.primaryProvider) {
+    const ok = await confirm({
+      kind: 'generic',
+      titleKey: 'lcs.settings.storage.primarySwitchTitle',
+      descriptionKey: 'lcs.settings.storage.primarySwitchHelp',
+      confirmColor: 'warning',
+    })
+    if (!ok) return
+  }
+
+  if (key === 'general.defaultPageSize' || key === 'system.paginationDefault' || key === 'backup.intervalHours' || key === 'storage.backupIntervalHours') {
     const n = Number(value)
-    const fallback = key === 'backup.intervalHours' ? 24 : 20
+    const fallback = key === 'backup.intervalHours' ? 24 : key === 'storage.backupIntervalHours' ? 24 : 20
     setByPath(model.value as unknown as Record<string, unknown>, key, Number.isFinite(n) ? n : fallback)
     return
   }
@@ -271,6 +278,20 @@ function settingsRules(): Record<string, FieldRule> {
     'backup.r2BucketName': { required: backupEnabled, maxLength: 255 },
     'backup.r2Endpoint': { required: backupEnabled, url: true, maxLength: 500 },
     'backup.r2Prefix': { maxLength: 255 },
+    // Storage & Backup: required only when the block was started (any r2 value)
+    // or a provider was activated — the backend re-validates the same rules.
+    'storage.providers.r2.accountId': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 128 },
+    'storage.providers.r2.bucketName': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 255 },
+    'storage.providers.r2.accessKeyId': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 255 },
+    'storage.providers.r2.secretAccessKey': { maxLength: 512 },
+    'storage.providers.r2.endpoint': { url: true, maxLength: 500 },
+    'storage.providers.r2.objectPrefix': { maxLength: 255 },
+    'storage.providers.gdrive.clientId': { maxLength: 255 },
+    'storage.providers.gdrive.rootFolderId': { maxLength: 255 },
+    'storage.providers.gdrive.sharedDriveId': { maxLength: 255 },
+    'storage.backupIntervalHours': { number: true, integer: true, min: 1, max: 720 },
+    'storage.backupMaxRetries': { number: true, integer: true, min: 1, max: 10 },
+    'storage.retentionDays': { number: true, integer: true, min: 0, max: 3650 },
   }
 }
 
@@ -304,13 +325,27 @@ async function save() {
   validation.submitting.value = true
   validation.reset()
   try {
-    const failures = collectSettingsFailures()
+    const ownsMaintenance = activeTab.value === 'maintenance'
+    if (ownsMaintenance && !maintenance.validate()) return
+    if (activeTab.value === 'telegram' && telegramPanel.value?.validate() === false) return
+    const group = activeTab.value as keyof AppConfig
+    const groupChanged = activeTab.value !== 'maintenance' && JSON.stringify(model.value[group]) !== savedGroups.value[group]
+    const fields = systemSettingsTabs.find(tab => tab.id === activeTab.value)?.sections.flatMap(section => section.fields.map(field => field.key)) || []
+    const failures = groupChanged ? collectSettingsFailures(fields) : []
     if (failures.length) {
       validation.applyFailures(failures)
       await validation.focusFirstInvalid()
       return
     }
-    model.value = await appConfig.update(model.value)
+    // Reopen first when permitted; activate only after Backup settings finish saving.
+    if (ownsMaintenance && !maintenance.draft.value.enabled && !await maintenance.save()) return
+    if (groupChanged) {
+      const updated = await appConfig.update({ [group]: model.value[group] })
+      Object.assign(model.value, { [group]: updated[group] })
+      savedGroups.value[group] = JSON.stringify(updated[group])
+      if (group === 'storage') storageSavedAt.value = Date.now()
+    }
+    if (ownsMaintenance && maintenance.draft.value.enabled && !await maintenance.save()) return
     appLocalization.apply(model.value.localization)
     usePreferencesStore().syncLocaleWithConfig()
     toast.add({ title: t('lcs.common.saved'), color: 'success' })
@@ -428,9 +463,8 @@ useAppPageTitle(() => t('freight.pages.settings'))
     :saving="saving"
     :read-only="!canEdit"
     :can-save="canEdit"
-    :show-comments="false"
     :show-list-nav="false"
-    :more-items="moreItems"
+    :more-items="activeTab === 'maintenance' ? [] : moreItems"
     :field-errors="validation.fieldErrors.value"
     :form-errors="[...validation.formErrors.value, ...pageErrors]"
     :on-field-edit="validation.clearFieldError"
@@ -440,11 +474,27 @@ useAppPageTitle(() => t('freight.pages.settings'))
     @refresh="load"
   >
     <template #tab-extra>
+      <DocumentMaintenanceSettingsPanel
+        v-if="activeTab === 'maintenance' && canConfigure"
+        v-model="maintenance.draft.value"
+        :disabled="saving || pending"
+        :field-errors="maintenance.validation.fieldErrors.value"
+        :form-errors="maintenance.validation.formErrors.value"
+        @edit="maintenance.validation.clearFieldError"
+      />
       <DocumentTelegramSettingsPanel
 v-if="activeTab === 'telegram' && model"
+ref="telegramPanel"
 :config="model.telegram"
 :can-manage="canConfigure"
+@update:rules="value => { if (model) model.telegram.rules = value }"
 @refresh="load" />
+      <DocumentStorageSettingsPanel
+        v-if="activeTab === 'storage' && model"
+        :can-manage="canConfigure"
+        :can-manage-backup="canManageBackup"
+        :saved-at="storageSavedAt"
+      />
     </template>
   </DocumentAppDocumentPage>
 

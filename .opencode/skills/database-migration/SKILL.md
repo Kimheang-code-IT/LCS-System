@@ -26,11 +26,11 @@ documents must survive every migration.
 
 | Document | Use it for |
 |---|---|
-| `docs/06_database_design.sql` | Generated DDL plus a description of every table and column |
+| `docs/01-architecture/database-design.sql` | Generated DDL plus a description of every table and column |
 | `backend/scripts/schema_descriptions.py` | The prose behind that file; must be extended with every new table/column |
-| `docs/11_deployment_and_security.md` §8, §12 | Apply/verify/roll back procedure and the supported rollback boundary |
-| `docs/05_solution_architecture.md` §13 | Current table count, migration head and consistency rules |
-| `AGENTS.md` §Backend | `alembic/env.py` import list, `reset_all_data`, ruff settings |
+| `docs/archive/deployment-security-history.md` §8, §12 | Apply/verify/roll back procedure and the supported rollback boundary |
+| `docs/01-architecture/implementation-reference.md` §13 | Current table count, migration head and consistency rules |
+| `docs/03-development/coding-standards.md` (Backend implementation rules) | `alembic/env.py` import list, `reset_all_data`, ruff settings |
 
 ## Non-negotiable rules
 
@@ -50,7 +50,7 @@ documents must survive every migration.
 
 ## Workflow
 
-1. **Measure the current state** from the live database, not the migrations:
+1. **Measure the current state** on the explicitly approved disposable/rehearsal target, not merely migration text. Production access/backup/restore needs separate explicit authorization; never discover a real database target implicitly:
 
    ```sql
    SELECT table_name,
@@ -64,7 +64,7 @@ documents must survive every migration.
    control totals; run it before and after and diff the two outputs.
 2. **Back up first.** `pg_dump -Fc`, then restore the dump into a scratch database
    and confirm the revision and row counts. A backup you have never restored is
-   not a backup. See `docs/11_deployment_and_security.md` §11-§12.
+   not a backup. See `docs/archive/deployment-security-history.md` §11-§12.
 3. **Write the revision** in `backend/alembic/versions/`, chained from the current
    head (`uv run python -m alembic heads`), with a real `downgrade()`.
    - Use `IF EXISTS` in `downgrade()` (`DROP INDEX IF EXISTS`, `ALTER TABLE … DROP
@@ -82,7 +82,7 @@ documents must survive every migration.
 
    ```bash
    cd backend
-   uv run python scripts/generate_schema_docs.py   # docs/06_database_design.sql
+   uv run python scripts/generate_schema_docs.py   # docs/01-architecture/database-design.sql
    uv run python scripts/generate_schema_docs.py --check --strict
    ```
 
@@ -121,6 +121,8 @@ documents must survive every migration.
 
 ## Testing
 
+Apply DEEP gates in `docs/03-development/testing-guide.md`; do not run a full suite merely because a schema file exists. Real PostgreSQL rehearsal/rollback, preservation and integrity checks remain mandatory for the affected migration.
+
 | Requirement | Command / artifact |
 |---|---|
 | Chain integrity (single head, linear, every downgrade non-empty) | `uv run python -m pytest tests/test_migration_chain.py -q` |
@@ -128,7 +130,7 @@ documents must survive every migration.
 | Generated docs in sync | `tests/test_schema_docs.py` |
 | Runtime guard behaviour | `psql <disposable> -f tests/sql/integrity_guards.sql` (16 scenarios) |
 | Data preservation | diff `pre_migration_counts.sql` before/after |
-| Full suite | `uv run python -m pytest -q` |
+| Broad regression (only if shared impact/release requires it) | `uv run python -m pytest -q` |
 
 ## Acceptance criteria
 
@@ -137,14 +139,14 @@ documents must survive every migration.
 - Row counts and financial control totals are unchanged except for the tables the
   migration is meant to populate, and every difference is explained.
 - No unvalidated foreign keys; the ledger still nets to zero.
-- `docs/06_database_design.sql` is regenerated and passes `--check --strict`.
+- `docs/01-architecture/database-design.sql` is regenerated and passes `--check --strict`.
 - The revision is additive, or the destructive part was explicitly approved.
-- `docs/11_deployment_and_security.md` is updated if the procedure changed.
+- `docs/archive/deployment-security-history.md` is updated if the procedure changed.
 
 ## Expected outputs
 
 - One or more `backend/alembic/versions/<rev>_<slug>.py` revisions with `downgrade()`.
 - Updated models, the `env.py`/generator import lists, and `schema_descriptions.py`.
-- Regenerated `docs/06_database_design.sql`.
-- An updated verification table in `docs/11_deployment_and_security.md` §8.
-- A migration or data-loss risk entry in `docs/11_deployment_and_security.md` §18 when anything is irreversible.
+- Regenerated `docs/01-architecture/database-design.sql`.
+- An updated verification table in `docs/archive/deployment-security-history.md` §8.
+- A migration or data-loss risk entry in `docs/archive/deployment-security-history.md` §18 when anything is irreversible.

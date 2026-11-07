@@ -38,10 +38,17 @@ async def _service_order(client, headers, status: str = "ACTIVE") -> str:
         assert (
             await client.post(f"/api/v1/service-orders/{order_id}/finish", headers=headers, json={})
         ).status_code == 200
-        updated = await client.put(
-            f"/api/v1/service-orders/{order_id}", headers=headers, json={"status": status}
+        # Reopen runs through the shared status endpoint (Finish locks a direct
+        # header edit; the reopen transition is the sanctioned path back).
+        reopened = await client.post(
+            f"/api/v1/jobs/{order_id}/status", headers=headers, json={"status": "ACTIVE"}
         )
-        assert updated.status_code == 200, updated.text
+        assert reopened.status_code == 200, reopened.text
+        if status != "ACTIVE":
+            deactivated = await client.put(
+                f"/api/v1/service-orders/{order_id}", headers=headers, json={"status": status}
+            )
+            assert deactivated.status_code == 200, deactivated.text
     return order_id
 
 

@@ -1,6 +1,6 @@
 """Guards the single generated schema documentation against model drift.
 
-``docs/06_database_design.sql`` is produced by ``scripts/generate_schema_docs.py``.
+``docs/01-architecture/database-design.sql`` is produced by ``scripts/generate_schema_docs.py``.
 These tests make sure it cannot silently fall behind the SQLAlchemy models, that
 every table and column is documented, and that the project keeps exactly one SQL
 reference file.
@@ -17,7 +17,7 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
-SCHEMA_SQL = REPO_ROOT / "docs" / "06_database_design.sql"
+SCHEMA_SQL = REPO_ROOT / "docs" / "01-architecture" / "database-design.sql"
 GENERATOR = BACKEND_ROOT / "scripts" / "generate_schema_docs.py"
 
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
@@ -66,7 +66,7 @@ def test_description_catalogue_has_no_stale_entries(generator_module) -> None:
 
 def test_docs_contains_exactly_one_sql_file() -> None:
     """The documentation set keeps one schema reference, not parallel SQL files."""
-    sql_files = sorted((REPO_ROOT / "docs").glob("*.sql"))
+    sql_files = sorted((REPO_ROOT / "docs").rglob("*.sql"))
     assert sql_files == [SCHEMA_SQL], f"unexpected SQL files in docs: {sql_files}"
 
 

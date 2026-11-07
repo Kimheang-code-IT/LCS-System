@@ -21,6 +21,8 @@ last_failure: float | None = None
 async def tick() -> None:
     global last_tick
     async with SessionLocal() as session:
+        from app.modules.settings.maintenance import tick as maintenance_tick
+        await maintenance_tick(session)
         claims = await outbox.claim(session)
     semaphore = asyncio.Semaphore(2)
 

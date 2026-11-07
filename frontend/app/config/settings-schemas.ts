@@ -150,7 +150,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             options: LANGUAGE_OPTIONS,
           },
           { key: 'telegram.includeOrganization', labelKey: 'lcs.settings.includeOrganization', type: 'boolean' },
-          { key: '__telegramConnection', labelKey: 'lcs.connection.title', type: 'connection-status', colSpan: 2 },
         ],
       },
     ],
@@ -230,17 +229,114 @@ export const appConfigTabs: DocumentTabSchema[] = [
           { key: 'backup.r2Prefix', labelKey: 'lcs.settings.backup.r2Prefix', type: 'text', colSpan: 2 },
         ],
       },
+    ],
+  },
+  {
+    id: 'storage',
+    labelKey: 'lcs.settings.tabs.storage',
+    sections: [
       {
-        id: 'backup-google-sheets',
-        titleKey: 'lcs.settings.backup.googleSheetsLegacy',
+        id: 'storageR2',
+        titleKey: 'lcs.settings.storage.r2Section',
         fields: [
-          { key: 'backup.spreadsheetId', labelKey: 'lcs.settings.backup.spreadsheetId', type: 'text', colSpan: 2 },
+          { key: 'storage.providers.r2.accountId', labelKey: 'lcs.settings.storage.r2AccountId', type: 'text', required: true },
+          { key: 'storage.providers.r2.bucketName', labelKey: 'lcs.settings.storage.r2BucketName', type: 'text', required: true },
+          { key: 'storage.providers.r2.accessKeyId', labelKey: 'lcs.settings.storage.r2AccessKeyId', type: 'text', required: true },
           {
-            key: 'backup.serviceAccountJson',
-            labelKey: 'lcs.settings.backup.serviceAccountJson',
+            key: 'storage.providers.r2.secretAccessKey',
+            labelKey: 'lcs.settings.storage.r2Secret',
             type: 'secret',
+            helpKey: 'lcs.fieldHelp.storageR2Secret',
             colSpan: 2,
           },
+          {
+            key: 'storage.providers.r2.endpoint',
+            labelKey: 'lcs.settings.storage.r2Endpoint',
+            type: 'url',
+            colSpan: 2,
+            helpKey: 'lcs.fieldHelp.storageR2Endpoint',
+          },
+          { key: 'storage.providers.r2.objectPrefix', labelKey: 'lcs.settings.storage.r2Prefix', type: 'text', colSpan: 2 },
+        ],
+      },
+      {
+        id: 'storageGDrive',
+        titleKey: 'lcs.settings.storage.gDriveSection',
+        fields: [
+          {
+            key: 'storage.providers.gdrive.authType',
+            labelKey: 'lcs.settings.storage.authType',
+            type: 'select',
+            options: [
+              { label: 'Personal Google account (OAuth)', value: 'oauth' },
+              { label: 'Google Workspace (service account)', value: 'service_account' },
+            ],
+          },
+          {
+            key: 'storage.providers.gdrive.clientId',
+            labelKey: 'lcs.settings.storage.clientId',
+            type: 'text',
+          },
+          {
+            key: 'storage.providers.gdrive.clientSecret',
+            labelKey: 'lcs.settings.storage.clientSecret',
+            type: 'secret',
+            helpKey: 'lcs.fieldHelp.storageClientSecret',
+          },
+          {
+            key: 'storage.providers.gdrive.serviceAccountJson',
+            labelKey: 'lcs.settings.storage.serviceAccountJson',
+            type: 'secret',
+            helpKey: 'lcs.fieldHelp.storageServiceAccount',
+            colSpan: 2,
+          },
+          {
+            key: 'storage.providers.gdrive.rootFolderId',
+            labelKey: 'lcs.settings.storage.rootFolderId',
+            type: 'text',
+            helpKey: 'lcs.fieldHelp.storageRootFolder',
+          },
+          {
+            key: 'storage.providers.gdrive.sharedDriveId',
+            labelKey: 'lcs.settings.storage.sharedDriveId',
+            type: 'text',
+            colSpan: 2,
+            helpKey: 'lcs.fieldHelp.storageSharedDrive',
+          },
+        ],
+      },
+      {
+        id: 'storagePrimary',
+        titleKey: 'lcs.settings.storage.primarySection',
+        fields: [
+          {
+            key: 'storage.primaryProvider',
+            labelKey: 'lcs.settings.storage.primaryProvider',
+            type: 'select',
+            options: [
+              { label: 'Cloudflare R2', value: 'r2' },
+              { label: 'Google Drive', value: 'gdrive' },
+            ],
+          },
+          {
+            key: 'storage.backupProvider',
+            labelKey: 'lcs.settings.storage.backupProvider',
+            type: 'select',
+            options: [
+              { label: 'Disabled', value: '' },
+              { label: 'Cloudflare R2', value: 'r2' },
+              { label: 'Google Drive', value: 'gdrive' },
+            ],
+          },
+          { key: 'storage.backupEnabled', labelKey: 'lcs.settings.storage.backupEnabled', type: 'boolean' },
+          {
+            key: 'storage.backupIntervalHours',
+            labelKey: 'lcs.settings.storage.backupSchedule',
+            type: 'select',
+            options: BACKUP_INTERVAL_OPTIONS,
+          },
+          { key: 'storage.backupMaxRetries', labelKey: 'lcs.settings.storage.backupRetries', type: 'number' },
+          { key: 'storage.retentionDays', labelKey: 'lcs.settings.storage.retentionDays', type: 'number' },
         ],
       },
     ],
@@ -271,7 +367,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
   },
 ]
 
-const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security', 'backup'])
+const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security', 'backup', 'storage'])
 const SETTINGS_FIELD_HELP: Record<string, string> = {
   'email.enabled': 'lcs.fieldHelp.enableEmail',
   'email.replyToEmail': 'lcs.fieldHelp.replyTo',
@@ -279,7 +375,16 @@ const SETTINGS_FIELD_HELP: Record<string, string> = {
   'backup.enabled': 'lcs.fieldHelp.backupEnabled',
   'backup.r2SecretAccessKey': 'lcs.fieldHelp.backupR2Secret',
   'backup.r2Prefix': 'lcs.fieldHelp.backupR2Prefix',
-  'backup.serviceAccountJson': 'lcs.fieldHelp.backupServiceAccount',
+  'storage.backupEnabled': 'lcs.fieldHelp.storageBackupEnabled',
+  'storage.backupIntervalHours': 'lcs.fieldHelp.storageBackupSchedule',
+  'storage.providers.r2.secretAccessKey': 'lcs.fieldHelp.storageR2Secret',
+  'storage.providers.r2.endpoint': 'lcs.fieldHelp.storageR2Endpoint',
+  'storage.providers.gdrive.clientSecret': 'lcs.fieldHelp.storageClientSecret',
+  'storage.providers.gdrive.serviceAccountJson': 'lcs.fieldHelp.storageServiceAccount',
+  'storage.providers.gdrive.rootFolderId': 'lcs.fieldHelp.storageRootFolder',
+  'storage.providers.gdrive.sharedDriveId': 'lcs.fieldHelp.storageSharedDrive',
+  'storage.primaryProvider': 'lcs.fieldHelp.storagePrimary',
+  'storage.backupProvider': 'lcs.fieldHelp.storageBackupProvider',
 }
 
 /** Administration system settings — Localization, Email, Telegram, Security, Backup. */
@@ -295,4 +400,6 @@ export const systemSettingsTabs: DocumentTabSchema[] = appConfigTabs
       })),
     })),
   }))
+
+systemSettingsTabs.push({ id: 'maintenance', labelKey: 'maintenance.settings', sections: [] })
 

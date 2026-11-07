@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import re
 import uuid
@@ -10,16 +12,17 @@ from io import BytesIO
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
 from app.core.config import settings
 from app.core.context import RequestContext
+from app.core.database import utcnow
 from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
-from app.core.storage import get_storage
 from app.modules.master_data import config_versions
 from app.modules.master_data.models import BusinessParty
 from app.modules.master_data.route_stops import (
@@ -54,12 +57,15 @@ from app.modules.operations.schemas import (
 )
 from app.modules.quotations.models import (
     Quotation,
+    QuotationConversion,
     QuotationRevision,
     QuotationRevisionContainer,
     QuotationRevisionLine,
     QuotationRevisionPlace,
 )
 from app.modules.settings.service import get_default_currency
+
+logger = logging.getLogger(__name__)
 
 ORDER_STATUS = {
     "active": "ACTIVE",
@@ -71,6 +77,15 @@ ORDER_STATUS = {
 
 # Legacy lifecycle statuses from before the Active/Inactive simplification.
 _LEGACY_INACTIVE = {"cancelled", "canceled", "closed", "inactive", "voided"}
+
+
+def _ensure_order_editing(order: ServiceOrder) -> None:
+    """Finish locks operational editing; financial settlement continues separately."""
+    if order.status == "FINISHED":
+        raise Conflict(
+            "ORDER_FINISHED",
+            "A finished service order is locked. Reopen it before editing operations.",
+        )
 
 
 def normalize_order_status(value: Any, default: str = "ACTIVE") -> str:
@@ -116,6 +131,11 @@ def order_record(order: ServiceOrder, data: dict[str, Any], extra: dict[str, Any
             "currency": order.currency_code,
             "createdAt": order.created_at.isoformat() if order.created_at else None,
             "updatedAt": order.updated_at.isoformat() if order.updated_at else None,
+            # "Started" is the creation stamp (set once, never edited); "Ended"
+            # is the Finish stamp, empty until the order is finished.
+            "startedAt": order.created_at.isoformat() if order.created_at else None,
+            "finishedAt": order.finished_at.isoformat() if order.finished_at else None,
+            "endedAt": order.finished_at.isoformat() if order.finished_at else None,
         }
     )
     if extra:
@@ -171,6 +191,22 @@ async def list_service_orders(session: AsyncSession, context: RequestContext, pa
         requirements_by_order.setdefault(requirement.service_order_id, []).append(
             _requirement_payload(requirement, labels.get(int(requirement.container_type_id)))
         )
+    links = (
+        await session.execute(
+            select(Attachment, AttachmentLink.entity_id)
+            .join(AttachmentLink, AttachmentLink.attachment_id == Attachment.id)
+            .where(
+                AttachmentLink.entity_type == "jobs",
+                AttachmentLink.entity_id.in_(order_ids),
+                Attachment.is_deleted.is_(False),
+            )
+            .order_by(Attachment.id)
+        )
+    ).all() if order_ids else []
+    files_by_order: dict[int, list[dict[str, Any]]] = {}
+    for attachment, order_id in links:
+        payload = await _attachment_payload_async(session, attachment)
+        files_by_order.setdefault(int(order_id), []).append(payload)
     revision_ids = [row.quotation_revision_id for row in rows if row.quotation_revision_id]
     quotations: dict[int, tuple[str, str]] = {}
     if revision_ids:
@@ -202,6 +238,8 @@ async def list_service_orders(session: AsyncSession, context: RequestContext, pa
         requirements_for_order = requirements_by_order.get(row.id)
         if requirements_for_order:
             extra["containerRequirements"] = requirements_for_order
+        # The Files grid reads the linked uploads, never a payload copy race.
+        extra["attachments"] = files_by_order.get(row.id, [])
         records.append(order_record(row, row.data or {}, extra))
     return paged(records, page, total)
 
@@ -241,6 +279,10 @@ async def get_service_order(session: AsyncSession, context: RequestContext, iden
         ]
     if route:
         extra["places"] = route
+    # Linked files are authoritative for the Files grid: they always exist once
+    # uploaded (the attachment API links them), while the payload's JSON copy
+    # races the save that stores it.
+    extra["attachments"] = await list_attachments(session, context, "jobs", str(order.id))
     # The quote link must survive a deep link or refresh: the workspace derives
     # its container payment rows from the source quotation (same as the list).
     if order.quotation_revision_id:
@@ -262,7 +304,9 @@ async def _resolve_party(session: AsyncSession, name: str | None, context: Reque
     return await resolve_party_by_name(session, name, context)
 
 
-async def save_service_order(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+async def save_service_order(
+    session: AsyncSession, context: RequestContext, data: dict[str, Any], idempotency_key: str | None = None
+) -> dict:
     default_currency = await get_default_currency(session)
     from app.modules.master_data.currency_rates import assert_currency_code
     from app.modules.quotations.service import resolve_direction
@@ -299,26 +343,68 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
         except NotFound:
             order = None
     if order is None:
-        party = await _resolve_party(session, data.get("customer"), context)
-        direction = await resolve_direction(session, data.get("direction"))
+        # A replayed create request is answered with the order it already made,
+        # so a network retry never produces a second copy of the booking.
+        quotation_used = True
+        if idempotency_key:
+            replay = (
+                await session.execute(
+                    select(QuotationConversion).where(QuotationConversion.idempotency_key == idempotency_key)
+                )
+            ).scalars().first()
+            if replay is not None:
+                existing = await session.get(ServiceOrder, replay.service_order_id)
+                if existing is not None:
+                    return order_record(existing, existing.data or {})
+        # Quotation selection is mandatory for a new Service Order; the business
+        # party, trade direction and currency always come from that quotation.
+        quotation_id = data.get("quotationId") or data.get("quotation_id")
+        try:
+            numeric_quotation_id = int(str(quotation_id))
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed(
+                "A quotation is required for a new service order.",
+                {"quotationId": "Required"},
+            ) from exc
+        quotation = await session.get(Quotation, numeric_quotation_id)
+        if quotation is None:
+            raise ValidationFailed("The selected quotation does not exist.", {"quotationId": "Unknown quotation."})
+        from app.modules.quotations.service import get_latest_revision
+
+        revision = await get_latest_revision(session, quotation)
+        if revision is None:
+            raise ValidationFailed(
+                "The selected quotation has no revision to copy.",
+                {"quotationId": "No revision."},
+            )
         number = data.get("jobNo") or data.get("serviceOrderNo")
         if not number or not str(number).strip():
             number = await allocate_number(session, "SERVICE_ORDER")
         order = ServiceOrder(
             service_order_no=str(number),
-            customer_party_id=party.id,
-            trade_direction_id=direction.id,
+            quotation_revision_id=revision.id,
+            customer_party_id=quotation.customer_party_id,
+            trade_direction_id=quotation.trade_direction_id,
             status=normalize_order_status(data.get("status"), "ACTIVE"),
-            currency_code=data.get("currency") or default_currency,
+            currency_code=revision.currency_code or default_currency,
+            description=revision.description,
             created_by_user_id=context.user_id,
-            data={},
+            data=dict(quotation.data or {}),
         )
         session.add(order)
         await session.flush()
-        # Pin the order to the configuration in force right now, so a later
-        # publish cannot re-interpret the component rows it will collect.
-        await config_versions.stamp_service_order(session, order)
+        await _attach_quotation_copy(session, order, quotation, revision)
+        session.add(
+            QuotationConversion(
+                quotation_revision_id=revision.id,
+                service_order_id=order.id,
+                converted_by_user_id=context.user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
     else:
+        quotation_used = False
+        _ensure_order_editing(order)
         # Only reassign when the caller actually supplied the field, otherwise a
         # partial save would silently repoint the order at another party/direction.
         if "customer" in data:
@@ -328,9 +414,14 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
         order.status = normalize_order_status(data.get("status"), order.status)
         order.currency_code = data.get("currency") or order.currency_code
 
+    # A brand-new quotation-based order arrives with the UI's empty route
+    # collections; the server-side copy is authoritative, so a blank list must
+    # not wipe the stops it just copied.
+    if quotation_used and not data.get("places"):
+        data.pop("places", None)
     if "places" in data:
         # Route stops are their own collection, not arbitrary header JSON: this
-        # keeps them queryable and lets the quotation conversion copy them. Row
+        # keeps them queryable and lets the quotation copy populate them. Row
         # ids are preserved, so an existing row keeps an inactive reference.
         data["places"] = await save_route_stops(
             session,
@@ -340,21 +431,66 @@ async def save_service_order(session: AsyncSession, context: RequestContext, dat
             rows=data.get("places"),
         )
 
-    payload = {key: value for key, value in data.items() if key not in {"id", "createdAt", "updatedAt"}}
+    payload = {key: value for key, value in data.items() if key not in {"id", "createdAt", "updatedAt", "quotationId", "quotation_id"}}
     # Merge so a partial update does not discard previously stored fields.
     order.data = jsonable({**(order.data or {}), **payload})
-    await session.commit()
+    if not str((order.data or {}).get("customer") or "").strip() and order.customer_party_id:
+        stored = await session.get(BusinessParty, int(order.customer_party_id))
+        if stored is not None:
+            order.data = jsonable({**(order.data or {}), "customer": stored.legal_name})
+    from app.modules.telegram.producers import service_order_notification
+
+    # Transactional outbox: the notification commits with the order itself, so
+    # a Telegram outage can never fail a booking and a replay cannot double-send.
+    await service_order_notification(session, order, "SERVICE_ORDER_CREATED" if quotation_used else "SERVICE_ORDER_UPDATED")
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Two racing creates carrying the same idempotency key: the loser rolls
+        # back and answers with the winning request's order instead of a 500.
+        await session.rollback()
+        if idempotency_key:
+            replay = (
+                await session.execute(
+                    select(QuotationConversion).where(QuotationConversion.idempotency_key == idempotency_key)
+                )
+            ).scalars().first()
+            if replay is not None:
+                existing = await session.get(ServiceOrder, replay.service_order_id)
+                if existing is not None:
+                    return order_record(existing, existing.data or {})
+        raise
     await cache.bump("reports")
-    return order_record(order, order.data or {})
+    extra: dict[str, Any] | None = None
+    if order.quotation_revision_id:
+        link = (
+            await session.execute(
+                select(QuotationRevision.id, Quotation.id, Quotation.quotation_no)
+                .join(Quotation, Quotation.id == QuotationRevision.quotation_id)
+                .where(QuotationRevision.id == order.quotation_revision_id)
+            )
+        ).first()
+        if link:
+            extra = {"quotationId": str(link[1]), "quotationNo": link[2]}
+    return order_record(order, order.data or {}, extra)
 
 
 async def finish_service_order(session: AsyncSession, context: RequestContext, identifier: str) -> dict:
-    """Mark a service order as finished (idempotent)."""
+    """Mark a service order as finished (idempotent).
+
+    Operational editing locks from this point; invoices, payments and the
+    accounting trail continue on the order without needing full settlement.
+    """
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot finish an inactive service order.")
     if order.status != "FINISHED":
         order.status = "FINISHED"
+        order.finished_at = utcnow()
+        order.finished_by_user_id = context.user_id
+        from app.modules.telegram.producers import service_order_notification
+
+        await service_order_notification(session, order, "SERVICE_ORDER_FINISHED")
         await session.commit()
         await cache.bump("reports")
     return order_record(order, order.data or {})
@@ -372,7 +508,23 @@ async def set_service_order_status(
     order = await OperationsRepository(session).resolve_order(identifier)
     if order is None:
         raise NotFound("Service order not found.")
-    order.status = normalize_order_status(status, order.status)
+    # Leaving FINISHED (reopen) keeps the order editable again but clears the
+    # Ended stamp: it is empty while the order is not finished, and a new Finish
+    # writes a fresh one.
+    if order.status == "FINISHED" and normalize_order_status(status, order.status) != "FINISHED":
+        order.finished_at = None
+        order.finished_by_user_id = None
+    previous = str(order.status)
+    next_status = normalize_order_status(status, order.status)
+    order.status = next_status
+    if previous != next_status:
+        from app.modules.telegram.producers import service_order_notification
+
+        await service_order_notification(
+            session,
+            order,
+            "SERVICE_ORDER_CANCELLED" if next_status == "INACTIVE" else "SERVICE_ORDER_STATUS_CHANGED",
+        )
     await session.commit()
     await cache.bump("reports")
     return order_record(order, order.data or {})
@@ -423,6 +575,10 @@ async def record_charge_status_change(
     """Issuing is the only charge transition; record it with both statuses."""
     from app.modules.audit.service import write_audit
 
+    if before == "ISSUED":
+        # An idempotent re-issue is answered with the same state; only the
+        # DRAFT → ISSUED transition leaves one audit event.
+        return
     await write_audit(
         session,
         context,
@@ -486,7 +642,6 @@ async def create_service_order_from_quotation(
 ) -> ServiceOrder:
     default_currency = await get_default_currency(session)
     number = await allocate_number(session, "SERVICE_ORDER")
-    data = dict(quotation.data or {})
     order = ServiceOrder(
         service_order_no=number,
         quotation_revision_id=revision.id,
@@ -496,10 +651,25 @@ async def create_service_order_from_quotation(
         currency_code=revision.currency_code or default_currency,
         description=revision.description,
         created_by_user_id=context.user_id,
-        data=data,
+        data=dict(quotation.data or {}),
     )
     session.add(order)
     await session.flush()
+    await _attach_quotation_copy(session, order, quotation, revision)
+    return order
+
+
+async def _attach_quotation_copy(
+    session: AsyncSession, order: ServiceOrder, quotation: Quotation, revision: QuotationRevision
+) -> None:
+    """Copy the quotation's reusable data into the order's own independent rows.
+
+    Route stops, container requirements and pricing lines become rows the order
+    owns — never shared pointers — so editing either document afterwards cannot
+    change the other. Actual container numbers, invoices, payments and journal
+    entries belong to this order alone and are never copied.
+    """
+    data = dict(order.data or {})
     # Pin the order to the configuration published when the quotation converts,
     # so a later publish cannot re-interpret its dynamic component rows.
     await config_versions.stamp_service_order(session, order)
@@ -573,8 +743,8 @@ async def create_service_order_from_quotation(
         requirement_by_source[source.id] = requirement
         # One pending box per required unit: the number is entered when the box is
         # actually collected, so the row starts with no identifier rather than a
-        # fabricated one. Re-conversion cannot duplicate these because a quotation
-        # converts once (idempotency key + duplicate guard in the quotation service).
+        # fabricated one. Every quotation reuse copies its own freshly prepared
+        # rows, so reusing the same quotation never duplicates a box.
         # Pricing-line types and quantities are deliberately never turned into
         # rows here: a line's quantity is a billing unit count, not a box count.
         for _ in range(max(1, int(source.quantity or 1))):
@@ -598,7 +768,7 @@ async def create_service_order_from_quotation(
 
     pricing = ServiceOrderPricing(
         service_order_id=order.id,
-        currency_code=revision.currency_code or default_currency,
+        currency_code=revision.currency_code or await get_default_currency(session),
         subtotal_amount=revision.subtotal_amount,
         discount_amount=revision.discount_amount,
         tax_amount=revision.tax_amount,
@@ -627,7 +797,6 @@ async def create_service_order_from_quotation(
         )
 
     await session.flush()
-    return order
 
 
 def _container_payload(container: ServiceOrderContainer, type_label: str | None = None) -> dict[str, Any]:
@@ -742,6 +911,7 @@ async def add_container(session: AsyncSession, context: RequestContext, identifi
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot add containers to an inactive service order.")
+    _ensure_order_editing(order)
     data = CONTAINER_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     existing: ServiceOrderContainer | None = None
     container_id = _int_or_none(data.get("id"))
@@ -820,6 +990,7 @@ async def delete_containers(
     is never silently removed; the caller reports the conflict instead.
     """
     order = await resolve_order(session, context, identifier)
+    _ensure_order_editing(order)
     rows = (
         await session.execute(
             select(ServiceOrderContainer).where(
@@ -1190,12 +1361,10 @@ async def issue_charge(session: AsyncSession, context: RequestContext, charge_id
     if not lines or (charge.total_amount or Decimal("0")) <= 0:
         raise ValidationFailed("A service charge must have at least one positive line before it can be issued.")
 
-    # Issuing confirms the commercial charge and automatically prepares the
-    # accounting draft. Posting remains a separate finance-authorized action.
+    # Issuing is an operational/billing state change only (workflows.md §9): the
+    # finance draft is created by the separate, finance-authorized convert
+    # command and journals follow only its posting.
     charge.status = "ISSUED"
-    from app.modules.finance import service as finance_service
-
-    await finance_service.create_invoice_from_charge(session, context, charge, commit=False)
     await session.commit()
     await cache.bump("reports")
     return await _charge_with_details(session, charge)
@@ -1212,13 +1381,25 @@ async def delete_charges(session: AsyncSession, ids: list[int]) -> int:
     return len(drafts)
 
 
-async def charge_to_invoice(session: AsyncSession, context: RequestContext, charge_id: int) -> dict:
+async def charge_to_invoice(
+    session: AsyncSession, context: RequestContext, charge_id: int, idempotency_key: str | None = None
+) -> dict:
     from app.modules.finance import service as finance_service
 
-    charge = await session.get(ServiceOrderCharge, charge_id)
+    # Lock the source charge so the whole check-and-create conversion is serial
+    # per charge on PostgreSQL: a second concurrent convert waits here, then its
+    # re-check inside the finance service sees the winner's source link and
+    # returns that document instead of drafting a second one.
+    charge = (
+        await session.execute(
+            select(ServiceOrderCharge).where(ServiceOrderCharge.id == charge_id).with_for_update()
+        )
+    ).scalars().first()
     if charge is None:
         raise NotFound("Service charge not found.")
-    document = await finance_service.create_invoice_from_charge(session, context, charge)
+    document = await finance_service.create_invoice_from_charge(
+        session, context, charge, idempotency_key=idempotency_key
+    )
     return document
 
 
@@ -1235,7 +1416,7 @@ async def list_attachments(session: AsyncSession, context: RequestContext, modul
             )
         )
     ).scalars().all()
-    return [_attachment_payload(item) for item in links]
+    return [await _attachment_payload_async(session, item) for item in links]
 
 
 async def link_attachment(
@@ -1288,7 +1469,8 @@ async def delete_attachments(session: AsyncSession, context: RequestContext, ids
     attachments = (
         await session.execute(select(Attachment).where(Attachment.id.in_(ids)))
     ).scalars().all()
-    storage = get_storage()
+    from app.modules.storage import service as storage_service
+
     removed = 0
     for attachment in attachments:
         if attachment.is_deleted:
@@ -1298,22 +1480,38 @@ async def delete_attachments(session: AsyncSession, context: RequestContext, ids
             delete(AttachmentLink).where(AttachmentLink.attachment_id == attachment.id)
         )
         try:
-            if storage.exists(attachment.storage_key):
-                storage.delete(attachment.storage_key)
+            tag = attachment.storage_provider or "local"
+            provider: Any = await storage_service.build_provider(session, tag)
+            if await asyncio.to_thread(provider.exists, attachment.storage_key):
+                await asyncio.to_thread(provider.delete, attachment.storage_key)
         except Exception:  # noqa: BLE001 - the flag is the source of truth, not the object store
+            pass
+        try:
+            from app.modules.storage.models import StorageReplica
+
+            replicas = (
+                await session.execute(select(StorageReplica).where(StorageReplica.attachment_id == attachment.id))
+            ).scalars().all()
+            for replica in replicas:
+                await session.delete(replica)
+        except Exception:  # noqa: BLE001 - replica cleanup is best-effort
             pass
         removed += 1
     await session.commit()
     return removed
 
 
-def _attachment_payload(attachment: Attachment) -> dict[str, Any]:
-    storage = get_storage()
-    url = (
-        storage.presigned_get(attachment.storage_key, settings.presigned_url_expire_seconds)
-        if storage.supports_presign
-        else None
-    )
+async def _attachment_payload_async(session: AsyncSession, attachment: Attachment) -> dict[str, Any]:
+    """Build the API attachment view, resolving URLs from the file's provider."""
+    from app.modules.storage import service as storage_service
+
+    tag = attachment.storage_provider or "local"
+    url = None
+    try:
+        provider = await storage_service.build_provider(session, tag)
+        url = await asyncio.to_thread(provider.presigned_get, attachment.storage_key, settings.presigned_url_expire_seconds)
+    except Exception:  # noqa: BLE001 - an unconfigured provider must not break listing
+        url = None
     if not url:
         url = f"{settings.storage_public_base_url}/{attachment.storage_key}"
     return {
@@ -1355,7 +1553,7 @@ async def update_attachment_note(
         raise NotFound("Attachment not found.")
     attachment.note = _attachment_note(note)
     await session.commit()
-    return _attachment_payload(attachment)
+    return await _attachment_payload_async(session, attachment)
 
 
 _UPLOAD_TYPES = {
@@ -1450,7 +1648,7 @@ def _validate_upload_content(extension: str, content: bytes) -> None:
 
 
 async def presign(session: AsyncSession, file_name: str, mime_type: str = "") -> dict[str, Any]:
-    storage = get_storage()
+    storage = await _resolve_upload_storage(session)
     clean_name, _, content_type = _upload_metadata(file_name, await effective_upload_extensions(session))
     key = f"{uuid.uuid4().hex}-{clean_name}"
     if storage.supports_presign and settings.storage_presigned_uploads_enabled:
@@ -1476,7 +1674,7 @@ async def store_upload(
     storage_key: str | None = None,
     note: str | None = None,
 ) -> dict:
-    storage = get_storage()
+    storage = await _resolve_upload_storage(session)
     clean_name, extension, content_type = _upload_metadata(file_name, await effective_upload_extensions(session))
     clean_note = _attachment_note(note)
     max_bytes = settings.upload_max_size_mb * 1024 * 1024
@@ -1489,26 +1687,78 @@ async def store_upload(
     key = storage_key or f"{uuid.uuid4().hex}-{clean_name}"
     if not re.fullmatch(r"[0-9a-f]{32}-[^/\\]{1,255}", key) or storage.exists(key):
         raise ValidationFailed("The storage key is invalid or already used.", {"file": "Invalid storage key"})
-    storage.put(key, content, content_type)
+    # Providers return the authoritative file id (Drive replaces the caller
+    # key with its own fileId); object stores echo the key unchanged.
+    stored_key = await asyncio.to_thread(storage.put, key, content, content_type)
     attachment = Attachment(
         file_name=clean_name,
-        storage_key=key,
+        storage_key=stored_key or key,
         mime_type=content_type,
         file_size_bytes=len(content),
-        storage_provider=storage.provider,
+        storage_provider=storage.tag,
         uploaded_by_user_id=context.user_id,
         note=clean_note,
     )
     session.add(attachment)
     await session.commit()
-    return _attachment_payload(attachment)
+    payload = await _attachment_payload_async(session, attachment)
+    # Durable backup scheduling never blocks or fails the upload itself.
+    try:
+        await _schedule_backup(attachment.id)
+    except Exception as exc:  # noqa: BLE001 - backup is asynchronous by design
+        logger.warning("Backup scheduling for attachment %s failed: %s", attachment.id, exc)
+    return payload
 
 
-async def read_attachment(storage_key: str) -> tuple[bytes, str]:
-    storage = get_storage()
-    if not storage.exists(storage_key):
-        raise NotFound("File not found.")
-    return storage.get(storage_key)
+async def _resolve_upload_storage(session: AsyncSession):
+    """The destination provider for new uploads, per the Settings configuration."""
+    from app.modules.storage import service as storage_service
+
+    return (await storage_service.resolve_upload_target(session))[0]
+
+
+async def _schedule_backup(attachment_id: int) -> None:
+    from app.core.database import SessionLocal
+    from app.modules.storage import service as storage_service
+    from app.modules.storage.models import StorageReplica
+
+    async with SessionLocal() as session:
+        config = await storage_service.load_config(session)
+        target = str(config.get("backupProvider") or "").strip()
+        if not target or not bool(config.get("backupEnabled")) or target == config.get("primaryProvider"):
+            return
+        if not storage_service.is_configured(target, (config.get("providers") or {}).get(target) or {}):
+            return
+        exists = (
+            await session.execute(
+                select(StorageReplica.id).where(
+                    StorageReplica.attachment_id == attachment_id,
+                    StorageReplica.backup_provider == target,
+                )
+            )
+        ).scalar_one_or_none()
+        if exists:
+            return
+        session.add(StorageReplica(attachment_id=attachment_id, backup_provider=target, backup_key="-", status="PENDING"))
+        await session.commit()
+
+
+async def read_attachment(storage_key: str, session: AsyncSession | None = None) -> tuple[bytes, str]:
+    """Stream the file from the provider it actually lives on (per its metadata)."""
+    from app.core.exceptions import NotFound
+    from app.modules.storage import service as storage_service
+
+    try:
+        return await storage_service.read_file(storage_key, None, session)
+    except (FileNotFoundError, OSError, LookupError) as exc:
+        # Deleted object or missing provider config → 404, not a raw provider error.
+        raise NotFound("File not found.") from exc
+    except Exception as exc:  # noqa: BLE001 - provider 404s surface as 404 too
+        import googleapiclient.errors  # noqa: PLC0415
+
+        if isinstance(exc, googleapiclient.errors.HttpError) and exc.resp.status == 404:
+            raise NotFound("File not found.") from exc
+        raise
 
 
 # --- Movements ---------------------------------------------------------------
@@ -1598,6 +1848,7 @@ async def save_movement(
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot change movements on an inactive service order.")
+    _ensure_order_editing(order)
 
     data = MOVEMENT_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     movement_id = _int_or_none(data.get("id"))
@@ -1690,6 +1941,7 @@ async def save_movement(
 
 async def delete_movements(session: AsyncSession, context: RequestContext, identifier: str, ids: list[int]) -> int:
     order = await resolve_order(session, context, identifier)
+    _ensure_order_editing(order)
     rows = (
         await session.execute(
             select(ServiceOrderMovement).where(
@@ -1747,6 +1999,7 @@ async def save_milestone(
     order = await resolve_order(session, context, identifier)
     if order.status == "INACTIVE":
         raise InvalidState("Cannot change milestones on an inactive service order.")
+    _ensure_order_editing(order)
 
     data = MILESTONE_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     milestone_id = _int_or_none(data.get("id"))
@@ -1809,6 +2062,7 @@ async def save_milestone(
 
 async def delete_milestones(session: AsyncSession, context: RequestContext, identifier: str, ids: list[int]) -> int:
     order = await resolve_order(session, context, identifier)
+    _ensure_order_editing(order)
     rows = (
         await session.execute(
             select(ServiceOrderMilestone).where(

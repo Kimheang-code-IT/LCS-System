@@ -52,6 +52,12 @@ class ImportModule:
     #: Keys a Create-and-Update import may not change: match keys and identity
     #: columns stay out, so an import can never rename a stable business code.
     fixed_keys: tuple[str, ...] = ()
+    #: Empty = the master-data pipeline. Configuration collections validate and
+    #: write through ``excel_io/config_io.py`` instead.
+    pipeline: str = ""
+    #: Configuration imports only ever create records: never overwrite, never
+    #: touch a published configuration silently.
+    create_only: bool = False
 
     def may_update(self, key: str) -> bool:
         return key not in self.fixed_keys and any(column.key == key and column.updatable for column in self.columns)
@@ -92,6 +98,15 @@ def master_data_module(collection: str, name: str, match_key: tuple[str, ...], f
                 updatable=camel not in match_key + fixed,
             )
         )
+    # Reference columns a Spec keeps outside ``fields`` (transportAssets has no
+    # field for transportType, yet every write requires it) — without these the
+    # import pipeline can never satisfy the spec's own required validation.
+    for camel, ref in spec.refs.items():
+        if any(column.key == camel for column in columns):
+            continue
+        columns.append(
+            ColumnSpec(key=camel, kind="reference", required=camel in spec.required, updatable=camel not in match_key + fixed)
+        )
     return ImportModule(
         key=collection,
         name=name,
@@ -123,11 +138,84 @@ _MASTER_ENTRIES = (
 )
 
 
+#: The Configuration module's own catalog (attributes, groups, tabs) plus the
+#: configuration *versions* workbook. Attributes/groups/tabs imports are
+#: create-only: a stable code already in the catalog is skipped, never edited.
+_CONFIG_ENTRIES = (
+    (
+        "componentAttributes",
+        "Component Attributes",
+        (
+            ColumnSpec("label", "text", required=True),
+            ColumnSpec("code", "text", required=True, updatable=False),
+            ColumnSpec("dataType", "text", required=True, example="select"),
+            ColumnSpec("options", "text", example="Option A; Option B"),
+        ),
+        ("code",),
+    ),
+    (
+        "componentGroups",
+        "Component Groups",
+        (
+            ColumnSpec("code", "text", required=True, updatable=False),
+            ColumnSpec("name", "text", required=True),
+            ColumnSpec("nameKm", "text"),
+            ColumnSpec("description", "text"),
+            ColumnSpec("renderMode", "text", example="table"),
+            ColumnSpec("displayOrder", "integer"),
+        ),
+        ("code",),
+    ),
+    (
+        "componentTabs",
+        "Component Tabs",
+        (
+            ColumnSpec("code", "text", required=True, updatable=False),
+            ColumnSpec("name", "text", required=True),
+            ColumnSpec("description", "text"),
+            ColumnSpec("tradeDirection", "text"),
+            ColumnSpec("displayOrder", "integer"),
+        ),
+        ("code",),
+    ),
+)
+
+
 def register_defaults() -> None:
     """Fill the registry (idempotent, so tests can reset and rebuild)."""
     for collection, name, match_key, fixed in _MASTER_ENTRIES:
         if collection not in REGISTRY:
             REGISTRY[collection] = master_data_module(collection, name, match_key, fixed)
+
+    if "componentAttributes" not in REGISTRY:
+        for collection, name, columns, match_key in _CONFIG_ENTRIES:
+            REGISTRY[collection] = ImportModule(
+                key=collection,
+                name=name,
+                view_permission="configuration.read",
+                manage_permission="configuration.manage",
+                template_version=1,
+                match_key=match_key,
+                columns=columns,
+                fixed_keys=match_key,
+                pipeline="component_config",
+                create_only=True,
+            )
+        # A configuration version imports as a whole workbook (Version /
+        # Attributes / Groups / Tabs / Relationships sheets) and always creates
+        # a new Draft: the file itself never names the version it occupies.
+        REGISTRY["configurationVersions"] = ImportModule(
+            key="configurationVersions",
+            name="Configuration Versions",
+            view_permission="configuration.read",
+            manage_permission="configuration.manage",
+            template_version=1,
+            match_key=(),
+            columns=(),
+            fixed_keys=(),
+            pipeline="config_versions",
+            create_only=True,
+        )
 
 
 register_defaults()

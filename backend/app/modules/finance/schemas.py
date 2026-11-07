@@ -23,7 +23,7 @@ ACCOUNT_TYPES = ("ASSET", "LIABILITY", "EQUITY", "REVENUE", "EXPENSE")
 NORMAL_BALANCES = ("DEBIT", "CREDIT")
 ACTIVE_STATUSES = ("ACTIVE", "INACTIVE")
 FINANCIAL_ACCOUNT_TYPES = ("BANK", "CASH")
-PERIOD_STATUSES = ("OPEN", "CLOSED")
+PERIOD_STATUSES = ("DRAFT", "OPEN", "CLOSED")
 
 ACCOUNT_SCHEMA = RecordSchema(
     (
@@ -93,9 +93,26 @@ FINANCIAL_ACCOUNT_SCHEMA = RecordSchema(
 
 PERIOD_WRITE_SCHEMA = RecordSchema(
     (
+        FieldSpec("name", max_length=120),
+        FieldSpec("description", max_length=2_000, aliases=("note",)),
+        FieldSpec("startDate", kind="date", aliases=("start_date",)),
+        FieldSpec("endDate", kind="date", aliases=("end_date",)),
         FieldSpec("status", choices=PERIOD_STATUSES, max_length=20),
-        FieldSpec("reason", max_length=2_000, aliases=("note",)),
+        FieldSpec("reason", max_length=2_000),
     ),
+    readonly=("id", "createdAt", "updatedAt"),
+    reject_unknown=True,
+)
+
+PERIOD_CREATE_SCHEMA = RecordSchema(
+    (
+        FieldSpec("name", max_length=120),
+        FieldSpec("description", max_length=2_000),
+        FieldSpec("startDate", kind="date", required=True, aliases=("start_date",)),
+        FieldSpec("endDate", kind="date", required=True, aliases=("end_date",)),
+        FieldSpec("status", choices=PERIOD_STATUSES, max_length=20),
+    ),
+    readonly=("id", "createdAt", "updatedAt"),
     reject_unknown=True,
 )
 

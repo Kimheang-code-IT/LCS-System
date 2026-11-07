@@ -258,7 +258,12 @@ async function removeMembership(link: ComponentTabGroupLink) {
       create-label="Add tab"
       @create="startAdd"
       @refresh="refresh"
-    />
+    >
+      <ExcelConfigPageIo
+        collection="componentTabs"
+        @imported="refresh"
+      />
+    </LayoutAppHeaderPageActions>
 
     <div class="grid gap-4 lg:grid-cols-[280px_1fr]">
       <aside class="rounded-lg border border-default bg-default p-2">

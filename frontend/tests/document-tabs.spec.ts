@@ -97,7 +97,6 @@ describe('moduleDocumentTabs', () => {
       'overview',
       'route',
       'pricing',
-      'containers',
       'files',
       'revisions',
     ])
@@ -114,11 +113,9 @@ describe('moduleDocumentTabs', () => {
       type: 'line-table',
       key: 'pricingLines',
     })
-    // The container requirements grid feeds the conversion's prepared boxes.
-    expect(tabs.find(tab => tab.id === 'containers')?.sections[0]?.fields[0]).toMatchObject({
-      type: 'line-table',
-      key: 'containerRequirements',
-    })
+    // Containers are derived from the pricing lines' Container Type + Qty; the
+    // quotation has no manual container grid any more.
+    expect(tabs.find(tab => tab.id === 'containers')).toBeUndefined()
   })
 
   it('compiles service charges and finance documents from tables', () => {

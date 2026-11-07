@@ -3,7 +3,7 @@ export function usePrintBilingual() {
   const khmerReady = ref(false)
 
   onMounted(async () => {
-    await loadLocaleMessages('km')
+    await Promise.all([loadLocaleMessages('km'), loadLocaleMessages('en')])
     khmerReady.value = true
   })
 
@@ -20,13 +20,13 @@ export function usePrintBilingual() {
 
   function bi(key: string): string {
     const khmerLine = kmText(key)
-    const english = t(key)
+    const english = t(key, {}, { locale: 'en' })
     return khmerLine ? `${khmerLine}\n${english}` : english
   }
 
   function biInline(key: string): string {
     const khmerLine = kmText(key)
-    const english = t(key)
+    const english = t(key, {}, { locale: 'en' })
     return khmerLine ? `${khmerLine} / ${english}` : english
   }
 

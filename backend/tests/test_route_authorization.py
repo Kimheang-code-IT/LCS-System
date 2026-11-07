@@ -34,6 +34,7 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/health/ready"),
         ("GET", "/"),
         ("GET", "/api/v1/health"),
+        ("GET", "/api/v1/maintenance/status"),
         # First-run bootstrap; the handler refuses once a user exists.
         ("GET", "/api/v1/auth/setup/status"),
         ("POST", "/api/v1/auth/setup/initialize"),

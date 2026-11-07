@@ -109,6 +109,16 @@ export interface TelegramConfig {
   lastTestMessage?: string
   destinations: TelegramDestination[]
   messageTemplate: string
+  /** Client group: Service Order notifications (own toggle, chat id, optional token). */
+  clientEnabled?: boolean
+  clientBotToken?: string
+  clientBotTokenConfigured?: boolean
+  clientGroupId?: string
+  clientEvents?: Record<string, boolean>
+  clientConnectionStatus?: ConnectionStatus
+  clientBotDisplayName?: string
+  clientLastTestedAt?: string
+  clientLastTestMessage?: string
 }
 
 export interface TelegramAlertRule {
@@ -266,7 +276,92 @@ export interface AppConfig {
   security: AppConfigSecurity
   system: AppConfigSystem
   backup: AppConfigBackup
+  storage: StorageConfig
   updatedAt: string
+}
+
+// --- Multi-provider file storage -------------------------------------------------
+
+export type StorageProviderTag = '' | 'r2' | 'gdrive'
+
+export interface StorageProviderR2 {
+  accountId: string
+  bucketName: string
+  accessKeyId: string
+  /** Write-only: never returned by the API (blank = keep stored value). */
+  secretAccessKey: string
+  secretAccessKeyConfigured?: boolean
+  /** Auto-generated endpoint; override for non-default locations. */
+  endpoint: string
+  objectPrefix: string
+  connectionStatus: string
+  lastVerifiedAt: string
+  lastTestMessage: string
+}
+
+export interface StorageProviderGDrive {
+  authType: 'oauth' | 'service_account' | ''
+  clientId: string
+  /** Write-only: never returned by the API (blank = keep stored value). */
+  clientSecret: string
+  clientSecretConfigured?: boolean
+  /** Write-only: service account JSON (blank = keep stored value). */
+  serviceAccountJson: string
+  serviceAccountConfigured?: boolean
+  connectedEmail: string
+  rootFolderId: string
+  /** Google Workspace shared drive the account (or service account) belongs to. */
+  sharedDriveId: string
+  connectionStatus: string
+  lastVerifiedAt: string
+  lastTestMessage: string
+}
+
+export interface StorageConfig {
+  primaryProvider: StorageProviderTag
+  backupProvider: StorageProviderTag
+  backupEnabled: boolean
+  backupIntervalHours: number
+  backupMaxRetries: number
+  retentionDays: number
+  providers: {
+    r2: StorageProviderR2
+    gdrive: StorageProviderGDrive
+  }
+}
+
+export interface StorageProviderStatus {
+  configured: boolean
+  connectionStatus: string
+  lastVerifiedAt: string | null
+  lastTestMessage: string
+  /** Present for Google Drive in OAuth mode. */
+  connectedEmail?: string
+}
+
+export interface StorageJob {
+  id: string
+  jobType: 'BACKUP' | 'MIGRATION' | 'RESTORE'
+  target: string
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+  dryRun: boolean
+  total: number
+  processed: number
+  failed: number
+  progress: number
+  startedAt: string | null
+  finishedAt: string | null
+  message: string | null
+}
+
+export interface StorageOverview {
+  backupEnabled: boolean
+  primaryProvider: string
+  backupProvider: string
+  pending: number
+  lastSuccessfulBackup: string | null
+  lastFailedBackup: string | null
+  recentJobs: StorageJob[]
 }
 
 export const TELEGRAM_TEMPLATE_VARIABLES = [

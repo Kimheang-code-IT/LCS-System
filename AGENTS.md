@@ -1,76 +1,73 @@
-# AGENTS.md
+# LCS agent working agreement
 
-LCS is an existing single-tenant freight-forwarding modular monolith with double-entry finance.
-Preserve its FastAPI backend, Nuxt 4 static SPA, PostgreSQL, Casbin, and accounting engine.
-Exactly 44 business pages are approved; supporting routes do not increase this count.
+LCS is an existing single-tenant freight-forwarding ERP with double-entry finance.
+Preserve FastAPI / SQLAlchemy / PostgreSQL, the Nuxt 4 static SPA, Casbin and exactly
+44 approved business pages. Supporting routes add no pages.
 
-## Repository and required reading order
+## Load context progressively
 
-1. Read this file and [agent handbook](docs/00-agent-handbook.md).
-2. Read [master roadmap](docs/plans/MASTER-ROADMAP.md), the active plan, and its Handoff.
-3. Read [design brief](docs/09-design-brief.md) for approved scope and requirement IDs.
-4. Read only relevant [architecture](docs/01-system-architecture.md),
-   [data](docs/02-data-model.md), [security](docs/03-security-access-control.md),
-   [record lifecycle](docs/04-record-workflow-lifecycle.md), and [API](docs/05-api-specification.md) sections.
-5. Follow [coding](docs/10-coding-conventions.md), [testing](docs/11-testing-and-quality.md),
-   [documentation](docs/12-documentation-standards.md), and [Git](docs/13-git-workflow.md) standards.
-6. Read [operations](docs/06-operations-runbook.md) before operational work.
+1. Read this file and [project context](.agents/context/project-context.md).
+2. For implementation/resume, read the [roadmap](docs/04-implementation/master-plan.md),
+   selected plan's Handoff and relevant phase/task only. An active plan is a resume pointer,
+   not authorization to bypass this request. S01 remains unfinished.
+3. Use [module map](.agents/context/module-map.md) to find the owner; open its row and only
+   needed [documentation](docs/README.md) sections. The [handbook](docs/03-development/ai-agent-guidelines.md)
+   owns lifecycle/resume details. [Tooling](docs/03-development/agent-tooling.md) owns skill/MCP setup.
+4. Search filenames/symbols/imports before reading source; inspect the smallest sufficient
+   range plus relevant callers/tests. Reuse unchanged context; do not re-audit the repository.
+   Load only the relevant skill. Respect lean-ctx read/search/shell rules when available.
 
-`backend/`: FastAPI modules, tests, Alembic. `frontend/`: Nuxt app, Vitest, Playwright.
-`infrastructure/`: Compose/nginx/scripts. `docs/`: approved foundation and retained detailed references.
-`.opencode/`: project skills, commands, and reviewer instructions.
+## Work within scope
 
-## Implementation and validation rules
+- Check Git status, untracked files and LastWriteTime before edits; preserve other sessions'
+  work. Verify behavior that already meets acceptance; implement only demonstrated gaps.
+- Reuse existing components, services, repositories, contracts and calculators. Keep functions
+  clear, types consistent, errors explicit and dependencies minimal; no unrelated refactors.
+- Follow [coding standards](docs/03-development/coding-standards.md) and approved requirements.
+  Source proves implementation, not acceptance. Surface conflicting/outdated requirements.
+- Classify FAST / STANDARD / DEEP using [testing policy](docs/03-development/testing-guide.md).
+  Plan architectural, multi-file API/data/security/workflow work before edits; use host plan
+  mode when available, otherwise a brief written plan. Work one testable slice at a time.
+- Default to one coding agent. Skills do not imply subagents. Use read-only review for DEEP
+  changes; delegate other independent work only when useful, supported and authorized.
 
-- Classify FAST / STANDARD / DEEP using the handbook; escalate for finance, auth, schema,
-  shared contracts, or infrastructure. Never reduce DEEP verification.
-- Use plan mode for architectural, multi-file, API, data-model, security, or workflow changes.
-- Build one independently testable vertical slice at a time; follow approved dependencies.
-- Inspect existing code and tests first. If behavior already meets acceptance, verify it;
-  do not rewrite it. Implement only demonstrated defects or missing requirements.
-- Follow existing patterns; preserve working functionality and permission semantics.
-- Add/update meaningful tests for changed behavior. Never weaken authorization, validation,
-  accounting protections, error handling, or tests to obtain a pass.
-- Gate touched stacks with available lint, typecheck, and tests; use the testing reference
-  for scope and order. Report exact commands, observed output, and unverified claims.
-- Do not refactor unrelated code or add dependencies without justification.
-- Check status, untracked files, and LastWriteTime before edits; preserve other sessions' work.
-- Use the project tooling rules in coding conventions; load only relevant skills.
-- Search before reading: locate with lean-ctx/ripgrep, then read only the needed ranges.
-  Do not re-read unchanged files or re-run a suite already run in this session.
+## Protect data and access
 
-## Security, finance, and restricted areas
+- Casbin is the sole authorization engine; backend checks are mandatory. Preserve protected
+  Super Administrator/current role semantics; add no parallel permission map.
+- Apply [financial invariants](docs/01-architecture/database-design.md#financial-data-integrity--canonical-invariants):
+  Decimal, balanced/atomic/idempotent posting, settlement bounds, immutable posted history,
+  source/rate snapshots. Printing never writes or allocates numbers.
+- Preserve historical records/relationships. Use additive Alembic migrations; never hand-edit
+  generated SQL. Remove obsolete docs only after content and dependency review.
+- Never read/copy/expose/stage/commit docs/lcssystem.pem, private keys or secrets; report
+  configuration presence only. No production data use, deployment, provider/infrastructure
+  changes, destructive reset or Git commit without appropriate explicit authorization.
 
-- Casbin is the only authorization decision engine; backend checks are mandatory.
-- Preserve the protected Super Administrator role; add no parallel role-permission mapping.
-- Follow accounting invariants in the data-model reference for every financial change.
-- Never read, copy, expose, stage, or commit `docs/lcssystem.pem`, private keys, or secrets.
-- Never print secret environment values; report configuration presence only.
-- Remove obsolete documentation only after content review, consolidation and dependency checks; never purge historical business records automatically.
-- Do not hand-edit generated schema SQL. Follow additive Alembic and schema-doc rules.
-- No production data use, deployment, provider migration, infrastructure changes, destructive
-  reset, or Git commit without the appropriate explicit authorization.
-- Foundation authorization permits documentation only; S01 implementation has not started.
+## Verify, record and stop
 
-## Documentation Policy
+- Run risk-based checks for changed behavior only. No automatic full suites, browser, build
+  or database work for prose/simple UI. Do not repeat passing suites without a new reason.
+  Essential finance/security/integrity checks and DEEP review remain mandatory; never weaken
+  validation, accounting protections, authorization or assertions for a pass.
+- Record exact commands/results/limits. Update only owning docs, affected decisions, phase/task
+  and Handoff; follow [documentation standards](docs/03-development/documentation-standards.md).
+  Context is a navigation aid; canonical docs remain authoritative. No secret/log dumps.
+- On continue/resume follow the handbook and unfinished Handoff only. On handoff/context
+  exhaustion stop implementation and record completed/remaining work and exact next step.
+- Report changes, actual verification and risks. Stop at requested scope; no automatic next
+  phase. No Git commit without explicit user authorization.
 
-- Maintain the master roadmap and active plan.
-- Update docs/00–13 when their area changes, including the conditional lifecycle document.
-- Create feature documentation when a new feature starts and its need is established.
-- Create user guides and release notes only for user-facing releases.
-- Create templates only when a document type is needed repeatedly.
-- Do not create speculative files or competing authoritative requirements.
-- Update only directly affected documentation; follow canonical ownership and legacy precedence
-  in the documentation standards. Use the [project status checklist](docs/plans/PROJECT-STATUS-CHECKLIST.md)
-  as the verification index; read only the section the task touches, never the whole
-  file; preserve the tooling-required feature report and its evidence.
+## graphify
 
-## Continue development and handoff
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
-On “Continue development”, “continue”, or “resume”, read this file, the master roadmap,
-and the active plan's Handoff. Follow the complete resume algorithm in the handbook:
-continue unfinished work only, preserve scope, validate, and update status/Handoff.
-On “handoff” or nearing the context limit, stop implementation and update Handoff before
-ending. Follow the handoff guide, including its resume prompt and conditional WIP convention.
-Never make a Git commit without the user's explicit authorization.
-An active plan is a resume pointer, not permission to bypass the user's current task scope.
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.

@@ -68,7 +68,7 @@ export function useDocumentActions(options: {
     return saved
   }
 
-  async function openPrint(templateId: PrintTemplateId) {
+  async function openPrint(templateId: PrintTemplateId, containerId?: string) {
     if (!module.value || !model.value.id) return
     await navigateTo(buildPrintRoute({
       collection: module.value.collection,
@@ -76,6 +76,8 @@ export function useDocumentActions(options: {
       template: templateId,
       returnTo: route.fullPath,
       modulePath: module.value.path,
+      containerId,
+      autoPrint: module.value.collection !== 'debitNotes',
     }))
   }
 

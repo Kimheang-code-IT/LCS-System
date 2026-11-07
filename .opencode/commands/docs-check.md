@@ -1,25 +1,20 @@
 ---
-description: Check whether documentation is stale or missing for the current change
+description: Check changed documentation, skill and context references
 ---
 
-Scope: the uncommitted diff plus what it changes in behaviour.
+Read docs/03-development/documentation-standards.md; inspect only task-changed prose/config.
 
-1. Generated files — never hand-edit. Regenerate and verify from `backend/`:
-   `uv run python scripts/generate_schema_docs.py --check --strict`. Prose for table and
-   column descriptions lives in `backend/scripts/schema_descriptions.py`.
-2. Status and risk — `docs/10_testing_and_quality.md` (verified implementation status,
-   coverage gaps, open risks). Update the entry the change touches; never mark
-   unverified work complete.
-3. Permissions — a new endpoint or permission code updates `docs/09_roles_and_permissions.md`
-   and `app/core/permissions.py` together.
-4. Architecture — layering, module boundary, or a new module updates
-   `docs/05_solution_architecture.md`.
-5. Deploy — a new env var, service, or migration step updates
-   `docs/11_deployment_and_security.md` and `infrastructure/.env.example`.
-6. Commands — a new or changed command updates the command list in `AGENTS.md` and
-   `README.md` only if the documented invocation changed.
-7. Reference check — every path and symbol the docs name must still exist. Report dead
-   references instead of silently deleting surrounding text.
+- Check relative local links/anchors, named source paths, skill frontmatter/name uniqueness
+  and discovery locations. Read required content withheld by tools only if access permits;
+  otherwise preserve it and report the semantic limit.
+- Canonical owners: requirements/architecture/business rules/API, current feature-status and
+  affected task/Handoff. Archive is history, not a second status authority.
+- Context/skills link to those owners; no duplicated requirement sets, stale decisions,
+  token-savings claims, credentials or logs. Preserve docs folder structure and useful history.
+- Run generated-schema check only if schema/model/descriptions changed; never hand-edit SQL.
+- Permissions/API changes update the current catalog; deployment changes update the current
+  deployment guide. Neither is implied by prose-only changes.
+- Run node scripts/feature-status.mjs for routing; do not promote ERP status for setup prose.
 
-Report: files updated, files that still need updating and why, and anything that cannot be
-verified in this environment.
+Report exact structural checks, changed files, unresolved references/semantic limitations.
+No runtime/backend/frontend/full-suite/browser/database gate for documentation-only work.

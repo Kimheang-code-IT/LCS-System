@@ -5,6 +5,7 @@ import { compactQuery, stableQueryString } from '~/utils/api/query'
 import { csrfRequestHeaders } from '~/utils/security/csrf'
 import { authErrorCode, canReplayBody } from '~/utils/auth/renewal'
 import { isNetworkFailure } from '~/utils/api/errors'
+import { redirectForMaintenance } from '~/utils/auth/maintenance'
 
 type ApiRequestOptions = {
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
@@ -101,11 +102,12 @@ export function useApi() {
         if (!sameOriginApiUrl(url, String(baseURL))) {
             throw new Error('API requests must use the configured API origin')
         }
-        if (!isAuthEndpoint(url)) await authStore.waitForIdentity()
-        if (authStore.identityUnverified && !isAuthEndpoint(url)) {
+        const publicStatus = url === '/api/v1/maintenance/status'
+        if (!isAuthEndpoint(url) && !publicStatus) await authStore.waitForIdentity()
+        if (authStore.identityUnverified && !isAuthEndpoint(url) && !publicStatus) {
             throw { statusCode: 503, data: { code: 'SESSION_IDENTITY_UNAVAILABLE', message: t('session.connection') } }
         }
-        if (authStore.sessionExpired && !isAuthEndpoint(url)) {
+        if (authStore.sessionExpired && !isAuthEndpoint(url) && !publicStatus) {
             throw { statusCode: 401, data: { code: 'SESSION_EXPIRED', message: t('session.expired') } }
         }
         const requestKey = getRequestKey(url, options)
@@ -146,6 +148,10 @@ export function useApi() {
                     ...options.headers,
                 },
                 onResponseError({ response }) {
+                    if (response.status === 503 && response._data?.code === 'MAINTENANCE_MODE') {
+                        if (import.meta.client && redirectForMaintenance(response.status, response._data?.code, window.location.pathname)) void navigateTo('/maintenance')
+                        return
+                    }
                     if (response.status === 401) {
                         sawUnauthorized = true
                         return

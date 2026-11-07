@@ -58,14 +58,14 @@ export const freightDocumentRecordKey: InjectionKey<{
 export const freightDocumentModelKey: InjectionKey<Ref<FreightRecord>> = Symbol('freightDocumentModel')
 
 /**
- * Collections whose document chrome shows the comments & activity panel.
- * Only quotations, service orders and service charges keep this feature.
+ * Runtime upload owner for `kind: 'files'` tables: the page decides which
+ * persisted record owns the uploads it renders. `recordNo` is the NUMERIC id
+ * the attachment link wants; an unsaved document returns an empty one and the
+ * upload stays generic (the metadata still round-trips in the payload).
  */
-export const COMMENT_ACTIVITY_COLLECTIONS = new Set(['quotations', 'jobs', 'jobCharges'])
-
-export function supportsCommentActivity(collection: string | null | undefined): boolean {
-  return Boolean(collection && COMMENT_ACTIVITY_COLLECTIONS.has(collection))
-}
+export const freightDocumentAttachmentKey: InjectionKey<
+  () => { module: string, recordNo: string } | undefined
+> = Symbol('freightDocumentAttachmentOwner')
 
 const TYPE_MAP: Record<FreightFieldType, FieldType> = {
   text: 'text',
@@ -354,14 +354,6 @@ function quotationTabs(module: FreightModule, options: ModuleDocumentTabsOptions
       id: 'pricing',
       labelKey: 'freight.quotationTabs.pricing',
       sections: [{ id: 'pricing', fields: [lineTableField(tableOrThrow(module, 'pricingLines'), options)] }],
-    },
-    {
-      // The configured container-requirements grid: quantities here are what a
-      // conversion turns into prepared actual-container rows on the order.
-      id: 'containers',
-      labelKey: 'freight.quotationTabs.containers',
-      label: tableOrThrow(module, 'containerRequirements').title,
-      sections: [{ id: 'containers', fields: [lineTableField(tableOrThrow(module, 'containerRequirements'), options)] }],
     },
     {
       id: 'files',

@@ -20,28 +20,8 @@
   //   npx -y @playwright/mcp@0.0.83 install-browser chrome-for-testing
   // Localhost-only origins are a guardrail, not a security boundary: the test
   // account must still be a dedicated non-production user.
-  "mcp": {
-    "servers": {
-      "playwright": {
-        "type": "local",
-        // token-opt: off by default; flip to false only for interactive UI checks.
-        "disabled": true,
-        "command": [
-          "npx",
-          "-y",
-          "@playwright/mcp@0.0.83",
-          "--browser",
-          "chromium",
-          "--headless",
-          "--isolated",
-          "--output-dir",
-          ".playwright-mcp",
-          "--allowed-origins",
-          "http://localhost;http://localhost:8000;http://127.0.0.1;http://127.0.0.1:8000"
-        ]
-      }
-    }
-  },
+  // Removed 2026-11-06: browser acceptance moved to manual testing; restore
+  // this block (browser e2e) only if the automated browser suite returns.
 
   // Ordered rules; the LAST matching rule wins. `/permissions` in the TUI shows
   // what is currently in force.
@@ -133,7 +113,6 @@
       // token-opt: tool caches and generated graphs are not source.
       ".opencode/node_modules/**",
       "graphify-out/**",
-      ".playwright-mcp/**",
       ".serena/**"
     ]
   }

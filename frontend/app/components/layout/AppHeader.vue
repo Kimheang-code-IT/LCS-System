@@ -187,7 +187,7 @@ async function onHeaderRefresh() {
           />
         </template>
         <CommonAppDocumentActionButton
-          v-else-if="actions?.canCreate"
+          v-if="actions?.canCreate"
           :icon="actions.createIcon || 'i-lucide-plus'"
           :label="actions.createLabel"
           @click="actions.onCreate?.()"

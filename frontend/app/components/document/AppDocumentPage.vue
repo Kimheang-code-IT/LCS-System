@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 import type {
-  ActivityEvent,
   AttachmentMeta,
   DocumentTabSchema,
-  EntityComment,
 } from '~/types/common'
 import { useConfirm } from '~/composables/common/useConfirm'
 import type { ExportRequest } from '~/types/export'
@@ -31,7 +29,6 @@ const props = withDefaults(defineProps<{
   /** Messages that belong to no single field (business rule, network). */
   formErrors?: string[]
   showSave?: boolean
-  showComments?: boolean
   showTabs?: boolean
   showListNav?: boolean
   canNavigatePrevious?: boolean
@@ -42,17 +39,7 @@ const props = withDefaults(defineProps<{
   isCreate?: boolean
   /** Force the wider document content shell (matches App Config settings width). */
   contentWide?: boolean
-  canComment?: boolean
-  comments?: EntityComment[]
-  activity?: ActivityEvent[]
   attachments?: AttachmentMeta[]
-  commentBody?: string
-  submittingComment?: boolean
-  updatingCommentId?: string | null
-  deletingCommentId?: string | null
-  hasMoreFeed?: boolean
-  loadingMoreFeed?: boolean
-  currentUser?: { id: string, name: string, email?: string }
   moreItems?: DropdownMenuItem[][]
   exporting?: boolean
   canExport?: boolean
@@ -84,7 +71,6 @@ const props = withDefaults(defineProps<{
   readOnly: false,
   canSave: true,
   showSave: true,
-  showComments: false,
   showTabs: true,
   showListNav: false,
   canNavigatePrevious: false,
@@ -93,16 +79,7 @@ const props = withDefaults(defineProps<{
   listNavigationDirection: null,
   isCreate: false,
   contentWide: false,
-  canComment: true,
-  comments: () => [],
-  activity: () => [],
   attachments: () => [],
-  commentBody: '',
-  submittingComment: false,
-  updatingCommentId: null,
-  deletingCommentId: null,
-  hasMoreFeed: false,
-  loadingMoreFeed: false,
   exporting: false,
   canExport: true,
   confirmSave: true,
@@ -111,16 +88,11 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:activeTab': [string]
-  'update:commentBody': [string]
   'update:attachments': [AttachmentMeta[]]
   save: []
   refresh: []
-  submitComment: []
-  updateComment: [id: string, body: string]
-  deleteComment: [id: string]
-  loadMoreFeed: []
-  navigatePrevious: []
-  navigateNext: []
+  'navigatePrevious': []
+  'navigateNext': []
   export: [request: ExportRequest]
 }>()
 
@@ -278,25 +250,6 @@ class="flex min-h-0 w-full"
                   <!-- A tab whose content is not a field grid renders here: the
                        owning view decides what to show for the active tab. -->
                   <slot name="tab-extra" :tab-id="activeTab" />
-
-                  <DocumentAppDocumentContentShell v-if="showComments && !isCreate" :wide="contentWide">
-                    <DocumentAppCommentsActivity
-:comments="comments"
-:activity="activity"
-:comment-body="commentBody"
-                      :submitting="submittingComment"
-:updating-comment-id="updatingCommentId"
-                      :deleting-comment-id="deletingCommentId"
-:has-more="hasMoreFeed"
-:loading-more="loadingMoreFeed"
-                      :can-comment="canComment"
-:current-user="currentUser"
-                      @update:comment-body="emit('update:commentBody', $event)"
-@submit="emit('submitComment')"
-                      @update-comment="emit('updateComment', $event.id, $event.body)"
-                      @delete-comment="emit('deleteComment', $event)"
-@load-more="emit('loadMoreFeed')" />
-                  </DocumentAppDocumentContentShell>
 
                   <DocumentAppDocumentContentShell
 v-if="$slots['after-form']"

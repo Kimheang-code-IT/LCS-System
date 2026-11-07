@@ -12,7 +12,7 @@ const { biInline } = usePrintBilingual()
 
 <template>
   <div class="issuer-header">
-    <div v-if="issuer.logoUrl && !logoFailed" class="issuer-header__logo">
+    <div v-if="issuer.logoUrl" class="issuer-header__logo" :data-print-asset-error="logoFailed">
       <img
         :src="issuer.logoUrl"
         :alt="issuer.legalName || issuer.displayName || 'issuer logo'"
@@ -119,20 +119,20 @@ const { biInline } = usePrintBilingual()
 
 .issuer-header__contact {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
   gap: 2mm;
   margin: 2px 0 0;
   font-size: 9px;
   line-height: 1.45;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .issuer-header__contact-item {
   flex: 0 1 auto;
   min-width: 0;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .issuer-header__contact-item--email {

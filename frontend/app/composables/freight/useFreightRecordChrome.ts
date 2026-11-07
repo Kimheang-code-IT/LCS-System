@@ -1,4 +1,4 @@
-import type { ActivityEvent, AttachmentMeta, EntityComment, PersonSummary } from '~/types/common'
+import type { AttachmentMeta, PersonSummary } from '~/types/common'
 import type { FreightRecord } from '~/types/record'
 import type { FreightModule } from '~/config/freight-modules'
 
@@ -11,8 +11,6 @@ export function useFreightRecordChrome(options: {
   const store = useFreightStore()
   const auth = useAuthStore()
   const { t } = useI18n()
-  const commentBody = ref('')
-  const submittingComment = ref(false)
 
   const currentUser = computed<PersonSummary>(() => ({
     id: String(auth.user?.id || 'me'),
@@ -41,55 +39,9 @@ export function useFreightRecordChrome(options: {
     if (id && options.module.value) await navigateTo(`${options.module.value.path}/${id}`)
   }
 
-  const comments = computed<EntityComment[]>(() => {
-    const rows = options.model.value.comments
-    return Array.isArray(rows) ? rows as EntityComment[] : []
-  })
-
   const attachments = computed<AttachmentMeta[]>(() => {
     const rows = options.model.value.attachments
     return Array.isArray(rows) ? rows as AttachmentMeta[] : []
-  })
-
-  const activity = computed<ActivityEvent[]>(() => {
-    const entityId = String(options.model.value.id || '')
-    const entityType = options.module.value?.collection || 'record'
-    const fromRecord = Array.isArray(options.model.value.activity)
-      ? (options.model.value.activity as Array<Record<string, unknown>>).map((item, index) => ({
-          id: String(item.id || `act-${index}`),
-          entityType,
-          entityId,
-          action: String(item.action || 'updated'),
-          summary: String(item.action || item.summary || 'updated'),
-          occurredAt: String(item.at || item.occurredAt || options.model.value.updatedAt || new Date().toISOString()),
-          actor: { id: 'user', name: String(item.user || currentUser.value.name) } as PersonSummary,
-        }))
-      : []
-    const title = options.module.value
-      ? String(options.model.value[options.module.value.titleField] || '')
-      : ''
-    const recordNos = new Set([
-      title,
-      entityId,
-      String(options.model.value.jobNo || ''),
-    ].filter(Boolean))
-    const fromAudit = store.list('auditLogs')
-      .filter(row => recordNos.has(String(row.entityId || '')))
-      .map(row => ({
-        id: String(row.id),
-        entityType,
-        entityId,
-        action: String(row.action || 'updated'),
-        summary: String(row.action || 'updated'),
-        occurredAt: String(row.occurredAt || row.createdAt || new Date().toISOString()),
-        actor: { id: 'user', name: String(row.user || currentUser.value.name) } as PersonSummary,
-        metadata: {
-          result: row.result ? String(row.result) : undefined,
-          remark: row.remark ? String(row.remark) : undefined,
-          module: row.module ? String(row.module) : undefined,
-        },
-      }))
-    return [...fromRecord, ...fromAudit].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt))
   })
 
   function patch(partial: Record<string, unknown>) {
@@ -108,48 +60,6 @@ export function useFreightRecordChrome(options: {
     patch({ [key]: value })
   }
 
-  async function submitComment() {
-    const body = commentBody.value.trim()
-    if (!body || options.isCreate.value) return
-    submittingComment.value = true
-    try {
-      const next: EntityComment = {
-        id: `cmt-${Date.now()}`,
-        entityType: options.module.value?.collection || 'record',
-        entityId: String(options.model.value.id || ''),
-        body,
-        author: currentUser.value,
-        createdAt: new Date().toISOString(),
-      }
-      patch({ comments: [...comments.value, next] })
-      commentBody.value = ''
-      if (options.module.value && options.model.value.id) {
-        store.save(options.module.value.collection, options.model.value)
-      }
-    }
-    finally {
-      submittingComment.value = false
-    }
-  }
-
-  async function updateComment(id: string, body: string) {
-    patch({
-      comments: comments.value.map(item => item.id === id
-        ? { ...item, body, editedAt: new Date().toISOString() }
-        : item),
-    })
-    if (options.module.value && options.model.value.id) {
-      store.save(options.module.value.collection, options.model.value)
-    }
-  }
-
-  async function deleteComment(id: string) {
-    patch({ comments: comments.value.filter(item => item.id !== id) })
-    if (options.module.value && options.model.value.id) {
-      store.save(options.module.value.collection, options.model.value)
-    }
-  }
-
   function emptyFieldValue() {
     return undefined as unknown
   }
@@ -158,21 +68,14 @@ export function useFreightRecordChrome(options: {
 
   return {
     t,
-    commentBody,
-    submittingComment,
     currentUser,
     listTo,
     canNavigatePrevious,
     canNavigateNext,
     navigatePrevious,
     navigateNext,
-    comments,
     attachments,
-    activity,
     setChromeField,
-    submitComment,
-    updateComment,
-    deleteComment,
     emptyFieldValue,
     noopSetField,
   }

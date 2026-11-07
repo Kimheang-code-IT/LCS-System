@@ -144,7 +144,13 @@ async def test_service_order_invoice_is_found_after_issuing_a_charge(client):
         f"/api/v1/service-charges/{charge.json()['data']['id']}/issue", headers=headers, json={}
     )
     assert issued.status_code == 200, issued.text
-    invoice_id = issued.json()["data"]["financialDocumentId"]
+    converted = await client.post(
+        f"/api/v1/service-charges/{charge.json()['data']['id']}/create-finance-invoice",
+        headers=headers,
+        json={},
+    )
+    assert converted.status_code == 201, converted.text
+    invoice_id = converted.json()["data"]["id"]
 
     # The order-level lookup must see the invoice the charge produced.
     found = await client.get(f"/api/v1/service-orders/{order_id}/invoice", headers=headers)
@@ -248,6 +254,102 @@ async def test_trial_balance_ignores_draft_and_double_counts_no_reversal(client)
     baseline_net = round(sum(row["balance"] for row in baseline["items"]), 4)
     reversal_net = round(sum(row["balance"] for row in after_reversal["items"]), 4)
     assert reversal_net == baseline_net, "a full reversal must return each account to its prior balance"
+
+
+async def test_profitability_layers_follow_the_ledger_currency_rules(client):
+    """Test A/B/C/D/F: layers stay in their own denomination; no double counting.
+
+    A KHR order with one issued charge converted into a KHR invoice and posted:
+    the operational layer must stay 100 KHR (its document currency), the posted
+    layer must be the ledger-true base amount (0.03 USD at the approved rate),
+    and the charge's converted representations must not double-count.
+    """
+    from tests.test_finance_automation import _charge
+    from tests.test_multi_currency import _rate
+
+    headers = await login(client)
+    await _rate(client, headers, "KHR", "USD", 0.00025)
+
+    quotation = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Profit Layers Customer",
+            "direction": "Import",
+            "currency": "KHR",
+            "amount": 100,
+            "pricingLines": [{"description": "Ocean freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert quotation.status_code == 201, quotation.text
+    revision_id = quotation.json()["data"]["revisionId"]
+    assert (await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})).status_code == 200
+    assert (await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})).status_code == 200
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    service_order_id = converted.json()["data"]["serviceOrderId"]
+    charge = await _charge(client, headers, service_order_id, currency="KHR")
+    await _post_charged_layers(client, headers, charge["id"])
+
+    # Test H — the report is read-only: count the journals the posting wrote,
+    # then prove calculating the report writes none of its own.
+    journals_before = (await client.get("/api/v1/journal-entries", headers=headers, params={"page_size": 200})).json()["data"]["items"]
+
+    row = await _profitability_row(client, headers, service_order_id)
+    assert row["currency"] == "KHR" and row["baseCurrency"] == "USD"
+    assert row["quoted"] == pytest.approx(100), "the estimate stays in the quotation currency"
+    assert row["serviceCharges"] == pytest.approx(110), "the issued layer keeps its document currency"
+    assert row["postedRevenue"] == pytest.approx(110 * 0.00025, abs=0.01), (
+        "the posted layer is the base-converted ledger amount"
+    )
+    assert row["revenue"] == pytest.approx(row["postedRevenue"]), "no doc-currency sum is mislabelled as revenue"
+    assert row["uninvoicedCharges"] == 0, "the converted charge is not reported as a second revenue event"
+    assert row["margin"] == pytest.approx(100), "profit/(revenue) with positive revenue"
+    assert "mixedCurrency" not in row
+
+    # Test H — the report is read-only: no journals are created by calculating.
+    journals_after = (await client.get("/api/v1/journal-entries", headers=headers, params={"page_size": 200})).json()["data"]["items"]
+    assert len(journals_after) == len(journals_before)
+
+
+async def test_mixed_currency_charges_are_grouped_never_summed(client):
+    """Test D/E/F: a USD order with a KHR charge must not sum the two layers."""
+    from tests.test_finance_automation import _charge, _service_order
+    from tests.test_multi_currency import _rate
+
+    headers = await login(client)
+    await _rate(client, headers, "KHR", "USD", 0.00025)
+    order_id = await _service_order(client, headers, amount=100)
+    await _charge(client, headers, order_id)
+    await _charge(client, headers, order_id, currency="KHR")
+    for charge in (await client.get("/api/v1/service-charges", headers=headers, params={"page_size": 200})).json()["data"]["items"]:
+        assert (await client.post(f"/api/v1/service-charges/{charge['id']}/issue", headers=headers, json={})).status_code == 200, charge
+
+    row = await _profitability_row(client, headers, order_id)
+    assert row["mixedCurrency"] is True, "two currencies in one order must be flagged"
+    assert row["serviceCharges"] == pytest.approx(110), "only the order-currency layer takes the numeric column"
+    assert "KHR 110" in row["layersByCurrency"], row["layersByCurrency"]
+    assert row["uninvoicedCharges"] == pytest.approx(110), "no KHR amount silently enters the USD figure"
+    assert "KHR 110" in row["uninvoicedByCurrency"], row["uninvoicedByCurrency"]
+    assert row["margin"] == 0 and row["postedRevenue"] == 0, "zero revenue: margin 0, never a division error"
+
+
+async def _profitability_row(client, headers, service_order_id: str) -> dict:
+    report = await client.get("/api/v1/reports/profitability", headers=headers)
+    assert report.status_code == 200, report.text
+    return next(item for item in report.json()["data"] if item["id"] == service_order_id)
+
+
+async def _post_charged_layers(client, headers, charge_id: str) -> str:
+    issued = await client.post(f"/api/v1/service-charges/{charge_id}/issue", headers=headers, json={})
+    assert issued.status_code == 200, issued.text
+    assert "financialDocumentId" not in issued.json()["data"], "issue stays isolated"
+    converted = await client.post(f"/api/v1/service-charges/{charge_id}/create-finance-invoice", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    document_id = converted.json()["data"]["id"]
+    posted = await client.post(f"/api/v1/financial-documents/{document_id}/post", headers=headers, json={})
+    assert posted.status_code == 200, posted.text
+    return document_id
 
 
 async def test_profit_loss_reports_posted_revenue_and_expense(client):
@@ -410,7 +512,13 @@ async def test_order_invoice_endpoint_is_idempotent_after_charges_are_issued(cli
         f"/api/v1/service-charges/{charge.json()['data']['id']}/issue", headers=headers, json={}
     )
     assert issued.status_code == 200, issued.text
-    invoice_id = issued.json()["data"]["financialDocumentId"]
+    converted = await client.post(
+        f"/api/v1/service-charges/{charge.json()['data']['id']}/create-finance-invoice",
+        headers=headers,
+        json={},
+    )
+    assert converted.status_code == 201, converted.text
+    invoice_id = converted.json()["data"]["id"]
 
     again = await client.post(f"/api/v1/service-orders/{order_id}/invoice", headers=headers, json={})
     assert again.status_code == 201, again.text

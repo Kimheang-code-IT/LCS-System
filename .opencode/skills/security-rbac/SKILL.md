@@ -27,9 +27,9 @@ protect anything.
 
 | Document | Use it for |
 |---|---|
-| `docs/09_roles_and_permissions.md` | Casbin model, catalog, page→capability compile, role composition, enforcement, synchronization |
-| `docs/11_deployment_and_security.md` §16-§17 | Controls that must stay enforced |
-| `AGENTS.md` §Backend | Auth model, cookie/token transport |
+| `docs/01-architecture/permission-catalog.md` | Casbin model, catalog, page→capability compile, role composition, enforcement, synchronization |
+| `docs/archive/deployment-security-history.md` §16-§17 | Controls that must stay enforced |
+| `docs/03-development/coding-standards.md` (Backend implementation rules) | Auth model, cookie/token transport |
 | `backend/app/core/permissions.py` | The code-owned catalog, matrix pages, page grants and role seeds |
 | `backend/app/core/authorization/` | The enforcer, policy readers/writers, cycle detection, Redis sync |
 | `backend/app/core/deps.py`, `core/context.py`, `core/database.py` | Guard dependencies, per-decision check, denial audit |
@@ -68,8 +68,8 @@ protect anything.
    Adding a code requires:
    - an entry in `SOURCE_PERMISSIONS` (API capability) or the page/matrix tuples;
    - a page that grants it in `PAGE_PERMISSION_GRANTS` (or, for a deliberately
-     coarse fallback, a note in `docs/09` §15);
-   - a row in `docs/09_roles_and_permissions.md`;
+     coarse fallback, a note in `docs/01-architecture/permission-catalog.md`);
+   - a row in `docs/01-architecture/permission-catalog.md`;
    - a decision about which seeded role in `ROLE_DEFINITIONS` should hold it.
    `tests/test_role_permissions.py` fails if a capability no page can grant.
 2. **Protect the endpoint** with `Depends(require_permission("code"))`
@@ -101,7 +101,7 @@ protect anything.
   a hidden button is UX, not enforcement. Do not report a feature protected because
   the button is hidden.
 - **Rate-limit login and unauthenticated probes**; lockout policy lives in
-  `auth/service.py` (`MAX_FAILED_ATTEMPTS`, `LOCKOUT_MINUTES`).
+  Settings/security configuration and `auth/service.py`; inspect current limits rather than assuming constants.
 - Do not log tokens, cookies, or request bodies containing credentials.
 - Backup and restore paths must redact secrets (`backup/service.py::SENSITIVE_HINTS`).
 - Never commit a secret. `.gitignore` covers `.env`, `*.pem`, `*.key`; a private key
@@ -113,7 +113,8 @@ protect anything.
 ```bash
 cd backend
 uv run python -m pytest tests/test_auth_rbac.py tests/test_role_permissions.py -q --no-header
-uv run python -m pytest -q && uv run ruff check app tests alembic scripts
+uv run ruff check <changed-paths>
+# A full pytest run needs shared-impact/release justification, not every auth edit.
 ```
 
 Required coverage for a change:
@@ -144,11 +145,11 @@ authenticated request.
 - Administrative self-protection and last-admin guards still hold.
 - No secret is exposed in a response, an audit snapshot, a log, or a commit.
 - Audit events are written for the changes listed in step 5.
-- Backend suite and ruff pass; the frontend contract test still passes.
+- Focused auth/denial/regression and lint pass under `docs/03-development/testing-guide.md`; affected contract/route-authorization checks pass. Essential DEEP coverage is mandatory.
 
 ## Expected outputs
 
 - Changed `permissions.py`, `core/authorization/*`, and/or the module router.
-- A row in `docs/09_roles_and_permissions.md`.
+- A row in `docs/01-architecture/permission-catalog.md`.
 - Authorization tests including the denial path.
-- A security finding recorded in `docs/11_deployment_and_security.md` §18 if a gap cannot be closed now.
+- A security finding recorded in `docs/archive/deployment-security-history.md` §18 if a gap cannot be closed now.

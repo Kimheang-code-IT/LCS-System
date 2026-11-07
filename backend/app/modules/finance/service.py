@@ -49,6 +49,7 @@ from app.modules.finance.schemas import (
     FINANCIAL_ACCOUNT_SCHEMA,
     JOURNAL_LINE_SCHEMA,
     JOURNAL_WRITE_SCHEMA,
+    PERIOD_CREATE_SCHEMA,
     PERIOD_WRITE_SCHEMA,
     POSTING_RULE_WRITE_SCHEMA,
     SEQUENCE_WRITE_SCHEMA,
@@ -293,12 +294,13 @@ async def create_financial_account(session: AsyncSession, context: RequestContex
 def period_payload(period: AccountingPeriod, closed_by: str | None = None, posting_count: int = 0) -> dict[str, Any]:
     return {
         "id": str(period.id),
-        "name": f"{period.period_year}-{str(period.period_month).zfill(2)}",
+        "name": period.name or f"{period.period_year}-{str(period.period_month).zfill(2)}",
         "year": period.period_year,
         "month": period.period_month,
         "startDate": period.start_date.isoformat(),
         "endDate": period.end_date.isoformat(),
         "status": period.status,
+        "description": period.description,
         "postingCount": posting_count,
         "closedBy": closed_by,
         "closedAt": period.closed_at.isoformat() if period.closed_at else None,
@@ -346,6 +348,98 @@ async def resolve_period(session: AsyncSession, posting_date: date) -> Accountin
     return period
 
 
+async def _assert_no_overlap(
+    session: AsyncSession, start_date: date, end_date: date, exclude_id: int | None = None
+) -> None:
+    """Refuse any range intersecting an existing period, whatever its status.
+
+    A DRAFT period reserves its dates like an OPEN one; otherwise two periods
+    could open a gap for double-posting the same transactions. The PostgreSQL
+    schema enforces the same rule with an EXCLUDE constraint, so bypassing the
+    service cannot create an overlap either.
+    """
+    stmt = select(AccountingPeriod).where(
+        AccountingPeriod.start_date <= end_date,
+        AccountingPeriod.end_date >= start_date,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(AccountingPeriod.id != exclude_id)
+    other = (await session.execute(stmt.order_by(AccountingPeriod.start_date))).scalars().first()
+    if other is None:
+        return
+    raise Conflict(
+        "PERIOD_OVERLAP",
+        (
+            "The date range overlaps the existing period "
+            f"{other.name or f'{other.period_year}-{str(other.period_month).zfill(2)}'} "
+            f"({other.start_date.isoformat()} - {other.end_date.isoformat()})."
+        ),
+        field_errors={
+            "startDate": "The range overlaps an existing period.",
+            "endDate": "The range overlaps an existing period.",
+        },
+    )
+
+
+def _assert_dates(start_date: date, end_date: date) -> None:
+    if start_date > end_date:
+        raise ValidationFailed(
+            "The start date must be on or before the end date.",
+            field_errors={"endDate": "The end date must be on or after the start date."},
+        )
+
+
+async def create_period(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    """Create one custom period: any date range, no fiscal-year requirement.
+
+    Monthly, quarterly, yearly and bespoke ranges are all just start/end dates.
+    ``period_year``/``period_month`` are derived from the start date so the
+    existing unique constraint and the derived label keep working; the user
+    never enters them.
+    """
+    data = PERIOD_CREATE_SCHEMA.validate(data)
+    start_date: date = data["startDate"]
+    end_date: date = data["endDate"]
+    _assert_dates(start_date, end_date)
+    await _assert_no_overlap(session, start_date, end_date)
+    status = str(data.get("status") or "DRAFT").upper()
+    period = AccountingPeriod(
+        name=(str(data["name"]).strip() or None) if data.get("name") else None,
+        description=data.get("description"),
+        period_year=start_date.year,
+        period_month=start_date.month,
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+    )
+    session.add(period)
+    await session.flush()
+    from app.modules.audit.service import write_audit
+
+    await write_audit(
+        session,
+        context,
+        event_type="PERIOD_CREATED",
+        entity_type="accounting_period",
+        entity_id=period.id,
+        action="create",
+        after={"startDate": start_date.isoformat(), "endDate": end_date.isoformat(), "status": status},
+    )
+    await session.commit()
+    return period_payload(period)
+
+
+async def _period_period_count(session: AsyncSession, period_id: int) -> int:
+    """How many journal entries live in one period (read once, reused twice)."""
+    return int(
+        (
+            await session.execute(
+                select(func.count()).select_from(JournalEntry).where(JournalEntry.accounting_period_id == period_id)
+            )
+        ).scalar_one()
+    )
+
+
 async def update_period(session: AsyncSession, context: RequestContext, period_id: int, data: dict[str, Any]) -> dict:
     period = await session.get(AccountingPeriod, period_id)
     if period is None:
@@ -353,18 +447,68 @@ async def update_period(session: AsyncSession, context: RequestContext, period_i
     data = PERIOD_WRITE_SCHEMA.validate(data, partial=True)
     status_value = data.get("status")
     if status_value is not None:
-        period.status = str(status_value).upper()
-        if period.status == "OPEN":
+        new_status = str(status_value).upper()
+        if period.status == "CLOSED" and new_status != "CLOSED":
+            raise InvalidState(
+                "A closed period is reopened through the reopen action, which records the authorization.",
+            )
+        if period.status == "DRAFT" and new_status == "CLOSED":
+            raise InvalidState("Only an open period can be closed.")
+        period.status = new_status
+        if new_status in {"DRAFT", "OPEN"}:
             period.closed_at = None
             period.closed_by_user_id = None
+    new_start = data.get("startDate", period.start_date)
+    new_end = data.get("endDate", period.end_date)
+    if new_start != period.start_date or new_end != period.end_date:
+        if period.status == "CLOSED":
+            raise InvalidState("A closed period keeps its dates; reopen it first.")
+        if await _period_period_count(session, period_id):
+            raise Conflict(
+                "PERIOD_HAS_POSTINGS",
+                "The period holds journal entries; its dates cannot change.",
+                field_errors={"startDate": "Remove or move the journal entries first."},
+            )
+        _assert_dates(new_start, new_end)
+        await _assert_no_overlap(session, new_start, new_end, exclude_id=period.id)
+        period.start_date = new_start
+        period.end_date = new_end
+        period.period_year = new_start.year
+        period.period_month = new_start.month
+    if "name" in data:
+        period.name = (str(data["name"]).strip() or None) if data["name"] is not None else None
+    if "description" in data:
+        period.description = data["description"]
     await session.commit()
     return period_payload(period)
 
 
 async def close_period(session: AsyncSession, context: RequestContext, period_id: int) -> dict:
-    period = await session.get(AccountingPeriod, period_id)
+    # The period-row lock serializes closing against every posting path: a
+    # concurrent post/reverse waits here, then its own lock re-check refuses
+    # with PERIOD_CLOSED (or loses exactly the order the books record).
+    period = (
+        await session.execute(
+            select(AccountingPeriod).where(AccountingPeriod.id == period_id).with_for_update()
+        )
+    ).scalars().first()
     if period is None:
         raise NotFound("Accounting period not found.")
+    # Closing a draft would silently skip the open gate; the policy offers the
+    # close action only from OPEN for the same reason.
+    if period.status != "OPEN":
+        raise InvalidState(f"Only an open period can be closed (status is {period.status}).")
+    from app.modules.finance.period_closing import _integrity_checks, blocking_results
+
+    # Re-validate the mandatory checks under the lock: the reviewed validation is
+    # advisory history, this replay is the decision against the consistent state.
+    blocked = blocking_results(await _integrity_checks(session, period))
+    if blocked:
+        raise Conflict(
+            "PERIOD_HAS_BLOCKING_ISSUES",
+            f"The period cannot close while {', '.join(check['name'] for check in blocked)} fail.",
+            field_errors={"blockingCodes": ",".join(check["code"] for check in blocked)},
+        )
     period.status = "CLOSED"
     period.closed_at = datetime.now(UTC)
     period.closed_by_user_id = context.user_id
@@ -378,6 +522,8 @@ async def reopen_period(session: AsyncSession, context: RequestContext, period_i
     Stores ``OPEN`` and clears the closure stamp. The previous frontend path
     wrote ``REOPENED``, which the posting checks treat as open but which left
     ``closed_at``/``closed_by_user_id`` attributed to the closing user.
+    The authorization, the requested reason and the audit trail are owned by
+    the status endpoint that routes here (``PERIOD_REOPENED``).
     """
     period = await session.get(AccountingPeriod, period_id)
     if period is None:
@@ -387,6 +533,111 @@ async def reopen_period(session: AsyncSession, context: RequestContext, period_i
     period.closed_by_user_id = None
     await session.commit()
     return period_payload(period)
+
+
+async def delete_period(session: AsyncSession, context: RequestContext, period_id: int) -> dict:
+    """Delete a period only when nothing has ever posted into it.
+
+    A period referenced by journal entries is part of the books: deleting it
+    would orphan real postings, so the guard refuses regardless of status.
+    """
+    period = await session.get(AccountingPeriod, period_id)
+    if period is None:
+        raise NotFound("Accounting period not found.")
+    postings = await _period_period_count(session, period_id)
+    if postings:
+        raise Conflict(
+            "PERIOD_HAS_POSTINGS",
+            f"The period holds {postings} journal entries and cannot be deleted.",
+        )
+    from app.modules.audit.service import write_audit
+
+    await write_audit(
+        session,
+        context,
+        event_type="PERIOD_DELETED",
+        entity_type="accounting_period",
+        entity_id=period_id,
+        action="delete",
+        before={
+            "name": period.name,
+            "startDate": period.start_date.isoformat(),
+            "endDate": period.end_date.isoformat(),
+            "status": period.status,
+        },
+    )
+    await session.delete(period)
+    await session.commit()
+    return {"deleted": True, "id": str(period_id)}
+
+
+async def generate_periods(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+    """Create the twelve monthly periods of a fiscal year (Jan 1 - Dec 31).
+
+    Re-running a year is a refill, never a duplicate or an overlap: periods
+    that already exist for that year (whatever their status) are preserved as
+    they are and skipped. The commit is atomic — either every missing month of
+    the run is stored or the request fails without partial effects.
+    """
+    try:
+        year = int(str(data.get("year") or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise ValidationFailed("Enter a fiscal year to generate.", {"year": "Required"}) from exc
+    if not 1900 <= year <= 2999:
+        raise ValidationFailed(
+            "The fiscal year is out of range.",
+            {"year": "Enter a year between 1900 and 2999."},
+        )
+    created: list[AccountingPeriod] = []
+    skipped = 0
+    for month in range(1, 13):
+        existing = (
+            await session.execute(
+                select(AccountingPeriod).where(
+                    AccountingPeriod.period_year == year,
+                    AccountingPeriod.period_month == month,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            skipped += 1
+            continue
+        # Month boundaries use the calendar itself, so February of a leap year
+        # spans through the 29th.
+        start = date(year, month, 1)
+        end_date = (
+            date(year, 12, 31)
+            if month == 12
+            else date(year, month + 1, 1) - timedelta(days=1)
+        )
+        period = AccountingPeriod(
+            period_year=year,
+            period_month=month,
+            start_date=start,
+            end_date=end_date,
+            status="OPEN",
+        )
+        session.add(period)
+        await session.flush()
+        created.append(period)
+    from app.modules.audit.service import write_audit
+
+    await write_audit(
+        session,
+        context,
+        event_type="PERIODS_GENERATED",
+        entity_type="accounting_period",
+        entity_id=year,
+        action="generate",
+        after={"year": year, "created": len(created), "skipped": skipped},
+    )
+    await session.commit()
+    return {
+        "year": year,
+        "created": len(created),
+        "skipped": skipped,
+        "periods": [period_payload(period) for period in created],
+    }
 
 
 def sequence_payload(sequence: DocumentSequence) -> dict[str, Any]:
@@ -1169,6 +1420,12 @@ def _validate_posting_account(account: ChartOfAccount | None, label: str) -> Cha
     return validate_postable(account, label)
 
 
+async def document_status(session: AsyncSession, document_id: int) -> str | None:
+    """Current status of one document, for a transition-aware audit trail."""
+    document = (await session.execute(select(FinancialDocument.status).where(FinancialDocument.id == document_id))).first()
+    return None if document is None else str(document[0])
+
+
 async def post_document(session: AsyncSession, context: RequestContext, document_id: int) -> dict:
     """Post a financial document as one atomic, balanced journal entry.
 
@@ -1199,8 +1456,19 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     posting_date = document.posting_date or document.document_date or date.today()
     document.posting_date = posting_date
     period = await resolve_period(session, posting_date)
-    if period.status == "CLOSED":
-        raise Conflict("PERIOD_CLOSED", "The accounting period is closed.")
+    # Serialize with closing: taking the period row lock here means a concurrent
+    # close either commits first (this posting refuses with PERIOD_CLOSED) or
+    # loses to this posting and re-validates under its own lock.
+    locked = (
+        await session.execute(
+            select(AccountingPeriod).where(AccountingPeriod.id == period.id).with_for_update()
+        )
+    ).scalars().first()
+    if locked is not None:
+        period = locked
+    if period.status != "OPEN":
+        code = "PERIOD_NOT_OPEN" if period.status == "DRAFT" else "PERIOD_CLOSED"
+        raise Conflict(code, "The accounting period is not open.")
 
     total = document.total_amount or Decimal("0")
     document_lines = await _document_lines(session, document.id)
@@ -1322,8 +1590,16 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
     original_entry = await session.get(JournalEntry, posting.journal_entry_id)
     posting_date = date.today()
     period = await resolve_period(session, posting_date)
-    if period.status == "CLOSED":
-        raise Conflict("PERIOD_CLOSED", "The accounting period is closed.")
+    locked = (
+        await session.execute(
+            select(AccountingPeriod).where(AccountingPeriod.id == period.id).with_for_update()
+        )
+    ).scalars().first()
+    if locked is not None:
+        period = locked
+    if period.status != "OPEN":
+        code = "PERIOD_NOT_OPEN" if period.status == "DRAFT" else "PERIOD_CLOSED"
+        raise Conflict(code, "The accounting period is not open.")
     entry_no = await allocate_number(session, "JOURNAL")
     reversal = JournalEntry(
         entry_no=entry_no,
@@ -1488,6 +1764,10 @@ async def allocate_payment(
         raise InvalidState("Both payment and target documents must be posted.")
     if payment.currency_code != target.currency_code:
         raise Conflict("CURRENCY_MISMATCH", "Payment and target currency must match.")
+    if payment.party_id and target.party_id and payment.party_id != target.party_id:
+        # Settlement stays inside one customer/supplier: a receipt may not pay
+        # another party's invoice, whatever balances both sides show.
+        raise Conflict("PARTY_MISMATCH", "The payment and the target document must share the same party.")
     if amount <= 0:
         raise ValidationFailed("Allocated amount must be greater than zero.")
 
@@ -1541,9 +1821,25 @@ async def create_invoice_from_charge(
     charge: ServiceOrderCharge,
     *,
     commit: bool = True,
+    idempotency_key: str | None = None,
 ) -> dict:
     if charge.status != "ISSUED":
         raise InvalidState("Only an issued service charge can create a finance invoice.")
+    if idempotency_key:
+        prior = (
+            await session.execute(
+                select(FinancialDocumentSource).where(FinancialDocumentSource.idempotency_key == idempotency_key)
+            )
+        ).scalars().first()
+        if prior is not None:
+            if prior.source_type != "SERVICE_ORDER_CHARGE" or prior.source_id != charge.id:
+                raise Conflict(
+                    "IDEMPOTENCY_KEY_CONFLICT",
+                    "This idempotency key already converted a different source; use a new key.",
+                )
+            document = await session.get(FinancialDocument, prior.financial_document_id)
+            if document is not None:
+                return document_payload(document, document.data or {}, await _document_lines(session, document.id))
     existing = (
         await session.execute(
             select(FinancialDocumentSource).where(
@@ -1620,13 +1916,35 @@ async def create_invoice_from_charge(
             financial_document_id=document.id,
             source_type="SERVICE_ORDER_CHARGE",
             source_id=charge.id,
+            idempotency_key=idempotency_key,
         )
     )
-    if commit:
-        await session.commit()
-        await cache.bump("reports")
-    else:
-        await session.flush()
+    try:
+        if commit:
+            await session.commit()
+            await cache.bump("reports")
+        else:
+            await session.flush()
+    except IntegrityError:
+        # Defense in depth: the unique source keys (idempotency_key, and the
+        # per-charge bill-once index) tell us another conversion won the race.
+        # The winner's result is the honest answer; a key bound to another
+        # source is a conflict, never a silent second draft.
+        await session.rollback()
+        if idempotency_key:
+            winner = (
+                await session.execute(
+                    select(FinancialDocumentSource).where(FinancialDocumentSource.idempotency_key == idempotency_key)
+                )
+            ).scalars().first()
+            if winner is not None and winner.source_type == "SERVICE_ORDER_CHARGE" and winner.source_id == charge.id:
+                document = await session.get(FinancialDocument, winner.financial_document_id)
+                if document is not None:
+                    return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+        raise Conflict(
+            "CHARGE_ALREADY_CONVERTED" if not idempotency_key else "IDEMPOTENCY_KEY_CONFLICT",
+            "This conversion races an identical request that already committed. Reload the charge and retry.",
+        ) from None
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
@@ -2038,8 +2356,10 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
             "Total base-currency debit must equal total base-currency credit.",
         )
     period = await session.get(AccountingPeriod, entry.accounting_period_id) if entry.accounting_period_id else None
-    if period is not None and period.status == "CLOSED":
-        raise Conflict("PERIOD_CLOSED", "The accounting period is closed.")
+    if period is not None:
+        code = "PERIOD_NOT_OPEN" if period.status == "DRAFT" else "PERIOD_CLOSED"
+        if period.status != "OPEN":
+            raise Conflict(code, "The accounting period is not open.")
     entry.status = "POSTED"
     entry.posted_at = datetime.now(UTC)
     entry.posted_by_user_id = context.user_id

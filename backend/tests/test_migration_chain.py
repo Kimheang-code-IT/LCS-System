@@ -7,7 +7,7 @@ every revision, and an additive/non-destructive shape for the revisions that
 introduce or preserve the design's structures.
 
 Together they are what makes ``alembic downgrade`` a usable rollback rather than
-a promise. ``docs/11_deployment_and_security.md`` §8 documents the procedure;
+a promise. ``docs/archive/deployment-security-history.md`` §8 documents the procedure;
 this module keeps the invariants from silently regressing.
 """
 
@@ -45,7 +45,18 @@ ADDITIVE_REVISIONS = (
     "c7e8f9a0b1c2",  # quotation source service order (re-quotation trace)
     "f6a7b8c9d0e1",  # document_types soft-delete attribution column + indexes
     "b4c5d6e7f8a9",  # direct RBAC: one role per user, no role inheritance
+    "f3a4b5c6d7e8",  # quotation reuse (many orders per quotation) + Finish stamp
+    "f4a4b5c6d7e8",  # service order Started/Ended columns (reused stamps + audit backfill)
+    "a8c0e2e4b6d8",  # accounting period management: name/description columns, status labels, overlap guard
+    "c0d1e2f3a4b5",  # service-order movement sequence uniqueness (app-level guard gains its DB backstop)
+    "b7c8d9e0f1a2",  # charge bill-once: unique charge source link + conversion idempotency keys
 )
+
+# Constraints a newer revision was explicitly authorised to remove, quoted by
+# the requirement change (quotation reuse: one quotation -> many service orders).
+AUTHORISED_DROPS: dict[str, set[str]] = {
+    "f3a4b5c6d7e8": {"uq_quotation_conversions_quotation_revision_id"},
+}
 
 PRESERVATION_REVISIONS = (
     "c3d4e5f6a7b8",  # Places text backfill; no table/column removal
@@ -54,14 +65,14 @@ PRESERVATION_REVISIONS = (
 
 # These revisions intentionally have nothing to undo. Their upgrade is a data
 # backfill or a read-only guard, and downgrading must not drop Places either.
-NOOP_DOWNGRADES = frozenset(PRESERVATION_REVISIONS)
+NOOP_DOWNGRADES = frozenset((*PRESERVATION_REVISIONS, "f4a4b5c6d7e8"))
 
 
 def _revision_files() -> dict[str, Path]:
     files: dict[str, Path] = {}
     for path in sorted(VERSIONS.glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        match = re.search(r'^revision:\s*str\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        match = re.search(r"""^revision:\s*str\s*=\s*["']([^"/']+)["']""", text, re.MULTILINE)
         if match:
             assert match.group(1) not in files, f"Duplicate revision identity: {match.group(1)}"
             files[match.group(1)] = path
@@ -124,8 +135,8 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["b4c5d6e7f8a9"], (
-        "the head changed; update docs/11_deployment_and_security.md and the deployed "
+    assert heads == ["a7f3c9e21d84"], (
+        "the head changed; update docs/archive/deployment-security-history.md and the deployed "
         f"revision expectation (found {heads})"
     )
 
@@ -156,14 +167,17 @@ def test_new_revisions_are_additive_only(revision: str):
     downgrade, or a view/trigger it owns); ``op.alter_column`` is not expected at
     all because these revisions only add structures.
     """
+    allowed_drops = AUTHORISED_DROPS.get(revision, set())
     path = _revision_files()[revision]
     source = path.read_text(encoding="utf-8")
     upgrade_body = source.split("def upgrade", 1)[1].split("def downgrade", 1)[0]
 
     assert "op.alter_column" not in upgrade_body, f"{revision} alters a column in upgrade()"
 
-    for statement in re.findall(r"op\.drop_(\w+)\(\s*[\"']([^\"']+)", upgrade_body):
+    for statement in re.findall(r"""op\.drop_(\w+)\(\s*["']([^/"']+)""", upgrade_body):
         kind, name = statement
+        if name in allowed_drops:
+            continue
         created_in_upgrade = f'"{name}"' in upgrade_body.split("op.drop_", 1)[0]
         assert created_in_upgrade, (
             f"{revision} drops {kind} {name!r} in upgrade() without having created it; "
@@ -176,7 +190,7 @@ def test_new_revisions_never_drop_a_pre_existing_table():
 
     ``role_permissions`` and ``user_role_assignments`` are deliberately absent:
     ``a1b2c3d4e5f7`` replaces both editable authorization mappings with the
-    Casbin policy table ``casbin_rule`` (see ``docs/09_roles_and_permissions.md``
+    Casbin policy table ``casbin_rule`` (see ``docs/01-architecture/permission-catalog.md``
     §2), and that replacement was reviewed and authorised as part of the
     authorization migration rather than as an additive revision.
     """

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
@@ -12,14 +12,62 @@ from app.core.exceptions import ValidationFailed
 from app.core.rate_limit import enforce_rate_limit
 from app.modules.audit.service import write_audit
 from app.modules.settings import service
+from app.modules.settings.maintenance import DeploymentResult, MaintenanceChange
 from app.modules.settings.schemas import (
     APP_CONFIG_WRITE_SCHEMA,
     APP_INFO_WRITE_SCHEMA,
     RESET_DATA_SCHEMA,
     SEARCH_ASK_SCHEMA,
 )
+from app.modules.telegram.client import TelegramError
 
 router = APIRouter()
+
+
+@router.get("/maintenance/status")
+async def maintenance_status(response: Response, session: AsyncSession = Depends(get_session)) -> dict:
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.core.config import settings
+    from app.modules.settings import maintenance
+    response.headers["Cache-Control"] = "no-store"
+    if settings.force_maintenance:
+        return {"data": maintenance.public(maintenance.DEFAULT)}
+    try:
+        value = await maintenance.load(session)
+    except SQLAlchemyError:
+        value = {**maintenance.DEFAULT, "enabled": True}
+    return {"data": maintenance.public(value)}
+
+
+@router.get("/settings/maintenance")
+async def get_maintenance(
+    context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.settings import maintenance
+    value = await maintenance.load(session)
+    return {"data": {**value, **maintenance.public(value), "history": await maintenance.history(session)}}
+
+
+@router.put("/settings/maintenance")
+async def set_maintenance(
+    payload: MaintenanceChange,
+    context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.settings import maintenance
+    return {"data": await maintenance.change(session, context, payload)}
+
+
+@router.post("/settings/maintenance/deployment")
+async def maintenance_deployment(
+    payload: DeploymentResult,
+    context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.settings import maintenance
+    return {"data": await maintenance.record_deployment(session, context, payload)}
 
 
 # --- App info (branding) -----------------------------------------------------
@@ -118,6 +166,40 @@ async def send_test_telegram(
     if not value.get("adminGroupId"):
         raise ValidationFailed("Verify an admin group first.")
     await client(value).send_message(value["adminGroupId"], "LCS admin-group delivery test.")
+    return {"data": {"status": "connected", "message": "Telegram accepted the test message."}}
+
+
+@router.post("/settings/app-config/telegram/client/test-connection")
+async def test_telegram_client_connection(
+    context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from app.modules.telegram.service import test_client_connection
+
+    await enforce_rate_limit(f"telegram:client-test:{context.user_id}", limit=5, window_seconds=300)
+    return {"data": await test_client_connection(session)}
+
+
+@router.post("/settings/app-config/telegram/client/send-test")
+async def send_test_telegram_client(
+    context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """A real message to the client group only; the admin group never sees it."""
+    from app.modules.telegram.service import client_sender, config
+
+    await enforce_rate_limit(f"telegram:client-send-test:{context.user_id}", limit=3, window_seconds=300)
+    value = await config(session)
+    sender, chat_id = client_sender(value)
+    try:
+        await sender.send_message(chat_id, "LCS client-group delivery test.")
+    except TelegramError as exc:
+        if exc.code in {"chat_not_found", "bot_was_blocked", "not_enough_rights_to_send"}:
+            raise ValidationFailed(
+                "Telegram could not deliver to the client group. Add the bot to the group and grant it permission to post.",
+                {"telegram.clientGroupId": exc.code},
+            ) from exc
+        raise
     return {"data": {"status": "connected", "message": "Telegram accepted the test message."}}
 
 

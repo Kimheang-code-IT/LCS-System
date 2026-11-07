@@ -5,7 +5,7 @@ Modular-monolith freight forwarding, operations and double-entry finance system.
 - **Frontend:** Nuxt 4 static SPA (`frontend/`) — built with `nuxt generate`, served by nginx.
 - **Backend:** FastAPI + SQLAlchemy 2.x + Alembic (`backend/`).
 - **Database and authorization:** PostgreSQL with Casbin RBAC and session-bound authentication.
-- **Storage:** MinIO (S3-compatible) for attachments.
+- **Storage:** Cloudflare R2 / Google Drive for file attachments, configured in Settings → Storage & Backup.
 - **Infrastructure:** Compose, env files and nginx config (`infrastructure/`).
 
 ## Current version
@@ -18,7 +18,7 @@ Modular-monolith freight forwarding, operations and double-entry finance system.
 - **Approved navigation** — 44 business pages, including Posting Rules. Organizations
   and Branches are outside the current single-tenant scope.
 - **Standard host ports** — backend `8000`, frontend `80`, PostgreSQL `5432`,
-  Redis `6379`, MinIO `9000` / `9001`.
+  Redis `6379`.
 
 ## Run (Docker Compose)
 
@@ -38,14 +38,12 @@ docker compose -f infrastructure/docker-compose.yml down    # keeps volumes/data
 | Backend / API docs | http://localhost:8000 · http://localhost:8000/docs | `backend:8000` |
 | PostgreSQL | `localhost:5432` | `postgres:5432` |
 | Redis | `localhost:6379` | `redis:6379` |
-| MinIO API / Console | http://localhost:9000 · http://localhost:9001 | `minio:9000` / `9001` |
 
 Health: `http://localhost:8000/health`, `http://localhost:8000/health/ready`.
 
 Host ports are env-driven (see `infrastructure/.env` / `infrastructure/.env.example`):
 `FRONTEND_HOST_PORT` (default `80`), `BACKEND_HOST_PORT` (default `8000`),
-`POSTGRES_HOST_PORT` (default `5432`), `REDIS_HOST_PORT` (default `6379`),
-`MINIO_HOST_PORT` (default `9000`), `MINIO_CONSOLE_HOST_PORT` (default `9001`).
+`POSTGRES_HOST_PORT` (default `5432`), `REDIS_HOST_PORT` (default `6379`).
 
 Authentication uses JWT: the access token is short-lived
 (`ACCESS_TOKEN_EXPIRE_MINUTES`, 15 in Docker and capped at 30 in production) and
@@ -57,7 +55,7 @@ unchecked, cookies are browser-session cookies and the server enforces
 `SESSION_REFRESH_TOKEN_EXPIRE_HOURS` (12 hours). Change the durations via the env
 vars without rebuilding.
 
-The **local development** backend container waits for PostgreSQL, Redis and MinIO
+The **local development** backend container waits for PostgreSQL and Redis
 to become healthy, then runs `alembic upgrade head`. Production images start
 Uvicorn only: the production workflow runs Alembic explicitly with the new image
 while the old stack is still serving. A fresh database requires first-run administrator
@@ -89,10 +87,11 @@ users, credentials, roles, permissions, role assignments, sessions, and audit
 history are not deleted, so the protected System Administrator remains usable
 and first-run setup is not reopened.
 
-Attachments use the existing S3-compatible storage interface, configured for MinIO in
-Compose. Upload/download behavior follows the configured provider and authorization path;
-production disables presigned uploads. Local storage remains an existing alternative.
-See the operations and security references before changing storage configuration.
+File attachments use Cloudflare R2 or Google Drive, configured in
+Settings → Storage & Backup. Upload/download behavior follows the configured
+provider and authorization path; MinIO is no longer part of the stack and there
+is no object-storage environment configuration. See the operations and security
+references before changing storage configuration.
 
 ## Modules
 
@@ -112,45 +111,20 @@ backend/app/modules/
 
 ## Documentation map
 
-The approved foundation follows [system-design-prompt.md](docs/system-design-prompt.md).
-Scope: exactly **44 business pages**, with supporting routes excluded.
+Start with [docs/README.md](docs/README.md). Documentation is grouped for easier maintenance:
 
-- [00-agent-handbook.md](docs/00-agent-handbook.md)
-- [01-system-architecture.md](docs/01-system-architecture.md)
-- [02-data-model.md](docs/02-data-model.md)
-- [03-security-access-control.md](docs/03-security-access-control.md)
-- [04-record-workflow-lifecycle.md](docs/04-record-workflow-lifecycle.md)
-- [05-api-specification.md](docs/05-api-specification.md)
-- [06-operations-runbook.md](docs/06-operations-runbook.md)
-- [07-adr-log.md](docs/07-adr-log.md)
-- [08-app-flow.md](docs/08-app-flow.md)
-- [09-design-brief.md](docs/09-design-brief.md)
-- [10-coding-conventions.md](docs/10-coding-conventions.md)
-- [11-testing-and-quality.md](docs/11-testing-and-quality.md)
-- [12-documentation-standards.md](docs/12-documentation-standards.md)
-- [13-git-workflow.md](docs/13-git-workflow.md)
+- [Project](docs/00-project/README.md): overview, requirements, 44-page inventory, status and audit.
+- [Architecture](docs/01-architecture/system-architecture.md): system, database, API, security and decisions.
+- [Business](docs/02-business/workflows.md): lifecycle rules, workflows, accounting/posting and UI standards.
+- [Development](docs/03-development/ai-agent-guidelines.md): coding, tests, deployment and Git guidance.
+- [Implementation](docs/04-implementation/master-plan.md): master plan, tracker, dependencies, acceptance and phases.
+- [Archive](docs/archive/README.md): preserved older references with explicit review limits.
 
-- [Master roadmap](docs/plans/MASTER-ROADMAP.md)
-- [Plan template](docs/plans/PLAN-0001-template.md)
-- [Active S01 plan](docs/plans/PLAN-0002-access-and-page-authorization.md)
-- [Handoff guide](docs/handoff/README.md)
-
-The [44-page inventory](docs/09-design-brief.md#approved-44-page-inventory) and stable requirements
-are consolidated into the canonical foundation. [Feature status](docs/12_feature_status.md)
-and [generated schema](docs/06_database_design.sql) remain required tooling references.
-The [cleanup inventory](docs/12-documentation-standards.md#documentation-cleanup-inventory)
-lists retained dependency/review exceptions, not competing requirement authorities.
-S01 is planned only; this foundation does not establish production readiness.
-
-Reusable agent workflows live in `.opencode/skills/` (`lcs-development` is the
-umbrella; `database-migration`, `fastapi-backend`, `nuxt-frontend`,
-`dynamic-ui-configuration`, `quotation-management`, `finance-accounting`,
-`security-rbac`, `testing-qa`, `deployment-devops`, `project-analysis` are the
-focused ones). Reusable slash commands live in `.opencode/commands/` and the
-read-only review subagent in `.opencode/agents/reviewer.md`.
-
-`docs/lcssystem.pem` is an untracked private key. It must never be committed,
-copied into an image, or exposed; its relocation is an open owner decision.
+The [active S01 Handoff](docs/04-implementation/plans/PLAN-0002-access-and-page-authorization.md#handoff)
+controls unfinished implementation scope. Folder reorganization does not promote application
+acceptance or production readiness. The [feature-status report](docs/00-project/feature-status.md)
+and [generated schema](docs/01-architecture/database-design.sql) retain their tooling support.
+Agent workflows and commands remain in .opencode/; read AGENTS.md before making changes.
 
 ## Backend package manager — uv
 
@@ -176,7 +150,7 @@ nginx.
 
 ## Quality gates
 
-```bash
-cd backend && uv run alembic upgrade head && uv run pytest -q && uv run ruff check .
-cd ../frontend && pnpm lint && pnpm typecheck && pnpm test && pnpm i18n:check && pnpm generate
-```
+Use [focused-first gates](docs/03-development/testing-guide.md) for the changed behavior and stack.
+Run commands from backend/ or frontend/ as appropriate. Schema generation/migrations,
+full suites, i18n, browser and build checks depend on scope; do not run database upgrades as
+a generic documentation gate. Record exact executed evidence and skips in the active plan.

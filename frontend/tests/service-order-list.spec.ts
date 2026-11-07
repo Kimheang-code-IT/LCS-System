@@ -7,7 +7,7 @@ import { getFreightModule } from '../app/config/freight-modules'
 const serviceOrders = getFreightModule('/service-orders')!
 
 describe('service order list', () => {
-  it('keeps the eight business columns in order', () => {
+  it('keeps the eleven business columns in order', () => {
     expect(serviceOrders.columns.map(column => column.key)).toEqual([
       'jobNo',
       'quotationNo',
@@ -15,6 +15,8 @@ describe('service order list', () => {
       'direction',
       'containersCount',
       'chargesTotal',
+      'startedAt',
+      'endedAt',
       'status',
       'createdBy',
       'createdAt',

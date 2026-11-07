@@ -1,13 +1,12 @@
 """Backend enforcement of maintenance mode and read-only mode.
 
-The flags live in App Config, so they are read per authenticated request. The
-check sits in ``get_current_context`` rather than the SPA: a disabled button is
-not a security control.
+Maintenance admission is also enforced on public API routes by the API-router
+dependency; this guard restricts the authenticated recovery allowlist using Casbin.
 
 Policy:
 - Maintenance blocks ordinary authenticated access with ``503 MAINTENANCE_MODE``.
-  Authentication endpoints stay open so an administrator can sign in and switch
-  it off, and the Settings endpoint stays open for an administrator only.
+  Exact authentication/recovery operations remain available; general Settings
+  writes and public integrations stay blocked.
 - Read-only blocks unsafe HTTP methods with ``409 READ_ONLY_MODE``. Safe reads,
   authentication and the administrator Settings endpoint stay available.
 - Health endpoints do not depend on an authenticated context and stay reachable.
@@ -21,7 +20,6 @@ from app.core.context import RequestContext
 from app.core.exceptions import DomainError
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
-_AUTH_PREFIX = "/api/v1/auth/"
 _SETTINGS_PATH = "/api/v1/settings/app-config"
 # Report generation and export are POSTs only because they carry a filter
 # object; they read the ledger and write nothing, so read-only mode must not
@@ -37,17 +35,17 @@ def _is_generated_report(request: Request) -> bool:
 
 def _is_recovery_admin(context: RequestContext) -> bool:
     return (
-        context.is_platform_admin
-        or context.has_permission("settings.app_config.update")
+        context.has_permission("settings.app_config.update")
         or context.has_permission("configuration.manage")
     )
 
 
 def _recovery_allowed(request: Request, context: RequestContext) -> bool:
     path = request.url.path.rstrip("/")
-    if path.startswith(_AUTH_PREFIX.rstrip("/")):
+    from app.modules.settings.maintenance import ADMIN_ALLOWED, AUTH_ALLOWED
+    if (request.method, path) in AUTH_ALLOWED:
         return True
-    if path == _SETTINGS_PATH:
+    if (request.method, path) in ADMIN_ALLOWED:
         return _is_recovery_admin(context)
     return False
 
@@ -56,17 +54,17 @@ async def enforce_access_modes(request: Request, context: RequestContext, sessio
     from app.modules.settings.service import get_access_policy
 
     policy = await get_access_policy(session)
-    if policy["maintenance"] and not _recovery_allowed(request, context):
-        raise DomainError(
-            "MAINTENANCE_MODE",
-            "The application is in maintenance mode. Only administrators can sign in and change settings.",
-            status_code=503,
-        )
+    from app.core.config import settings
+    from app.modules.settings.maintenance import active, load, refusal
+    value = await load(session)
+    if (settings.force_maintenance or active(value)) and not _recovery_allowed(request, context):
+        raise refusal(value)
     if (
         policy["readOnly"]
         and request.method.upper() not in _SAFE_METHODS
         and not _is_generated_report(request)
         and not _recovery_allowed(request, context)
+        and not (request.url.path.rstrip("/") == _SETTINGS_PATH and _is_recovery_admin(context))
     ):
         raise DomainError(
             "READ_ONLY_MODE",

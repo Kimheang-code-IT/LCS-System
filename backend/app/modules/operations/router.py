@@ -31,10 +31,11 @@ async def list_service_orders(
 @router.post("/service-orders", status_code=status.HTTP_201_CREATED)
 async def create_service_order(
     payload: dict = Body(default={}),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("service_order.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.save_service_order(session, context, payload)}
+    return {"data": await service.save_service_order(session, context, payload, idempotency_key)}
 
 
 @router.delete("/service-orders")
@@ -345,7 +346,7 @@ async def create_finance_invoice(
     context: RequestContext = Depends(require_permission("service_charge.convert_to_invoice")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    document = await service.charge_to_invoice(session, context, charge_id)
+    document = await service.charge_to_invoice(session, context, charge_id, idempotency_key)
     await session.commit()
     return {"data": document}
 
@@ -402,8 +403,9 @@ async def update_attachment(
 async def download_attachment(
     storage_key: str,
     context: RequestContext = Depends(require_permission("attachment.read")),
+    session: AsyncSession = Depends(get_session),
 ) -> Response:
-    content, content_type = await service.read_attachment(storage_key)
+    content, content_type = await service.read_attachment(storage_key, session)
     return Response(
         content=content,
         media_type=content_type,

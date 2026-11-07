@@ -155,9 +155,13 @@ async def test_issued_charge_invoice_carries_the_tax(client):
         f"/api/v1/service-charges/{charge['id']}/issue", headers=headers, json={}
     )
     assert issued.status_code == 200, issued.text
+    # Conversion is now an explicit, separately-authorized command.
+    converted = await client.post(
+        f"/api/v1/service-charges/{charge['id']}/create-finance-invoice", headers=headers, json={}
+    )
+    assert converted.status_code == 201, converted.text
 
-    invoice_id = issued.json()["data"]["financialDocumentId"]
-    invoice = await client.get(f"/api/v1/financial-documents/{invoice_id}", headers=headers)
+    invoice = await client.get(f"/api/v1/financial-documents/{converted.json()['data']['id']}", headers=headers)
     assert invoice.status_code == 200, invoice.text
     body = invoice.json()["data"]
 

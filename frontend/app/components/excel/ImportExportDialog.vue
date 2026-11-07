@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useExcelIo, type ExcelPreviewRow, type ImportMode } from '~/composables/useExcelIo'
+import { useExcelIo, type ExcelPreviewRow } from '~/composables/useExcelIo'
 import { useLcs } from '~/composables/freight/useLcs'
 import { useConfirm } from '~/composables/common/useConfirm'
 
@@ -19,7 +19,9 @@ const lcs = useLcs()
 /** The page's ⋯ menu opens the dialog; it owns no trigger button of its own. */
 const open = defineModel<boolean>('open', { default: false })
 const step = ref<'upload' | 'preview' | 'result'>('upload')
-const mode = ref<ImportMode>('CREATE_ONLY')
+/** Import mode is fixed to the safe backend default: never overwrite existing rows. */
+const importMode = 'CREATE_ONLY' as const
+/** UFileUpload single-file model (multiple=false): the File, or null when removed. */
 const file = ref<File | null>(null)
 const token = ref('')
 const summary = ref({ total: 0, create: 0, update: 0, skip: 0, error: 0 })
@@ -40,23 +42,13 @@ watch(open, (isOpen) => {
     .catch(() => { /* history is informational; the form still works */ })
 }, { immediate: true })
 
-const modeItems = computed(() => [
-  { label: t('freight.excel.modeCreateOnly'), value: 'CREATE_ONLY' },
-  { label: t('freight.excel.modeCreateAndUpdate'), value: 'CREATE_AND_UPDATE' },
-  { label: t('freight.excel.modeValidateOnly'), value: 'VALIDATE_ONLY' },
-])
-
-function onFilePicked(event: Event) {
-  const input = event.target as HTMLInputElement | null
-  file.value = input?.files?.[0] ?? null
-}
 
 async function validate() {
   if (!file.value) return
   busy.value = true
   error.value = ''
   try {
-    const result = await api.validate(props.collection, file.value, mode.value)
+    const result = await api.validate(props.collection, file.value, importMode)
     token.value = result.token
     summary.value = result.summary
     rows.value = result.rows
@@ -103,45 +95,38 @@ async function closePreview() {
 </script>
 
 <template>
-  <UModal v-model:open="open">
-    <template #content>
-      <div class="p-4 space-y-4">
-        <h2 class="text-lg font-semibold">{{ t('freight.excel.import') }}</h2>
+  <UModal
+    v-model:open="open"
+    :title="t('freight.excel.import')"
+    :close="{ color: 'primary', variant: 'outline', class: 'rounded-full' }"
+    :ui="{ content: 'w-[calc(100%-2rem)] max-w-2xl sm:max-w-2xl' }"
+  >
+    <template #body>
+      <div class="space-y-5">
         <CommonAppFormErrorSummary :form-errors="error ? [error] : []" />
 
         <template v-if="step === 'upload'">
-          <p class="text-sm text-muted">{{ t('freight.excel.stepTemplate') }}</p>
-          <UButton
-            icon="i-lucide-download"
-            variant="outline"
-            size="sm"
-            @click="api.template(props.collection)"
-          >
-            {{ t('freight.excel.downloadTemplate') }}
-          </UButton>
-          <UFormField :label="t('freight.excel.mode')" name="import-mode">
-            <URadioGroup v-model="mode" :items="modeItems" />
-          </UFormField>
-          <UFormField :label="t('freight.excel.uploadFile')" name="import-file">
-            <input
-              type="file"
-              accept=".xlsx"
-              data-field-key="import.file"
-              class="text-sm"
-              @change="onFilePicked"
-            >
-          </UFormField>
-          <div class="flex justify-end gap-2">
-            <UButton variant="ghost" @click="open = false">{{ t('lcs.common.cancel') }}</UButton>
+          <div class="flex flex-wrap gap-2">
             <UButton
-              :loading="busy"
-              :disabled="!file"
-              icon="i-lucide-shield-check"
-              @click="validate"
+              icon="i-lucide-download"
+              variant="outline"
+              size="sm"
+              @click="api.template(props.collection)"
             >
-              {{ t('freight.excel.validate') }}
+              {{ t('freight.excel.downloadTemplate') }}
             </UButton>
           </div>
+          <UFormField :label="t('freight.excel.uploadFile')" name="import-file">
+            <!-- Client-side type filtering is a hint only: the backend still rejects
+                 non-.xlsx workbooks and bodies over MAX_FILE_BYTES at validate time. -->
+            <UFileUpload
+              v-model="file"
+              accept=".xlsx"
+              layout="grid"
+              :interactive="false"
+              data-field-key="import.file"
+            />
+          </UFormField>
         </template>
 
         <template v-else-if="step === 'preview'">
@@ -181,28 +166,6 @@ async function closePreview() {
               </tbody>
             </table>
           </div>
-          <div class="flex justify-between gap-2">
-            <UButton
-              variant="outline"
-              icon="i-lucide-file-x-2"
-              :disabled="summary.error === 0 && summary.total === 0"
-              @click="api.errorReport(token)"
-            >
-              {{ t('freight.excel.errorReport') }}
-            </UButton>
-            <div class="flex gap-2">
-              <UButton variant="ghost" @click="closePreview">{{ t('freight.excel.cancel') }}</UButton>
-              <UButton
-                :loading="busy"
-                :disabled="summary.error > 0 || (summary.create === 0 && summary.update === 0)"
-                icon="i-lucide-check-circle-2"
-                color="success"
-                @click="confirmImport"
-              >
-                {{ t('freight.excel.confirm') }}
-              </UButton>
-            </div>
-          </div>
         </template>
 
         <template v-else>
@@ -234,11 +197,67 @@ async function closePreview() {
               </li>
             </ul>
           </div>
-          <div class="flex justify-end">
-            <UButton @click="open = false">{{ t('lcs.common.close') }}</UButton>
-          </div>
         </template>
       </div>
+    </template>
+
+    <template #footer>
+      <template v-if="step === 'upload'">
+        <div class="flex justify-end gap-2">
+          <UButton
+color="neutral"
+variant="ghost"
+:disabled="busy"
+@click="open = false">
+            {{ t('freight.excel.cancel') }}
+          </UButton>
+          <UButton
+            :loading="busy"
+            :disabled="!file"
+            icon="i-lucide-shield-check"
+            @click="validate"
+          >
+            {{ t('freight.excel.validate') }}
+          </UButton>
+        </div>
+      </template>
+
+      <template v-else-if="step === 'preview'">
+        <div class="flex w-full items-center justify-between gap-2">
+          <UButton
+            variant="outline"
+            icon="i-lucide-file-x-2"
+            :disabled="summary.error === 0 && summary.total === 0"
+            @click="api.errorReport(token)"
+          >
+            {{ t('freight.excel.errorReport') }}
+          </UButton>
+          <div class="flex gap-2">
+            <UButton
+color="neutral"
+variant="ghost"
+:disabled="busy"
+@click="closePreview">
+              {{ t('freight.excel.cancel') }}
+            </UButton>
+            <UButton
+              :loading="busy"
+              :disabled="summary.error > 0 || (summary.create === 0 && summary.update === 0)"
+              icon="i-lucide-check-circle-2"
+              color="success"
+              @click="confirmImport"
+            >
+              {{ t('freight.excel.confirm') }}
+            </UButton>
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="flex justify-end">
+          <UButton @click="open = false">{{ t('lcs.common.close') }}</UButton>
+        </div>
+      </template>
     </template>
   </UModal>
 </template>

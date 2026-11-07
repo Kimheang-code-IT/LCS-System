@@ -184,8 +184,12 @@ export type FreightTable = {
   lockedPresets?: boolean
   /** Native file picker + File name / By / Created columns. */
   kind?: 'files'
-  /** Document an uploaded file belongs to; set by the document tab compiler. */
-  upload?: { module: string, recordNo: string }
+  /**
+   * Document an uploaded file belongs to; set by the document tab compiler or,
+   * for a routed document page, resolved at pick time by the page's owner
+   * context (the record id arrives only after the document loads).
+   */
+  upload?: { module: string, recordNo: string } | (() => { module: string, recordNo: string } | undefined)
   /**
    * Recomputes derived values (line totals, tax, amounts) after a cell edit.
    * Returned keys are merged onto the row. Declared here so the renderer stays
@@ -1436,9 +1440,9 @@ if (quotationModule) freightModules.push({
   ],
   tables: [
     QUOTATION_ROUTE_TABLE,
-    { key: 'containerRequirements', title: 'Containers', titleKm: 'កុងតឺន័រ', addLabel: 'Add Container', columns: [
-      { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select', required: true }, { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', type: 'number', required: true }, { key: 'description', label: 'Description', labelKm: 'បរិយាយ' },
-    ], rowDefaults: containerRequirementRowDefaults },
+    // Containers are derived from the Pricing lines' Container Type + Qty, so
+    // there is no manual Container Requirements table any more. Historical
+    // quotations keep their saved requirements (legacy payload accepted).
     { key: 'pricingLines', title: 'Pricing', titleKm: 'តម្លៃ', addLabel: 'Add Pricing Line', columns: [
       { key: 'feeType', label: 'Fee Type', labelKm: 'ប្រភេទថ្លៃ', labelKey: 'freight.ui.feeTypeCol', type: 'select' },
       { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select' },
@@ -1458,14 +1462,7 @@ if (quotationModule) freightModules.push({
     ] },
   ],
   actions: [
-    { key: 'saveDraft', label: 'Save Draft', labelKm: 'រក្សាទុកព្រាង', icon: 'i-lucide-save' },
-    { key: 'submit', label: 'Submit', labelKm: 'ដាក់ស្នើ', icon: 'i-lucide-check-circle', color: 'primary' },
-    { key: 'send', label: 'Send', labelKm: 'ផ្ញើ', icon: 'i-lucide-send' },
-    { key: 'createRevision', label: 'Create Revision', labelKm: 'បង្កើតកំណែ', icon: 'i-lucide-git-branch' },
-    { key: 'accept', label: 'Accept', labelKm: 'ទទួលយក', icon: 'i-lucide-check', color: 'success' },
-    { key: 'reject', label: 'Reject', labelKm: 'បដិសេធ', icon: 'i-lucide-x', color: 'error' },
-    { key: 'convertJob', label: 'Convert to Service Order', labelKm: 'បម្លែងទៅបញ្ជាសេវាកម្ម', icon: 'i-lucide-arrow-right', color: 'primary' },
-    { key: 'cancel', label: 'Cancel', labelKm: 'បោះបង់', icon: 'i-lucide-ban', color: 'warning' },
+    { key: 'saveDraft', label: 'Save Data', labelKm: 'រក្សាទុកទិន្នន័យ', icon: 'i-lucide-save', color: 'primary' },
   ],
   filters: [f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', '', '', 'select', undefined, { labelKey: 'freight.fields.customerPartyId' }), f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select', undefined, { labelKey: 'freight.ui.cols.direction' })],
 })
@@ -1488,6 +1485,8 @@ if (jobsModule) freightModules.push({
     col('direction', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', { labelKey: 'freight.ui.cols.direction' }),
     col('containersCount', 'Containers', 'កុងតឺន័រ', { labelKey: 'freight.jobSections.containers' }),
     col('chargesTotal', 'Total Charges', 'ថ្លៃសរុប', { labelKey: 'freight.ui.totalCharges' }),
+    col('startedAt', 'Started', 'ចាប់ផ្តើម', { labelKey: 'freight.ui.cols.started', type: 'datetime' }),
+    col('endedAt', 'Ended', 'បញ្ចប់', { labelKey: 'freight.ui.cols.ended', type: 'datetime' }),
     col('status', 'Status', 'ស្ថានភាព', { labelKey: 'freight.ui.status' }),
     col('createdBy', 'Created By', 'បង្កើតដោយ', { labelKey: 'freight.fields.createdBy' }),
     col('createdAt', 'Created At', 'បង្កើតនៅ', { labelKey: 'freight.fields.createdAt', type: 'datetime' }),
@@ -1495,6 +1494,7 @@ if (jobsModule) freightModules.push({
   // The Service Order Overview is intentionally minimal: the quotation-style
   // header fields, the reference block and a single operational remark.
   fields: [
+    f('quotationId', 'Quotation', 'សម្រង់តម្លៃ', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { labelKey: 'freight.ui.cols.quotation', helpKey: 'freight.fieldHelp.orderQuotation' }),
     f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true, labelKey: 'freight.fields.customerPartyId' }),
     f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }),
     f('date', 'Quotation Date', 'កាលបរិច្ឆេទ', 'Job Information', 'ព័ត៌មានការងារ', 'date', undefined, { required: true }),

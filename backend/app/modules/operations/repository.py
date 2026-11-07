@@ -41,7 +41,14 @@ class OperationsRepository:
             )
         total = await count_query(self.session, stmt)
         result = await self.session.execute(
-            stmt.order_by(*list_sort_orders(ServiceOrder, page, ServiceOrder.id.desc()))
+            stmt.order_by(*list_sort_orders(
+                ServiceOrder,
+                page,
+                ServiceOrder.id.desc(),
+                # Started/Ended are the created/finish stamps under friendlier
+                # API names, so both columns are sortable on the list.
+                aliases={"startedAt": "created_at", "endedAt": "finished_at"},
+            ))
             .limit(page.page_size)
             .offset(page.offset)
         )

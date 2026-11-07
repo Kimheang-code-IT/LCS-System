@@ -144,6 +144,35 @@ async def client(session_factory, seeded):
     app.dependency_overrides.clear()
 
 
+async def seed_quotation(client, headers: dict, payload: dict | None = None) -> dict:
+    """A minimal quotation for service-order creation.
+
+    Selecting a quotation is mandatory for a new Service Order, so every test
+    that creates an order directly goes through this helper first.
+    """
+    from datetime import date
+
+    body = {"date": date.today().isoformat(), "direction": "Import", "currency": "USD", **(payload or {})}
+    if not body.get("customerPartyId") and not body.get("customer"):
+        party = (await client.get("/api/v1/businessParties", headers=headers, params={"page_size": 1})).json()["data"]["items"][0]
+        body["customerPartyId"] = party["id"]
+    response = await client.post("/api/v1/quotations", headers=headers, json=body)
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
+async def seed_service_order(client, headers: dict, payload: dict | None = None) -> dict:
+    """Create one service order from a fresh quotation (quotation mandatory)."""
+    quotation = await seed_quotation(client, headers)
+    response = await client.post(
+        "/api/v1/service-orders",
+        headers=headers,
+        json={"quotationId": quotation["id"], **(payload or {})},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
 @pytest_asyncio.fixture
 async def client_fresh(session_factory):
     """HTTP client against an empty database; `/auth/setup` is still pending."""

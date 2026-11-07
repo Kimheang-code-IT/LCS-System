@@ -48,8 +48,8 @@ def _workbook_bytes(module: str, rows: list[list], headers: list[str] | None = N
     return stream.getvalue()
 
 
-async def _headers(client, headers: dict) -> list[str]:
-    response = await client.get("/api/v1/excel/feeTypes/template", headers=headers)
+async def _headers(client, headers: dict, module: str = "feeTypes") -> list[str]:
+    response = await client.get(f"/api/v1/excel/{module}/template", headers=headers)
     assert response.status_code == 200, response.text
     workbook = load_workbook(io.BytesIO(response.content))
     return [cell.value for cell in next(workbook["Data"].iter_rows(min_row=1, max_row=1))]
@@ -188,6 +188,19 @@ async def test_preview_generates_no_records(client):
     listed = await client.get("/api/v1/feeTypes", headers=headers)
     codes = [row["code"] for row in listed.json()["data"]["items"]]
     assert "FT-PREVIEW" not in codes
+
+
+async def test_reference_column_satisfies_required_transport_type(client):
+    """transportAssets writes require transportType; the registry must expose it
+    as a reference column so an import row can satisfy the spec by name."""
+    headers = await login(client)
+    expected = await _headers(client, headers, module="transportAssets")
+    assert "transportType" in expected
+    row = {"assetCode": "TA-REG-TEST", "identity": "PPH-REG-999", "transportType": "Truck"}
+    content = _workbook_bytes("transportAssets", [[row.get(header) for header in expected]], headers=expected)
+    data = (await _validate(client, headers, "transportAssets", content)).json()["data"]
+    first = data["rows"][0]
+    assert first["action"] == "CREATE", first["errors"]
 
 
 async def test_confirm_import_persists_and_is_single_use(client):

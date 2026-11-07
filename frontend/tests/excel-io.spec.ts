@@ -78,4 +78,33 @@ describe('Excel import/export wiring', () => {
     expect(registry).toContain('businessParties')
     expect(registry).toContain('documentTypes')
   })
+
+  it('configuration pages host the shared import/export dialogs', () => {
+    const pages: Array<[string, string]> = [
+      ['component-attributes', 'componentAttributes'],
+      ['component-groups', 'componentGroups'],
+      ['component-tabs', 'componentTabs'],
+      ['versions', 'configurationVersions'],
+    ]
+    for (const [page, collection] of pages) {
+      const source = readFileSync(resolve(__dirname, `../app/pages/configuration/${page}/index.vue`), 'utf8')
+      expect(source, page).toContain('ExcelConfigPageIo')
+      expect(source, page).toContain(`collection="${collection}"`)
+      expect(source, page).toContain('@imported=')
+    }
+    const io = readFileSync(resolve(__dirname, '../app/components/excel/ConfigPageIo.vue'), 'utf8')
+    // The same shared dialogs the master-data pages use — no new UI.
+    expect(io).toContain('<ExcelImportExportDialog')
+    expect(io).toContain('<CommonAppExportDialog')
+    expect(io).toContain("scopes=\"all_matching\"")
+    expect(io).toContain("t('actions.importData')")
+    expect(io).toContain("t('actions.exportData')")
+  })
+
+  it('the versions page exports a full snapshot workbook per version', () => {
+    const versions = readFileSync(resolve(__dirname, '../app/pages/configuration/versions/index.vue'), 'utf8')
+    expect(versions).toContain('exportVersionWorkbook')
+    expect(versions).toContain("t('freight.excel.exportWorkbook')")
+    expect(versions).toContain("'configurationVersions', [version.id]")
+  })
 })

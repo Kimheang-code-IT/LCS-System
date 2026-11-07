@@ -47,10 +47,72 @@ async def enqueue_private(session: AsyncSession, user_id: int, event: str, *, to
     return row
 
 
+#: One Telegram message per (event, order) per cooldown window: replayed API
+#: calls and rapid successive saves cannot flood the client group.
+CLIENT_COOLDOWN_MINUTES = 5
+
+_CLIENT_TITLES = {
+    "SERVICE_ORDER_CREATED": "Created",
+    "SERVICE_ORDER_UPDATED": "Updated",
+    "SERVICE_ORDER_STATUS_CHANGED": "Status Changed",
+    "SERVICE_ORDER_FINISHED": "Finished",
+    "SERVICE_ORDER_CANCELLED": "Cancelled",
+}
+
+
+async def enqueue_client(session: AsyncSession, event: str, *, order_no: str, status: str, occurred: str) -> NotificationOutbox | None:
+    """Queue the client group's Service Order notification. Calls no network."""
+    from datetime import timedelta
+
+    value = await service.config(session)
+    if event not in _CLIENT_TITLES or not value.get("clientEnabled") or not value.get("clientGroupId"):
+        return None
+    events = value.get("clientEvents") or {}
+    if not events.get(event, True):
+        return None
+    try:
+        chat_id = int(str(value.get("clientGroupId")))
+        assert abs(chat_id) < 2**53
+    except (TypeError, ValueError, AssertionError):
+        return None
+    cooldown = utcnow() - timedelta(minutes=CLIENT_COOLDOWN_MINUTES)
+    recent = await session.scalar(
+        select(NotificationOutbox.id).where(
+            NotificationOutbox.destination_type == "CLIENT",
+            NotificationOutbox.event_type == event,
+            NotificationOutbox.payload["orderNo"].as_string() == str(order_no),
+            NotificationOutbox.created_at > cooldown,
+        )
+    )
+    if recent:
+        return None
+    row = NotificationOutbox(
+        event_type=event, category="client", severity="INFO",
+        destination_type="CLIENT", destination_reference=chat_id,
+        payload={
+            "text": f"📦 Service Order {_CLIENT_TITLES[event]}\nOrder: {order_no}\nStatus: {status}\nDate: {occurred}",
+            "orderNo": str(order_no),
+            "event": event,
+            "bot_id": value.get("clientBotId") or value.get("botId"),
+        },
+        expires_at=utcnow() + timedelta(days=1), max_attempts=3,
+        deduplication_key=f"client:{event}:{order_no}:{secrets.token_hex(8)}",
+    )
+    session.add(row)
+    return row
+
+
 async def enqueue_admin(session: AsyncSession, event: str, category: str, severity: str, *, reference: str, summary: str, dedup: str) -> NotificationOutbox | None:
     value = await service.config(session)
     rule = policy(value, category)
-    if not value.get("enabled") or not value.get("adminGroupId") or not rule["enabled"] or SEVERITY[severity] < SEVERITY[rule["minimumSeverity"]]:
+    destination = value.get("adminGroupId")
+    audience = None
+    if category == "system":
+        from app.modules.settings.maintenance import load
+        maintenance = await load(session)
+        if maintenance.get("developerGroupId"):
+            destination, audience = int(maintenance["developerGroupId"]), "developer"
+    if not value.get("enabled") or not destination or not rule["enabled"] or SEVERITY[severity] < SEVERITY[rule["minimumSeverity"]]:
         return None
     if await session.scalar(select(NotificationOutbox.id).where(NotificationOutbox.deduplication_key == dedup)):
         return None
@@ -59,7 +121,7 @@ async def enqueue_admin(session: AsyncSession, event: str, category: str, severi
         if recent:
             return None
     # Producers pass controlled summaries, never exceptions, request bodies or credentials.
-    row = NotificationOutbox(event_type=event, category=category, severity=severity, destination_type="ADMIN", destination_reference=value["adminGroupId"], payload={"text": f"LCS {category.title()} Alert\nSeverity: {severity}\nEvent: {summary[:600]}\nReference: {reference[:100]}\nTime: {utcnow().isoformat()}", "bot_id": value.get("botId")}, expires_at=utcnow() + timedelta(days=1), max_attempts=rule["maxAttempts"], deduplication_key=dedup)
+    row = NotificationOutbox(event_type=event, category=category, severity=severity, destination_type="ADMIN", destination_reference=destination, payload={"text": f"LCS {category.title()} Alert\nSeverity: {severity}\nEvent: {summary[:600]}\nReference: {reference[:100]}\nTime: {utcnow().isoformat()}", "bot_id": value.get("botId"), **({"maintenanceAudience": audience} if audience else {})}, expires_at=utcnow() + timedelta(days=1), max_attempts=rule["maxAttempts"], deduplication_key=dedup)
     session.add(row)
     await session.flush()
     return row
@@ -93,8 +155,30 @@ async def deliver(row_id: int, claim_token: str, *, session_factory=SessionLocal
             return
         session.expunge(row)
         value = await service.config(session)
-        eligible = value.get("enabled") and value.get("botId") == row.payload.get("bot_id") and service.aware(row.expires_at) > utcnow()
-        if row.destination_type == "ADMIN":
+        if row.destination_type == "CLIENT":
+            # Client notifications depend on their own toggle and chat id, not
+            # on the global bot switch the admin alerts and pairings use.
+            client_bot_id = value.get("clientBotId") or value.get("botId")
+            stored_bot = row.payload.get("bot_id")
+            eligible = (
+                service.aware(row.expires_at) > service.utcnow()
+                and bool(value.get("clientEnabled"))
+                and str(value.get("clientGroupId")) == str(row.destination_reference)
+                and (stored_bot is None or stored_bot == client_bot_id)
+                and (value.get("clientEvents") or {}).get(row.payload.get("event"), True)
+            )
+        else:
+            eligible = value.get("enabled") and value.get("botId") == row.payload.get("bot_id") and service.aware(row.expires_at) > utcnow()
+        if row.destination_type == "CLIENT":
+            pass  # eligibility fully decided above
+        elif row.destination_type == "ADMIN" and "maintenanceAudience" in row.payload:
+            from app.modules.settings.maintenance import load
+            maintenance = await load(session)
+            audience = row.payload.get("maintenanceAudience")
+            eligible = eligible and audience in {"operations", "developer"} and str(maintenance.get(f"{audience}GroupId")) == str(row.destination_reference) and not row.sensitive_payload
+            if not row.payload.get("maintenanceLifecycle"):
+                eligible = eligible and policy(value, "system")["enabled"]
+        elif row.destination_type == "ADMIN":
             eligible = eligible and value.get("adminGroupId") == row.destination_reference and row.category in service.DEFAULT_RULES and row.category != "recovery" and not row.sensitive_payload and policy(value, row.category)["enabled"]
         else:
             link = await session.get(TelegramLink, row.payload.get("user_id"))
@@ -111,8 +195,12 @@ async def deliver(row_id: int, claim_token: str, *, session_factory=SessionLocal
         try:
             text = json.loads(decrypt_secret(row.sensitive_payload))["text"] if row.sensitive_payload else row.payload["text"]
             # The claim transaction already committed. Delivery has a bounded timeout.
-            await service.client(value).send_message(row.destination_reference, text)
-            row.status, row.sent_at, row.last_error = "SENT", utcnow(), None
+            if row.destination_type == "CLIENT":
+                sender, chat_id = service.client_sender(value)
+                await sender.send_message(chat_id, text)
+            else:
+                await service.client(value).send_message(row.destination_reference, text)
+            row.status, row.sent_at, row.last_error = "SENT", service.utcnow(), None
             row.sensitive_payload = None
         except TelegramError as exc:
             row.last_error = exc.code

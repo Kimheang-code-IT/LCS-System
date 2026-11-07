@@ -1,6 +1,20 @@
-import type { AppConfigRepository, AppInfoRepository, BackupRepository } from '~/repositories/contracts/settings'
+import type {
+  AppConfigRepository,
+  AppInfoRepository,
+  BackupRepository,
+  StorageRepository,
+} from '~/repositories/contracts/settings'
 import type { ApiResponse } from '~/types/common'
-import type { AppConfig, AppInfo, BackupRunSummary, BackupStatus, ConnectionStatus } from '~/types/settings'
+import type {
+  AppConfig,
+  AppInfo,
+  BackupRunSummary,
+  BackupStatus,
+  ConnectionStatus,
+  StorageJob,
+  StorageOverview,
+  StorageProviderStatus,
+} from '~/types/settings'
 import { ApiEndpoints } from '~/utils/constants/api-endpoints'
 import { unwrapApiData } from './response'
 
@@ -30,6 +44,8 @@ export function createHttpAppConfigRepository(): AppConfigRepository {
       ApiEndpoints.APP_CONFIG_SEND_TEST_TELEGRAM,
       destinationId ? { destinationId } : {},
     ),
+    testTelegramClientConnection: () => postResult(ApiEndpoints.APP_CONFIG_TEST_TELEGRAM_CLIENT),
+    sendTestTelegramClientMessage: () => postResult(ApiEndpoints.APP_CONFIG_SEND_TEST_TELEGRAM_CLIENT),
     resetData: async confirm =>
       unwrapApiData(await api.post<{ reset: boolean } | ApiResponse<{ reset: boolean }>>(
         ApiEndpoints.SETTINGS_RESET_DATA,
@@ -73,4 +89,50 @@ export function createHttpBackupRepository(): BackupRepository {
         ),
       ),
   }
+}
+
+type StorageStatusResponse = {
+  config: AppConfig['storage']
+  providers: Record<'r2' | 'gdrive', StorageProviderStatus>
+  overview: StorageOverview
+}
+
+export function createHttpStorageRepository(): StorageRepository {
+  const api = useApi()
+  const post = async (endpoint: string, body: Record<string, unknown> = {}) =>
+    unwrapApiData(await api.post<StorageJob | ApiResponse<StorageJob>>(endpoint, body))
+  const plain = async <T>(endpoint: string, body: Record<string, unknown> = {}) =>
+    unwrapApiData(await api.post<T | ApiResponse<T>>(endpoint, body))
+
+  return {
+    status: async () =>
+      unwrapApiData(await api.get<StorageStatusResponse | ApiResponse<StorageStatusResponse>>(ApiEndpoints.STORAGE_STATUS)),
+    testConnection: provider =>
+      plain<{ status: string, message: string }>(ApiEndpoints.STORAGE_TEST_CONNECTION, { provider }),
+    googleAuthorize: () => plain<{ url: string }>(ApiEndpoints.STORAGE_GOOGLE_AUTHORIZE),
+    googleDisconnect: () => plain<{ status: string }>(ApiEndpoints.STORAGE_GOOGLE_DISCONNECT),
+    backupNow: () => post(ApiEndpoints.STORAGE_BACKUP_NOW),
+    backupJobs: async () => unwrapApiData(await api.get<StorageJob[] | ApiResponse<StorageJob[]>>(ApiEndpoints.STORAGE_BACKUP_JOBS)),
+    backupRetry: () => post(ApiEndpoints.STORAGE_BACKUP_RETRY),
+    setPrimary: provider => plain<{ primaryProvider: string }>(ApiEndpoints.STORAGE_PRIMARY, { provider }),
+    migrationPreview: async target => {
+      const query = `?target=${encodeURIComponent(target)}`
+      return unwrapApiData(
+        await api.get<
+          { target: string, byProvider: Record<string, number>, files: number, bytes: number, alreadyOnTarget: number, toMigrate: number } | ApiResponse<{ target: string, byProvider: Record<string, number>, files: number, bytes: number, alreadyOnTarget: number, toMigrate: number }>
+        >(`${ApiEndpoints.STORAGE_MIGRATION_PREVIEW}${query}`),
+      )
+    },
+    migrationStart: (target, dryRun) => post(ApiEndpoints.STORAGE_MIGRATION_START, { target, dryRun }),
+    progress: async () =>
+      unwrapApiData(await api.get<StorageJob | null | ApiResponse<StorageJob | null>>(ApiEndpoints.STORAGE_PROGRESS)),
+    migrationCleanup: confirm => plain<{ removed: number }>(ApiEndpoints.STORAGE_MIGRATION_CLEANUP, { confirm }),
+    restorePreview: async () =>
+      unwrapApiData(
+        await api.get<{ restorable: number, replicas: number, primary: string } | ApiResponse<{ restorable: number, replicas: number, primary: string }>>(
+          ApiEndpoints.STORAGE_RESTORE_PREVIEW,
+        ),
+      ),
+    restore: confirm => post(ApiEndpoints.STORAGE_RESTORE, { confirm }),
+  } as StorageRepository
 }

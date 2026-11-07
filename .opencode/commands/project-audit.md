@@ -1,26 +1,18 @@
 ---
-description: Audit the OpenCode, LeanCTX and project tooling setup
+description: Inspect agent tooling without broad code or test execution
 ---
 
-Read-only audit. Report findings by expected benefit, and apply only changes that are
-safe and reversible.
+Audit the requested configuration/context scope only. Inspect existing project instructions,
+.agents/context, .agents/skills and .opencode skills/commands/reviewer before adding anything.
 
-1. Effective config: `opencode debug config` (configuration sources) and
-   `opencode debug agents` (merged agent permissions and modes); `opencode debug paths`
-   for data, cache and config locations.
-2. MCP: `opencode mcp list` — every connected server costs tool descriptions in every
-   session; flag any that is unused or `needs authentication`.
-3. Extensions: list `.opencode/skills/*/SKILL.md` (name + description + line count),
-   `.opencode/commands/*.md`, `.opencode/agents/*.md` and the global `skills/`, `commands/`,
-   `agents/` directories. Flag duplicates that answer the same question.
-4. Instructions: `AGENTS.md` (root and global) — duplicated rules, stale commands, claims
-   that no longer match the code, and anything that belongs in a skill instead.
-5. Toolchain: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm i18n:check`,
-   `uv run pytest -q`, `uv run ruff check .` — report what runs and how long it takes.
-6. Docs: broken references, generated docs out of date, status documents that disagree
-   with the code.
-7. LeanCTX health: `ctx_quality` (or lean-ctx health) if available, and note any command
-   blocked by the shell allowlist.
+Inspect MCP entries as names/status/auth-field presence only, never dump effective config,
+credentials, headers, env values or private keys. Use available live tool discovery to
+separate connected tools from configured/disabled/unavailable tools. Client commands must
+be supported by the installed version; check help only when permitted, never bypass blocks.
 
-Never change the default model, provider credentials, proxy routing, production secrets or
-Git history. Do not delete a document or skill without approval — mark it superseded first.
+Find duplicate/stale instructions and source-path references. Do not run full application
+suites to audit prose; use /docs-check. Measure actual bytes/available usage, not invented
+savings. Change only explicitly requested project configuration. No global/model/provider
+changes, installs, MCP deployment or archive/skill removal without appropriate authorization.
+
+Report working/configured-not-tested/optional/unavailable separately and stop.
