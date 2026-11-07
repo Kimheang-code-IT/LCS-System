@@ -327,6 +327,16 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "One execution of the Google Sheets backup job (manual or scheduled) with its\n"
         "counters and outcome. Runs are kept for operational history."
     ),
+    "storage_replicas": (
+        "One verified copy of one attachment on one backup provider (Cloudflare R2 / Google\n"
+        "Drive). A PENDING row is a durable replication request the backup scheduler sweeps;"
+        " ACTIVE means the copy was size- and checksum-verified in place."
+    ),
+    "storage_jobs": (
+        "One managed storage job (attachment backup sweep, historical-file migration or\n"
+        "restore) with progress counters, so interactive runs survive a page reload and an\n"
+        "interrupted job is resumed by the scheduler."
+    ),
     "backup_records": (
         "One immutable version of one database row. Append-only: a complete history of every\n"
         "change is preserved and can be replayed after data loss."
@@ -1450,6 +1460,33 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "spreadsheet_id": "Google Sheets spreadsheet that received the data.",
         "message": "Human-readable summary of the run outcome.",
         "detail": "JSONB payload with structured run diagnostics.",
+    },
+    # -- storage ----------------------------------------------------------
+    "storage_replicas": {
+        "attachment_id": "The attachment this copy belongs to. Deleting the attachment deletes the replica.",
+        "backup_provider": "Provider tag holding this copy ('r2' or 'gdrive'). One copy per (attachment, provider).",
+        "backup_key": "Object key on the backup provider. '-' while the copy is still pending.",
+        "status": "PENDING (durable replication request), ACTIVE (size- and checksum-verified) or FAILED.",
+        "file_size_bytes": "Size of the verified replica in bytes.",
+        "checksum": "MD5 checksum of the replica content, compared against the source before cleanup.",
+        "attempts": "Replication attempts so far; the scheduler caps retries per attempt.",
+        "created_by_migration": "Whether the historical-file migration created this replica instead of the backup sweep.",
+        "last_error": "Last replication failure message. Cleared on success.",
+        "last_synced_at": "Timestamp of the last verified successful copy.",
+    },
+    "storage_jobs": {
+        "job_type": "BACKUP (replication sweep), MIGRATION (copy historical files to a new provider) or RESTORE.",
+        "target_provider": "Provider the job operates on ('r2' or 'gdrive').",
+        "status": "PENDING (queued or resumed), RUNNING, COMPLETED or FAILED. Indexed for polling.",
+        "dry_run": "TRUE for migration previews that report scope without copying.",
+        "progress": "Completion percentage (0-100).",
+        "total": "Planned number of files to process.",
+        "processed": "Files handled successfully.",
+        "failed": "Files that could not be processed; the row records per-file errors in the log.",
+        "started_by_user_id": "Administrator who started the job, when interactive.",
+        "message": "Human-readable summary of the job outcome.",
+        "started_at": "Timestamp the job started. NULL while queued.",
+        "finished_at": "Timestamp the job completed. NULL while still running.",
     },
     "backup_records": {
         "run_id": "Run that produced this version. Set to NULL when the run row is deleted.",

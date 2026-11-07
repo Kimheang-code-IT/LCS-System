@@ -65,7 +65,10 @@ PRESERVATION_REVISIONS = (
 
 # These revisions intentionally have nothing to undo. Their upgrade is a data
 # backfill or a read-only guard, and downgrading must not drop Places either.
-NOOP_DOWNGRADES = frozenset((*PRESERVATION_REVISIONS, "f4a4b5c6d7e8"))
+# b1c2d3e4f5a6 only soft-deletes MinIO/local-disk attachment rows whose objects
+# no longer exist anywhere; a downgrade would advertise files that cannot be
+# read, so it is intentionally empty (see alembic revision docstring).
+NOOP_DOWNGRADES = frozenset((*PRESERVATION_REVISIONS, "f4a4b5c6d7e8", "b1c2d3e4f5a6"))
 
 
 def _revision_files() -> dict[str, Path]:

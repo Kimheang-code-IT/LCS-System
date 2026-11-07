@@ -56,7 +56,7 @@ async def enforce_access_modes(request: Request, context: RequestContext, sessio
     policy = await get_access_policy(session)
     from app.core.config import settings
     from app.modules.settings.maintenance import active, load, refusal
-    value = await load(session)
+    value = await load(session, request)
     if (settings.force_maintenance or active(value)) and not _recovery_allowed(request, context):
         raise refusal(value)
     if (

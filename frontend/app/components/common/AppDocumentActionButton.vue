@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  click: []
+  click: [event: MouseEvent]
 }>()
 
 const ui = computed(() => documentActionButtonUi(props.color))

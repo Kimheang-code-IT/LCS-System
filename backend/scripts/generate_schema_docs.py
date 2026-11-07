@@ -53,6 +53,7 @@ import app.modules.master_data.models  # noqa: E402, F401
 import app.modules.operations.models  # noqa: E402, F401
 import app.modules.quotations.models  # noqa: E402, F401
 import app.modules.settings.models  # noqa: E402, F401
+import app.modules.storage.models  # noqa: E402, F401
 import app.modules.telegram.models  # noqa: E402, F401
 from app.core.database import Base  # noqa: E402
 

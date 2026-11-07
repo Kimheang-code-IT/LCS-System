@@ -48,6 +48,10 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/v1/auth/forgot-password/reset"),
         # Authenticated by Telegram's secret token header, not by a session.
         ("POST", "/api/v1/integrations/telegram/webhook"),
+        # Google Drive OAuth callback, part of the storage feature: the signed
+        # state JWT (type + 10-minute expiry) is the credential, and tokens are
+        # exchanged server-side without ever reaching the caller.
+        ("GET", "/api/v1/storage/google/callback"),
     }
 )
 

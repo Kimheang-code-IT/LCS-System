@@ -824,6 +824,7 @@ separately reviewed maintenance operation.
 | A database owner can disable guards with `SET LOCAL lcs.allow_financial_purge` | The guards defend against mistakes, not a hostile DBA | Accepted; least-privilege DB roles are required |
 | Cross-currency allocation is not implemented | Payment and invoice must share a currency | Accepted; a reviewed FX design is required |
 | No MFA for privileged users | A stolen password is sufficient for login | Open |
+| Migration `b1c2d3e4f5a6` removal of MinIO/local attachment access is irreversible | MinIO objects and the Docker upload volume were already deleted (authorized); the migration only marks the rows soft-deleted and removes their links. Downgrading cannot resurrect the objects or the deleted link rows | Known limitation; restoring those attachments requires a pre-removal verified dump (the documented rollback boundary is restore, never `downgrade`) |
 | No malware scanning on uploads | File type/size/signature are checked, but content is not scanned | Open; add a scanner if untrusted uploads are accepted |
 | Off-host PostgreSQL backups are optional | Without `BACKUP_S3_BUCKET`, a host-level dump is not disaster recovery | Partial; encrypted S3 SSE-KMS upload is implemented but the bucket/lifecycle must be provisioned and verified |
 | No browser E2E | Focus, tab reveal, and responsive layout are checked manually | Open; see `docs/10_testing_and_quality.md` |

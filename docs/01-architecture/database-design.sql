@@ -2510,6 +2510,72 @@ COMMENT ON COLUMN service_order_pricing.created_at IS 'Row creation timestamp (U
 COMMENT ON COLUMN service_order_pricing.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
+-- Table: storage_jobs
+-- Module: app.modules.storage.models  [app.modules.storage.models]
+-- One managed storage job (attachment backup sweep, historical-file migration
+-- or restore) with progress counters, so interactive runs survive a page
+-- reload and an interrupted job is resumed by the scheduler.
+-- --------------------------------------------------------------------------
+CREATE TABLE storage_jobs (
+    -- BACKUP (replication sweep), MIGRATION (copy historical files to a new
+    -- provider) or RESTORE.
+    job_type VARCHAR(16) NOT NULL,
+    -- Provider the job operates on ('r2' or 'gdrive').
+    target_provider VARCHAR(32) NOT NULL,
+    -- PENDING (queued or resumed), RUNNING, COMPLETED or FAILED. Indexed for
+    -- polling.
+    status VARCHAR(16) NOT NULL,
+    -- TRUE for migration previews that report scope without copying.
+    dry_run BOOLEAN NOT NULL,
+    -- Completion percentage (0-100).
+    progress INTEGER NOT NULL,
+    -- Planned number of files to process.
+    total INTEGER NOT NULL,
+    -- Files handled successfully.
+    processed INTEGER NOT NULL,
+    -- Files that could not be processed; the row records per-file errors in
+    -- the log.
+    failed INTEGER NOT NULL,
+    -- Administrator who started the job, when interactive.
+    started_by_user_id BIGINT,
+    -- Human-readable summary of the job outcome.
+    message TEXT,
+    -- Timestamp the job started. NULL while queued.
+    started_at TIMESTAMP WITH TIME ZONE,
+    -- Timestamp the job completed. NULL while still running.
+    finished_at TIMESTAMP WITH TIME ZONE,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_storage_jobs PRIMARY KEY (id),
+    CONSTRAINT fk_storage_jobs_started_by_user_id_users FOREIGN KEY(started_by_user_id) REFERENCES users (id)
+);
+CREATE INDEX ix_storage_jobs_job_type ON storage_jobs (job_type);
+CREATE INDEX ix_storage_jobs_status ON storage_jobs (status);
+
+COMMENT ON TABLE storage_jobs IS 'One managed storage job (attachment backup sweep, historical-file migration or restore) with progress counters, so interactive runs survive a page reload and an interrupted job is resumed by the scheduler.';
+COMMENT ON COLUMN storage_jobs.job_type IS 'BACKUP (replication sweep), MIGRATION (copy historical files to a new provider) or RESTORE.';
+COMMENT ON COLUMN storage_jobs.target_provider IS 'Provider the job operates on (''r2'' or ''gdrive'').';
+COMMENT ON COLUMN storage_jobs.status IS 'PENDING (queued or resumed), RUNNING, COMPLETED or FAILED. Indexed for polling.';
+COMMENT ON COLUMN storage_jobs.dry_run IS 'TRUE for migration previews that report scope without copying.';
+COMMENT ON COLUMN storage_jobs.progress IS 'Completion percentage (0-100).';
+COMMENT ON COLUMN storage_jobs.total IS 'Planned number of files to process.';
+COMMENT ON COLUMN storage_jobs.processed IS 'Files handled successfully.';
+COMMENT ON COLUMN storage_jobs.failed IS 'Files that could not be processed; the row records per-file errors in the log.';
+COMMENT ON COLUMN storage_jobs.started_by_user_id IS 'Administrator who started the job, when interactive.';
+COMMENT ON COLUMN storage_jobs.message IS 'Human-readable summary of the job outcome.';
+COMMENT ON COLUMN storage_jobs.started_at IS 'Timestamp the job started. NULL while queued.';
+COMMENT ON COLUMN storage_jobs.finished_at IS 'Timestamp the job completed. NULL while still running.';
+COMMENT ON COLUMN storage_jobs.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN storage_jobs.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN storage_jobs.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
 -- Table: telegram_links
 -- Module: Telegram Notifications and Verified Identities  [app.modules.telegram.models]
 -- Private Telegram numeric identities verified by an authenticated,
@@ -3501,6 +3567,69 @@ COMMENT ON COLUMN service_order_places.notes IS 'Free-text notes about this stop
 COMMENT ON COLUMN service_order_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
+-- Table: storage_replicas
+-- Module: app.modules.storage.models  [app.modules.storage.models]
+-- One verified copy of one attachment on one backup provider (Cloudflare R2 /
+-- Google Drive). A PENDING row is a durable replication request the backup
+-- scheduler sweeps; ACTIVE means the copy was size- and checksum-verified in
+-- place.
+-- --------------------------------------------------------------------------
+CREATE TABLE storage_replicas (
+    -- The attachment this copy belongs to. Deleting the attachment deletes
+    -- the replica.
+    attachment_id BIGINT NOT NULL,
+    -- Provider tag holding this copy ('r2' or 'gdrive'). One copy per
+    -- (attachment, provider).
+    backup_provider VARCHAR(32) NOT NULL,
+    -- Object key on the backup provider. '-' while the copy is still pending.
+    backup_key VARCHAR(512) NOT NULL,
+    -- PENDING (durable replication request), ACTIVE (size- and
+    -- checksum-verified) or FAILED.
+    status VARCHAR(16) NOT NULL,
+    -- Size of the verified replica in bytes.
+    file_size_bytes BIGINT NOT NULL,
+    -- MD5 checksum of the replica content, compared against the source before
+    -- cleanup.
+    checksum VARCHAR(64),
+    -- Replication attempts so far; the scheduler caps retries per attempt.
+    attempts INTEGER NOT NULL,
+    -- Whether the historical-file migration created this replica instead of
+    -- the backup sweep.
+    created_by_migration BOOLEAN NOT NULL,
+    -- Last replication failure message. Cleared on success.
+    last_error TEXT,
+    -- Timestamp of the last verified successful copy.
+    last_synced_at TIMESTAMP WITH TIME ZONE,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_storage_replicas PRIMARY KEY (id),
+    CONSTRAINT uq_storage_replicas_target UNIQUE (attachment_id, backup_provider),
+    CONSTRAINT fk_storage_replicas_attachment_id_attachments FOREIGN KEY(attachment_id) REFERENCES attachments (id) ON DELETE CASCADE
+);
+CREATE INDEX ix_storage_replicas_status ON storage_replicas (status);
+
+COMMENT ON TABLE storage_replicas IS 'One verified copy of one attachment on one backup provider (Cloudflare R2 / Google Drive). A PENDING row is a durable replication request the backup scheduler sweeps; ACTIVE means the copy was size- and checksum-verified in place.';
+COMMENT ON COLUMN storage_replicas.attachment_id IS 'The attachment this copy belongs to. Deleting the attachment deletes the replica.';
+COMMENT ON COLUMN storage_replicas.backup_provider IS 'Provider tag holding this copy (''r2'' or ''gdrive''). One copy per (attachment, provider).';
+COMMENT ON COLUMN storage_replicas.backup_key IS 'Object key on the backup provider. ''-'' while the copy is still pending.';
+COMMENT ON COLUMN storage_replicas.status IS 'PENDING (durable replication request), ACTIVE (size- and checksum-verified) or FAILED.';
+COMMENT ON COLUMN storage_replicas.file_size_bytes IS 'Size of the verified replica in bytes.';
+COMMENT ON COLUMN storage_replicas.checksum IS 'MD5 checksum of the replica content, compared against the source before cleanup.';
+COMMENT ON COLUMN storage_replicas.attempts IS 'Replication attempts so far; the scheduler caps retries per attempt.';
+COMMENT ON COLUMN storage_replicas.created_by_migration IS 'Whether the historical-file migration created this replica instead of the backup sweep.';
+COMMENT ON COLUMN storage_replicas.last_error IS 'Last replication failure message. Cleared on success.';
+COMMENT ON COLUMN storage_replicas.last_synced_at IS 'Timestamp of the last verified successful copy.';
+COMMENT ON COLUMN storage_replicas.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN storage_replicas.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN storage_replicas.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
+
+-- --------------------------------------------------------------------------
 -- Table: transport_asset_identity_types
 -- Module: Master Data  [app.modules.master_data.models]
 -- Administrator-managed vocabulary for transport_assets.identity_type. Each
@@ -4429,5 +4558,5 @@ COMMENT ON COLUMN service_order_charge_lines.line_amount IS 'Final payable amoun
 COMMENT ON COLUMN service_order_charge_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- ==========================================================================
--- END OF SCHEMA - 77 tables
+-- END OF SCHEMA - 79 tables
 -- ==========================================================================

@@ -101,7 +101,7 @@ def master_data_module(collection: str, name: str, match_key: tuple[str, ...], f
     # Reference columns a Spec keeps outside ``fields`` (transportAssets has no
     # field for transportType, yet every write requires it) — without these the
     # import pipeline can never satisfy the spec's own required validation.
-    for camel, ref in spec.refs.items():
+    for camel, _ref in spec.refs.items():
         if any(column.key == camel for column in columns):
             continue
         columns.append(

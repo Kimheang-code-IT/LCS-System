@@ -1,4 +1,11 @@
-"""Persistent, uncached maintenance admission policy. End times never reopen access."""
+"""Persistent maintenance admission policy. End times never reopen access.
+
+The evaluation state is re-read from the database on every request — through a
+per-request memo shared by the router-level admission and the authenticated
+guard, so one request costs exactly one small settings read. A short-lived
+legacy fallback (no dedicated maintenance row yet) reads only the ``system``
+row instead of the whole app-config snapshot.
+"""
 
 from __future__ import annotations
 
@@ -93,17 +100,53 @@ def active(value: dict, now: datetime | None = None) -> bool:
     return bool(value.get("enabled") and (not start or datetime.fromisoformat(start) <= (now or utcnow())))
 
 
-async def load(session: AsyncSession) -> dict:
+async def load(session: AsyncSession, request: Request | None = None) -> dict:
+    """Read the admission policy once per request.
+
+    The dedicated maintenance row is re-read on every request on purpose:
+    maintenance state must be visible immediately, including direct database
+    edits (the persistence-latch test relies on that). The two call sites per
+    request (the router-level admission and the authenticated guard) share the
+    value through ``request.state``, so a request performs one small read.
+    """
+    if request is not None and getattr(request.state, "maintenance_value", None) is not None:
+        return request.state.maintenance_value
     row = await session.scalar(
         select(AppSetting).where(AppSetting.setting_key == KEY).execution_options(populate_existing=True)
     )
     if row:
-        return {**DEFAULT, **row.setting_value}
-    # Honor the existing flag until the first dedicated maintenance save.
-    from app.modules.settings.service import _current_app_config
+        value = {**DEFAULT, **row.setting_value}
+    else:
+        # Legacy fallback until the first dedicated maintenance save: honor the
+        # system section's maintenanceMode. It is cached per engine — any save
+        # creates the dedicated row, which is re-read fresh from here on, so the
+        # snapshot can never mask real state.
+        import time
 
-    config, _ = await _current_app_config(session)
-    return {**DEFAULT, "enabled": bool((config.get("system") or {}).get("maintenanceMode"))}
+        bind = session.get_bind()
+        now = time.monotonic()
+        cached = _LEGACY_FALLBACK_CACHE.get(bind)
+        if cached is not None and now - cached[0] < _LEGACY_FALLBACK_TTL_SECONDS:
+            value = cached[1]
+        else:
+            from app.modules.settings.service import APP_CONFIG_COLLECTION, _load_record
+
+            system_row = await session.scalar(select(AppSetting).where(AppSetting.setting_key == "system"))
+            system = dict(system_row.setting_value or {}) if system_row else {}
+            if not system:
+                legacy = await _load_record(session, APP_CONFIG_COLLECTION)
+                system = dict((legacy.data or {}).get("system") or {}) if legacy and isinstance(legacy.data, dict) else {}
+            value = {**DEFAULT, "enabled": bool(system.get("maintenanceMode"))}
+            _LEGACY_FALLBACK_CACHE[bind] = (now, value)
+    if request is not None:
+        request.state.maintenance_value = value
+    return value
+
+
+#: Snapshot of the no-row legacy fallback, per engine. Only ever read while the
+#: dedicated maintenance row is absent, so creating that row naturally ends it.
+_LEGACY_FALLBACK_TTL_SECONDS = 300.0
+_LEGACY_FALLBACK_CACHE: dict[int, tuple[float, dict]] = {}
 
 
 def public(value: dict) -> dict:
@@ -297,7 +340,7 @@ async def admission(request: Request, session: AsyncSession = Depends(get_sessio
     ):
         return
     try:
-        value = await load(session)
+        value = await load(session, request)
     except SQLAlchemyError:
         raise refusal(DEFAULT) from None
     if settings.force_maintenance or active(value):

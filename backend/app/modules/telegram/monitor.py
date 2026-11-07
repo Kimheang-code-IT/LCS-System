@@ -1,7 +1,6 @@
 """Measured runtime incidents and committed-event producers, sampled once a minute."""
 
 import asyncio
-import os
 import time
 from collections import deque
 from datetime import timedelta
