@@ -64,7 +64,6 @@ class CloudflareR2Provider:
     supports_presign = True
 
     def __init__(self, config: dict[str, Any]) -> None:
-        from app.core.storage import S3Storage
 
         account_id = str(config.get("accountId") or "").strip()
         self._storage = S3Storage(

@@ -582,8 +582,8 @@ async def migration_cleanup(session: AsyncSession, confirm: str) -> dict[str, An
     provider must differ from the current primary, and a checksum-verified
     replica must exist. Never automatic and never applied to unrelated rows.
     """
-    from app.modules.operations.models import Attachment
     from app.core.database import SessionLocal
+    from app.modules.operations.models import Attachment
 
     if confirm.strip().upper() != "DELETE":
         raise ValidationFailed("Type DELETE to confirm removing migration source files.", {"confirm": "Confirmation required."})
