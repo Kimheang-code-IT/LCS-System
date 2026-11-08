@@ -24,11 +24,11 @@ permissions, or financial correctness.
 
 | Document | Use it for |
 |---|---|
-| `AGENTS.md` §Backend | Layering, envelope, permission sync, ruff config |
-| `docs/05_solution_architecture.md` | Module boundaries and the layering contract |
-| `docs/09_roles_and_permissions.md` | Permission codes and page mapping |
+| `docs/03-development/coding-standards.md` (Backend implementation rules) | Layering, envelope, permission sync, ruff config |
+| `docs/01-architecture/implementation-reference.md` | Module boundaries and the layering contract |
+| `docs/01-architecture/permission-catalog.md` | Permission codes and page mapping |
 | `backend/app/modules/<name>/` | The existing pattern to extend (router → service → models/repository) |
-| `docs/11_deployment_and_security.md` | Security controls that must stay in place |
+| `docs/archive/deployment-security-history.md` | Security controls that must stay in place |
 
 ## Architecture
 
@@ -102,14 +102,14 @@ models.py      SQLAlchemy 2.x typed mappings
 - Reject an unknown status rather than silently storing it. If a status set is
   deliberately open, normalise it against a documented allow-list.
 - Guard against N+1: prefer one set-based query in a repository over a query per
-  row. `tests/test_repository_queries.py` and `docs/05` describe the expectation.
+  row. `tests/test_repository_queries.py` and `docs/01-architecture/api-design.md` describe the expectation.
 
 ## Testing
 
 ```bash
 cd backend
 uv run python -m pytest tests/<relevant>.py -q --no-header   # focused first
-uv run python -m pytest -q                                   # full suite (~12 min)
+uv run python -m pytest -q                                   # optional broad/release run
 uv run ruff check .
 ```
 
@@ -127,7 +127,7 @@ when you rely on one.
 - The operation is atomic; a failure leaves no partial write.
 - Money uses `Decimal`/`NUMERIC` with no float round-trip.
 - No new N+1; list endpoints paginate.
-- `uv run python -m pytest -q` and `uv run ruff check .` pass.
+- Focused affected tests and lint pass under `docs/03-development/testing-guide.md`; no automatic full suite.
 - The frontend contract test still passes.
 
 ## Expected outputs

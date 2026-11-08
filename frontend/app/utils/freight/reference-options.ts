@@ -5,7 +5,7 @@ export type ReferenceOptionSource = {
   /** Master-record field stored as the select value. */
   valueField?: 'code' | 'name' | 'id' | 'legalName' | 'displayName' | 'accountCode' | 'accountName'
   /** Master-record field shown as the select label. */
-  labelField?: 'code' | 'name' | 'legalName' | 'displayName' | 'accountCode' | 'accountName'
+  labelField?: 'code' | 'name' | 'legalName' | 'displayName' | 'accountCode' | 'accountName' | 'quotationNo'
   /** Only include records whose `status` matches one of these (case-insensitive). */
   statuses?: string[]
   /** Only include records whose boolean field is true (e.g. `postable`). */
@@ -86,6 +86,9 @@ const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
   // The bank/cash account a receipt or payment settles through; the backend stores
   // the row id, so the payload carries the name separately for printing.
   financialAccountId: { collection: 'financialAccounts', valueField: 'id', labelField: 'accountName', statuses: ['ACTIVE'] },
+  // The quotation a Service Order is raised from. The value is the quotation id
+  // (one quotation may produce many orders); the label is the quotation number.
+  quotationId: { collection: 'quotations', valueField: 'id', labelField: 'quotationNo' },
 }
 
 export function referenceOptionSource(key: string): ReferenceOptionSource | undefined {

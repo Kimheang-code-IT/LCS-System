@@ -14,6 +14,8 @@ const props = withDefaults(defineProps<{
   /** Rows matching the current filters, when the host can count them. */
   matchingCount?: number | null
   counting?: boolean
+  /** Hosts without row selection limit the scope to one value (e.g. all_matching). */
+  scopes?: ExportScope
 }>(), {
   fields: () => [],
   selectedCount: 0,
@@ -23,6 +25,7 @@ const props = withDefaults(defineProps<{
   updatedBySupported: false,
   matchingCount: null,
   counting: false,
+  scopes: undefined,
 })
 
 const emit = defineEmits<{
@@ -40,15 +43,19 @@ const format = ref<ExportFormat>('xlsx')
 const scope = ref<ExportScope>('all_matching')
 const selectedFields = ref<string[]>([])
 
-const scopeItems = computed(() => [
-  { label: t('lcs.exportDialog.allMatching'), value: 'all_matching' },
-  { label: t('lcs.exportDialog.currentPage'), value: 'current_page' },
-  {
-    label: t('lcs.exportDialog.selectedRows', { n: props.selectedCount }),
-    value: 'selected',
-    disabled: props.selectedCount < 1,
-  },
-])
+const scopeItems = computed(() => {
+  const items = [
+    { label: t('lcs.exportDialog.allMatching'), value: 'all_matching' },
+    { label: t('lcs.exportDialog.currentPage'), value: 'current_page' },
+    {
+      label: t('lcs.exportDialog.selectedRows', { n: props.selectedCount }),
+      value: 'selected',
+      disabled: props.selectedCount < 1,
+    },
+  ]
+  // A single-scope host shows only that option (no row selection to offer).
+  return props.scopes ? items.filter(item => item.value === props.scopes) : items
+})
 
 const formatItems = computed(() => [
   { label: 'Excel (.xlsx)', value: 'xlsx' },

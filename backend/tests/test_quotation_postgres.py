@@ -135,7 +135,8 @@ async def _counts(factory: async_sessionmaker[AsyncSession], revision_id: int) -
     return int(orders or 0), int(conversions or 0)
 
 
-async def test_concurrent_conversions_create_exactly_one_service_order(pg_factory):
+async def test_concurrent_conversions_create_two_independent_orders(pg_factory):
+    """Reuse, not one-time conversion: two different requests make two orders."""
     revision_id = await _accepted_revision(pg_factory)
     context = await _context(pg_factory)
     barrier = asyncio.Barrier(2)
@@ -145,20 +146,20 @@ async def test_concurrent_conversions_create_exactly_one_service_order(pg_factor
         _attempt(pg_factory, context, revision_id, "concurrent-b", barrier),
     )
 
-    succeeded = [result for result in results if isinstance(result, dict)]
-    refused = [result for result in results if isinstance(result, Conflict)]
-    assert len(succeeded) == 1, results
-    assert len(refused) == 1, results
+    assert all(isinstance(result, dict) for result in results), results
+    order_ids = {result["serviceOrderId"] for result in results}
+    assert len(order_ids) == 2, results
 
     orders, conversions = await _counts(pg_factory, revision_id)
-    assert orders == 1
-    assert conversions == 1
+    assert orders == 2
+    assert conversions == 2
 
     async with pg_factory() as session:
         revision = await session.get(QuotationRevision, revision_id)
         quotation = await session.get(Quotation, revision.quotation_id if revision else 0)
-    assert revision is not None and revision.status == "CONVERTED"
-    assert quotation is not None and quotation.status == "CONVERTED"
+    # The quotation keeps its own status: it is a reusable CRUD reference now.
+    assert revision is not None and revision.status == "ACCEPTED"
+    assert quotation is not None and quotation.status == "ACCEPTED"
 
 
 async def test_concurrent_retries_with_the_same_key_return_one_order(pg_factory):

@@ -15,9 +15,20 @@ describe('file preview', () => {
     expect(filePreviewHref({ fileName: 'gate-photo.png' })).toBeNull()
   })
 
+  it('returns the storage-key download endpoint before any expiring URL', () => {
+    expect(filePreviewHref({ fileName: 'BL-8821.pdf', storageKey: 'key-bl.pdf', url: 'https://files.example.com/bl.pdf' }))
+      .toBe('/api/v1/attachments/file/key-bl.pdf')
+  })
+
   it('returns the persisted http(s) URL when one exists', () => {
     expect(filePreviewHref({ fileName: 'BL-8821.pdf', url: 'https://files.example.com/bl.pdf' }))
       .toBe('https://files.example.com/bl.pdf')
+  })
+
+  it('accepts same-origin relative paths for the stable download endpoint', () => {
+    expect(safeFilePreviewUrl('/api/v1/attachments/file/key-bl.pdf'))
+      .toBe('/api/v1/attachments/file/key-bl.pdf')
+    expect(safeFilePreviewUrl('//evil.example/share')).toBeNull()
   })
 
   it('rejects executable URL schemes and keeps http(s) plus blob', () => {

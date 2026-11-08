@@ -27,6 +27,7 @@ export type PrintIssuer = PrintParty & {
 }
 
 export type PrintDocumentMeta = {
+  titleKey?: string
   number: string
   documentType: string
   issueDate: string
@@ -73,6 +74,9 @@ export type PrintLine = {
 }
 
 export type PrintTotals = {
+  localPrecision?: number
+  discount?: number
+  taxableAmount?: number
   currency: string
   subtotal: number
   taxRate: number
@@ -105,6 +109,8 @@ export type PrintSignatures = {
 }
 
 export type PrintViewModel = {
+  precision?: number
+  isContainerBreakdown?: boolean
   templateId: string
   issuer: PrintIssuer
   party: PrintParty

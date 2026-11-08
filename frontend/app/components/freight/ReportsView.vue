@@ -498,7 +498,11 @@ async function exportCsv(request:{fieldCodes:string[]}){
       <!-- Generate/Rebuild remain only on the reports that need them (financial
            ledger pages); the operations reports load and refresh themselves. -->
       <template v-if="!autoLoad">
+        <!-- One engine button at a time: while nothing has been generated yet
+             the page offers Generate; once the report data is on screen the
+             same data is re-fetched through Rebuild instead. -->
         <CommonAppDocumentActionButton
+          v-if="!generated"
           :label="t('freight.reportCatalog.generate')"
           icon="i-lucide-play"
           :loading="generating"
@@ -506,6 +510,7 @@ async function exportCsv(request:{fieldCodes:string[]}){
           @click="generateReport"
         />
         <CommonAppDocumentActionButton
+          v-else
           :label="t('freight.reportCatalog.rebuild')"
           color="secondary"
           icon="i-lucide-refresh-cw"

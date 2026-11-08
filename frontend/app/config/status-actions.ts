@@ -24,6 +24,7 @@ export const STATUS_ACTION_META: Record<string, StatusActionMeta> = {
   post: { labelKey: 'freight.statusActions.post', icon: 'i-lucide-check-circle-2', color: 'primary' },
   reverse: { labelKey: 'freight.statusActions.reverse', icon: 'i-lucide-undo-2', color: 'warning' },
   close: { labelKey: 'freight.statusActions.close', icon: 'i-lucide-lock', color: 'warning' },
+  open: { labelKey: 'freight.statusActions.open', icon: 'i-lucide-lock-open', color: 'success' },
   reopen: { labelKey: 'freight.statusActions.reopen', icon: 'i-lucide-lock-open', color: 'primary' },
   send: { labelKey: 'freight.statusActions.send', icon: 'i-lucide-send', color: 'primary' },
   accept: { labelKey: 'freight.statusActions.accept', icon: 'i-lucide-check', color: 'success' },

@@ -1,122 +1,57 @@
-"""Object storage abstraction.
+"""Object storage abstraction for Cloudflare R2.
 
-Supports local filesystem storage (development default) and any S3-compatible
-object store such as MinIO. The backend talks to the internal endpoint
-(``S3_ENDPOINT_URL``) and signs browser-facing URLs with the public endpoint
-(``S3_PUBLIC_ENDPOINT_URL``) so uploads/downloads work from outside Docker.
+The S3-compatible client below is the building block the database-configured
+storage module (``app.modules.storage``) uses for Cloudflare R2. There is no
+local-disk provider, no MinIO, and no environment-configured object store:
+file attachment storage lives in Settings → Storage & Backup only.
 """
 
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from pathlib import Path
-from typing import Protocol
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError, EndpointConnectionError
 
-from app.core.config import settings
-
 logger = logging.getLogger(__name__)
 
 
-class Storage(Protocol):
-    provider: str
-    supports_presign: bool
-
-    def put(self, key: str, data: bytes, content_type: str) -> None: ...
-    def get(self, key: str) -> tuple[bytes, str]: ...
-    def delete(self, key: str) -> None: ...
-    def exists(self, key: str) -> bool: ...
-    def presigned_put(self, key: str, content_type: str, expires: int = 3600) -> str | None: ...
-    def presigned_get(self, key: str, expires: int = 3600) -> str | None: ...
-
-
-class LocalStorage:
-    provider = "local"
-    supports_presign = False
-
-    def __init__(self, root: str) -> None:
-        self.root = Path(root)
-
-    def _path(self, key: str) -> Path:
-        normalized = str(key).replace("\\", "/")
-        # Strip a Windows drive prefix (e.g. "C:") so it cannot become absolute.
-        if len(normalized) >= 2 and normalized[1] == ":":
-            normalized = normalized[2:]
-        parts = [part for part in normalized.split("/") if part not in {"", ".", ".."}]
-        candidate = Path(*parts) if parts else Path("_")
-        root = self.root.resolve()
-        resolved = (root / candidate).resolve()
-        if resolved != root and root not in resolved.parents:
-            raise ValueError(f"Invalid storage key: {key}")
-        return resolved
-
-    def put(self, key: str, data: bytes, content_type: str) -> None:
-        path = self._path(key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-
-    def get(self, key: str) -> tuple[bytes, str]:
-        return self._path(key).read_bytes(), "application/octet-stream"
-
-    def delete(self, key: str) -> None:
-        path = self._path(key)
-        if path.exists():
-            path.unlink()
-
-    def exists(self, key: str) -> bool:
-        return self._path(key).exists()
-
-    def presigned_put(self, key: str, content_type: str, expires: int = 3600) -> str | None:
-        return None
-
-    def presigned_get(self, key: str, expires: int = 3600) -> str | None:
-        return None
-
-
 class S3Storage:
-    provider = "s3"
+    provider = "r2"
     supports_presign = True
 
     def __init__(
         self,
         *,
-        bucket: str | None = None,
-        endpoint_url: str | None = None,
-        public_endpoint_url: str | None = None,
-        access_key: str | None = None,
-        secret_key: str | None = None,
-        region: str | None = None,
+        bucket: str = "",
+        endpoint_url: str = "",
+        public_endpoint_url: str = "",
+        access_key: str = "",
+        secret_key: str = "",
+        region: str = "auto",
         ensure_bucket: bool = True,
     ) -> None:
         """Build an S3-compatible storage client.
 
-        Defaults preserve the application upload-storage behavior. Explicit
-        values let callers such as the backup module reuse this abstraction for
-        another S3-compatible destination (Cloudflare R2) without mutating
-        process-wide settings.
+        Callers (the storage module's Cloudflare R2 provider) always pass
+        explicit database-configured values; there is no env fallback.
         """
-        self.bucket = bucket or settings.s3_bucket
-        self._access_key = access_key or settings.s3_access_key
-        self._secret_key = secret_key or settings.s3_secret_key
-        self._region = region or settings.s3_region
-        endpoint = endpoint_url if endpoint_url is not None else settings.s3_endpoint_url
-        public_endpoint = public_endpoint_url if public_endpoint_url is not None else settings.s3_public_endpoint_url
+        self.bucket = bucket
+        self._access_key = access_key
+        self._secret_key = secret_key
+        self._region = region
+        endpoint = endpoint_url
+        public_endpoint = public_endpoint_url or endpoint
         self._client = self._build_client(endpoint)
-        self._presign_client = self._build_client(public_endpoint or endpoint)
+        self._presign_client = self._build_client(public_endpoint)
         if ensure_bucket:
             self._ensure_bucket()
 
     def _build_client(self, endpoint_url: str | None):
-        # Trust an explicit scheme in the URL: the internal endpoint is usually
-        # http://minio:9000 while the browser-facing endpoint is https://...
-        if endpoint_url and "://" in endpoint_url:
-            use_ssl = endpoint_url.lower().startswith("https://")
-        else:
-            use_ssl = settings.s3_use_ssl
+        # Trust an explicit scheme in the URL: the internal endpoint may be
+        # http:// while the browser-facing one is https://.
+        use_ssl = bool(endpoint_url and endpoint_url.lower().startswith("https://"))
         return boto3.client(
             "s3",
             endpoint_url=endpoint_url,
@@ -178,9 +113,3 @@ class S3Storage:
         except Exception:  # noqa: BLE001
             return None
 
-
-@lru_cache
-def get_storage() -> Storage:
-    if settings.storage_provider.lower() in {"s3", "minio"}:
-        return S3Storage()
-    return LocalStorage(settings.storage_local_path)

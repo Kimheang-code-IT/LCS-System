@@ -1,7 +1,6 @@
 """Measured runtime incidents and committed-event producers, sampled once a minute."""
 
 import asyncio
-import os
 import time
 from collections import deque
 from datetime import timedelta
@@ -148,7 +147,8 @@ async def _database_failure() -> None:
     if _db_failed_at is None:
         _db_failed_at = now
     value = _cached_config
-    if not value or not value.get("enabled") or not value.get("adminGroupId"):
+    destination = value.get("maintenanceDeveloperGroupId") or value.get("adminGroupId")
+    if not value or not value.get("enabled") or not destination:
         return
     rule = outbox.policy(value, "system")
     if not rule["enabled"] or now - _db_failed_at < 60 or _db_notified_at and now - _db_notified_at < rule["cooldownMinutes"] * 60:
@@ -156,7 +156,7 @@ async def _database_failure() -> None:
     try:
         # The outbox is unavailable with PostgreSQL. This bounded, best-effort exception
         # uses only credentials/destination cached by a previous successful read.
-        await service.client(value).send_message(value["adminGroupId"], f"LCS System Alert\nSeverity: CRITICAL\nPostgreSQL connectivity checks failed repeatedly. Durable delivery is unavailable until the database recovers.\nTime: {utcnow().isoformat()}")
+        await service.client(value).send_message(destination, f"LCS System Alert\nSeverity: CRITICAL\nPostgreSQL connectivity checks failed repeatedly. Durable delivery is unavailable until the database recovers.\nTime: {utcnow().isoformat()}")
         _db_notified_at = now
     except Exception:
         pass
@@ -172,6 +172,8 @@ async def monitor_tick() -> None:
             async with SessionLocal() as session:
                 await session.execute(text("SELECT 1"))
                 _cached_config = await service.config(session)
+                from app.modules.settings.maintenance import load
+                _cached_config["maintenanceDeveloperGroupId"] = (await load(session)).get("developerGroupId")
     except Exception:
         await _database_failure()
         return
@@ -185,7 +187,7 @@ async def monitor_tick() -> None:
                 _db_failed_at = _db_notified_at = None
             await security_events(session)
             await backup_events(session)
-            disk = psutil.disk_usage(settings.storage_local_path if os.path.exists(settings.storage_local_path) else ".").percent
+            disk = psutil.disk_usage("/").percent
             memory = psutil.virtual_memory().percent
             cpu = psutil.cpu_percent(interval=None)
             await incident(session, "disk_usage", disk >= 85, recovered=disk < 80, summary=f"Disk utilization: {disk:.0f}%.", severity="CRITICAL" if disk >= 95 else "WARNING", duration=60, measured=int(disk))

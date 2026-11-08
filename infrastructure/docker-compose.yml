@@ -34,28 +34,6 @@ services:
       timeout: 5s
       retries: 12
 
-  minio:
-    container_name: ff-minio
-    # Upstream MinIO removed its Docker Hub/Quay images (source-only since Oct
-    # 2025, repo archived). pgsty/minio is a maintained, drop-in community fork:
-    # same env vars, `server` command, /data layout and `mc` healthcheck binary.
-    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "${BIND_HOST:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
-      - "${BIND_HOST:-127.0.0.1}:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
-    volumes:
-      - freight_minio_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "mc ready local || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 10s
-
   backend:
     container_name: ff-api
     build:
@@ -88,26 +66,14 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:${FRONTEND_HOST_PORT:-80},http://127.0.0.1:${FRONTEND_HOST_PORT:-80}}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,testserver}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-s3}
-      STORAGE_LOCAL_PATH: /app/storage
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
-      # Browser-facing endpoint used to sign upload/download URLs.
-      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:${MINIO_HOST_PORT:-9000}}
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      S3_BUCKET: ${S3_BUCKET:-freight-attachments}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_USE_SSL: ${S3_USE_SSL:-false}
+      # File attachment storage lives in Settings → Storage & Backup (R2/Drive);
+      # uploads are processed in memory and written directly to the cloud.
     ports:
       - "${BIND_HOST:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
-    volumes:
-      - freight_uploads:/app/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=4).read()"]
@@ -126,7 +92,7 @@ services:
     ports:
       # Public HTTP. Published on all host interfaces on purpose so other
       # machines on the LAN can reach it (see section 19 of
-      # docs/11_deployment_and_security.md). The HTTPS (443) mapping is added by
+      # docs/archive/deployment-security-history.md). The HTTPS (443) mapping is added by
       # docker-compose.prod.yml.
       - "${FRONTEND_HOST_PORT:-80}:80"
     volumes:
@@ -139,5 +105,3 @@ services:
 volumes:
   freight_postgres_data:
   freight_redis_data:
-  freight_minio_data:
-  freight_uploads:

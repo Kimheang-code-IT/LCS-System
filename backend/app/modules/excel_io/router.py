@@ -88,7 +88,12 @@ async def download_template(
     _rate_limit(context, "template")
     excel_module = service.get_module(module)
     _require(context, excel_module.view_permission)
-    content = await templates.build_template(session, excel_module)
+    if excel_module.pipeline:
+        from app.modules.excel_io import config_io
+
+        content = await config_io.build_template(session, excel_module)
+    else:
+        content = await templates.build_template(session, excel_module)
     return _spreadsheet(content, f"{module}-import-template.xlsx")
 
 

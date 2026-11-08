@@ -36,11 +36,15 @@ export function createHttpModuleRepository(module: FreightModule): ModuleReposit
       asPaged(unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(base, { query }))),
     get: async id =>
       unwrapApiData(await api.get<ApiResponse<FreightRecord>>(`${base}/${id}`)),
-    create: async (input) => {
+    create: async (input, idempotencyKey) => {
       const body = ['quotations', 'jobCharges', 'debitNotes', 'journals'].includes(module.collection)
         ? stripOfficialNumberFields(input, module.collection)
         : input
-      return unwrapApiData(await api.post<ApiResponse<FreightRecord>>(base, body))
+      return unwrapApiData(await api.post<ApiResponse<FreightRecord>>(
+        base,
+        body,
+        idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined,
+      ))
     },
     update: async (id, input) =>
       unwrapApiData(await api.put<ApiResponse<FreightRecord>>(`${base}/${id}`, { ...input, id })),

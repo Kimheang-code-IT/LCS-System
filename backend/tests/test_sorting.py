@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.conftest import login
+from tests.conftest import login, seed_service_order
 
 
 async def _items(client, url: str, params: dict, headers: dict) -> list[dict]:
@@ -13,8 +13,8 @@ async def test_service_order_sort_key_maps_camel_case_to_column(client):
     """sortKey/sortDir order by the mapped column (serviceOrderNo -> service_order_no)."""
     headers = await login(client)
     for _ in range(2):
-        created = await client.post("/api/v1/service-orders", json={}, headers=headers)
-        assert created.status_code == 201, created.text
+        created = await seed_service_order(client, headers)
+        assert created["id"]
 
     ascending = await _items(
         client, "/api/v1/service-orders", {"sortKey": "serviceOrderNo", "sortDir": "asc"}, headers
@@ -26,6 +26,16 @@ async def test_service_order_sort_key_maps_camel_case_to_column(client):
     numbers = [row["serviceOrderNo"] for row in ascending]
     assert numbers == sorted(numbers)
     assert [row["serviceOrderNo"] for row in descending] == list(reversed(numbers))
+
+
+async def test_service_order_started_ended_sort_keys(client):
+    """Started/Ended are sortable aliases of the created/finish stamps."""
+    headers = await login(client)
+    order = await seed_service_order(client, headers)
+    assert order["startedAt"] == order["createdAt"]
+    asc = await _items(client, "/api/v1/service-orders", {"sortKey": "startedAt", "sortDir": "asc"}, headers)
+    desc = await _items(client, "/api/v1/service-orders", {"sortKey": "endedAt", "sortDir": "desc"}, headers)
+    assert asc and desc
 
 
 async def test_document_sequences_sort_and_unknown_key_fallback(client):

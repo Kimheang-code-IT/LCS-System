@@ -12,7 +12,7 @@ from datetime import date
 
 import pytest
 
-from tests.conftest import login
+from tests.conftest import login, seed_service_order
 
 pytestmark = pytest.mark.asyncio
 
@@ -241,16 +241,8 @@ async def test_client_amount_is_ignored_and_unit_amount_tax_amount_are_accepted(
 
 
 async def _service_order_job_no(client, headers) -> str:
-    party = (
-        await client.get("/api/v1/businessParties", headers=headers, params={"page_size": 1})
-    ).json()["data"]["items"][0]
-    order = await client.post(
-        "/api/v1/service-orders",
-        headers=headers,
-        json={"customer": party["legalName"], "direction": "Import", "currency": "USD"},
-    )
-    assert order.status_code == 201, order.text
-    return order.json()["data"]["jobNo"]
+    order = await seed_service_order(client, headers)
+    return order["jobNo"]
 
 
 async def test_movement_and_milestone_values_are_refused_on_their_cell(client):

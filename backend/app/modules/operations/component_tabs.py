@@ -462,6 +462,9 @@ async def bulk_save(
     tab_group_id: int | None = None,
 ) -> dict:
     order = await _get_order(session, service_order_id)
+    from app.modules.operations.service import _ensure_order_editing
+
+    _ensure_order_editing(order)
     group = await _get_group(session, group_id)
     memberships = await _group_attributes(session, group.id)
 

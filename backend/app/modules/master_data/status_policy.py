@@ -15,7 +15,7 @@ quotation …) and this module refuses to bypass that engine — the frontend ke
 calling the dedicated endpoint for those, which is what keeps the accounting
 logic in one place.
 
-The table is code-defined on purpose (see ``docs/05_solution_architecture.md``
+The table is code-defined on purpose (see ``docs/01-architecture/implementation-reference.md``
 Appendix B): a configuration
 mistake must not be able to weaken a workflow or an authorization rule.
 """
@@ -35,7 +35,8 @@ ASSET_VOCABULARY_WRITE = ("master.transport_assets.update", *REFERENCE_WRITE)
 ACCOUNT_WRITE = ("chart_of_accounts.manage",)
 POSTING_RULE_WRITE = ("posting_rule.manage",)
 SEQUENCE_WRITE = ("configuration.manage",)
-PERIOD_WRITE = ("accounting_period.close",)
+PERIOD_WRITE = ("accounting_period.update", "accounting_period.close")
+PERIOD_REOPEN = ("accounting_period.reopen", "accounting_period.close")
 ORDER_WRITE = ("service_order.update",)
 CHARGE_WRITE = ("service_charge.issue",)
 DOCUMENT_POST = ("financial_document.post",)
@@ -186,6 +187,11 @@ _QUOTATION_TRANSITIONS: dict[str, tuple[StatusTransition, ...]] = {
 }
 
 _PERIOD_TRANSITIONS: dict[str, tuple[StatusTransition, ...]] = {
+    # A freshly created custom period is DRAFT until it is opened; no posting
+    # enters it while it is only a planned range.
+    "DRAFT": (
+        StatusTransition(to="OPEN", action="open", permissions=PERIOD_WRITE, event_type="PERIOD_OPENED"),
+    ),
     "OPEN": (
         StatusTransition(to="CLOSED", action="close", permissions=PERIOD_WRITE, kind="command", confirm=True),
     ),
@@ -194,12 +200,14 @@ _PERIOD_TRANSITIONS: dict[str, tuple[StatusTransition, ...]] = {
         # An existing record labelled REOPENED (the label the old form wrote) is
         # brought back to the status the posting paths read.
         StatusTransition(
-            to="OPEN", action="reopen", permissions=PERIOD_WRITE, confirm=True, event_type="PERIOD_REOPENED",
+            to="OPEN", action="reopen", permissions=PERIOD_REOPEN, confirm=True, event_type="PERIOD_REOPENED",
         ),
     ),
     "CLOSED": (
         StatusTransition(
-            to="OPEN", action="reopen", permissions=PERIOD_WRITE, confirm=True, event_type="PERIOD_REOPENED",
+            # Reopening touches closed books: an administrator decision with a
+            # stated reason, kept as one audit record with both statuses.
+            to="OPEN", action="reopen", permissions=PERIOD_REOPEN, confirm=True, reason=True, event_type="PERIOD_REOPENED",
         ),
     ),
 }
@@ -306,7 +314,7 @@ def _policies() -> dict[str, StatusPolicy]:
     policies["accountingPeriods"] = StatusPolicy(
         entity_type="accounting_period",
         store="period",
-        statuses=("OPEN", "CLOSED", "REOPENED"),
+        statuses=("DRAFT", "OPEN", "CLOSED", "REOPENED"),
         transitions=_PERIOD_TRANSITIONS,
     )
 

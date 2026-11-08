@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
 import type { PrintViewModel } from '~/utils/freight/print-model'
-import { printOrDash } from '~/utils/freight/print-model'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { usePrintBilingual } from '~/composables/print/usePrintBilingual'
 
@@ -11,13 +10,15 @@ const props = defineProps<{
   printUser: string
 }>()
 
-const { t } = useI18n()
+const { t: translate } = useI18n()
+const t = (key: string) => translate(key, {}, { locale: 'en' })
 const { formatDate, formatNumber } = useAppLocalization()
 const { bi, biInline, khmer } = usePrintBilingual()
 
-const usd = (value: number) => `$ ${formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-const riel = (value: number) => `៛ ${formatNumber(value, { maximumFractionDigits: 0 })}`
+const money = (value: number, currency = props.model.totals.currency) => {
+  const precision = currency !== props.model.totals.currency ? props.model.totals.localPrecision ?? 2 : props.model.precision ?? 2
+  return `${currency} ${formatNumber(value, { minimumFractionDigits: precision, maximumFractionDigits: precision })}`
+}
 
 function formatInvoiceDateSpaced(value: string): string {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/)
@@ -45,8 +46,8 @@ const customerRows = computed<CustomerRow[]>(() => [
   { label: bi('freight.print.fields.enterpriseName'), value: enterpriseValue.value },
   { label: bi('freight.print.fields.address'), value: addressValue.value },
   { label: bi('freight.print.fields.telephoneNo'), value: props.model.party.phone || '' },
-  { label: vatTinLabel.value, value: props.model.party.taxIdentifier || '-' },
-])
+  { label: vatTinLabel.value, value: props.model.party.taxIdentifier || '' },
+].filter(row => row.value))
 
 type Row = Record<string, string>
 
@@ -58,9 +59,9 @@ function formatDescription(line: { descriptionKh: string, description: string })
 const rows = computed<Row[]>(() => props.model.lines.map(line => ({
   no: String(line.no),
   description: formatDescription(line),
-  quantity: line.quantity ? formatNumber(line.quantity, { maximumFractionDigits: 2 }) : '',
-  unitPrice: line.unitPrice ? usd(line.unitPrice) : '',
-  amount: line.amount ? usd(line.amount) : '',
+  quantity: formatNumber(line.quantity, { maximumFractionDigits: 3 }),
+  unitPrice: `${line.currency} ${formatNumber(line.unitPrice, { minimumFractionDigits: props.model.precision ?? 2, maximumFractionDigits: Math.max(4, props.model.precision ?? 2) })}`,
+  amount: money(line.amount),
 })))
 
 const columns = computed<TableColumn<Row>[]>(() => [
@@ -81,32 +82,36 @@ const totalsItems = computed(() => {
     bottomRule?: boolean
     footer?: boolean
   }> = [
-    { label: `${biInline('freight.print.fields.subTotal')} (${totals.currency})`, value: usd(totals.subtotal) },
+    { label: `${biInline('freight.print.fields.subTotal')} (${totals.currency})`, value: money(totals.subtotal) },
   ]
+  if (totals.discount) {
+    items.push({ label: biInline('freight.print.fields.discount'), value: money(totals.discount) })
+    items.push({ label: biInline('freight.print.fields.taxableAmount'), value: money(totals.taxableAmount ?? totals.subtotal) })
+  }
   if (totals.taxRate > 0 || totals.taxAmount > 0) {
-    const rate = printOrDash(totals.taxRate ? formatNumber(totals.taxRate) : '10')
+    const rate = totals.taxRate ? ` @${formatNumber(totals.taxRate)}%` : ''
     items.push({
-      label: `${biInline('freight.print.fields.vat')} @${rate}% (${totals.currency})`,
-      value: usd(totals.taxAmount),
+      label: `${biInline('freight.print.fields.vat')}${rate} (${totals.currency})`,
+      value: money(totals.taxAmount),
     })
   }
   items.push({
     label: `${biInline('freight.print.fields.grandTotal')} (${totals.currency})`,
-    value: usd(totals.grandTotal),
+    value: money(totals.grandTotal),
     strong: true,
     topRule: true,
   })
   if (totals.exchangeRate > 0 && totals.localCurrency !== totals.currency) {
     items.push({
-      label: `${biInline('freight.print.fields.grandTotalRiel')}`,
-      value: riel(totals.grandTotalLocal),
+      label: `${biInline('freight.print.fields.grandTotal')} (${totals.localCurrency})`,
+      value: money(totals.grandTotalLocal, totals.localCurrency),
       strong: true,
       topRule: true,
       bottomRule: true,
     })
     items.push({
-      label: `${biInline('freight.print.fields.exchangeRate')} 1$ =`,
-      value: `R ${formatNumber(totals.exchangeRate, { maximumFractionDigits: 0 })}`,
+      label: `${biInline('freight.print.fields.exchangeRate')} 1 ${totals.currency} =`,
+      value: `${formatNumber(totals.exchangeRate, { maximumFractionDigits: 8 })} ${totals.localCurrency}`,
       footer: true,
     })
   }
@@ -128,10 +133,10 @@ const partyDisplayName = computed(() =>
 
     <div class="tax-invoice__title">
       <p class="tax-invoice__title-kh font-khmer">
-        {{ khmer('freight.print.title.taxInvoice') }}
+        {{ khmer(model.document.titleKey || 'freight.print.title.invoice') }}
       </p>
       <p class="tax-invoice__title-en">
-        {{ t('freight.print.title.taxInvoice') }}
+        {{ t(model.document.titleKey || 'freight.print.title.invoice') }}
       </p>
     </div>
 
@@ -179,6 +184,7 @@ const partyDisplayName = computed(() =>
       </div>
     </section>
 
+    <p v-if="model.document.remarks" class="tax-invoice__remarks">{{ biInline('freight.print.fields.remarks') }}: {{ model.document.remarks }}</p>
     <footer class="tax-invoice__signatures">
       <PrintSignatureBlock
         :slots="[
@@ -207,16 +213,8 @@ const partyDisplayName = computed(() =>
   </div>
 </template>
 
-<style>
-@page taxInvoice {
-  size: A4 portrait;
-  margin: 8mm 10mm 10mm;
-}
-</style>
-
 <style scoped>
 .tax-invoice {
-  page: taxInvoice;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -224,7 +222,7 @@ const partyDisplayName = computed(() =>
   max-width: 190mm;
   margin: 0 auto;
   padding: 0;
-  font-family: Arial, Helvetica, "Noto Sans Khmer", sans-serif;
+  font-family: Arial, Helvetica, "Noto Sans Khmer", "Noto Sans SC", sans-serif;
   font-size: 10px;
   line-height: 1.4;
   color: #000;
@@ -282,7 +280,8 @@ const partyDisplayName = computed(() =>
 }
 
 .tax-invoice__meta-body {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56mm;
   align-items: flex-start;
   gap: 8mm;
 }
@@ -307,7 +306,8 @@ const partyDisplayName = computed(() =>
   margin-bottom: 8px;
   font-size: 11px;
   line-height: 1.4;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .tax-invoice__side-field:last-child {
@@ -324,7 +324,7 @@ const partyDisplayName = computed(() =>
 }
 
 .tax-invoice__date-value {
-  letter-spacing: 0.12em;
+  letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -337,7 +337,8 @@ const partyDisplayName = computed(() =>
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16mm;
+  gap: 6mm;
+  break-inside: avoid;
   width: 100%;
   margin-top: 8px;
 }
@@ -348,13 +349,17 @@ const partyDisplayName = computed(() =>
 }
 
 .tax-invoice__footer-right {
-  flex: 0 0 auto;
+  flex: 0 1 52%;
+  min-width: 0;
   margin-left: auto;
 }
 
 .tax-invoice__signatures {
   margin-top: 16mm;
+  break-inside: avoid;
 }
+
+.tax-invoice__remarks { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4mm; }
 
 @media print {
   .tax-invoice__content {

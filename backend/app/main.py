@@ -18,6 +18,8 @@ from app.core.database import SessionLocal
 from app.core.redis import close_redis
 from app.core.security import constant_time_compare, verify_csrf_token
 from app.modules.backup.scheduler import start_scheduler, stop_scheduler
+from app.modules.storage.scheduler import start_scheduler as start_storage_scheduler
+from app.modules.storage.scheduler import stop_scheduler as stop_storage_scheduler
 from app.modules.telegram.client import TelegramError
 
 logger = logging.getLogger(__name__)
@@ -68,11 +70,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Vocabulary creator attribution deferred until the database is available.")
     start_scheduler()
+    start_storage_scheduler()
     start_worker()
     try:
         yield
     finally:
         await stop_scheduler()
+        await stop_storage_scheduler()
         await stop_worker()
         await close_redis()
 
@@ -123,7 +127,7 @@ async def request_context_middleware(request: Request, call_next):
     except Exception:
         server_errors.append(time.monotonic())
         raise
-    if response.status_code >= 500:
+    if response.status_code >= 500 and not getattr(request.state, "maintenance_blocked", False):
         server_errors.append(time.monotonic())
     elif response.status_code == 429:
         rate_violations.append(time.monotonic())

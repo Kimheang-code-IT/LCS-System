@@ -73,7 +73,7 @@ jobs:
             echo "--- compose ps -a ---"
             $COMPOSE ps -a || true
             echo "--- container states ---"
-            for name in ff-api ff-frontend ff-db ff-redis ff-minio; do
+            for name in ff-api ff-frontend ff-db ff-redis; do
               $DOCKER inspect -f "$name status={{.State.Status}} exit={{.State.ExitCode}} restarts={{.RestartCount}}" "$name" 2>&1 || true
             done
             echo "--- ff-frontend logs ---"
@@ -416,13 +416,6 @@ jobs:
           JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
           CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
-          MINIO_ROOT_USER: ${{ vars.MINIO_ROOT_USER || 'minioadmin' }}
-          MINIO_ROOT_PASSWORD: ${{ secrets.MINIO_ROOT_PASSWORD }}
-          S3_ACCESS_KEY: ${{ vars.S3_ACCESS_KEY || 'lcs-app' }}
-          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-          S3_BUCKET: ${{ vars.S3_BUCKET || 'freight-attachments' }}
-          S3_REGION: ${{ vars.S3_REGION || 'us-east-1' }}
-          S3_PUBLIC_ENDPOINT_URL: ${{ vars.S3_PUBLIC_ENDPOINT_URL || 'https://lcslog.minidev.in' }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'https://lcslog.minidev.in' }}
         with:
           host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
@@ -431,7 +424,7 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,MINIO_ROOT_USER,MINIO_ROOT_PASSWORD,S3_ACCESS_KEY,S3_SECRET_KEY,S3_BUCKET,S3_REGION,S3_PUBLIC_ENDPOINT_URL,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,CORS_ORIGINS
           script: |
             set -eu
             cd "$DEPLOY_DIR"
@@ -457,10 +450,6 @@ jobs:
             require_value "${JWT_SECRET_KEY:-}" JWT_SECRET_KEY
             require_value "${CSRF_SECRET_KEY:-}" CSRF_SECRET_KEY
             require_value "${FIELD_ENCRYPTION_KEY:-}" FIELD_ENCRYPTION_KEY
-            require_value "${MINIO_ROOT_PASSWORD:-}" MINIO_ROOT_PASSWORD
-            require_value "${S3_ACCESS_KEY:-}" S3_ACCESS_KEY
-            require_value "${S3_SECRET_KEY:-}" S3_SECRET_KEY
-            require_value "${S3_PUBLIC_ENDPOINT_URL:-}" S3_PUBLIC_ENDPOINT_URL
 
             # Image names must be lowercase.
             IMAGE_PREFIX="$(printf '%s' "$IMAGE_PREFIX" | tr '[:upper:]' '[:lower:]')"
@@ -506,13 +495,6 @@ jobs:
               write_kv JWT_SECRET_KEY "$JWT_SECRET_KEY"
               write_kv CSRF_SECRET_KEY "$CSRF_SECRET_KEY"
               write_kv FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
-              write_kv MINIO_ROOT_USER "$MINIO_ROOT_USER"
-              write_kv MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"
-              write_kv S3_ACCESS_KEY "$S3_ACCESS_KEY"
-              write_kv S3_SECRET_KEY "$S3_SECRET_KEY"
-              write_kv S3_BUCKET "$S3_BUCKET"
-              write_kv S3_REGION "$S3_REGION"
-              write_kv S3_PUBLIC_ENDPOINT_URL "$S3_PUBLIC_ENDPOINT_URL"
               write_kv CORS_ORIGINS "$CORS_ORIGINS"
             } > "$TMP"
             chmod 600 "$TMP"
@@ -564,7 +546,7 @@ jobs:
             # data services, not the application.
             if [ "$($DOCKER inspect -f '{{.State.Running}}' ff-db 2>/dev/null || echo false)" != "true" ]; then
               echo "PostgreSQL is not running; starting data services for backup/migration..."
-              if ! $COMPOSE up -d postgres redis minio; then
+              if ! $COMPOSE up -d postgres redis; then
                 echo "Could not start data services; aborting before migration." >&2
                 restore_previous_env
                 exit 1

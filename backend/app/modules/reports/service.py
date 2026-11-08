@@ -198,15 +198,54 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
     cached = await cache.get_json("reports", *cache_parts)
     if cached is not None:
         return cached
+    from app.modules.settings.service import get_default_currency
+
+    base_currency = await get_default_currency(session)
     rows = await ReportRepository(session).service_order_finance_rows()
+    layers = await ReportRepository(session).profitability_charge_layers()
     items = []
     for row in rows:
         revenue = Decimal(str(row["posted_revenue"] or 0))
         cost = Decimal(str(row["posted_cost"] or 0))
-        issued_charges = Decimal(str(row["issued_charges"] or 0))
-        draft_revenue = Decimal(str(row["draft_revenue"] or 0))
         profit = revenue - cost
-        uninvoiced = max(Decimal("0"), issued_charges - revenue - draft_revenue)
+        order_id, order_currency = int(row["id"]), str(row["currency_code"] or "")
+        groups = layers.get(order_id, {})
+        # One currency group per row: the operational layers (quoted/charges and
+        # uninvoiced) are document-currency values, so a mixed set of currencies
+        # is surfaced explicitly instead of being summed into a wrong number.
+        mixed = bool(groups) and (len(groups) > 1 or any(currency != order_currency for currency in groups))
+        own = groups.get(order_currency) or {}
+
+        def _amount(value: Decimal) -> str:
+            text = f"{value:f}"
+            return text.rstrip("0").rstrip(".") if "." in text else text
+
+        def _per_currency(compute, group: dict) -> str:
+            return "; ".join(f"{currency} {_amount(compute(sums))}" for currency, sums in sorted(group.items()))
+
+        if mixed:
+            # §10 rule: foreign-currency layers are never summed into the order's
+            # figure. The numeric columns keep the order currency's own group;
+            # every other currency surfaces in the grouped fields.
+            service_charges = own.get("issued", Decimal("0")) if groups else Decimal("0")
+            draft_charges_layer = own.get("draft", Decimal("0")) if groups else Decimal("0")
+            uninvoiced = max(Decimal("0"), service_charges - own.get("linked", Decimal("0"))) if groups else Decimal("0")
+            mixed_fields = {
+                "mixedCurrency": True,
+                "layersByCurrency": _per_currency(lambda sums: sums.get("issued", Decimal("0")), groups),
+                "uninvoicedByCurrency": _per_currency(
+                    lambda sums: max(Decimal("0"), sums.get("issued", Decimal("0")) - sums.get("linked", Decimal("0"))),
+                    groups,
+                ),
+            }
+        else:
+            service_charges = own.get("issued", Decimal("0"))
+            draft_charges_layer = own.get("draft", Decimal("0"))
+            # The converted representation is attributed by its source link and
+            # stays in the charge's own currency, so a charge is never revenue
+            # twice (draft) nor double-subtracted from the issued amount.
+            uninvoiced = max(Decimal("0"), service_charges - own.get("linked", Decimal("0")))
+            mixed_fields = {}
         items.append(
             {
                 "id": str(row["id"]),
@@ -215,13 +254,18 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
                 "customer": row["customer_name"] or "",
                 "status": row["status"],
                 "currency": row["currency_code"],
+                **mixed_fields,
+                # Posted/draft/draft-revenue layers are base-currency sums of the
+                # documents' own approved-rate snapshots; the operational layers
+                # above carry the order/charge document currency.
+                "baseCurrency": base_currency,
                 "date": row["created_at"].date().isoformat() if row["created_at"] else None,
                 "createdAt": row["created_at"].isoformat() if row["created_at"] else None,
                 "quoted": _f(row["quoted"]),
-                "serviceCharges": _f(issued_charges),
-                "draftServiceCharges": _f(row["draft_charges"]),
+                "serviceCharges": _f(service_charges),
+                "draftServiceCharges": _f(draft_charges_layer),
                 "chargeCount": int(row["charge_count"] or 0),
-                "draftRevenue": _f(draft_revenue),
+                "draftRevenue": _f(row["draft_revenue"]),
                 "uninvoicedCharges": _f(uninvoiced),
                 "revenue": _f(revenue),
                 "postedRevenue": _f(revenue),
@@ -230,6 +274,8 @@ async def profitability(session: AsyncSession, context: RequestContext) -> list[
                 "totalCost": _f(cost),
                 "profit": _f(profit),
                 "grossProfit": _f(profit),
+                # Zero revenue has no meaningful percentage; margin reports 0 and
+                # the loss case is never hidden when revenue > 0.
                 "margin": _f(profit / revenue * 100) if revenue else 0.0,
             }
         )
@@ -624,7 +670,7 @@ async def _service_order_status_counts(
         "awaitingClosure": counts.get("FINISHED", 0),
         # Charts are data-driven, so they report the real lifecycle. The frontend
         # KPI cards deep-link with the pre-simplification filter values and need
-        # the same mapping applied; tracked in docs/10_testing_and_quality.md.
+        # the same mapping applied; tracked in docs/archive/testing-quality-history.md.
         "byStatus": [
             {"status": status, "count": counts.get(status, 0)}
             for status in SERVICE_ORDER_LIFECYCLE

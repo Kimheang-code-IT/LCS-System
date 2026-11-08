@@ -2,11 +2,10 @@ import type { QuotationRevisionStatus } from '~/types/domain'
 import { quotationDomainStatus } from '~/utils/freight/states'
 
 export type QuotationPermissionInput = {
-  /** `quotation.update_draft` — edit, delete, re-quote. */
+  /** `quotation.update_draft` — edit and delete authority for quotations. */
   updateDraft: boolean
-  /** `quotation.submit` — draft -> submitted (the active workflow step). */
+  /** Legacy fields kept so existing call sites compile; no workflow uses them. */
   submit: boolean
-  /** `quotation.convert` — submitted (or legacy sent/accepted) -> service order. */
   convert: boolean
 }
 
@@ -21,10 +20,10 @@ export type QuotationActionAvailability = {
 }
 
 /**
- * Single source of truth for quotation action availability. The active workflow
- * is DRAFT -> SUBMITTED -> CONVERTED with a re-quote on every step; SENT and
- * ACCEPTED are legacy statuses that stay convertible but offer no action of
- * their own, and a quotation linked to a service order can never be deleted.
+ * Single source of truth for quotation action availability. A quotation is a
+ * reusable commercial reference: it stays editable under CRUD rules, Submit /
+ * Send / Accept / Re-quote are retired from the UI, and deletion is refused only
+ * while a service order still depends on it.
  */
 export function quotationActionAvailability(
   status: unknown,
@@ -33,32 +32,26 @@ export function quotationActionAvailability(
 ): QuotationActionAvailability {
   const domain = quotationDomainStatus(status)
   const hasServiceOrder = Boolean(options.hasServiceOrder)
-  const draft = domain === 'DRAFT'
-  const legacySent = domain === 'SENT'
-  const legacyAccepted = domain === 'ACCEPTED'
-  const converted = domain === 'CONVERTED' || hasServiceOrder
 
   return {
     status: domain,
-    edit: draft && can.updateDraft,
-    submit: draft && can.submit,
-    convert: !converted && (domain === 'SUBMITTED' || legacySent || legacyAccepted) && can.convert,
-    revise: can.updateDraft,
-    // A submitted offer is a formal commitment like a sent one was: withdrawal
-    // is a cancel, so deletion stays limited to drafts and legacy sent rows.
-    delete: can.updateDraft && (draft || legacySent) && !converted,
-    openServiceOrder: converted,
+    edit: can.updateDraft,
+    submit: false,
+    convert: false,
+    revise: false,
+    delete: can.updateDraft && !hasServiceOrder,
+    openServiceOrder: hasServiceOrder,
   }
 }
 
 /**
- * Re-quotation from a service order raises a *new* quotation, so it is offered on
- * any saved order to whoever may revise a quotation. It never edits the order.
+ * Re-quotation is retired; kept as an always-false helper so old call sites
+ * compile unchanged.
  */
-export function serviceOrderRequotationAvailability(input: {
+export function serviceOrderRequotationAvailability(_input: {
   isCreate: boolean
   hasRecord: boolean
   canRevise: boolean
 }): boolean {
-  return input.canRevise && !input.isCreate && input.hasRecord
+  return false
 }

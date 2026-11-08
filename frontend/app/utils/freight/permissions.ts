@@ -22,3 +22,14 @@ export function userSourcePermissions(user: AuthUser | null | undefined): Source
 export function hasSourcePermission(user: AuthUser | null | undefined, code: SourcePermission) {
   return userSourcePermissions(user).includes(code)
 }
+
+/**
+ * Raw check for a server-sent source capability outside the typed union
+ * (e.g. legacy aggregates such as `configuration.manage`): the typed filter
+ * above would drop them, while the backend still accepts them for the same
+ * command.
+ */
+export function hasRawSourceCapability(user: AuthUser | null | undefined, code: string) {
+  const sent = user?.sourcePermissions as string[] | undefined
+  return Boolean(sent && sent.includes(code))
+}

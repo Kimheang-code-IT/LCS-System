@@ -17,7 +17,7 @@ import { FINANCIAL_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
-import { financeDomainStatus, isRecordReadOnly, quotationDomainStatus } from '~/utils/freight/states'
+import { financeDomainStatus, isRecordReadOnly } from '~/utils/freight/states'
 import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys, extraPermissionCodes } from '~/utils/role/permissions'
 import type { AppRolePermissionRow } from '~/types/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
@@ -33,7 +33,7 @@ import {
   freightDocumentModelKey,
   moduleDocumentTabs,
   RELATED_FIELD_KEY,
-  supportsCommentActivity,
+  freightDocumentAttachmentKey,
 } from '~/utils/freight/document-tabs'
 import {
   linkedFinanceInvoiceForCharge,
@@ -71,6 +71,8 @@ import type { ValidationFailure } from '~/utils/validation/field-rules'
 import { validatePasswordStrength } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 import { pageActionPermission } from '~/utils/freight/page-access'
+import { hasRawSourceCapability } from '~/utils/freight/permissions'
+import type { SourcePermission } from '~/types/domain'
 import { useQuotationCommands } from '~/composables/freight/useQuotationCommands'
 import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
@@ -209,21 +211,14 @@ const { menuItem: statusMenuItem } = useRecordStatus(module, {
 })
 
 const {
-  commentBody,
-  submittingComment,
   currentUser,
   listTo,
   canNavigatePrevious,
   canNavigateNext,
   navigatePrevious,
   navigateNext,
-  comments,
   attachments,
-  activity,
   setChromeField,
-  submitComment,
-  updateComment,
-  deleteComment,
 } = useFreightRecordChrome({ module, isCreate, recordId, model })
 
 const { pages: rolePermissionPages, load: loadRolePermissionCatalog } = useRolePermissionCatalog()
@@ -349,11 +344,26 @@ onBeforeUnmount(() => {
 onMounted(() => window.addEventListener('beforeunload', beforeUnloadWarning))
 usePageSeo({ title: () => title.value })
 
-/** Comments & activity are only shown on quotations, service orders and service charges. */
-const showRecordChrome = computed(() => supportsCommentActivity(module.value?.collection))
 const compactBusinessDocument = computed(() => false)
 const chargeLinkedToJob = computed(() => module.value?.collection === 'jobCharges' && Boolean(String(model.value.jobNo || '').trim()))
 const related = computed(() => module.value && !isCreate.value ? store.related(module.value, model.value) : [])
+/**
+ * Business/finance document forms whose save must mirror the backend write
+ * command. Create uses the create code, editing the update code; `accountingPeriods`
+ * has no create capability code (union lacks it), so its create gate is the matrix
+ * code alone.
+ */
+const DOCUMENT_WRITE_GATES: Partial<Record<string, { create: SourcePermission | '', update: SourcePermission | '' }>> = {
+  jobCharges: { create: 'service_charge.create', update: 'service_charge.update' },
+  journals: { create: 'journal_entry.create', update: 'journal_entry.update' },
+  accountingPeriods: { create: '', update: 'accounting_period.update' },
+  postingRules: { create: 'posting_rule.create', update: 'posting_rule.update' },
+  documentSequences: { create: 'document_sequence.create', update: 'document_sequence.update' },
+}
+/** Legacy capability aggregates that used to unlock the same write commands. */
+const DOCUMENT_WRITE_LEGACY: Partial<Record<string, readonly string[]>> = {
+  documentSequences: ['configuration.manage'],
+}
 const readOnly = computed(() => {
   if (!module.value) return true
   if (module.value.readOnly) return true
@@ -362,15 +372,32 @@ const readOnly = computed(() => {
     if (module.value.collection === 'users' && !lcs.can('user.manage')) return true
     if (module.value.collection === 'roles' && !lcs.can('role.manage')) return true
     if (module.value.group === 'master' && !lcs.can('master.reference.manage')) {
-      // Narrow matrix roles save through their screen's update code (the
-      // transport-assets code covers identity types and capacity units too).
-      const updateCode = pageActionPermission(module.value.permission, 'update')
-      if (!(updateCode && auth.canAccessPage(updateCode))) return true
+      // Narrow matrix roles save through their screen's own write code (the
+      // transport-assets code covers identity types and capacity units too);
+      // creating needs the create code, editing the update code. Document
+      // types keep the coarse reference guard: the backend write command
+      // accepts only `master.reference.manage` / `configuration.manage`.
+      const writeCode = module.value.collection === 'documentTypes'
+        ? 'master.reference.manage'
+        : pageActionPermission(module.value.permission, isCreate.value ? 'create' : 'update')
+      if (!(writeCode && auth.canAccessPage(writeCode))) return true
     }
     if (module.value.group === 'configuration' && !auth.canAccessPage('configuration.manage')) return true
+    const writeGate = DOCUMENT_WRITE_GATES[module.value.collection]
+    if (writeGate) {
+      // Create/edit follows the entity's own write command (or the legacy
+      // aggregate capability that predates the matrix); a read-only account
+      // gets a read-only form, exactly as the backend would refuse it.
+      const needed = isCreate.value ? writeGate.create : writeGate.update
+      const matrixCode = pageActionPermission(module.value.permission, isCreate.value ? 'create' : 'update')
+      const held = (needed ? lcs.can(needed) : false)
+        || (DOCUMENT_WRITE_LEGACY[module.value.collection]?.some(code => hasRawSourceCapability(auth.user, code)) ?? false)
+        || (matrixCode ? auth.canAccessPage(matrixCode) : false)
+      if (!held) return true
+    }
   }
   if (isRecordReadOnly(module.value.collection, model.value)) return true
-  if (module.value.collection === 'quotations' && !lcs.can('quotation.update_draft') && quotationDomainStatus(model.value.status) === 'DRAFT' && !isCreate.value) return true
+  if (module.value.collection === 'quotations' && !lcs.can('quotation.update_draft') && !isCreate.value) return true
   if (module.value.collection === 'debitNotes' && !lcs.can('financial_document.update_draft')) return true
   return false
 })
@@ -499,9 +526,10 @@ function beforeUnloadWarning(event: BeforeUnloadEvent) {
   event.returnValue = ''
 }
 
-// Quotation workflow: Draft -> Sent (send) -> Accepted (accept) -> Service
-// Order (convert). Re-quotation clones the latest revision into a new draft.
-// A dirty draft only offers Save so every transition runs on persisted data.
+// A quotation is a reusable CRUD reference: the only header actions are Save
+// and Save changes. Submit / Send / Accept / Re-quote / Convert are retired from
+// the UI; service orders are now created by selecting the quotation on the
+// Service Order form.
 const quotationAvailability = computed(() => quotationActionAvailability(
   model.value.status,
   {
@@ -513,17 +541,15 @@ const quotationAvailability = computed(() => quotationActionAvailability(
 ))
 
 /**
- * The quotation status transitions keep their availability rules (a converted
- * quotation must not offer Convert again, and a dirty draft is saved first), so
- * the shared status menu offers exactly what those rules allow.
+ * No status transitions are offered from the quotation page: the workflow
+ * vocabulary keeps legacy values readable, but no action writes them.
  */
 function transitionsAvailableForQuotation(transition: RecordStatusTransition): boolean {
-  const availability = quotationAvailability.value
-  if (transition.action === 'submit') return availability.submit && !quotationDraftDirty.value
-  if (transition.action === 'convert') return availability.convert && !quotationDraftDirty.value
-  if (transition.action === 'reject') return lcs.can('quotation.accept')
-  if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
-  return true
+  if (transition.action === 'submit') return false
+  if (transition.action === 'convert') return false
+  if (transition.action === 'reject') return false
+  if (transition.action === 'cancel') return false
+  return false
 }
 
 const quotationHeaderActions = computed<FreightAction[]>(() => {
@@ -532,24 +558,9 @@ const quotationHeaderActions = computed<FreightAction[]>(() => {
     if (!lcs.can('quotation.create')) return []
     return [{ key: 'submitQuotation', label: 'Save', labelKm: 'រក្សាទុក', icon: 'i-lucide-save', color: 'primary' }]
   }
-  const availability = quotationAvailability.value
   const actions: FreightAction[] = []
-  if (availability.status === 'DRAFT' && quotationDraftDirty.value) {
-    if (availability.edit) {
-      actions.push({ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' })
-    }
-    return actions
-  }
-  if (availability.submit) {
-    actions.push({ key: 'send', label: t('freight.ui.submit'), icon: 'i-lucide-send' })
-  }
-  if (availability.convert) {
-    actions.push({ key: 'convertJob', label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', color: 'primary' })
-  }
-  // Re-quotation is offered on everything but an editable draft (a draft is its
-  // own next revision) — Submitted, Converted and the legacy statuses.
-  if (availability.revise && !availability.edit) {
-    actions.push({ key: 'createRevision', label: t('freight.ui.requote'), icon: 'i-lucide-git-branch' })
+  if (quotationAvailability.value.edit) {
+    actions.push({ key: 'saveQuotationChanges', label: 'Save changes', labelKm: 'រក្សាទុកការផ្លាស់ប្តូរ', icon: 'i-lucide-save', color: 'primary' })
   }
   return actions
 })
@@ -583,7 +594,7 @@ const headerActions = computed(() => {
         canView: auth.canAccessPage('finance.financial_documents.view'),
       })
       if (action.key === 'saveDraft') return (status === 'Draft' || isCreate.value) && lcs.can('service_charge.create')
-      if (action.key === 'issue') return !isCreate.value && Boolean(model.value.id) && status === 'Draft' && lcs.can('service_charge.issue')
+      if (action.key === 'issue') return !isCreate.value && Boolean(model.value.id) && status === 'Draft' && lcs.can('service_charge.submit')
       if (action.key === 'createInvoice') return !isCreate.value && invoiceAction === 'create'
       if (action.key === 'viewInvoice') return !isCreate.value && invoiceAction === 'view'
       if (action.key === 'print') return false
@@ -791,6 +802,16 @@ provide(freightDocumentLineTableRowMenuKey, (tableKey) => {
   }
 })
 provide(freightDocumentModelKey, model)
+/**
+ * File-grid uploads persist against the open record via the attachment API:
+ * the record id arrives only after the document loads, so the owner is read at
+ * pick time. An unsaved document keeps the legacy local-preview row.
+ */
+provide(freightDocumentAttachmentKey, () => {
+  if (!module.value) return undefined
+  const recordNo = String(model.value.id || '').trim()
+  return { module: module.value.collection, recordNo }
+})
 
 function traceLookups() {
   return {
@@ -1543,8 +1564,8 @@ async function duplicateCurrentRole() {
   }
 }
 
-async function openPrint(templateId: PrintTemplateId) {
-  await documentActions.openPrint(templateId)
+async function openPrint(templateId: PrintTemplateId, containerId?: string) {
+  await documentActions.openPrint(templateId, containerId)
 }
 
 /**
@@ -1658,7 +1679,6 @@ async function confirmReverse() {
       :save-label="documentSaveLabel"
       :confirm-save="false"
 :show-cancel="false"
-:show-comments="showRecordChrome"
 :show-tabs="tabs.length > 1"
 show-list-nav
 content-wide
@@ -1666,23 +1686,13 @@ content-wide
 :can-navigate-next="canNavigateNext"
 :list-to="listTo"
       :is-create="isCreate"
-:can-comment="showRecordChrome && !isCreate"
-:comments="comments"
-:activity="showRecordChrome ? activity : []"
-      :attachments="attachments"
-:comment-body="commentBody"
-:submitting-comment="submittingComment"
-      :current-user="currentUser"
+:attachments="attachments"
       :more-items="moreItems"
 :can-export="false"
 @update:active-tab="activeTab = $event"
-      @update:comment-body="commentBody = $event"
-@update:attachments="setChromeField('attachments', $event)"
+      @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
 @refresh="load"
-@submit-comment="submitComment"
-@update-comment="updateComment"
-      @delete-comment="deleteComment"
 @navigate-previous="navigatePrevious"
 @navigate-next="navigateNext">
       <FreightUserPasswordDialog

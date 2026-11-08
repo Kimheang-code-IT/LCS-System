@@ -2,7 +2,7 @@
 
 This module is the single source of truth for the prose that
 ``scripts/generate_schema_docs.py`` renders into
-``docs/06_database_design.sql``. Keeping the text here — instead of
+``docs/01-architecture/database-design.sql``. Keeping the text here — instead of
 hand-editing the generated SQL — means the documentation can be regenerated
 after any model change with::
 
@@ -179,9 +179,9 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "quotation_revision_containers": "Container requirement line of a quotation revision.",
     "quotation_revision_lines": "Chargeable price line of a quotation revision.",
     "quotation_conversions": (
-        "Record of a quotation revision being converted into a service order. Both unique\n"
-        "constraints make conversion idempotent — a revision yields at most one service order\n"
-        "and an order originates from at most one revision."
+        "Ledger row of a quotation revision being turned into a service order. One revision may\n"
+        "yield many orders (quotation reuse); the idempotency key makes a repeated identical\n"
+        "request a replay instead of a duplicate."
     ),
     # -- operations -------------------------------------------------------
     "service_orders": (
@@ -209,7 +209,7 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "service_order_charges": "Customer-facing invoice or service note raised from a service order.",
     "service_order_charge_lines": "Chargeable line of a service order charge.",
     "attachments": (
-        "Metadata for a file held in object storage (MinIO/S3). File bytes never live in\n"
+        "Metadata for a file held in object storage (R2/Drive) or local disk. File bytes never live in\n"
         "PostgreSQL."
     ),
     "attachment_links": "Polymorphic link attaching a stored file to any business record.",
@@ -238,7 +238,8 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "carries its balance."
     ),
     "accounting_periods": (
-        "Accounting month used to close the books. Posting is refused into a CLOSED period."
+        "Accounting period used to close the books: a generated month or a custom date\n"
+        "range. Posting only enters an OPEN period; closing and reopening are audited."
     ),
     "document_sequences": (
         "Per-type, per-year counter behind every human-facing document number (SO-000123,\n"
@@ -325,6 +326,16 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     "backup_runs": (
         "One execution of the Google Sheets backup job (manual or scheduled) with its\n"
         "counters and outcome. Runs are kept for operational history."
+    ),
+    "storage_replicas": (
+        "One verified copy of one attachment on one backup provider (Cloudflare R2 / Google\n"
+        "Drive). A PENDING row is a durable replication request the backup scheduler sweeps;"
+        " ACTIVE means the copy was size- and checksum-verified in place."
+    ),
+    "storage_jobs": (
+        "One managed storage job (attachment backup sweep, historical-file migration or\n"
+        "restore) with progress counters, so interactive runs survive a page reload and an\n"
+        "interrupted job is resumed by the scheduler."
     ),
     "backup_records": (
         "One immutable version of one database row. Append-only: a complete history of every\n"
@@ -925,8 +936,8 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     "quotation_conversions": {
         "quotation_revision_id": (
-            "Revision that was converted. UNIQUE, so a revision can produce at most one\n"
-            "service order."
+            "Revision the order was created from. NOT unique: a quotation is a reusable reference\n"
+            "and may create many orders; the index keeps the ledger queryable."
         ),
         "service_order_id": (
             "Service order created from the revision. UNIQUE, so an order originates from at\n"
@@ -960,6 +971,16 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "dynamic form it was filled in, so publishing a new configuration cannot\n"
             "re-interpret its saved component rows."
         ),
+        "created_by_user_id": (
+            "Identifier of the user who created this record. NULL when the action\n"
+            "was performed by the system, or set to NULL by ON DELETE SET NULL once\n"
+            "the user is removed."
+        ),
+        "finished_at": (
+            "Recorded when the Finish action completes the order. Operational editing locks from\n"
+            "this point; invoices and payments keep working without it."
+        ),
+        "finished_by_user_id": "User who ran the Finish action. Set only when finished_at is written.",
     },
     "service_order_places": {
         "service_order_id": "Service order the stop belongs to. CASCADE on order deletion.",
@@ -1136,7 +1157,7 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "mime_type": "MIME type detected at upload time.",
         "file_size_bytes": "Size of the stored object in bytes.",
         "checksum": "Digest used to detect duplicates and corruption.",
-        "storage_provider": "Storage backend holding the object: local or minio.",
+        "storage_provider": "Storage backend holding the object: r2, gdrive, or local for historical rows.",
         "document_version": "Version number, incremented when several revisions of one document are stored.",
         "note": "Optional operator note describing the file; display only, never used for access control.",
         "uploaded_at": "Timestamp the object was written to storage.",
@@ -1190,15 +1211,17 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "status": "Record status (ACTIVE, INACTIVE).",
     },
     "accounting_periods": {
-        "period_year": "Calendar year of the accounting month.",
-        "period_month": "Month number, 1 to 12.",
-        "start_date": "First day of the accounting month.",
-        "end_date": "Last day of the accounting month.",
+        "name": "Optional custom period name. NULL falls back to the derived YYYY-MM label.",
+        "description": "Optional free-text note about the period.",
+        "period_year": "Calendar year of the period start; derived, never requested.",
+        "period_month": "Month number of the period start (1 to 12); derived, never requested.",
+        "start_date": "First day of the accounting period.",
+        "end_date": "Last day of the accounting period; ranges never overlap (EXCLUDE guard on PostgreSQL).",
         "status": (
-            "Period state (OPEN, CLOSING, CLOSED). Indexed because every posting resolves the\n"
-            "period by status."
+            "Period state (DRAFT, OPEN, CLOSED). Indexed because the posting paths resolve\n"
+            "the period by status; only OPEN accepts postings."
         ),
-        "closed_at": "Timestamp the period was closed. NULL while it is still open.",
+        "closed_at": "Timestamp the period was closed. NULL while it is not closed.",
     },
     "document_sequences": {
         "document_type": "Document family the counter serves, for example SERVICE_ORDER or TAX_INVOICE.",
@@ -1296,6 +1319,11 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "not a foreign key, because the source may live in any table."
         ),
         "relationship_type": "How the source relates to the document: GENERATED_FROM, REFERENCES or SUPERSEDES.",
+        "idempotency_key": (
+            "UNIQUE replay key for the command that created this link (conversion endpoints accept an\n"
+            "Idempotency-Key header). A replay returns the linked document; the same key against a\n"
+            "different source is refused. Retained with the relationship, like allocation keys."
+        ),
         "created_at": "Timestamp the link was created.",
     },
     "financial_document_allocations": {
@@ -1432,6 +1460,33 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "spreadsheet_id": "Google Sheets spreadsheet that received the data.",
         "message": "Human-readable summary of the run outcome.",
         "detail": "JSONB payload with structured run diagnostics.",
+    },
+    # -- storage ----------------------------------------------------------
+    "storage_replicas": {
+        "attachment_id": "The attachment this copy belongs to. Deleting the attachment deletes the replica.",
+        "backup_provider": "Provider tag holding this copy ('r2' or 'gdrive'). One copy per (attachment, provider).",
+        "backup_key": "Object key on the backup provider. '-' while the copy is still pending.",
+        "status": "PENDING (durable replication request), ACTIVE (size- and checksum-verified) or FAILED.",
+        "file_size_bytes": "Size of the verified replica in bytes.",
+        "checksum": "MD5 checksum of the replica content, compared against the source before cleanup.",
+        "attempts": "Replication attempts so far; the scheduler caps retries per attempt.",
+        "created_by_migration": "Whether the historical-file migration created this replica instead of the backup sweep.",
+        "last_error": "Last replication failure message. Cleared on success.",
+        "last_synced_at": "Timestamp of the last verified successful copy.",
+    },
+    "storage_jobs": {
+        "job_type": "BACKUP (replication sweep), MIGRATION (copy historical files to a new provider) or RESTORE.",
+        "target_provider": "Provider the job operates on ('r2' or 'gdrive').",
+        "status": "PENDING (queued or resumed), RUNNING, COMPLETED or FAILED. Indexed for polling.",
+        "dry_run": "TRUE for migration previews that report scope without copying.",
+        "progress": "Completion percentage (0-100).",
+        "total": "Planned number of files to process.",
+        "processed": "Files handled successfully.",
+        "failed": "Files that could not be processed; the row records per-file errors in the log.",
+        "started_by_user_id": "Administrator who started the job, when interactive.",
+        "message": "Human-readable summary of the job outcome.",
+        "started_at": "Timestamp the job started. NULL while queued.",
+        "finished_at": "Timestamp the job completed. NULL while still running.",
     },
     "backup_records": {
         "run_id": "Run that produced this version. Set to NULL when the run row is deleted.",

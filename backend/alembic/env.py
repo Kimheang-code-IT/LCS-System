@@ -20,6 +20,7 @@ import app.modules.master_data.models  # noqa: F401
 import app.modules.operations.models  # noqa: F401
 import app.modules.quotations.models  # noqa: F401
 import app.modules.settings.models  # noqa: F401
+import app.modules.storage.models  # noqa: F401
 import app.modules.telegram.models  # noqa: F401
 from alembic import context
 from app.core.config import settings

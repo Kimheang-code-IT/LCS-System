@@ -20,7 +20,16 @@ from app.modules.settings.models import AppSetting
 from app.modules.telegram.client import TelegramClient, TelegramError
 from app.modules.telegram.models import NotificationOutbox, TelegramLink, TelegramPairing, TelegramUpdate
 
-READONLY = {"botId", "botDisplayName", "botUsername", "connectionStatus", "lastVerifiedAt", "lastTestedAt", "lastTestMessage", "adminGroupId", "adminGroupName", "adminGroupVerifiedAt", "webhookSecret", "webhookStatus", "webhookUrl", "botTokenConfigured", "destinations"}
+READONLY = {"botId", "botDisplayName", "botUsername", "connectionStatus", "lastVerifiedAt", "lastTestedAt", "lastTestMessage", "adminGroupId", "adminGroupName", "adminGroupVerifiedAt", "webhookSecret", "webhookStatus", "webhookUrl", "botTokenConfigured", "destinations",
+            "clientBotId", "clientBotUsername", "clientBotDisplayName", "clientConnectionStatus", "clientLastVerifiedAt", "clientLastTestedAt", "clientLastTestMessage", "clientBotTokenConfigured"}
+#: The client group's only events are committed Service Order lifecycle actions.
+CLIENT_EVENTS = (
+    "SERVICE_ORDER_CREATED",
+    "SERVICE_ORDER_UPDATED",
+    "SERVICE_ORDER_STATUS_CHANGED",
+    "SERVICE_ORDER_FINISHED",
+    "SERVICE_ORDER_CANCELLED",
+)
 DEFAULT_RULES = {
     name: {"enabled": False, "destination": "PRIVATE" if name == "recovery" else "ADMIN", "minimumSeverity": "INFO" if name in {"recovery", "backup"} else "WARNING", "cooldownMinutes": 15, "notifyOnRecovery": True, "maxAttempts": 3}
     for name in ("security", "backup", "system", "recovery")
@@ -45,12 +54,19 @@ def trusted_origin() -> str:
 
 async def config(session: AsyncSession) -> dict:
     stored, _ = await settings_service._current_app_config(session)
-    return {**settings_service.DEFAULT_APP_CONFIG["telegram"], **(stored.get("telegram") or {})}
+    return merged_client_config({**settings_service.DEFAULT_APP_CONFIG["telegram"], **(stored.get("telegram") or {})})
 
 
 async def locked_config(session: AsyncSession) -> dict:
     row = (await session.execute(select(AppSetting).where(AppSetting.setting_key == "telegram").with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
-    return {**settings_service.DEFAULT_APP_CONFIG["telegram"], **(row.setting_value if row else {})}
+    return merged_client_config({**settings_service.DEFAULT_APP_CONFIG["telegram"], **(row.setting_value if row else {})})
+
+
+def merged_client_config(value: dict) -> dict:
+    """Stored per-event toggles override defaults; unset events stay usable."""
+    value = dict(value)
+    value["clientEvents"] = {**settings_service.DEFAULT_APP_CONFIG["telegram"]["clientEvents"], **(value.get("clientEvents") or {})}
+    return value
 
 
 async def save_internal(session: AsyncSession, value: dict, context: RequestContext | None = None) -> None:
@@ -77,6 +93,34 @@ def prepare_patch(patch: dict, current: dict) -> dict:
         clean.pop("botToken", None)
     if "botToken" in clean and clean["botToken"] != current.get("botToken"):
         clean.update(botId=None, botUsername="", botDisplayName="", connectionStatus="not_tested", lastVerifiedAt="", adminGroupId=None, adminGroupName="", adminGroupVerifiedAt="", webhookSecret=encrypt_secret(secrets.token_urlsafe(32)), webhookStatus="not_registered")
+    if clean.get("clientBotToken"):
+        # A blank field means "keep the stored token"; a literal client token is
+        # validated like the main one and encrypted before it is stored.
+        try:
+            TelegramClient(str(clean["clientBotToken"]))
+        except TelegramError:
+            raise ValidationFailed("Invalid Telegram bot token.", {"telegram.clientBotToken": "Enter the BotFather token."}) from None
+        clean["clientBotToken"] = encrypt_secret(str(clean["clientBotToken"]))
+    else:
+        clean.pop("clientBotToken", None)
+    if "clientBotToken" in clean and clean["clientBotToken"] != current.get("clientBotToken"):
+        clean.update(clientBotId=None, clientBotUsername="", clientBotDisplayName="", clientConnectionStatus="not_tested", clientLastVerifiedAt="", clientLastTestedAt="")
+    if "clientGroupId" in clean:
+        raw = str(clean.get("clientGroupId") or "").strip().replace(" ", "")
+        if raw:
+            try:
+                chat_id = int(raw)
+                assert abs(chat_id) < 2**53 and not raw.startswith(("+", "-0"))
+            except (ValueError, AssertionError):
+                raise ValidationFailed("Enter the numeric Telegram chat id.", {"telegram.clientGroupId": "Invalid chat id"}) from None
+            clean["clientGroupId"] = str(chat_id)
+        else:
+            clean["clientGroupId"] = ""
+    if "clientEvents" in clean:
+        events = clean["clientEvents"]
+        if not isinstance(events, dict) or set(events) - set(CLIENT_EVENTS) or any(type(v) is not bool for v in events.values()):
+            raise ValidationFailed("Invalid Service Order notification events.", {"telegram.clientEvents": "Invalid events"})
+        clean["clientEvents"] = events
     if "rules" in clean:
         rules = clean["rules"]
         if not isinstance(rules, dict) or set(rules) - set(DEFAULT_RULES):
@@ -105,6 +149,57 @@ def client(value: dict) -> TelegramClient:
     if not value.get("enabled") or not value.get("botToken"):
         raise ValidationFailed("Telegram is disabled or has no bot token.")
     return TelegramClient(decrypt_secret(value["botToken"]))
+
+
+def client_sender(value: dict) -> tuple[TelegramClient, int]:
+    """The client group's bot and chat: a separate token when one is stored,
+    otherwise the same credential as the admin bot (shared reference)."""
+    if not value.get("clientEnabled"):
+        raise ValidationFailed("Client group notifications are disabled.")
+    token = value.get("clientBotToken") or value.get("botToken")
+    if not token:
+        raise ValidationFailed("No bot token is configured for the client group.", {"telegram.clientBotToken": "Required"})
+    try:
+        chat_id = int(str(value.get("clientGroupId") or ""))
+    except (TypeError, ValueError):
+        raise ValidationFailed("Configure the client group chat id first.", {"telegram.clientGroupId": "Required"}) from None
+    return TelegramClient(decrypt_secret(token)), chat_id
+
+
+def test_client_sender(value: dict) -> TelegramClient:
+    """getMe for the client credential, without requiring a chat id."""
+    token = value.get("clientBotToken") or value.get("botToken")
+    if not token:
+        raise ValidationFailed("No bot token is configured for the client group.", {"telegram.clientBotToken": "Required"})
+    return TelegramClient(decrypt_secret(token))
+
+
+async def test_client_connection(session: AsyncSession) -> dict:
+    value = await config(session)
+    try:
+        identity = await test_client_sender(value).get_me()
+        value.update(
+            clientBotId=identity["id"],
+            clientBotDisplayName=str(identity.get("first_name", ""))[:255],
+            clientBotUsername=str(identity.get("username", ""))[:100],
+            clientConnectionStatus="connected",
+            clientLastVerifiedAt=utcnow().isoformat(),
+            clientLastTestMessage="Client bot verified by getMe.",
+        )
+        if value.get("clientBotToken"):
+            value["clientBotToken"] = encrypt_secret(decrypt_secret(value["clientBotToken"]))
+    except TelegramError as exc:
+        value.update(clientConnectionStatus="failed", clientLastTestMessage=exc.code, clientLastVerifiedAt="", clientBotId=None)
+    value["clientLastTestedAt"] = utcnow().isoformat()
+    current = await locked_config(session)
+    stored_token = decrypt_secret(current.get("clientBotToken") or "") if current.get("clientBotToken") else ""
+    new_token = decrypt_secret(value.get("clientBotToken") or "") if value.get("clientBotToken") else ""
+    if current.get("clientEnabled") is not value.get("clientEnabled") or stored_token != new_token:
+        raise ValidationFailed("Client group configuration changed during verification. Test it again.")
+    fields = {key: value[key] for key in ("clientBotId", "clientBotDisplayName", "clientBotUsername", "clientConnectionStatus", "clientLastVerifiedAt", "clientLastTestedAt", "clientLastTestMessage", "clientBotToken") if key in value}
+    await save_internal(session, {**current, **fields})
+    await session.commit()
+    return {"status": value["clientConnectionStatus"], "message": value["clientLastTestMessage"], "lastTestedAt": value["clientLastTestedAt"]}
 
 
 async def test_connection(session: AsyncSession) -> dict:

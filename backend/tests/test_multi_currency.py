@@ -436,7 +436,10 @@ async def test_an_invoice_generated_from_a_charge_keeps_the_currency_and_takes_i
 
     issued = await client.post(f"/api/v1/service-charges/{charge_id}/issue", headers=headers, json={})
     assert issued.status_code == 200, issued.text
-    invoice_id = issued.json()["data"]["financialDocumentId"]
+    converted = await client.post(
+        f"/api/v1/service-charges/{charge_id}/create-finance-invoice", headers=headers, json={}
+    )
+    invoice_id = converted.json()["data"]["id"]
     invoice = await _detail(client, headers, invoice_id)
 
     assert invoice["currency"] == "KHR", "the invoice keeps the source currency"

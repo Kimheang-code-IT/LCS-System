@@ -12,6 +12,7 @@ from app.modules.finance.models import (
     ChartOfAccount,
     FinancialAccount,
     FinancialDocument,
+    FinancialDocumentSource,
     JournalEntry,
     JournalEntryLine,
 )
@@ -56,13 +57,16 @@ class ReportRepository:
         finance_totals = (
             select(
                 FinancialDocument.service_order_id.label("service_order_id"),
+                # Base-currency amounts carry the document's own approved rate
+                # snapshot, so posted/draft layers can never be summed across
+                # currencies (the same rule the ledger reports follow).
                 func.coalesce(
                     func.sum(
                         case(
                             (
                                 (FinancialDocument.document_type == "CUSTOMER_INVOICE")
                                 & (FinancialDocument.status == "POSTED"),
-                                FinancialDocument.total_amount,
+                                FinancialDocument.base_total_amount,
                             ),
                             else_=0,
                         )
@@ -75,7 +79,7 @@ class ReportRepository:
                             (
                                 (FinancialDocument.document_type == "SUPPLIER_BILL")
                                 & (FinancialDocument.status == "POSTED"),
-                                FinancialDocument.total_amount,
+                                FinancialDocument.base_total_amount,
                             ),
                             else_=0,
                         )
@@ -88,7 +92,7 @@ class ReportRepository:
                             (
                                 (FinancialDocument.document_type == "CUSTOMER_INVOICE")
                                 & (FinancialDocument.status == "DRAFT"),
-                                FinancialDocument.total_amount,
+                                FinancialDocument.base_total_amount,
                             ),
                             else_=0,
                         )
@@ -124,6 +128,63 @@ class ReportRepository:
         )
         result = await self.session.execute(stmt)
         return [dict(row) for row in result.mappings().all()]
+
+    async def profitability_charge_layers(
+        self,
+    ) -> dict[int, dict[str, dict[str, Decimal]]]:
+        """Per ``(order_id, document currency)`` charge-layer amounts.
+
+        Two sums, both in the layer's own document currency so no cross-currency
+        addition ever happens here:
+
+        - ``ISSUED`` / ``DRAFT``: the service charges themselves, by their
+          lifecycle status.
+        - ``LINKED``: the total of every non-reversed finance document linked to
+          one of this order's charges (via its source relationship) — the
+          converted representation, never summed with the charge itself.
+        """
+        charges = (
+            await self.session.execute(
+                select(
+                    ServiceOrderCharge.service_order_id,
+                    ServiceOrderCharge.currency_code,
+                    func.sum(case((ServiceOrderCharge.status == "ISSUED", ServiceOrderCharge.total_amount), else_=0)),
+                    func.sum(case((ServiceOrderCharge.status == "DRAFT", ServiceOrderCharge.total_amount), else_=0)),
+                )
+                .where(ServiceOrderCharge.status.in_(("ISSUED", "DRAFT")))
+                .group_by(ServiceOrderCharge.service_order_id, ServiceOrderCharge.currency_code)
+            )
+        ).all()
+        linked = (
+            await self.session.execute(
+                select(
+                    ServiceOrderCharge.service_order_id,
+                    FinancialDocument.currency_code,
+                    func.sum(FinancialDocument.total_amount),
+                )
+                .select_from(FinancialDocumentSource)
+                .join(FinancialDocument, FinancialDocument.id == FinancialDocumentSource.financial_document_id)
+                .join(ServiceOrderCharge, ServiceOrderCharge.id == FinancialDocumentSource.source_id)
+                .where(
+                    FinancialDocumentSource.source_type == "SERVICE_ORDER_CHARGE",
+                    FinancialDocument.status != "REVERSED",
+                )
+                .group_by(ServiceOrderCharge.service_order_id, FinancialDocument.currency_code)
+            )
+        ).all()
+        layers: dict[int, dict[str, dict[str, Decimal]]] = {}
+
+        def _entry(order_id: int, currency: str | None):
+            return layers.setdefault(int(order_id), {}).setdefault(str(currency or "").upper(), {})
+
+        for order_id, currency, issued, draft in charges:
+            entry = _entry(order_id, currency)
+            entry["issued"] = Decimal(issued or 0)
+            entry["draft"] = Decimal(draft or 0)
+        for order_id, currency, total in linked:
+            key = _entry(order_id, currency)
+            key["linked"] = key.get("linked", Decimal("0")) + Decimal(total or 0)
+        return layers
 
     async def container_register_rows(self) -> list[dict]:
         """Every container with the order, customer and type it belongs to."""

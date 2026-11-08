@@ -1,24 +1,23 @@
 ---
-description: Run only the backend tests affected by the current change set
+description: Find the smallest relevant existing backend regression selector
 ---
 
-Pick the smallest backend test set for the uncommitted diff. Run from `backend/`.
+Select by changed behavior and existing tests, then run the union once from backend/.
+This table is a starting lookup, not a mandate to run every file in a row.
 
-| Changed path | Run |
+| Area | Existing candidates (tests/) |
 |---|---|
-| `app/modules/quotations/**` | `uv run pytest -q tests/test_quotations.py tests/test_quotation_versions.py` |
-| `app/modules/operations/**` | `uv run pytest -q tests/test_workflows.py tests/test_component_attributes.py tests/test_movements_and_milestones.py` |
-| `app/modules/master_data/**` | `uv run pytest -q tests/test_config_versions.py tests/test_config_compare.py tests/test_currencies_and_fx.py tests/test_place_roles.py tests/test_postgres_places_migration.py` |
-| `app/modules/finance/**` | `uv run pytest -q tests/test_financial_documents_module.py tests/test_posting_rules.py tests/test_finance_automation.py tests/test_multi_currency.py` |
-| `app/modules/auth/**`, `app/core/permissions.py`, `app/core/authorization/**` | `uv run pytest -q tests/test_auth_rbac.py tests/test_role_permissions.py tests/test_page_api_integration.py` |
-| `app/api/**`, `app/core/**` | `uv run pytest -q tests/test_api_completeness.py tests/test_frontend_api_contract.py tests/test_request_schemas.py` |
-| `models.py`, `alembic/versions/**` | `uv run pytest -q tests/test_migration_chain.py tests/test_schema_integrity.py tests/test_schema_docs.py` |
-| `frontend/app/utils/constants/**`, `app/utils/api/**` | `uv run pytest -q tests/test_frontend_api_contract.py` |
+| Quotations/SO conversion | test_quotation_reuse.py, test_quotations.py, test_quotation_versions.py, test_workflows.py |
+| Operations | test_movements_and_milestones.py, test_workflows.py, test_component_attributes.py |
+| Finance | test_financial_documents_module.py, test_posting_rules.py, test_multi_currency.py, test_accounting_periods.py |
+| Invoice/container print | test_financial_printing.py |
+| Master/config | test_config_versions.py, test_currencies_and_fx.py, test_place_roles.py |
+| Auth/permissions | test_auth_rbac.py, test_role_permissions.py, test_route_authorization.py |
+| API/client contracts | test_frontend_api_contract.py, test_request_schemas.py |
+| Schema | test_migration_chain.py, test_schema_integrity.py, test_schema_docs.py |
 
-Rules:
-
-- Two or more rows apply → run the union, in one `pytest` call with several paths.
-- A previous run left failures → `uv run pytest -q --lf` first; it re-runs only those.
-- Single test: `uv run pytest -q tests/test_quotations.py::test_name`.
-- Report the pass/fail counts and the first failing traceback. Do not paste the whole run.
-- Run the full suite only when the diff touches shared infrastructure or the user asks.
+Verify files and relevant cases exist. Command: uv run --no-sync pytest -q tests/<selected>.py.
+New meaningful regressions are allowed for actual gaps. DEEP adds required denial/rollback/
+idempotency/race checks and independent review; never substitute only a smoke test. SQLite
+cannot validate PostgreSQL triggers/locks. Do not rerun unchanged passing suites or run the
+whole repository merely because two areas are touched. Report exact command/results/limits.

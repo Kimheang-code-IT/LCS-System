@@ -67,6 +67,41 @@ def _invoice_payload(party_id: int, **extra) -> dict:
     }
 
 
+async def test_posting_replay_returns_the_document_and_writes_one_audit_event(client, session_factory, seeded):
+    """Test B: the replay is a read-only no-op — one journal, one audit event."""
+    from app.modules.audit.models import AuditEvent
+    from app.modules.finance.models import FinancialDocumentPosting, JournalEntry, JournalEntryLine
+
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id, _party_name, _account_id, _account_name = await _party_and_account(session)
+    document = await _create(client, headers, _invoice_payload(party_id))
+    document_id = document["id"]
+
+    posted = await client.post(f"/api/v1/financial-documents/{document_id}/post", headers=headers, json={})
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["data"]["status"] == "Posted"
+    replay = await client.post(f"/api/v1/financial-documents/{document_id}/post", headers=headers, json={})
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["data"]["id"] == document_id
+
+    async with session_factory() as session:
+        assert len((await session.execute(select(FinancialDocumentPosting).where(FinancialDocumentPosting.financial_document_id == int(document_id)))).scalars().all()) == 1
+        entry = (await session.execute(select(JournalEntry).where(JournalEntry.source_document_id == int(document_id)))).scalars().one()
+        assert entry.debit_total == entry.credit_total == 100
+        lines = (await session.execute(select(JournalEntryLine).where(JournalEntryLine.journal_entry_id == entry.id))).scalars().all()
+        assert len(lines) == 2  # AR debit, revenue credit
+        events = (
+            await session.execute(
+                select(AuditEvent.event_type).where(
+                    AuditEvent.entity_id == int(document_id),
+                    AuditEvent.entity_type == "financial_document",
+                )
+            )
+        ).scalars().all()
+        assert events == ["FINANCIAL_POSTED"], "the idempotent replay must not write a second audit event"
+
+
 async def test_a_receipt_keeps_its_settlement_fields(client, session_factory, seeded):
     headers = await login(client)
     async with session_factory() as session:

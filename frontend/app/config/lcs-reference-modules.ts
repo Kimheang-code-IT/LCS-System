@@ -358,11 +358,28 @@ export const lcsReferenceModules: FreightModule[] = [
     filters: [field('entryType', 'Entry Type', 'ប្រភេទទិនានុប្បវត្តិ', '', '', 'select', ['MANUAL', 'AUTOMATIC', 'REVERSAL']), field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['DRAFT', 'POSTED', 'REVERSED', 'VOIDED']), field('periodId', 'Accounting Period', 'រយៈពេលគណនេយ្យ')],
   }),
   module({
+    // POST /accounting-periods creates one custom period from a start and end
+    // date; year/month are derived by the backend so no fiscal-year is ever
+    // requested. Status actions (open/close/reopen) come from the row menu.
     path: '/finance/accounting-periods', title: 'Accounting Periods', titleKm: 'រយៈពេលគណនេយ្យ', singular: 'Accounting Period', singularKm: 'រយៈពេលគណនេយ្យ', description: 'Posting periods and closure control.', descriptionKm: 'រយៈពេលចុះគណនី និងការគ្រប់គ្រងការបិទ។',
-    icon: 'i-lucide-calendar-range', group: 'finance', permission: 'finance.accounting_periods.view', collection: 'accountingPeriods', titleField: 'name', kind: 'standard', canCreate: false, readOnly: true,
+    icon: 'i-lucide-calendar-range', group: 'finance', permission: 'finance.accounting_periods.view', collection: 'accountingPeriods', titleField: 'name', kind: 'standard', canCreate: true,
     columns: [column('name', 'Period', 'រយៈពេល'), column('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម'), column('endDate', 'End Date', 'ថ្ងៃបញ្ចប់'), column('status', 'Status', 'ស្ថានភាព'), column('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី'), column('closedBy', 'Closed By', 'បិទដោយ'), column('closedAt', 'Closed At', 'ពេលបិទ')],
-    fields: [field('year', 'Year', 'ឆ្នាំ', undefined, undefined, 'number'), field('month', 'Month', 'ខែ', undefined, undefined, 'number'), field('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម', undefined, undefined, 'date'), field('endDate', 'End Date', 'ថ្ងៃបញ្ចប់', undefined, undefined, 'date'), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', PERIOD_STATUS), field('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'number', undefined, false, { computed: true }), field('closedBy', 'Closed By', 'បិទដោយ', 'Closure', 'ការបិទ', 'text', undefined, false, { computed: true }), field('closedAt', 'Closed At', 'ពេលបិទ', 'Closure', 'ការបិទ', 'datetime', undefined, false, { computed: true })],
-    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', ['OPEN', 'CLOSED', 'REOPENED'])],
+    fields: [field('name', 'Period Name', 'ឈ្មោះរយៈពេល', undefined, undefined, 'text', undefined, false, { rule: { maxLength: 120 } }), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea'), field('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម', undefined, undefined, 'date', undefined, true), field('endDate', 'End Date', 'ថ្ងៃបញ្ចប់', undefined, undefined, 'date', undefined, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', PERIOD_STATUS), field('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'number', undefined, false, { computed: true })],
+    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', PERIOD_STATUS)],
+  }),
+  module({
+    // Same periods collection as Accounting Periods, focused on closure: the
+    // row menu offers exactly the close/reopen status transitions the backend
+    // policy grants, so the server-side pre-closing checks stay authoritative.
+    path: '/finance/period-closing', title: 'Period Closing', titleKm: 'ការបិទរយៈពេល', singular: 'Period Closing', singularKm: 'ការបិទរយៈពេល', description: 'Close and reopen posting periods under backend validation.', descriptionKm: 'បិទ និងបើកឡើងវិញរយៈពេលការចុះបញ្ជីក្រោមការផ្ទៀងផ្ទាត់។',
+    icon: 'i-lucide-calendar-check', group: 'finance', permission: 'finance.accounting_periods.view', collection: 'accountingPeriods', titleField: 'name', titleKey: 'freight.pages.periodClosing', kind: 'standard',
+    columns: [
+      column('name', 'Period', 'រយៈពេល'), column('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម'), column('endDate', 'End Date', 'ថ្ងៃបញ្ចប់'), column('status', 'Status', 'ស្ថានភាព'), column('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី', { labelKey: 'freight.fields.postingCount' }), column('closedBy', 'Closed By', 'បិទដោយ', { labelKey: 'freight.fields.closedBy' }), column('closedAt', 'Closed At', 'ពេលបិទ', { labelKey: 'freight.fields.closedAt' }),
+    ],
+    fields: [
+      field('name', 'Period Name', 'ឈ្មោះរយៈពេល', undefined, undefined, 'text', undefined, false, { rule: { maxLength: 120 } }), field('description', 'Description', 'បរិយាយ', 'Details', 'ព័ត៌មានលម្អិត', 'textarea'), field('startDate', 'Start Date', 'ថ្ងៃចាប់ផ្តើម', undefined, undefined, 'date', undefined, true), field('endDate', 'End Date', 'ថ្ងៃបញ្ចប់', undefined, undefined, 'date', undefined, true), field('status', 'Status', 'ស្ថានភាព', 'Control', 'ការគ្រប់គ្រង', 'select', PERIOD_STATUS), field('postingCount', 'Posting Count', 'ចំនួនការចុះបញ្ជី', 'Control', 'ការគ្រប់គ្រង', 'number', undefined, false, { computed: true }),
+    ],
+    filters: [field('status', 'Status', 'ស្ថានភាព', '', '', 'select', PERIOD_STATUS)],
   }),
   module({
     path: '/finance/posting-rules', title: 'Posting Rules', titleKm: 'ច្បាប់ចុះបញ្ជី', singular: 'Posting Rule', singularKm: 'ច្បាប់ចុះបញ្ជី', description: 'Which ledger accounts a document type posts through.', descriptionKm: 'គណនីក្បត់គ្រប់អ្វីដែលប្រភេទឯកសារនីមួយៗចុះបញ្ជីតាម.',

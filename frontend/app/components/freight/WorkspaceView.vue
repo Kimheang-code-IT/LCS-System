@@ -10,11 +10,12 @@ import {
   formatFreightCell,
   freightStatusBadge,
   useFreightLabel,
-  useFreightRouteModule,
+  useFreightRouteModule, formatMoney 
 } from '~/composables/freight/useFreight'
 import { useLcs } from '~/composables/freight/useLcs'
 import type { FreightRecord } from '~/types/record'
 import type { ExportFilters, ExportRequest } from '~/types/export'
+import type { SourcePermission } from '~/types/domain'
 import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
 import type { ExcelModuleInfo } from '~/composables/useExcelIo'
 import { chargeDomainStatus, financeDomainStatus } from '~/utils/freight/states'
@@ -33,6 +34,7 @@ import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit
 import { useModuleList } from '~/composables/freight/useModuleList'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useRecordStatus } from '~/composables/freight/useRecordStatus'
+import { useLcsRepositories } from '~/repositories'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 
@@ -93,9 +95,44 @@ const sortKey = computed(() => {
 })
 const sortDir = computed(() => (sortKey.value ? sort.value?.dir : undefined))
 
-async function refreshList() {
+// --- Period closing validation ------------------------------------------------
+// Read-side panel: closing stays a status transition; this only renders the
+// backend's own pre-closing checks, warnings and base-currency balances.
+const validationOpen = ref(false)
+const validatingId = ref('')
+const validationRow = ref<Record<string, unknown> | null>(null)
+const validationReport = ref<Record<string, unknown> | null>(null)
+const validationError = ref('')
+
+const financeRepo = useLcsRepositories().finance
+
+/** Collection-scoped empty state copy (e.g. "No accounting periods found"). */
+const emptyTitle = computed(() =>
+  current.value?.collection === 'accountingPeriods' ? t('freight.ui.periodClosing.noPeriods') : '')
+
+async function runValidationForRow(row: Record<string, unknown>) {
+  validationRow.value = row
+  validationOpen.value = true
+  validatingId.value = String(row.id || '')
+  validationError.value = ''
+  try {
+    validationReport.value = (await financeRepo.closingValidation(String(row.id))) as unknown as Record<string, unknown>
+  }
+  catch (cause) {
+    validationError.value = lcs.errorMessage(cause)
+  }
+  finally {
+    validatingId.value = ''
+  }
+}
+
+const manualRefreshing = ref(false)
+
+async function refreshList(quiet = false) {
   if (!current.value) return
-  pending.value = true
+  // A manual reload keeps the table data visible; only the header icon spins.
+  if (quiet) manualRefreshing.value = true
+  else pending.value = true
   try {
     await moduleList.refresh({
       q: q.value,
@@ -109,6 +146,7 @@ async function refreshList() {
     })
   }
   finally {
+    manualRefreshing.value = false
     pending.value = false
   }
 }
@@ -166,8 +204,13 @@ function canMasterAction(action: 'create' | 'update' | 'delete'): boolean {
   const module = current.value
   if (!module || module.group !== 'master') return false
   if (lcs.can('master.reference.manage')) return true
-  return pageActionPermission(module.permission, action) !== ''
-    && auth.canAccessPage(pageActionPermission(module.permission, action))
+  // Document types keep the coarse reference guard (backend write commands
+  // accept only `master.reference.manage` / `configuration.manage`).
+  const perPageCode = module.collection === 'documentTypes'
+    ? ''
+    : pageActionPermission(module.permission, action)
+  const code = perPageCode != '' ? perPageCode : 'master.reference.manage'
+  return code !== '' && auth.canAccessPage(code)
 }
 const canManageModule = computed(() => {
   if (!current.value) return false
@@ -179,10 +222,35 @@ const canManageModule = computed(() => {
   if (current.value.group === 'configuration') return auth.canAccessPage('configuration.manage')
   return true
 })
+/**
+ * Business/finance/administration create flows that are not otherwise gated:
+ * the New button follows the same per-page create code (matrix) the backend
+ * collection command enforces, with the entity capability code (or the legacy
+ * aggregate capability that predates the matrix) still accepted. Accounting
+ * periods have no capability code — the generate/POST command is
+ * `accounting_period.update` and the matrix code is authoritative.
+ */
+const PAGE_CREATE_GATES: Record<string, { capability: SourcePermission | '', legacy?: readonly string[] }> = {
+  quotations: { capability: 'quotation.create' },
+  jobCharges: { capability: 'service_charge.create' },
+  debitNotes: { capability: 'financial_document.create' },
+  journals: { capability: 'journal_entry.create' },
+  accountingPeriods: { capability: '' },
+  postingRules: { capability: 'posting_rule.create' },
+  documentSequences: { capability: 'document_sequence.create', legacy: ['configuration.manage'] },
+}
+
 const canCreate = computed(() => {
   if (!current.value?.canCreate || current.value.readOnly) return false
   if (isJobList.value) return lcs.can('service_order.create')
   if (current.value.group === 'master') return canMasterAction('create')
+  const gate = PAGE_CREATE_GATES[current.value.collection]
+  if (gate) {
+    const matrixCode = pageActionPermission(current.value.permission, 'create')
+    return (gate.capability ? lcs.can(gate.capability) : false)
+      || (gate.legacy?.some(code => hasRawSourceCapability(auth.user, code)) ?? false)
+      || (matrixCode ? auth.canAccessPage(matrixCode) : false)
+  }
   if (!canManageModule.value) return false
   return true
 })
@@ -223,7 +291,24 @@ const bulkAction = computed<{ kind: 'delete' | 'deactivate', label: string, icon
 // --- Excel Import & Export (allowlisted by the backend catalog) ---
 const excelIo = useExcelIo()
 const excelModules = ref<ExcelModuleInfo[]>([])
-void excelIo.modules().then(rows => { excelModules.value = rows }).catch(() => { /* catalog stays empty; actions stay hidden */ })
+const excelLoaded = ref(false)
+
+async function loadExcelModules() {
+  // The catalog answers 401 until the session is restored and one-shot loading
+  // left the ⋯ menu empty forever after any transient failure, so an empty
+  // retry: once the user becomes known, and when the page re-activates.
+  if (!auth.user) return
+  try {
+    excelModules.value = await excelIo.modules()
+    excelLoaded.value = true
+  }
+  catch {
+    excelLoaded.value = false
+  }
+}
+void loadExcelModules()
+watch(() => auth.user?.id, id => { if (id && !excelLoaded.value) void loadExcelModules() })
+onActivated(() => { if (!excelLoaded.value) void loadExcelModules() })
 const excelModule = computed(() => excelModules.value.find(item => item.key === current.value?.collection) ?? null)
 
 const exportOpen = ref(false)
@@ -476,18 +561,11 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (availability.edit) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     }
-    // Submit / Convert are the active quotation transitions; they come from the
-    // shared policy, gated by the quotation availability rules (a converted
-    // quotation must not offer Convert again, and legacy SENT/ACCEPTED rows
-    // only ever convert).
+    // Submit / Convert are retired: a quotation is a CRUD reference now, so the
+    // status menu offers nothing and the row keeps Edit / Delete / Open order.
     const statusItem = statusMenuItem(row, {
       allowTransition: (transition) => {
-        if (transition.action === 'send') return false
-        if (transition.action === 'accept') return false
-        if (transition.action === 'submit') return availability.submit
-        if (transition.action === 'convert') return availability.convert
-        if (transition.action === 'reject') return false
-        if (transition.action === 'cancel') return lcs.can('quotation.update_draft')
+        if (['send', 'accept', 'submit', 'convert', 'reject', 'cancel'].includes(transition.action)) return false
         return true
       },
     })
@@ -506,6 +584,11 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     const status = chargeDomainStatus(row.status)
     if (status === 'DRAFT' && lcs.can('service_charge.create')) items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     if (status === 'ISSUED' && !row.financialDocumentId && lcs.can('service_charge.convert_to_invoice')) items.push({ label: t('freight.ui.createFinanceInvoice'), icon: 'i-lucide-file-plus-2', onSelect: () => { void runRowAction('createInvoice', row) } })
+  }
+  else if (collection === 'accountingPeriods') {
+    // Review-only: the backend's own pre-closing checks; the actual close is a
+    // separate, explicitly confirmed status transition.
+    items.push({ label: t('freight.ui.periodClosing.runValidation'), icon: 'i-lucide-shield-check', onSelect: () => { void runValidationForRow(row) } })
   }
   else if (collection === 'debitNotes') {
     const status = financeDomainStatus(row.status)
@@ -537,8 +620,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   return [items]
 }
 
-/** The closing check the period confirm used to describe inline. */
-function periodCloseSummary(row: Record<string, unknown>) {
+/** The closing check the period confirm used to describe inline. */function periodCloseSummary(row: Record<string, unknown>) {
   const start = String(row.startDate || '').slice(0, 10)
   const end = String(row.endDate || '').slice(0, 10)
   const draftDocuments = store.list('debitNotes').filter(item =>
@@ -759,7 +841,7 @@ function recordStatusValue(row: Record<string, unknown>) {
 }
 
 function refresh() {
-  void refreshList()
+  void refreshList(true)
   store.reload()
 }
 
@@ -795,10 +877,19 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       :can-create="canCreate"
       :create-label="t('freight.ui.newEntity', { entity: moduleSingular(current) })"
       :more-items="headerMenuItems"
-      :refreshing="pending"
+      :refreshing="pending || manualRefreshing"
       @create="openCreate"
       @refresh="refresh"
-    />
+    >
+      <!-- Period Closing never creates periods: send users to Accounting Periods. -->
+      <CommonAppDocumentActionButton
+        v-if="current.path === '/finance/period-closing'"
+        :label="t('freight.pages.accountingPeriods')"
+        icon="i-lucide-calendar-range"
+        color="secondary"
+        @click="navigateTo('/finance/accounting-periods')"
+      />
+    </LayoutAppHeaderPageActions>
 
     <CommonAppExportDialog
       v-model:open="exportOpen"
@@ -832,6 +923,7 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       :loading="pending"
       :show-date-range="Boolean(dateField)"
       :filters-active="hasActiveFilters"
+      :empty-title="emptyTitle"
       @select="onRowSelect"
     >
       <template #filters="{ compact }">
@@ -867,6 +959,72 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
         </template>
       </template>
     </TableAppListTable>
+
+    <!-- Pre-closing validation: backend checks, warnings and base-currency balances. -->
+    <UModal v-model:open="validationOpen" :title="t('freight.ui.periodClosing.validation')">
+      <template #body>
+        <div class="space-y-3 text-sm">
+          <UAlert v-if="validationError" color="error" :description="validationError" />
+          <div v-else-if="!validationReport && validatingId" class="flex items-center gap-2 text-muted" role="status">
+            <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" aria-hidden="true" />
+            <span>{{ t('common.loading') }}</span>
+          </div>
+          <template v-else-if="validationReport">
+            <div class="flex flex-wrap items-center gap-2">
+              <UBadge color="success">
+                {{ ((validationReport.checks as Array<Record<string, unknown>>) || []).filter(c => c.status === 'PASS').length }} {{ t('freight.ui.periodClosing.passed') }}
+              </UBadge>
+              <UBadge v-if="((validationReport.checks as Array<Record<string, unknown>>) || []).some(c => c.status === 'WARNING')" color="warning">
+                {{ ((validationReport.checks as Array<Record<string, unknown>>) || []).filter(c => c.status === 'WARNING').length }} {{ t('freight.ui.periodClosing.warnings') }}
+              </UBadge>
+              <UBadge v-if="Number(validationReport.blockingCount)" color="error">
+                {{ t('freight.ui.periodClosing.blocking', { count: Number(validationReport.blockingCount) }) }}
+              </UBadge>
+              <span v-if="validationRow" class="text-xs text-muted">{{ validationRow.name }} · {{ validationRow.startDate }} — {{ validationRow.endDate }}</span>
+            </div>
+            <ul class="space-y-1.5">
+              <li
+                v-for="check in (validationReport.checks as Array<Record<string, unknown>>) || []"
+                :key="String(check.code)"
+                class="flex flex-wrap items-center gap-2 rounded-sm border border-default px-2.5 py-1.5 text-xs"
+              >
+                <UBadge :color="check.status === 'PASS' ? 'success' : check.status === 'WARNING' ? 'warning' : check.status === 'BLOCKED' ? 'error' : 'neutral'">
+                  {{ String(check.code) }}
+                </UBadge>
+                <span class="font-medium">{{ String(check.name) }}</span>
+                <span class="text-muted">{{ String(check.message) }}</span>
+                <span v-if="check.recommendedAction" class="text-highlighted">→ {{ String(check.recommendedAction) }}</span>
+              </li>
+            </ul>
+            <div class="grid grid-cols-2 gap-2 text-xs md:grid-cols-3">
+              <div class="rounded-sm border border-default px-2.5 py-2">
+                <div class="text-muted">{{ t('freight.ui.periodClosing.revenue') }}</div>
+                <b class="tabular-nums">{{ formatMoney((validationReport.summary as Record<string, unknown>)?.revenue) }}</b>
+              </div>
+              <div class="rounded-sm border border-default px-2.5 py-2">
+                <div class="text-muted">{{ t('freight.ui.periodClosing.expenses') }}</div>
+                <b class="tabular-nums">{{ formatMoney((validationReport.summary as Record<string, unknown>)?.expenses) }}</b>
+              </div>
+              <div class="rounded-sm border border-default px-2.5 py-2">
+                <div class="text-muted">{{ t('freight.ui.periodClosing.unapplied') }}</div>
+                <b class="tabular-nums">{{ formatMoney((validationReport.summary as Record<string, unknown>)?.unappliedPayments) }}</b>
+              </div>
+            </div>
+            <p class="text-xs text-muted">{{ t('freight.ui.periodClosing.inBase') }} {{ String(validationReport.baseCurrency || '—') }}</p>
+          </template>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex w-full items-center justify-end gap-2">
+          <UButton
+            :label="t('lcs.common.close')"
+color="neutral"
+variant="ghost"
+            @click="validationOpen = false"
+          />
+        </div>
+      </template>
+    </UModal>
   </div>
   <div v-else class="grid h-full min-h-0 flex-1 place-items-center p-8">
     <UEmpty

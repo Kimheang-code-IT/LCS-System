@@ -95,7 +95,7 @@ Report, in this order, each finding with `file:line` and one-line justification:
    enforces it, and a test proves the denial path. Flag any endpoint reachable without it.
 4. **Schema and migrations** — additive Alembic revision with a working `downgrade()`,
    `alembic/env.py` imports the new model, model added to `reset_all_data` when it holds
-   business data, generated `docs/06_database_design.sql` regenerated.
+   business data, generated `docs/01-architecture/database-design.sql` regenerated.
 5. **Contracts** — `tests/test_frontend_api_contract.py` inputs (frontend endpoint
    constants, `freight-remote.ts`) match a real route; response uses the `{"data": ...}`
    envelope; errors use `{code, message, request_id, field_errors}`.

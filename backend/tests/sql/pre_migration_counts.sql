@@ -6,7 +6,7 @@
 --   psql "$DATABASE_URL" -f backend/tests/sql/pre_migration_counts.sql > post.txt
 --   diff pre.txt post.txt
 --
--- docs/11_deployment_and_security.md §8 and §12 list the only rows that may differ.
+-- docs/archive/deployment-security-history.md §8 and §12 list the only rows that may differ.
 -- Read-only: this script never writes.
 \pset pager off
 \pset footer off

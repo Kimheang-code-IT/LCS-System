@@ -4,6 +4,13 @@
   </div>
 </template>
 
+<style>
+@page {
+  size: A4 portrait;
+  margin: 10mm 10mm 15mm;
+}
+</style>
+
 <style scoped>
 @media print {
   :global(html),

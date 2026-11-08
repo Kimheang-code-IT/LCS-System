@@ -1,23 +1,17 @@
 ---
-description: Run backend tests (argument = path, file, node id or -k expression)
+description: Run backend tests selected for the current task
 ---
 
-Run from `backend/`:
+Run from backend/ with uv run --no-sync pytest -q <existing selector>.
+User selector: $ARGUMENTS
 
-- No argument: `uv run pytest -q` (whole suite, SQLite in-memory).
-- File: `uv run pytest -q tests/test_workflows.py`.
-- Single test: `uv run pytest -q tests/test_quotations.py::test_create_quotation`.
-- Keyword: `uv run pytest -q -k "posting and balance"`.
-- Previous failures only: `uv run pytest -q --lf`.
-- With a full traceback and stop-on-first: add `-x --tb=short`.
+With no selector, identify changed behavior and the smallest owning existing test file;
+use /test-fast as a lookup. Do not default to the full backend suite. An explicit whole-suite
+request or demonstrated wide shared/release impact can justify uv run --no-sync pytest -q.
+Batch relevant files once; --lf only for failures relevant to this task.
 
-`$ARGUMENTS`
-
-Notes:
-
-- Tests use in-memory SQLite and real routers through `client`; no PostgreSQL or Docker
-  needed. Never point a test at a real database.
-- When `uv` is not on PATH, fall back to the documented Docker runner in `AGENTS.md`
-  (mount the repo, `uv sync --frozen --extra dev`, then run the same selector).
-- Never delete, skip or weaken a failing test to make the suite green.
-- Report counts plus the first failure only; the full log stays in the terminal.
+SQLite fixtures do not prove PostgreSQL guards/locking. Any PostgreSQL run requires an
+explicitly isolated disposable target. Do not use developer/production data, apply migrations,
+reset data, install frameworks or weaken tests. Follow the DEEP policy for finance/security.
+If uv/environment is unavailable, report it; do not silently deploy a Docker replacement.
+Report exact command, counts, first failure and unverified properties; no verbose log dump.

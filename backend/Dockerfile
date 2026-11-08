@@ -27,7 +27,9 @@ COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
 
-RUN mkdir -p /app/storage && chown -R app:app /app
+# No storage directory: uploaded objects are processed in memory and written
+# directly to Cloudflare R2 / Google Drive (Settings → Storage & Backup).
+RUN chown -R app:app /app
 
 USER app
 

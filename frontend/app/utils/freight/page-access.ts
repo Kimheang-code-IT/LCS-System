@@ -23,6 +23,7 @@ export const PAGE_ROUTE_PERMISSIONS: Readonly<Record<string, string>> = {
   '/finance/financial-accounts/new': 'finance.financial_accounts.create',
   '/finance/journals': 'finance.journal_entries.view',
   '/finance/accounting-periods': 'finance.accounting_periods.view',
+  '/finance/period-closing': 'finance.accounting_periods.view',
   '/finance/posting-rules': 'finance.posting_rules.view',
   '/finance/posting-rules/new': 'finance.posting_rules.create',
   '/master-data/business-parties': 'master.business_parties.view',
@@ -40,8 +41,11 @@ export const PAGE_ROUTE_PERMISSIONS: Readonly<Record<string, string>> = {
   // The transport-asset vocabulary shares its matrix page (mirrors the backend
   // collection map); the legacy `master.reference.view` code stays accepted.
   '/master-data/asset-identity-types': 'master.transport_assets.view',
+  '/master-data/asset-identity-types/new': 'master.transport_assets.create',
   '/master-data/capacity-units': 'master.transport_assets.view',
+  '/master-data/capacity-units/new': 'master.transport_assets.create',
   '/master-data/party-roles': 'master.party_roles.view',
+  '/master-data/party-roles/new': 'master.party_roles.create',
   '/master-data/fee-types': 'master.fee_types.view',
   '/master-data/fee-types/new': 'master.fee_types.create',
   '/master-data/currencies': 'master.currencies.view',

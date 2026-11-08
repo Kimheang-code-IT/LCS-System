@@ -63,9 +63,13 @@ export function financeDomainStatus(value: unknown): FinancialDocumentStatus {
   return FINANCE_STATUS[String(value || '')] || 'DRAFT'
 }
 
-export function isQuotationImmutable(status: unknown) {
-  const value = quotationDomainStatus(status)
-  return value !== 'DRAFT'
+/**
+ * A quotation is a reusable CRUD reference: it stays editable whatever status a
+ * legacy workflow wrote into it. The vocabulary (Sent / Accepted / …) remains
+ * display-only for historical rows.
+ */
+export function isQuotationImmutable(_status: unknown) {
+  return false
 }
 
 export function isFinancePosted(status: unknown) {

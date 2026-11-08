@@ -1,4 +1,4 @@
-import type { AppConfigRepository, AppInfoRepository, BackupRepository } from '~/repositories/contracts/settings'
+import type { AppConfigRepository, AppInfoRepository, BackupRepository, StorageRepository } from '~/repositories/contracts/settings'
 import type {
   AttachmentRepository,
   AuditRepository,
@@ -10,7 +10,7 @@ import type {
   UiSchemaRepository,
   UserAdminRepository,
 } from '~/repositories/contracts/lcs'
-import { createHttpAppConfigRepository, createHttpAppInfoRepository, createHttpBackupRepository } from '~/repositories/http/settings'
+import { createHttpAppConfigRepository, createHttpAppInfoRepository, createHttpBackupRepository, createHttpStorageRepository } from '~/repositories/http/settings'
 import { createHttpComponentConfigRepository } from '~/repositories/http/component-config'
 import type { ComponentConfigRepository } from '~/repositories/contracts/component-config'
 import {
@@ -39,6 +39,7 @@ let initialized = false
 let appInfoRepo: AppInfoRepository
 let appConfigRepo: AppConfigRepository
 let backupRepo: BackupRepository
+let storageRepo: StorageRepository
 let quotationRepo: QuotationRepository
 let jobRepo: JobRepository
 let componentConfigRepo: ComponentConfigRepository
@@ -57,6 +58,7 @@ function ensureRepositories() {
   appInfoRepo = createHttpAppInfoRepository()
   appConfigRepo = createHttpAppConfigRepository()
   backupRepo = createHttpBackupRepository()
+  storageRepo = createHttpStorageRepository()
   quotationRepo = createHttpQuotationRepository()
   jobRepo = createHttpJobRepository()
   componentConfigRepo = createHttpComponentConfigRepository()
@@ -77,7 +79,7 @@ export function useArchiveRepository(): ArchiveRepository {
 
 export function useSettingsRepositories() {
   ensureRepositories()
-  return { appInfo: appInfoRepo!, appConfig: appConfigRepo!, backup: backupRepo! }
+  return { appInfo: appInfoRepo!, appConfig: appConfigRepo!, backup: backupRepo!, storage: storageRepo! }
 }
 
 export function useLcsRepositories() {

@@ -18,7 +18,7 @@ export interface ModuleListQuery {
 export interface ModuleRepository<T = FreightRecord> {
   list: (query?: ModuleListQuery) => Promise<LcsPaged<T>>
   get: (id: string) => Promise<T>
-  create: (input: Record<string, unknown>) => Promise<T>
+  create: (input: Record<string, unknown>, idempotencyKey?: string) => Promise<T>
   update: (id: string, input: Record<string, unknown>) => Promise<T>
   remove: (ids: string[]) => Promise<void>
   /** Legal status transitions for this collection, already permission-filtered. */

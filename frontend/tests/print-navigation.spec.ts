@@ -23,7 +23,7 @@ describe('invoice print navigation', () => {
 
   it('builds encoded detail paths and exposes the LCS logo fallback', () => {
     expect(documentDetailPath('/service-charges', 'SC 001')).toBe('/service-charges/SC%20001')
-    expect(DEFAULT_INVOICE_LOGO_URL).toBe('/lcs-invoice-logo.png')
+    expect(DEFAULT_INVOICE_LOGO_URL).toBe('/lcs-invoice-logo.jpg')
   })
 
   it('builds auto-print routes and detects auto-print query', () => {

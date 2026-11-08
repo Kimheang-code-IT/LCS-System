@@ -1,6 +1,6 @@
 ---
 name: nuxt-frontend
-description: Use when implementing or changing the LCS Nuxt 4 frontend: pages, Vue components, TypeScript composables, repository and API integration, Pinia stores, i18n, responsive layout, accessibility, and inline form validation.
+description: "Use when implementing or changing the LCS Nuxt 4 frontend: pages, Vue components, TypeScript composables, repository and API integration, Pinia stores, i18n, responsive layout, accessibility, and inline form validation."
 ---
 
 # Nuxt frontend
@@ -29,12 +29,12 @@ production and no mock data layer.
 
 | Document | Use it for |
 |---|---|
-| `AGENTS.md` §Frontend | Enforced conventions and the icon/i18n gotchas |
-| `docs/08_frontend_and_ui_design.md` | Intended page, component, and data-flow design |
+| `docs/03-development/coding-standards.md` (Frontend implementation rules) | Enforced conventions and the icon/i18n gotchas |
+| `docs/02-business/ui-ux-standards.md` | Intended page, component, and data-flow design |
 | `frontend/app/config/freight-modules.ts`, `lcs-reference-modules.ts` | The metadata-driven page definitions |
 | `frontend/app/utils/validation/` | The validation primitives |
 | `frontend/app/composables/common/useFormValidation.ts` | The shared form-error state machine |
-| `docs/10_testing_and_quality.md` §7-§8 | Current state and known gaps |
+| `docs/archive/testing-quality-history.md` §7-§8 | Current state and known gaps |
 
 ## Architecture
 
@@ -132,9 +132,9 @@ confirmed successes only.
 cd frontend
 pnpm lint
 pnpm typecheck
-pnpm test                                    # all specs
+pnpm test                                    # optional broad/release run
 pnpm vitest run tests/<file>.spec.ts         # one spec
-pnpm i18n:check
+pnpm i18n:check                              # locale changes only
 pnpm generate                                # only for build-affecting changes
 ```
 
@@ -144,15 +144,14 @@ error-mapping change without a spec is incomplete.
 
 ## Acceptance criteria
 
-- `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm i18n:check` all pass.
+- Scoped lint/typecheck and relevant behavior checks pass under `docs/03-development/testing-guide.md`; locale parity when copy changes. No automatic full suite.
 - Every API path the change introduces exists on the backend (contract test).
 - Validation errors render under the correct field; no validation failure is
   reported by a toast.
 - An invalid form cannot be submitted, and focus moves to the first invalid field,
   opening its tab or section first.
 - User input survives a failed submit.
-- Keyboard accessible: the summary is announced, its items are focusable, and
-  inputs receive focus.
+- Keyboard accessible: fieldless errors are announced and the first invalid field receives focus; do not duplicate field errors in the summary.
 - Copy exists in every locale.
 
 ## Expected outputs

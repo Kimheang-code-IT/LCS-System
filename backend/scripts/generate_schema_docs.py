@@ -1,4 +1,4 @@
-"""Generate ``docs/06_database_design.sql`` from the live SQLAlchemy models.
+"""Generate ``docs/01-architecture/database-design.sql`` from the live SQLAlchemy models.
 
 This is the single canonical schema reference for the project. It renders the
 PostgreSQL DDL, plus a description for every table and every column, two ways:
@@ -27,7 +27,7 @@ from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_ROOT.parent
-OUTPUT_PATH = REPO_ROOT / "docs" / "06_database_design.sql"
+OUTPUT_PATH = REPO_ROOT / "docs" / "01-architecture" / "database-design.sql"
 
 # The generator lives outside the package, so make both roots importable when it
 # is run as a plain script (`python scripts/generate_schema_docs.py`).
@@ -53,6 +53,7 @@ import app.modules.master_data.models  # noqa: E402, F401
 import app.modules.operations.models  # noqa: E402, F401
 import app.modules.quotations.models  # noqa: E402, F401
 import app.modules.settings.models  # noqa: E402, F401
+import app.modules.storage.models  # noqa: E402, F401
 import app.modules.telegram.models  # noqa: E402, F401
 from app.core.database import Base  # noqa: E402
 
@@ -96,7 +97,7 @@ PREAMBLE = """\
 -- descriptions. Applying the COMMENT ON section to an existing database refreshes
 -- the prose without touching data:
 --
---     psql -d "$DATABASE_URL" -f docs/06_database_design.sql
+--     psql -d "$DATABASE_URL" -f docs/01-architecture/database-design.sql
 --
 -- ---------------------------------------------------------------------------
 -- Conventions

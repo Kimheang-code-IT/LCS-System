@@ -13,6 +13,9 @@ export const TelegramEndpoints = {
 } as const
 
 export const ApiV1Endpoints = {
+  MAINTENANCE_STATUS: '/api/v1/maintenance/status',
+  MAINTENANCE: '/api/v1/settings/maintenance',
+  MAINTENANCE_DEPLOYMENT: '/api/v1/settings/maintenance/deployment',
   SETUP_STATUS: '/api/v1/auth/setup/status',
   SETUP_INITIALIZE: '/api/v1/auth/setup/initialize',
   LOGIN: '/api/v1/auth/login',
@@ -92,6 +95,7 @@ export const ApiV1Endpoints = {
   CHARGE_ISSUE: (id: number | string) => `/api/v1/service-charges/${id}/issue`,
   CHARGE_CREATE_INVOICE: (id: number | string) => `/api/v1/service-charges/${id}/create-finance-invoice`,
   FINANCIAL_DOCUMENTS: '/api/v1/financial-documents',
+  FINANCIAL_PRINT_DATA: (id: number | string) => `/api/v1/financial-documents/${id}/print-data`,
   RECORD_STATUS_POLICY: (collection: string) => `/api/v1/${collection}/status-policy`,
   RECORD_STATUS: (collection: string, id: number | string) => `/api/v1/${collection}/${id}/status`,
   FINANCIAL_POST: (id: number | string) => `/api/v1/financial-documents/${id}/post`,
@@ -100,6 +104,8 @@ export const ApiV1Endpoints = {
   JOURNALS: '/api/v1/journal-entries',
   JOURNAL_POST: (id: number | string) => `/api/v1/journal-entries/${id}/post`,
   PERIOD_CLOSE: (id: number | string) => `/api/v1/accounting-periods/${id}/close`,
+  PERIOD_CLOSING_VALIDATION: (id: number | string) => `/api/v1/accounting-periods/${id}/closing-validation`,
+  PERIOD_CLOSING_HISTORY: (id: number | string) => `/api/v1/accounting-periods/${id}/closing-history`,
   POSTING_RULES: '/api/v1/posting-rules',
   ATTACHMENTS_PRESIGN: '/api/v1/attachments/presign',
   ATTACHMENTS: '/api/v1/attachments',

@@ -55,10 +55,14 @@ describe('operations reports', () => {
       'customer',
       'quoted',
       'serviceCharges',
+      'draftRevenue',
       'postedRevenue',
       'postedCost',
       'grossProfit',
       'margin',
+      'uninvoicedCharges',
+      'baseCurrency',
+      'layersByCurrency',
     ])
   })
 
@@ -68,3 +72,5 @@ describe('operations reports', () => {
     expect(source).toContain('/quotations/${quotationId}')
   })
 })
+
+

@@ -11,12 +11,13 @@ const props = defineProps<{
   printUser: string
 }>()
 
-const { t } = useI18n()
-const { formatDate, formatMoney, formatNumber } = useAppLocalization()
+const { t: translate } = useI18n()
+const t = (key: string, params: Record<string, string> = {}) => translate(key, params, { locale: 'en' })
+const { formatDate, formatNumber } = useAppLocalization()
 
-const money = (value: number) => formatMoney(value, props.model.totals.currency)
-const qty = (value: number) => value ? formatNumber(value, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : ''
-const unitPrice = (value: number) => value ? formatNumber(value, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : ''
+const money = (value: number) => formatNumber(value, { minimumFractionDigits: props.model.precision ?? 2, maximumFractionDigits: props.model.precision ?? 2 })
+const qty = (value: number) => formatNumber(value, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+const unitPrice = (value: number) => formatNumber(value, { minimumFractionDigits: props.model.precision ?? 2, maximumFractionDigits: Math.max(4, props.model.precision ?? 2) })
 
 type Row = Record<string, string>
 
@@ -29,11 +30,11 @@ const rows = computed<Row[]>(() => {
     reference: line.reference || lineReference.value,
     description: line.description || '',
     quantity: qty(line.quantity),
-    unit: line.unit || 'CONT',
+    unit: line.unit || '',
     unitPrice: unitPrice(line.unitPrice),
     currency: props.model.totals.currency,
-    debit: line.debit ? money(line.debit) : '0.00',
-    credit: line.credit ? money(line.credit) : '0.00',
+    debit: money(line.debit),
+    credit: money(line.credit),
   }))
   lineRows.push({
     reference: '',
@@ -95,14 +96,13 @@ const documentMetaFields = computed(() => [
   { label: t('freight.print.fields.dcNoteNo'), value: printOrDash(props.model.document.number), strong: true },
   { label: t('freight.print.fields.billingDate'), value: props.model.document.issueDate ? formatDate(props.model.document.issueDate) : '' },
   { label: t('freight.print.fields.dueDate'), value: props.model.document.dueDate ? formatDate(props.model.document.dueDate) : '' },
-])
+].filter(row => row.value))
 
 const contactFields = computed(() => [
   { label: t('freight.print.fields.personInCharge'), value: props.model.document.personInCharge || props.model.party.contact || '' },
   { label: t('freight.print.fields.telNo'), value: props.model.party.phone || '' },
-  { label: t('freight.print.fields.faxNo'), value: '' },
   { label: t('freight.print.fields.email'), value: props.model.party.email || '' },
-])
+].filter(row => row.value))
 
 function formatDateIso(value: string): string {
   const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/)
@@ -116,26 +116,26 @@ const shipmentColLeft = computed(() => [
   { label: t('freight.print.fields.loadingPortShort'), value: printOrDash(props.model.shipment.loadingPort) },
   { label: t('freight.print.fields.dischargePortShort'), value: printOrDash(props.model.shipment.dischargePort) },
   { label: t('freight.print.fields.containerNo'), value: printOrDash(props.model.shipment.containerNo) },
-])
+].filter(row => row.value && row.value !== '-'))
 
 const shipmentColMiddle = computed(() => [
-  { label: t('freight.print.fields.etdShort'), value: props.model.shipment.etd ? formatDateIso(props.model.shipment.etd) : '-' },
-  { label: t('freight.print.fields.etaShort'), value: props.model.shipment.eta ? formatDateIso(props.model.shipment.eta) : '-' },
-  { label: t('freight.print.fields.vessel'), value: printOrDash(props.model.shipment.vessel) },
-  { label: t('freight.print.fields.containerShort'), value: containerLabel.value },
-])
+  { label: t('freight.print.fields.etdShort'), value: props.model.shipment.etd ? formatDateIso(props.model.shipment.etd) : '' },
+  { label: t('freight.print.fields.etaShort'), value: props.model.shipment.eta ? formatDateIso(props.model.shipment.eta) : '' },
+  { label: t('freight.print.fields.vessel'), value: props.model.shipment.vessel },
+  { label: t('freight.print.fields.containerShort'), value: containerLabel.value === '-' ? '' : containerLabel.value },
+].filter(row => row.value))
 
 const shipmentColRight = computed(() => [
   { label: t('freight.print.fields.invoiceDateShort'), value: props.model.document.issueDate ? formatDateIso(props.model.document.issueDate) : '-' },
   { label: t('freight.print.fields.package'), value: packageLabel.value },
   { label: t('freight.print.fields.voyage'), value: printOrDash(props.model.shipment.voyage) },
-])
+].filter(row => row.value && row.value !== '-'))
 
 const partyBottomRow = computed(() => [
   { label: t('freight.print.fields.shipper'), value: printOrDash(props.model.shipment.shipper) },
   { label: t('freight.print.fields.consignee'), value: printOrDash(props.model.shipment.consignee) },
   { label: t('freight.print.fields.notifyPartyShort'), value: printOrDash(props.model.shipment.notifyParty) },
-])
+].filter(row => row.value && row.value !== '-'))
 
 </script>
 
@@ -186,14 +186,9 @@ const partyBottomRow = computed(() => [
     <section class="dcn-partner-grid">
       <div class="dcn-partner-left">
         <PrintMetaGrid variant="dcn" :items="partnerFields" />
-        <div class="dcn-contact-row">
-          <span>{{ t('freight.print.fields.personInCharge') }} :</span>
-          <span>{{ t('freight.print.fields.telNo') }} :</span>
-          <span>{{ t('freight.print.fields.faxNo') }} :</span>
-        </div>
       </div>
 
-      <PrintMetaGrid variant="dcn-side" :items="contactFields" />
+      <PrintMetaGrid v-if="contactFields.length" variant="dcn-side" :items="contactFields" />
     </section>
 
     <section class="dcn-shipment-grid">
@@ -208,7 +203,7 @@ const partyBottomRow = computed(() => [
       </div>
     </section>
 
-    <section class="dcn-party-grid">
+    <section v-if="partyBottomRow.length" class="dcn-party-grid">
       <PrintMetaGrid
         v-for="item in partyBottomRow"
         :key="`party-${item.label}`"
@@ -218,6 +213,7 @@ const partyBottomRow = computed(() => [
     </section>
 
     <PrintLinesTable :columns="columns" :rows="rows" />
+    <p v-if="model.isContainerBreakdown" class="mt-2 text-[10px]">{{ t('freight.print.containerBreakdown', { number: model.document.number, container: model.shipment.containerNo }) }}</p>
 
     <section class="mt-2 space-y-1">
       <div class="flex items-baseline justify-end gap-2 text-[11px] font-semibold text-gray-900">
@@ -253,17 +249,10 @@ const partyBottomRow = computed(() => [
   </div>
 </template>
 
-<style>
-@page debitNote {
-  size: A4 portrait;
-  margin: 10mm 10mm 12mm;
-}
-</style>
-
 <style scoped>
 .print-paper {
-  page: debitNote;
   color: #111827;
+  font-family: Arial, "Noto Sans Khmer", "Noto Sans SC", sans-serif;
 }
 
 .dcn-header {

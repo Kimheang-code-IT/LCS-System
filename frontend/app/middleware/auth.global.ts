@@ -1,4 +1,6 @@
 import { useSetup } from '~/composables/auth/useSetup'
+import { useMaintenanceRepository } from '~/repositories/http/maintenance'
+import { maintenanceRecoveryPath } from '~/utils/auth/maintenance'
 import { firstPermittedPagePath, pagePermissionCandidatesForPath } from '~/utils/freight/page-access'
 import { normalizeRoutePath, safeInternalPath, sessionHasPermissionData } from '~/utils/auth/session'
 
@@ -19,6 +21,13 @@ const FORCED_PASSWORD_PATH = '/auth/change-password'
 
 export default defineNuxtRouteMiddleware(async (to, from) => {
   const auth = useAuthStore()
+  if (to.path === '/maintenance') return
+  let maintenanceActive = false
+  if (import.meta.client) {
+    try { maintenanceActive = (await useMaintenanceRepository().status()).active }
+    catch { maintenanceActive = true }
+    if (maintenanceActive && !maintenanceRecoveryPath(to.path)) return navigateTo('/maintenance', { replace: true })
+  }
   if (import.meta.client) {
     auth.hydrateClient()
     await auth.restoreSession()
@@ -67,7 +76,7 @@ export default defineNuxtRouteMiddleware(async (to, from) => {
     }, { replace: true })
   }
 
-  if (auth.isLoggedIn && isPublicPage) {
+  if (auth.isLoggedIn && isPublicPage && !maintenanceActive) {
     return navigateTo(safeInternalPath(to.query.redirect) || '/', { replace: true })
   }
 

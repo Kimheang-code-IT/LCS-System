@@ -87,6 +87,7 @@ export const REMOTE_ENDPOINTS: Record<string, RemoteEndpoint> = {
   accountingPeriods: {
     path: '/api/v1/accounting-periods',
     itemPath: id => `/api/v1/accounting-periods/${id}`,
+    bulkDelete: true,
     readOnly: false,
   },
   documentSequences: { path: '/api/v1/document-sequences', upsertViaPost: true },

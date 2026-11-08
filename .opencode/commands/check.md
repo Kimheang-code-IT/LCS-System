@@ -1,18 +1,15 @@
 ---
-description: Run the lint and type checks that apply to the changed files
+description: Run scoped lint/type checks for task-owned changed code
 ---
 
-Check only the stack that changed, then report failures without fixing unrelated ones.
-If the diff and untracked files match none of the paths below, report `no changed stack`
-and stop.
+Identify the current task-owned delta using status/diff, untracked files and timestamps;
+exclude unrelated preexisting work. Read docs/03-development/testing-guide.md for risk.
 
-1. Backend changed (`backend/**`): from `backend/` run `uv run ruff check .`.
-2. Frontend changed (`frontend/**`): from `frontend/` run `pnpm lint`, then `pnpm typecheck`.
-3. Locale bundles changed (`frontend/i18n/locales/**`): from `frontend/` run `pnpm i18n:check`.
-4. Model or `schema_descriptions.py` changed: from `backend/` run
-   `uv run python scripts/generate_schema_docs.py --check --strict`.
-5. Docs changed: apply the `/docs-check` checklist (`.opencode/commands/docs-check.md`)
-   for status, permissions, architecture, deploy and dead references.
+- Documentation/instructions only: structural checks via /docs-check; no runtime gates.
+- Backend code: from backend/ run uv run --no-sync ruff check <changed paths>.
+- Frontend code: from frontend/ run pnpm exec eslint <changed files>; pnpm typecheck when
+  types/components/contracts can be affected. Locale changes add pnpm i18n:check.
+- Schema changes alone add the existing generated-schema check from backend/.
 
-Report a one-line verdict per gate and the exact failing lines. Do not run the frontend
-production build here — that is `/build-fast`.
+Commands are selectors, not literal angle-bracket paths. Report exact commands/results and
+unverified checks. No build/full suite or unrelated fix.

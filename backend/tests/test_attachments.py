@@ -11,9 +11,82 @@ from datetime import date
 
 import pytest
 
+from app.core.exceptions import ValidationFailed
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
+
+
+class _InMemoryProvider:
+    """Stands in for the configured cloud provider (no network in tests)."""
+
+    tag = "r2"
+    supports_presign = False
+
+    def __init__(self) -> None:
+        self._objects: dict[str, tuple[bytes, str]] = {}
+
+    def put(self, key: str, data: bytes, content_type: str, file_name: str = "") -> str:
+        self._objects[key] = (data, content_type)
+        return key
+
+    def get(self, key: str) -> tuple[bytes, str]:
+        return self._objects[key]
+
+    def delete(self, key: str) -> None:
+        self._objects.pop(key, None)
+
+    def exists(self, key: str) -> bool:
+        return key in self._objects
+
+    def size(self, key: str) -> int | None:
+        return len(self._objects[key][0]) if key in self._objects else None
+
+    def checksum(self, key: str) -> str | None:
+        return None
+
+    def presigned_get(self, key: str, expires: int = 300) -> str | None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _fake_storage_provider(monkeypatch):
+    """Resolve uploads to an in-memory provider: no MinIO, no cloud call."""
+    from app.modules.storage import service as storage_service
+
+    provider = _InMemoryProvider()
+
+    async def fake_resolve(session):  # noqa: ANN001, ANN202
+        return provider, provider.tag
+
+    async def fake_build(session, tag):  # noqa: ANN001, ARG001
+        return provider
+
+    monkeypatch.setattr(storage_service, "resolve_upload_target", fake_resolve)
+    monkeypatch.setattr(storage_service, "build_provider", fake_build)
+    return provider
+
+
+async def test_upload_refused_without_configured_provider(client, monkeypatch):
+    """No MinIO/env fallback: uploads require an activated provider."""
+    from app.modules.storage import service as storage_service
+
+    async def unconfigured(session):  # noqa: ANN001, ANN202
+        raise ValidationFailed(
+            "File storage is not set up. Configure Cloudflare R2 or Google Drive in Settings → Storage & Backup first.",
+            {"storage": "No provider configured."},
+        )
+
+    monkeypatch.setattr(storage_service, "resolve_upload_target", unconfigured)
+    headers = await login(client)
+    response = await client.post(
+        "/api/v1/attachments/upload",
+        headers=headers,
+        files={"file": ("document.png", _PNG, "image/png")},
+    )
+    assert response.status_code == 422
+    assert "File storage is not set up" in response.json()["message"]
+
 
 # A minimal, valid PNG (1x1). The upload path validates the content signature, so a
 # placeholder byte string would be rejected before it reached storage.

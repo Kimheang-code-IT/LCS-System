@@ -13,7 +13,7 @@ from datetime import date
 
 import pytest
 
-from tests.conftest import login
+from tests.conftest import login, seed_service_order
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,14 +29,7 @@ async def _first(client, headers, path: str) -> dict:
 
 
 async def _service_order(client, headers) -> dict:
-    party = await _first(client, headers, "/api/v1/businessParties")
-    response = await client.post(
-        "/api/v1/service-orders",
-        headers=headers,
-        json={"customerPartyId": party["id"], "direction": "Import", "currency": "USD"},
-    )
-    assert response.status_code == 201, response.text
-    return response.json()["data"]
+    return await seed_service_order(client, headers)
 
 
 # --- Operations --------------------------------------------------------------

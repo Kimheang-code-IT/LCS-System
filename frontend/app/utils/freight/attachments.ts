@@ -104,10 +104,16 @@ function cacheKeyFor(row: Record<string, unknown>): string | null {
 
 /**
  * Object URL or http(s) URL for a native browser-tab preview. Returns null when
- * the row has no persisted URL and no real uploaded file content — previews are
- * never fabricated.
+ * the row has neither a persisted storage key nor real uploaded file content —
+ * previews are never fabricated. A persisted storage key links through the
+ * controlled download endpoint (same-origin, `attachment.read` enforced there),
+ * which never expires the way a presigned URL does.
  */
 export function filePreviewHref(row: Record<string, unknown>): string | null {
+  const storageKey = String(row.storageKey || '').trim()
+  if (storageKey && !storageKey.startsWith('blob:')) {
+    return safeFilePreviewUrl(`/api/v1/attachments/file/${storageKey}`)
+  }
   const persisted = safeExternalUrl(row.url || row.fileUrl || row.href)
   if (persisted) return persisted
   const storedPreview = safeFilePreviewUrl(row.previewUrl)
@@ -189,7 +195,8 @@ export function useFileAttachments(options: {
       uploadDate: String(meta.uploadedAt || uploadedAt).slice(0, 10),
       mimeType: String(meta.mimeType || mimeFromFileName(file.name, file.type)),
       fileSize: Number(meta.sizeBytes || file.size),
-      url: meta.url,
+      // The presigned URL expires in minutes; only the stable storage key
+      // round-trips. Reloaded rows preview through the download endpoint.
       storageKey: meta.storageKey,
       note: String(meta.note || ''),
       previewKey,

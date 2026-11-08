@@ -27,7 +27,7 @@ async def _admin_credential(session_factory) -> tuple[int, UserCredential]:
 async def test_maintenance_blocks_ordinary_access_but_keeps_admin_recovery(client):
     admin = await login(client)
     sales = await login(client, "sales")
-    enabled = await client.patch(CONFIG, headers=admin, json={"system": {"maintenanceMode": True}})
+    enabled = await client.put("/api/v1/settings/maintenance", headers=admin, json={"enabled": True, "reason": "Test maintenance", "revision": 0, "confirm": "MAINTENANCE"})
     assert enabled.status_code == 200, enabled.text
 
     blocked = await client.get("/api/v1/quotations", headers=admin)
@@ -37,7 +37,9 @@ async def test_maintenance_blocks_ordinary_access_but_keeps_admin_recovery(clien
 
     # Recovery: an administrator can still read and change settings.
     assert (await client.get(CONFIG, headers=admin)).status_code == 200
-    disabled = await client.patch(CONFIG, headers=admin, json={"system": {"maintenanceMode": False}})
+    verified = await client.post("/api/v1/settings/maintenance/deployment", headers=admin, json={"revision": enabled.json()["data"]["revision"], "status": "verified", "reason": "Verified recovery", "backupReference": "isolated-test-backup", "checks": ["drained", "backup", "migrations", "database", "backend", "authentication", "workflows", "jobs"]})
+    assert verified.status_code == 200, verified.text
+    disabled = await client.put("/api/v1/settings/maintenance", headers=admin, json={"enabled": False, "reason": "Verified recovery", "revision": verified.json()["data"]["revision"], "confirm": "REOPEN"})
     assert disabled.status_code == 200, disabled.text
     assert (await client.get("/api/v1/quotations", headers=admin)).status_code == 200
 

@@ -156,7 +156,8 @@ async def test_editing_an_issued_revision_opens_a_new_one_and_preserves_the_orig
     assert by_no[max(by_no)]["rawStatus"] == "DRAFT"
 
 
-async def test_a_converted_revision_cannot_be_converted_twice(client):
+async def test_one_quotation_creates_many_service_orders(client):
+    """A quotation is a reusable reference: converting again makes another order."""
     headers = await login(client)
     created = await _quotation(client, headers, 900)
     revision_id = created["revisionId"]
@@ -167,8 +168,8 @@ async def test_a_converted_revision_cannot_be_converted_twice(client):
     assert first.json()["data"]["serviceOrderId"]
 
     second = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
-    assert second.status_code == 409, second.text
-    assert second.json()["code"] == "DUPLICATE_CONVERSION"
+    assert second.status_code == 201, second.text
+    assert second.json()["data"]["serviceOrderId"] != first.json()["data"]["serviceOrderId"]
 
 
 async def test_concurrent_revision_requests_allocate_distinct_revision_numbers(client):

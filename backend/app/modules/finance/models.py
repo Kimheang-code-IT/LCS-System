@@ -56,6 +56,10 @@ class AccountingPeriod(PKMixin, TimestampMixin, Base):
     __tablename__ = "accounting_periods"
     __table_args__ = (UniqueConstraint("period_year", "period_month", name="uq_periods_year_month"),)
 
+    #: Custom display name. NULL on generated months, which fall back to the
+    #: derived "YYYY-MM" label so existing payloads keep their shape.
+    name: Mapped[str | None] = mapped_column(String(120))
+    description: Mapped[str | None] = mapped_column(String(2_000))
     period_year: Mapped[int] = mapped_column(Integer, nullable=False)
     period_month: Mapped[int] = mapped_column(Integer, nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -143,12 +147,25 @@ class FinancialDocumentLine(PKMixin, Base):
 
 class FinancialDocumentSource(PKMixin, Base):
     __tablename__ = "financial_document_sources"
-    __table_args__ = (UniqueConstraint("financial_document_id", "source_type", "source_id", "relationship_type", name="uq_fin_doc_sources"),)
+    __table_args__ = (
+        UniqueConstraint("financial_document_id", "source_type", "source_id", "relationship_type", name="uq_fin_doc_sources"),
+        # Bill-once: one financial document per service charge, ever — the order-level
+        # invoice path also treats any existing source row as "already invoiced".
+        Index(
+            "uq_fin_doc_source_charge",
+            "source_type",
+            "source_id",
+            unique=True,
+            postgresql_where=text("source_type = 'SERVICE_ORDER_CHARGE'"),
+            sqlite_where=text("source_type = 'SERVICE_ORDER_CHARGE'"),
+        ),
+    )
 
     financial_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("financial_documents.id", ondelete="CASCADE"), nullable=False, index=True)
     source_type: Mapped[str] = mapped_column(String(64), nullable=False)
     source_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(32), nullable=False, default="GENERATED_FROM")
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 

@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from app.modules.audit.models import AuditEvent
 from app.modules.master_data.status_policy import STATUS_POLICIES
-from tests.conftest import login
+from tests.conftest import login, seed_service_order
 
 pytestmark = pytest.mark.asyncio
 
@@ -244,7 +244,7 @@ async def test_a_closed_period_blocks_posting_and_reopening_restores_it(client):
     assert refused.status_code == 409, refused.text
     assert refused.json()["code"] == "PERIOD_CLOSED"
 
-    reopened = await _change_status(client, headers, "accountingPeriods", period["id"], "OPEN")
+    reopened = await _change_status(client, headers, "accountingPeriods", period["id"], "OPEN", reason="correction needed")
     assert reopened.status_code == 200, reopened.text
     assert str(reopened.json()["data"]["status"]).upper() == "OPEN"
     # Reopening stores OPEN and clears the closure stamp, so the period no
@@ -254,6 +254,52 @@ async def test_a_closed_period_blocks_posting_and_reopening_restores_it(client):
     accepted = await client.post(f"/api/v1/financial-documents/{blocked['id']}/post", headers=headers, json={})
     assert accepted.status_code == 200, accepted.text
     assert str(accepted.json()["data"]["status"]).upper() == "POSTED"
+
+
+async def test_generate_periods_creates_a_year_and_refills_without_duplicates(client):
+    """Generate fills a fiscal year idempotently: calendar months, leap years safe."""
+    headers = await login(client)
+
+    # Seed/posting tests may already have created some 2026 months: generation
+    # fills exactly the missing ones.
+    before = await client.get("/api/v1/accounting-periods", headers=headers, params={"page_size": 200})
+    existing_2026 = len([row for row in _rows(before) if row["year"] == 2026])
+
+    created = await client.post("/api/v1/accounting-periods/generate", headers=headers, json={"year": 2026})
+    assert created.status_code == 201, created.text
+    body = created.json()["data"]
+    assert body["skipped"] == existing_2026, body
+    assert body["created"] + body["skipped"] == 12, body
+    january = next(row for row in body["periods"] if row["month"] == 1)
+    assert january["startDate"] == "2026-01-01" and january["endDate"] == "2026-01-31"
+    december = next(row for row in body["periods"] if row["month"] == 12)
+    assert december["endDate"] == "2026-12-31"
+    february = next(row for row in body["periods"] if row["month"] == 2)
+    assert february["startDate"] == "2026-02-01" and february["endDate"] == "2026-02-28"
+    assert all(row["status"] == "OPEN" for row in body["periods"])
+
+    leap = await client.post("/api/v1/accounting-periods/generate", headers=headers, json={"year": 2028})
+    leap_february = next(row for row in leap.json()["data"]["periods"] if row["month"] == 2)
+    assert leap_february["endDate"] == "2028-02-29", leap_february
+
+    # Re-running the same year is a refill: nothing duplicated, nothing touched.
+    again = await client.post("/api/v1/accounting-periods/generate", headers=headers, json={"year": 2026})
+    rerun = again.json()["data"]
+    assert rerun["created"] == 0 and rerun["skipped"] == 12
+
+    listing = await client.get("/api/v1/accounting-periods", headers=headers, params={"page_size": 200})
+    for year in (2026, 2028):
+        assert len([row for row in _rows(listing) if row["year"] == year]) == 12
+
+    invalid = await client.post("/api/v1/accounting-periods/generate", headers=headers, json={"year": "abc"})
+    assert invalid.status_code == 422, invalid.text
+    assert "year" in invalid.json()["field_errors"]
+
+
+async def test_generation_needs_the_period_management_permission(client):
+    headers = await login(client, "ops.pp")
+    refused = await client.post("/api/v1/accounting-periods/generate", headers=headers, json={"year": 2026})
+    assert refused.status_code == 403, refused.text
 
 
 async def test_a_user_cannot_deactivate_the_protected_administrator(client):
@@ -280,13 +326,8 @@ async def test_a_document_sequence_can_be_deactivated(client):
 
 async def test_a_service_order_finish_is_audited(client, session_factory):
     headers = await login(client)
-    created = await client.post(
-        "/api/v1/service-orders",
-        headers=headers,
-        json={"customer": "Status Test Customer", "direction": "Import", "currency": "USD"},
-    )
-    assert created.status_code == 201, created.text
-    order_id = created.json()["data"]["id"]
+    created = await seed_service_order(client, headers)
+    order_id = created["id"]
 
     finished = await client.post(f"/api/v1/service-orders/{order_id}/finish", headers=headers, json={})
     assert finished.status_code == 200, finished.text
@@ -360,14 +401,19 @@ async def test_a_quotation_send_is_audited(client, session_factory):
 
 
 async def test_the_status_policy_of_a_workflow_collection_never_offers_a_plain_write(client):
-    """The accounting statuses are reachable only through their engines."""
+    """The accounting statuses are reachable only through their engines.
+
+    The period engine in the shared status service owns two transitions: the
+    audited reopen of closed books and the plain open of a planned (DRAFT)
+    range. Nothing else may bypass a workflow endpoint with a status write.
+    """
     headers = await login(client)
     for collection in ("journals", "jobCharges", "debitNotes", "accountingPeriods", "quotations"):
         policy = await _policy(client, headers, collection)
         for status, transitions in policy["transitions"].items():
             for transition in transitions:
                 if transition["kind"] == "status":
-                    assert collection == "accountingPeriods" and transition["action"] == "reopen", (
+                    assert collection == "accountingPeriods" and transition["action"] in {"open", "reopen"}, (
                         f"{collection}:{status} must not be writable by a plain status change"
                     )
 

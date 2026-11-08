@@ -31,9 +31,11 @@ describe('page access', () => {
   it('maps party roles, asset identity types and capacity units explicitly', () => {
     expect(requiredPagePermissionForPath('/master-data/party-roles')).toBe('master.party_roles.view')
     expect(requiredPagePermissionForPath('/master-data/party-roles/7')).toBe('master.party_roles.view')
+    expect(requiredPagePermissionForPath('/master-data/party-roles/new')).toBe('master.party_roles.create')
     expect(requiredPagePermissionForPath('/master-data/asset-identity-types')).toBe('master.transport_assets.view')
-    expect(requiredPagePermissionForPath('/master-data/asset-identity-types/new')).toBe('master.transport_assets.view')
+    expect(requiredPagePermissionForPath('/master-data/asset-identity-types/new')).toBe('master.transport_assets.create')
     expect(requiredPagePermissionForPath('/master-data/capacity-units')).toBe('master.transport_assets.view')
+    expect(requiredPagePermissionForPath('/master-data/capacity-units/new')).toBe('master.transport_assets.create')
     expect(requiredPagePermissionForPath('/master-data/capacity-units/3')).toBe('master.transport_assets.view')
     // The transport-asset vocabulary and party roles keep the legacy coarse
     // code alongside their screen code, mirroring the backend collection guard.

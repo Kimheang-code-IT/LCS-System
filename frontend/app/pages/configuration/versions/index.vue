@@ -132,6 +132,20 @@ function openNew() {
   return navigateTo('/configuration/versions/new')
 }
 
+/** The full five-sheet snapshot workbook for one stored version. */
+async function exportVersionWorkbook(version: ConfigurationVersion) {
+  const excelIo = useExcelIo()
+  try {
+    await excelIo.exportRows('configurationVersions', [version.id], { format: 'xlsx' })
+    toast.add({ title: t('lcs.exportDialog.completed'), color: 'success' })
+    pageErrors.value = []
+  }
+  catch (error) {
+    // Inline failure message: toasts are reserved for transport failures.
+    pageErrors.value = [apiErrorMessage(error, t('freight.ui.saveFailed'))]
+  }
+}
+
 async function publish(version: ConfigurationVersion) {
   const accepted = await confirm({
     kind: 'generic',
@@ -182,6 +196,11 @@ async function remove(version: ConfigurationVersion) {
 function actionItems(version: ConfigurationVersion): DropdownMenuItem[][] {
   const items: DropdownMenuItem[] = [
     { label: 'View', icon: 'i-lucide-eye', onSelect: () => void openVersion(version) },
+    {
+      label: t('freight.excel.exportWorkbook'),
+      icon: 'i-lucide-download',
+      onSelect: () => void exportVersionWorkbook(version),
+    },
   ]
   const editable = version.status === 'DRAFT'
   if (editable && canManage.value) {
@@ -322,6 +341,11 @@ onMounted(refreshAll)
           icon="i-lucide-upload-cloud"
           label="Publish live configuration"
           @click="openNew()"
+        />
+        <ExcelConfigPageIo
+          collection="configurationVersions"
+          :statuses="statusItems"
+          @imported="refreshAll"
         />
       </template>
     </LayoutAppHeaderPageActions>

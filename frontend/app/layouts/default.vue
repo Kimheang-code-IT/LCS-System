@@ -78,6 +78,7 @@ const {
         <LayoutAppHeader />
       </template>
       <template #body>
+        <LayoutMaintenanceNotice />
         <div class="dashboard-page-slot flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <NuxtPage :page-key="page => page.fullPath" />
         </div>

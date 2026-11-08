@@ -179,7 +179,12 @@ async function moveAttribute(index: number, direction: -1 | 1) {
       create-label="Add group"
       @create="startAdd"
       @refresh="refresh"
-    />
+    >
+      <ExcelConfigPageIo
+        collection="componentGroups"
+        @imported="refresh"
+      />
+    </LayoutAppHeaderPageActions>
 
     <div class="grid gap-4 lg:grid-cols-[280px_1fr]">
       <aside class="rounded-lg border border-default bg-default p-2">

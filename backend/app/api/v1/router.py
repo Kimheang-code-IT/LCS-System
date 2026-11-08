@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.modules.archive.router import router as archive_router
 from app.modules.audit.router import router as audit_router
@@ -13,10 +13,12 @@ from app.modules.master_data.status_router import router as status_router
 from app.modules.operations.router import router as operations_router
 from app.modules.quotations.router import router as quotations_router
 from app.modules.reports.router import router as reports_router
+from app.modules.settings.maintenance import admission
 from app.modules.settings.router import router as settings_router
+from app.modules.storage.router import router as storage_router
 from app.modules.telegram.router import router as telegram_router
 
-api_router = APIRouter()
+api_router = APIRouter(dependencies=[Depends(admission)])
 # Registered first so `GET /{collection}/status-policy` is matched before the
 # generic `GET /{collection}/{item_id}` routes of the data modules.
 api_router.include_router(status_router, tags=["status"])
@@ -27,6 +29,7 @@ api_router.include_router(finance_router, tags=["finance"])
 api_router.include_router(reports_router, tags=["reports"])
 api_router.include_router(master_data_router, tags=["master-data"])
 api_router.include_router(settings_router, tags=["settings"])
+api_router.include_router(storage_router, tags=["storage"])
 api_router.include_router(telegram_router, tags=["telegram"])
 api_router.include_router(backup_router, tags=["backup"])
 api_router.include_router(excel_io_router, tags=["excel-io"])

@@ -99,6 +99,9 @@ export function createHttpServiceChargeRepository(): ServiceChargeRepository {
 export function createHttpFinanceRepository(): FinanceRepository {
   const api = useApi()
   return {
+    getPrintData: async (id, template, containerId) => unwrapApiData(await api.get<ApiResponse<import('~/utils/freight/financial-print').FinancialPrintData>>(
+      ApiV1Endpoints.FINANCIAL_PRINT_DATA(id), { query: { template, ...(containerId ? { containerId } : {}) }, suppressErrorToast: true },
+    )),
     listDocuments: async query => asPaged(unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.FINANCIAL_DOCUMENTS, { query }))),
     getDocument: async id => unwrapApiData(await api.get<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.FINANCIAL_DOCUMENTS}/${id}`)),
     createDocument: async input =>
@@ -121,6 +124,18 @@ export function createHttpFinanceRepository(): FinanceRepository {
     listPeriods: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>('/api/v1/accounting-periods')),
     closePeriod: async (periodId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.PERIOD_CLOSE(periodId), {}, withIdempotency(key))),
+    reopenPeriod: async (periodId, reason, key) =>
+      unwrapApiData(
+        await api.post<ApiResponse<FreightRecord>>(
+          ApiV1Endpoints.RECORD_STATUS('accountingPeriods', periodId),
+          { status: 'OPEN', reason },
+          withIdempotency(key),
+        ),
+      ),
+    closingValidation: async periodId =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.PERIOD_CLOSING_VALIDATION(periodId), {})),
+    closingHistory: async periodId =>
+      unwrapApiData(await api.get<ApiResponse<FreightRecord>>(ApiV1Endpoints.PERIOD_CLOSING_HISTORY(periodId))),
   }
 }
 

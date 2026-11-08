@@ -40,8 +40,79 @@ async def _presign(client, headers, file_name: str):
     )
 
 
-async def test_a_disabled_extension_is_refused(client):
+class FakeR2:
+    """R2-shaped provider with no network: signed URLs are synthetic strings."""
+
+    tag = "r2"
+    provider = "r2"
+    supports_presign = True
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def presigned_put(self, key, content_type, expires=3600):
+        return f"https://r2.example/upload/{key}"
+
+    def presigned_get(self, key, expires=300):
+        return f"https://r2.example/download/{key}"
+
+    def put(self, key, data, content_type="application/octet-stream", file_name=""):
+        self.objects[key] = data
+        return key
+
+    def get(self, key):
+        if key not in self.objects:
+            raise LookupError(key)
+        return self.objects[key], "application/octet-stream"
+
+    def exists(self, key):
+        return key in self.objects
+
+    def delete(self, key):
+        self.objects.pop(key, None)
+
+    def test_connection(self):
+        return None
+
+
+async def _use_r2_storage(client, headers, monkeypatch, session_factory) -> None:
+    """Only R2 / Google Drive may hold files now: give these tests a correctly
+    configured R2 primary and mock the provider client so no network is touched.
+    The unconfigured-storage 422 keeps its own dedicated test elsewhere.
+    (Storage settings live to the side of the app-config write schema, so the
+    fixture seeds the setting row the way the real module writes it.)"""
+    from app.modules.settings.models import AppSetting
+    from app.modules.storage import service as storage_service
+
+    async with session_factory() as session:
+        row = await session.get(AppSetting, "storage")
+        stored = {
+            "primaryProvider": "r2",
+            "providers": {"r2": {
+                "accountId": "acct",
+                "bucketName": "attachments",
+                "bucket": "attachments",
+                "accessKeyId": "key",
+                "secretAccessKey": "secret",
+                "endpoint": "https://acct.r2.cloudflarestorage.com",
+            }},
+        }
+        if row is None:
+            session.add(AppSetting(setting_key="storage", setting_group="storage", setting_value=stored))
+        else:
+            row.setting_value = stored
+        await session.commit()
+    instance = FakeR2()
+
+    async def fake_build_provider(session, tag):
+        return instance
+
+    monkeypatch.setattr(storage_service, "build_provider", fake_build_provider)
+
+
+async def test_a_disabled_extension_is_refused(client, monkeypatch, session_factory):
     headers = await login(client)
+    await _use_r2_storage(client, headers, monkeypatch, session_factory)
     assert (await _presign(client, headers, "notes.csv")).status_code == 200
 
     await _set_extensions(client, headers, ["png", "jpg", "pdf"])
@@ -63,17 +134,19 @@ async def test_the_stored_list_cannot_widen_the_environment_list(client):
     assert refused.status_code == 422, refused.text
 
 
-async def test_an_empty_stored_list_falls_back_to_the_environment(client):
+async def test_an_empty_stored_list_falls_back_to_the_environment(client, monkeypatch, session_factory):
     """Clearing the field is ambiguous; refusing every upload would be worse."""
     headers = await login(client)
+    await _use_r2_storage(client, headers, monkeypatch, session_factory)
     await _set_extensions(client, headers, [])
 
     assert (await _presign(client, headers, "document.pdf")).status_code == 200
 
 
-async def test_a_disabled_extension_is_refused_on_upload_not_just_presign(client):
+async def test_a_disabled_extension_is_refused_on_upload_not_just_presign(client, monkeypatch, session_factory):
     """Presign is advisory; the upload is the authoritative check."""
     headers = await login(client)
+    await _use_r2_storage(client, headers, monkeypatch, session_factory)
     await _set_extensions(client, headers, ["png"])
 
     refused = await client.post(

@@ -157,7 +157,9 @@ async def test_master_data_list_cache_hit_and_invalidation(client, fake_redis, e
         cached = await client.get("/api/v1/placeRoles", headers=headers)
     assert cached.status_code == 200
     assert cached.json() == response.json()
-    assert second.count <= 1, "cached list response must not query the database"
+    # Cached list response: only the per-request user lookup and the
+    # maintenance-admission read may query the database.
+    assert second.count <= 2, "cached list response must not query the database"
 
     created = await client.post(
         "/api/v1/placeRoles",
@@ -212,7 +214,9 @@ async def test_dashboard_cache_hit_and_bump(client, fake_redis, engine):
     assert cached.status_code == 200
     assert cached.json()["data"] == response.json()["data"]
     # Only the per-request user lookup should hit the database.
-    assert second.count <= 1, f"dashboard cache miss: {second.count} queries"
+    # Only the per-request user lookup and the maintenance-admission read may
+    # hit the database; the dashboard payload itself must come from the cache.
+    assert second.count <= 2, f"dashboard cache miss: {second.count} queries: {second.statements}"
 
     await cache.bump("reports")
     with QueryCounter(engine) as third:

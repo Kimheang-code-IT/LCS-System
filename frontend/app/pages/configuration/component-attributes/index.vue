@@ -445,7 +445,12 @@ function rowInlineActions(row: AttributeRow) {
       :refreshing="config.loading.value"
       @create="startAdd"
       @refresh="refresh"
-    />
+    >
+      <ExcelConfigPageIo
+        collection="componentAttributes"
+        @imported="refresh"
+      />
+    </LayoutAppHeaderPageActions>
 
     <CommonAppFormErrorSummary class="mb-2" :form-errors="formErrors" />
 

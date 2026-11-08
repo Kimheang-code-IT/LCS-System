@@ -5,7 +5,7 @@ __pycache__/
 venv/
 .pytest_cache/
 .ruff_cache/
-storage/
+/storage/
 .env
 *.egg-info/
 build/

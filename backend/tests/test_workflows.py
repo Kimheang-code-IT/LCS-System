@@ -120,7 +120,8 @@ async def test_quotation_lifecycle_and_conversion(client):
     assert listed_order["quotationId"] == quotation["id"], "the list links to the real quotation record"
 
     second = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
-    assert second.status_code == 409
+    assert second.status_code == 201
+    assert second.json()["data"]["serviceOrderId"] != service_order_id
 
     return service_order_id
 
@@ -202,13 +203,13 @@ async def test_conversion_prepares_pending_actual_containers(client):
     assert blocked.json()["code"] == "CONTAINER_IN_USE"
 
 
-async def test_actual_containers_are_user_added_not_line_derived(client, session_factory):
-    """Rows are physical containers typed by number, never inferred from lines.
+async def test_actual_containers_are_numbered_and_unique_per_order(client, session_factory):
+    """Row numbers are typed by the operator, uniqueness is enforced, edits stick.
 
-    A quotation's pricing-line container types and billing quantities, and its
-    fee lines, must not create actual-container rows: conversion leaves the
-    table empty and the operator adds each box. Numbers are unique after case
-    normalisation, and the same type may repeat with distinct numbers.
+    Lines without a Container Type never derive boxes, so conversion leaves the
+    table empty here and the operator adds each physical container. Numbers are
+    unique after case normalisation, and the same type may repeat with distinct
+    numbers.
     """
 
     async with session_factory() as session:
@@ -229,8 +230,9 @@ async def test_actual_containers_are_user_added_not_line_derived(client, session
             "currency": "USD",
             "amount": 100,
             "pricingLines": [
-                {"description": "Trucking", "quantity": 10, "unitPrice": 10, "containerType": "40HC"},
-                {"description": "Delivery", "quantity": 2, "unitPrice": 5, "containerType": "40HC"},
+                # No Container Type on either line: billing units, not boxes.
+                {"description": "Trucking", "quantity": 10, "unitPrice": 10},
+                {"description": "Delivery", "quantity": 2, "unitPrice": 5},
             ],
         },
     )

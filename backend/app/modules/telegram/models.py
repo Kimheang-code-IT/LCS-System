@@ -46,7 +46,7 @@ class NotificationOutbox(PKMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_notification_due", "status", "next_attempt_at"),
         Index("ix_notification_history", "created_at"),
-        CheckConstraint("destination_type IN ('PRIVATE', 'ADMIN')", name="notification_destination"),
+        CheckConstraint("destination_type IN ('PRIVATE', 'ADMIN', 'CLIENT')", name="notification_destination"),
         CheckConstraint("category <> 'recovery' OR destination_type = 'PRIVATE'", name="recovery_private_only"),
         CheckConstraint("sensitive_payload IS NULL OR (category = 'recovery' AND destination_type = 'PRIVATE')", name="secret_private_only"),
         CheckConstraint("status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED', 'CANCELLED')", name="notification_status"),

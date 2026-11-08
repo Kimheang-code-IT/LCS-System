@@ -6,21 +6,24 @@ import { buildPrintViewModel, type PrintViewModel } from '~/utils/freight/print-
 import { buildChargePrintViewModel } from '~/utils/freight/charge-print'
 import { buildJobPrintViewModel } from '~/utils/freight/job-print'
 import { buildQuotationPrintViewModel } from '~/utils/freight/quotation-print'
+import { financialContainerOptions, financialPrintModel, type FinancialPrintData } from '~/utils/freight/financial-print'
 import { useSettingsRepositories } from '~/repositories'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
+import { apiErrorMessage } from '~/utils/validation/api-error'
 import { freightModules } from '~/config/freight-modules'
 import {
   DEFAULT_INVOICE_LOGO_URL,
   documentDetailPath,
   isAutoPrintRoute,
   safePrintReturnPath,
+  printTemplateQuery,
 } from '~/utils/freight/print-navigation'
 
 const route = useRoute()
 const router = useRouter()
 const store = useFreightStore()
 const auth = useAuthStore()
-const { t } = useI18n()
+const { t, loadLocaleMessages } = useI18n()
 const { formatDateTime, localization } = useAppLocalization()
 
 const collection = computed(() => String(route.params.collection || ''))
@@ -66,6 +69,18 @@ const statementRecord = computed<FreightRecord | null>(() => {
 const module = computed(() => freightModules.find(item => item.collection === collection.value) || null)
 const record = computed(() => statementRecord.value || store.get(collection.value, recordId.value))
 const accessDenied = computed(() => Boolean(module.value && !auth.canAccessPage(module.value.permission)))
+const financialMode = computed(() => collection.value === 'debitNotes' && (!record.value || record.value.documentType === 'CUSTOMER_INVOICE'))
+const financialData = ref<FinancialPrintData | null>(null)
+const financialChoices = ref<FinancialPrintData['containers']>([])
+const financialLoading = ref(false)
+const financialError = ref('')
+const assetError = ref('')
+const containerId = computed(() => String(route.query.containerId || ''))
+const financialContainers = computed(() => financialContainerOptions(financialData.value || { containers: financialChoices.value } as FinancialPrintData))
+const selectedFinancialContainer = computed({
+  get: () => containerId.value || financialData.value?.selectedContainerId || '',
+  set: value => { void router.replace({ query: { ...route.query, containerId: value || undefined } }) },
+})
 const notFound = computed(() => Boolean(collection.value && recordId.value) && !record.value
   && !(statementOrderId.value && statementCharges.value === null))
 
@@ -77,9 +92,38 @@ const templateId = computed<PrintTemplateId>({
       : defaultPrintTemplate(collection.value, record.value)
   },
   set: (value) => {
-    void router.replace({ query: { ...route.query, template: value } })
+    void router.replace({ query: printTemplateQuery(route.query, value) })
   },
 })
+
+let financialVersion = 0
+watch(() => [financialMode.value, recordId.value, templateId.value, containerId.value, accessDenied.value] as const, async () => {
+  const version = ++financialVersion
+  financialData.value = null
+  financialError.value = ''
+  assetError.value = ''
+  if (!financialMode.value || accessDenied.value) return
+  financialLoading.value = true
+  try {
+    if (templateId.value === 'debit-note' && !containerId.value) {
+      const source = await lcs.finance.getPrintData(recordId.value, 'tax-invoice')
+      if (version !== financialVersion) return
+      financialChoices.value = source.containers
+      if (source.containers.length !== 1) throw new Error(t('freight.print.selectContainer'))
+    }
+    const data = await lcs.finance.getPrintData(recordId.value, templateId.value, containerId.value || undefined)
+    if (version === financialVersion) {
+      financialData.value = data
+      financialChoices.value = data.containers
+    }
+  }
+  catch (error) {
+    if (version === financialVersion) financialError.value = apiErrorMessage(error, t('api.requestFailed'))
+  }
+  finally {
+    if (version === financialVersion) financialLoading.value = false
+  }
+}, { immediate: true })
 
 const logoUrl = ref(DEFAULT_INVOICE_LOGO_URL)
 const brandingReady = ref(false)
@@ -123,6 +167,7 @@ const lineId = computed(() => {
 })
 
 const viewModel = computed<PrintViewModel | null>(() => {
+  if (financialMode.value) return financialData.value ? financialPrintModel(financialData.value) : null
   if (!record.value) return null
   const context = {
     companies: store.list('companies'),
@@ -133,27 +178,33 @@ const viewModel = computed<PrintViewModel | null>(() => {
     localCurrency: localCurrency.value,
   }
   if (collection.value === 'quotations') {
-    return buildQuotationPrintViewModel(record.value, templateId.value, context, {
+    const model = buildQuotationPrintViewModel(record.value, templateId.value, context, {
       containerIndex: containerIndex.value,
     })
+    model.document.titleKey = 'freight.print.title.quotation'
+    return model
   }
   if (collection.value === 'jobs') {
-    return buildJobPrintViewModel(record.value, templateId.value, context, {
+    const model = buildJobPrintViewModel(record.value, templateId.value, context, {
       containerIndex: containerIndex.value,
       lineIndex: lineIndex.value,
     })
+    model.document.titleKey = 'freight.print.title.serviceOrderStatement'
+    return model
   }
   if (collection.value === 'jobCharges') {
-    return buildChargePrintViewModel(record.value, templateId.value, context, {
+    const model = buildChargePrintViewModel(record.value, templateId.value, context, {
       lineIndex: lineIndex.value,
       lineId: lineId.value || undefined,
     })
+    model.document.titleKey = 'freight.print.title.chargeStatement'
+    return model
   }
   return buildPrintViewModel(record.value, templateId.value, context)
 })
 
 const templateOptions = computed(() => supportedPrintTemplates(collection.value).map(template => ({
-  label: t(template.labelKey),
+  label: t(financialMode.value && template.id === 'tax-invoice' && financialData.value && !financialData.value.taxInvoiceEligible ? 'freight.print.title.invoice' : template.labelKey),
   value: template.id,
 })))
 
@@ -181,14 +232,22 @@ async function goBack() {
 
 /** Print only after all paper assets (e.g. the logo) finished loading. */
 async function printNow() {
-  if (!import.meta.client) return
+  if (!import.meta.client || accessDenied.value || !viewModel.value || financialLoading.value || financialError.value || financialData.value?.warnings.length) return
+  assetError.value = ''
+  await Promise.all([loadLocaleMessages('en'), loadLocaleMessages('km')])
+  await nextTick()
+  await document.fonts.ready
   const images = Array.from(document.querySelectorAll<HTMLImageElement>('.print-paper img'))
-  await Promise.all(images.map(img => img.complete
-    ? Promise.resolve()
-    : new Promise<void>((resolve) => {
-        img.addEventListener('load', () => resolve(), { once: true })
-        img.addEventListener('error', () => resolve(), { once: true })
-      })))
+  await Promise.all(images.map(img => img.complete ? Promise.resolve() : new Promise<void>((resolve) => {
+    const timer = window.setTimeout(resolve, 8000)
+    const done = () => { window.clearTimeout(timer); resolve() }
+    img.addEventListener('load', done, { once: true })
+    img.addEventListener('error', done, { once: true })
+  })))
+  if (images.some(img => !img.complete || !img.naturalWidth) || document.querySelector('.print-paper [data-print-asset-error="true"]')) {
+    assetError.value = t('freight.print.assetsFailed')
+    return
+  }
   window.print()
 }
 
@@ -198,7 +257,7 @@ const autoPrint = computed(() => isAutoPrintRoute(route.query as Record<string, 
 const autoPrintTriggered = ref(false)
 
 async function triggerAutoPrint() {
-  if (!autoPrint.value || autoPrintTriggered.value || !viewModel.value || !brandingReady.value) return
+  if (!autoPrint.value || autoPrintTriggered.value || !viewModel.value || !brandingReady.value || accessDenied.value) return
   autoPrintTriggered.value = true
   await nextTick()
   await printNow()
@@ -255,20 +314,32 @@ onBeforeUnmount(() => {
         class="w-24"
         :aria-label="t('freight.print.zoom')"
       />
+      <USelectMenu
+        v-if="financialMode && templateId === 'debit-note'"
+        v-model="selectedFinancialContainer"
+        :items="financialContainers"
+        value-key="value"
+        :aria-label="t('freight.print.actualContainer')"
+        class="w-52"
+      />
       <UButton
         color="primary"
         size="sm"
         icon="i-lucide-printer"
         :label="t('freight.print.print')"
-        :disabled="!viewModel"
+        :disabled="!viewModel || accessDenied || financialLoading || Boolean(financialError) || Boolean(financialData?.warnings.length)"
         @click="printNow"
       />
     </header>
 
+    <p v-if="assetError" role="alert" class="p-3 text-sm text-error print:hidden">{{ assetError }}</p>
     <div v-if="accessDenied" class="p-6 text-sm text-muted">
       {{ t('lcs.errors.forbidden') || t('freight.print.back') }}
     </div>
-    <div v-else-if="notFound || !viewModel" class="p-6 text-sm text-muted">
+    <div v-else-if="financialLoading" class="p-6 text-sm text-muted" role="status">{{ t('freight.print.loadingStored') }}</div>
+    <div v-else-if="financialError" class="p-6 text-sm text-error" role="alert">{{ financialError }}</div>
+    <div v-else-if="financialData?.warnings.length" class="p-6 text-sm text-error" role="alert">{{ financialData.warnings.join(' ') }}</div>
+    <div v-else-if="(!financialMode && notFound) || !viewModel" class="p-6 text-sm text-muted">
       {{ t('lcs.document.notFound') || 'Record not found.' }}
     </div>
 
@@ -364,12 +435,12 @@ onBeforeUnmount(() => {
   .print-paper--portrait {
     position: relative;
     padding: 0 !important;
-    width: 185mm !important;
-    min-height: 268mm !important;
+    width: 190mm !important;
+    min-height: 0 !important;
   }
 
   .print-paper {
-    overflow: hidden;
+    overflow: visible;
   }
 
   .watermark-text {

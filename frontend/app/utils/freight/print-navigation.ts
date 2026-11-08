@@ -1,5 +1,5 @@
 /** Default invoice logo used when branding settings have no printable logo. */
-export const DEFAULT_INVOICE_LOGO_URL = '/lcs-invoice-logo.png'
+export const DEFAULT_INVOICE_LOGO_URL = '/lcs-invoice-logo.jpg'
 
 /**
  * Accept only an application-local route. This prevents print-preview return
@@ -21,6 +21,13 @@ export function documentDetailPath(modulePath: string, recordId: string): string
 
 export const PRINT_AUTO_QUERY = 'autoPrint'
 
+/** A consolidated print must not inherit a previous single-container restriction. */
+export function printTemplateQuery(query: Record<string, string | null | (string | null)[] | undefined>, template: string) {
+  const next: typeof query = { ...query, template }
+  if (template === 'tax-invoice') delete next.containerId
+  return next
+}
+
 export function isAutoPrintRoute(query: Record<string, unknown>): boolean {
   const raw = query[PRINT_AUTO_QUERY] ?? query.autoPrint
   const value = Array.isArray(raw) ? raw[0] : raw
@@ -35,6 +42,7 @@ export function buildPrintRoute(options: {
   returnTo?: unknown
   modulePath?: string
   container?: number
+  containerId?: string
   lineIndex?: number
   /** Stable line id; preferred over the index when both are present. */
   lineId?: string
@@ -49,6 +57,7 @@ export function buildPrintRoute(options: {
   }
   if (options.autoPrint !== false) query[PRINT_AUTO_QUERY] = '1'
   if (options.container !== undefined) query.container = String(options.container)
+  if (options.containerId) query.containerId = options.containerId
   if (options.lineIndex !== undefined) query.line = String(options.lineIndex)
   if (options.lineId) query.lineId = options.lineId
   if (options.statementOrderId) query.statementOrder = options.statementOrderId

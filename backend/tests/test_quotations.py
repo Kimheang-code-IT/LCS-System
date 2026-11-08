@@ -664,7 +664,9 @@ async def test_requotation_from_a_service_order_creates_a_new_draft(client):
 
     original = await client.get(f"/api/v1/quotations/{quotation['id']}", headers=headers)
     assert original.status_code == 200, original.text
-    assert original.json()["data"]["rawStatus"] == "CONVERTED"
+    # Converting no longer rewrites the quotation: the revision it was created
+    # from keeps whatever status it held, and the quotation stays editable.
+    assert original.json()["data"]["rawStatus"] == "ACCEPTED"
 
 
 async def test_requotation_leaves_the_service_order_untouched(client):
@@ -741,14 +743,14 @@ async def test_container_requirements_are_persisted_and_returned(client, session
     assert stored[0].remarks == "One reefer"
 
 
-async def test_only_an_accepted_revision_can_be_converted(client):
+async def test_conversion_needs_the_convert_permission(client):
     headers = await login(client)
     party = await _first_party(client, headers, role="Customer")
     created = await _create_quotation(client, headers, {"customerPartyId": party["id"]})
 
-    refused = await client.post(f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={})
-    assert refused.status_code == 409, refused.text
-    assert refused.json()["code"] == "INVALID_STATE_TRANSITION"
+    # A draft converts directly now: reuse needs no workflow state.
+    converted = await client.post(f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
 
     finance_headers = await login(client, "finance")
     denied = await client.post(f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=finance_headers, json={})
@@ -800,13 +802,15 @@ async def test_submitted_workflow_converts_without_send_or_accept(client):
         f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={}
     )
     assert converted.status_code == 201, converted.text
-    assert converted.json()["data"]["status"] == "Converted"
 
+    # Reuse, not one-time conversion: the same request body without a key makes
+    # a second independent order; a repeated *request* (same key) replays the
+    # first order — covered by the idempotency test above.
     duplicate = await client.post(
         f"/api/v1/quotation-revisions/{created['revisionId']}/convert", headers=headers, json={}
     )
-    assert duplicate.status_code == 409, duplicate.text
-    assert duplicate.json()["code"] == "DUPLICATE_CONVERSION"
+    assert duplicate.status_code == 201, duplicate.text
+    assert duplicate.json()["data"]["serviceOrderId"] != converted.json()["data"]["serviceOrderId"]
 
 
 async def test_submit_and_convert_need_their_permissions(client):

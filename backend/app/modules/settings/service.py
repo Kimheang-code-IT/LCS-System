@@ -88,6 +88,16 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "webhookUrl": "",
         "connectionStatus": "not_tested",
         "destinations": [],
+        "clientEnabled": False,
+        "clientBotToken": "",
+        "clientGroupId": "",
+        "clientEvents": {
+            "SERVICE_ORDER_CREATED": True,
+            "SERVICE_ORDER_UPDATED": True,
+            "SERVICE_ORDER_STATUS_CHANGED": True,
+            "SERVICE_ORDER_FINISHED": True,
+            "SERVICE_ORDER_CANCELLED": True,
+        },
     },
     "notifications": {
         "inAppEnabled": True,
@@ -135,6 +145,44 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
         "lastRunStatus": "idle",
         "lastRunMessage": "",
     },
+    # File-object storage: database-configured providers editable from the
+    # Settings UI, editable without redeployment. Secret values below are
+    # write-only (never returned; _without_blank_secrets preserves stored ones).
+    "storage": {
+        "primaryProvider": "",
+        "backupProvider": "",
+        "backupEnabled": False,
+        "backupIntervalHours": 24,
+        "backupMaxRetries": 3,
+        "retentionDays": 0,
+        "providers": {
+            "r2": {
+                "accountId": "",
+                "bucketName": "",
+                "accessKeyId": "",
+                "secretAccessKey": "",
+                "endpoint": "",
+                "objectPrefix": "",
+                "connectionStatus": "not_configured",
+                "lastVerifiedAt": "",
+                "lastTestMessage": "",
+            },
+            "gdrive": {
+                "authType": "oauth",
+                "clientId": "",
+                "clientSecret": "",
+                "serviceAccountJson": "",
+                "connectedEmail": "",
+                "rootFolderId": "",
+                "sharedDriveId": "",
+                "objectPrefix": "",
+                "connectionStatus": "not_configured",
+                "lastVerifiedAt": "",
+                "lastTestMessage": "",
+                "refreshTokenEncrypted": "",
+            },
+        },
+    },
 }
 
 
@@ -170,7 +218,7 @@ async def _load_record(session: AsyncSession, collection: str) -> ModuleRecord |
 async def _load_settings(session: AsyncSession, keys: Iterable[str] | None = None) -> dict[str, AppSetting]:
     stmt = select(AppSetting)
     if keys is None:
-        stmt = stmt.where(AppSetting.setting_group != APP_INFO_GROUP)
+        stmt = stmt.where(AppSetting.setting_group != APP_INFO_GROUP, AppSetting.setting_key != "maintenance")
     else:
         stmt = stmt.where(AppSetting.setting_key.in_(tuple(keys)))
     rows = (await session.execute(stmt)).scalars().all()
@@ -327,7 +375,33 @@ def redact_app_config(config: dict[str, Any]) -> dict[str, Any]:
         telegram.pop("webhookSecret", None)
         telegram["botTokenConfigured"] = bool(telegram.get("botToken"))
         telegram["botToken"] = ""
+        telegram["clientBotTokenConfigured"] = bool(telegram.get("clientBotToken") or telegram.get("botToken"))
+        telegram["clientBotToken"] = ""
+    storage = payload.get("storage")
+    if isinstance(storage, dict):
+        storage["providers"] = _redact_storage_providers(storage.get("providers") or {})
     return payload
+
+
+_STORAGE_SECRET_KEYS = {
+    "r2": {"secretAccessKey": ("secretAccessKeyConfigured",)},
+    "gdrive": {"clientSecret": ("clientSecretConfigured",), "serviceAccountJson": ("serviceAccountConfigured",)},
+}
+
+
+def _redact_storage_providers(providers: dict[str, Any]) -> dict[str, Any]:
+    """Strip provider credentials/tokens; keep only 'configured' booleans."""
+    redacted: dict[str, Any] = {}
+    for tag, block in providers.items():
+        block = dict(block) if isinstance(block, dict) else {}
+        block.pop("refreshTokenEncrypted", None)  # tokens never leave the server
+        for secret, flag_names in _STORAGE_SECRET_KEYS.get(tag, {}).items():
+            if secret in block:
+                value = bool(str(block.pop(secret) or "").strip())
+                for name in flag_names:
+                    block[name] = value
+        redacted[tag] = block
+    return redacted
 
 
 def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
@@ -342,13 +416,130 @@ def _without_blank_secrets(patch: dict[str, Any]) -> dict[str, Any]:
             if not str(backup.get(key) or "").strip():
                 backup.pop(key, None)
         cleaned["backup"] = backup
-    for section, key in (("email", "password"), ("telegram", "botToken")):
+    for section, key in (("email", "password"), ("telegram", "botToken"), ("telegram", "clientBotToken")):
         block = cleaned.get(section)
         if isinstance(block, dict) and not str(block.get(key) or "").strip():
             block = dict(block)
             block.pop(key, None)
             cleaned[section] = block
+    cleaned = _without_blank_storage_secrets(cleaned)
     return cleaned
+
+
+_STORAGE_WRITE_ONLY = {
+    "r2": ("secretAccessKey",),
+    "gdrive": ("clientSecret", "serviceAccountJson", "refreshTokenEncrypted"),
+}
+
+
+def _without_blank_storage_secrets(patch: dict[str, Any]) -> dict[str, Any]:
+    storage = patch.get("storage")
+    if not isinstance(storage, dict) or not isinstance(storage.get("providers"), dict):
+        return patch
+    providers = dict(storage.get("providers") or {})
+    for tag, secrets in _STORAGE_WRITE_ONLY.items():
+        block = providers.get(tag)
+        if not isinstance(block, dict):
+            continue
+        block = dict(block)
+        for flag in ("secretAccessKeyConfigured", "clientSecretConfigured", "serviceAccountConfigured"):
+            block.pop(flag, None)
+        for key in secrets:
+            if not str(block.get(key) or "").strip():
+                block.pop(key, None)
+        providers[tag] = block
+    storage = dict(storage)
+    storage["providers"] = providers
+    patch["storage"] = storage
+    return patch
+
+
+_STORAGE_PROVIDERS = {"", "r2", "gdrive"}
+
+
+def _strip_storage_managed_fields(patch: dict[str, Any], stored: dict[str, Any]) -> dict[str, Any]:
+    """Connection status and verification stamps are server-managed: a stale UI
+    snapshot must never overwrite a fresher test result."""
+    storage = dict(patch or {})
+    providers_in = storage.get("providers")
+    if isinstance(providers_in, dict):
+        stored_providers = stored.get("providers") or {}
+        for tag, block in list(providers_in.items()):
+            if not isinstance(block, dict):
+                continue
+            block = dict(block)
+            previous = stored_providers.get(tag) or {}
+            for field in ("connectionStatus", "lastVerifiedAt", "lastTestMessage", "connectedEmail"):
+                block[field] = previous.get(field) or ""
+            providers_in[tag] = block
+    return storage
+
+
+def _validate_storage_config(config: dict[str, Any]) -> None:
+    """Field-level guardrails for the Storage & Backup settings group."""
+    errors: dict[str, str] = {}
+
+    for key in ("primaryProvider", "backupProvider"):
+        value = str(config.get(key) or "").strip()
+        if value not in _STORAGE_PROVIDERS:
+            errors[f"storage.{key}"] = "Choose Cloudflare R2 or Google Drive."
+    if str(config.get("backupIntervalHours") or ""):
+        try:
+            hours = int(config.get("backupIntervalHours"))
+        except (TypeError, ValueError) as exc:
+            raise ValidationFailed(
+                "Enter a whole number between 1 and 720.",
+                {"storage.backupIntervalHours": "Enter a whole number between 1 and 720."},
+            ) from exc
+        if not 1 <= hours <= 720:
+            errors["storage.backupIntervalHours"] = "Enter a value between 1 and 720."
+    try:
+        retries = int(config.get("backupMaxRetries") or 3)
+        if not 1 <= retries <= 10:
+            errors["storage.backupMaxRetries"] = "Enter a value between 1 and 10."
+    except (TypeError, ValueError) as exc:
+        raise ValidationFailed(
+            "Enter a whole number between 1 and 10.",
+            {"storage.backupMaxRetries": "Enter a whole number between 1 and 10."},
+        ) from exc
+    providers = config.get("providers") or {}
+    r2 = providers.get("r2") or {}
+    if any(str(r2.get(key) or "").strip() for key in ("accountId", "bucketName", "accessKeyId", "endpoint")):
+        for key in ("accountId", "bucketName", "accessKeyId"):
+            if not str(r2.get(key) or "").strip():
+                errors[f"storage.providers.r2.{key}"] = "This field is required for Cloudflare R2."
+        endpoint = str(r2.get("endpoint") or "").strip()
+        if endpoint:
+            parsed = urlparse(endpoint)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                errors["storage.providers.r2.endpoint"] = "Enter a valid HTTP or HTTPS S3 endpoint."
+        prefix = str(r2.get("objectPrefix") or "").strip()
+        if prefix.startswith("/") or ".." in prefix.split("/"):
+            errors["storage.providers.r2.objectPrefix"] = "Use a relative object prefix without '..' segments."
+    gdrive = providers.get("gdrive") or {}
+    auth_type = str(gdrive.get("authType") or "").strip()
+    if auth_type not in ("", "oauth", "service_account"):
+        errors["storage.providers.gdrive.authType"] = "Choose OAuth or service account authentication."
+    if auth_type == "service_account":
+        has_service_account = (
+            bool(str(gdrive.get("serviceAccountJson") or "").strip()) or bool(gdrive.get("serviceAccountConfigured"))
+        )
+        if not has_service_account:
+            errors["storage.providers.gdrive.serviceAccountJson"] = "Upload the service account JSON key."
+    # An active backup destination must be an independent location.
+    primary = str(config.get("primaryProvider") or "").strip()
+    backup = str(config.get("backupProvider") or "").strip()
+    if bool(config.get("backupEnabled")) and backup and backup == primary:
+        errors["storage.backupProvider"] = "The backup provider must differ from the primary provider."
+    # Only configured, verified providers can be activated.
+    for role, tag in (("primaryProvider", primary), ("backupProvider", backup)):
+        if tag not in {"r2", "gdrive"}:
+            continue
+        provider_config = (providers.get(tag) or {}) if isinstance(providers, dict) else {}
+        if str(provider_config.get("connectionStatus") or "") != "connected":
+            errors[f"storage.{role}"] = "Test the connection before activating this provider."
+    if errors:
+        raise ValidationFailed("Check the storage settings.", errors)
 
 
 def _validate_backup_config(config: dict[str, Any]) -> None:
@@ -396,6 +587,10 @@ def _validate_backup_config(config: dict[str, Any]) -> None:
 
 async def update_app_config(session: AsyncSession, context: RequestContext | None, patch: dict[str, Any]) -> dict:
     patch = dict(patch or {})
+    if "system" in patch and "maintenanceMode" in patch["system"]:
+        current_config, _ = await _current_app_config(session)
+        if patch["system"]["maintenanceMode"] != bool((current_config.get("system") or {}).get("maintenanceMode")):
+            raise ValidationFailed("Use the dedicated Maintenance section and confirmation to change maintenance mode.")
     if "telegram" in patch:
         await session.execute(select(AppSetting).where(AppSetting.setting_key == "telegram").with_for_update().execution_options(populate_existing=True))
     current, _updated_at = await _current_app_config(session)
@@ -442,6 +637,9 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
         data["telegram"] = {**telegram, "messageLanguage": normalize_message_language(telegram["messageLanguage"])}
     if "backup" in patch:
         _validate_backup_config(deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}))
+    if "storage" in patch:
+        data["storage"] = _strip_storage_managed_fields(data.get("storage") or {}, current.get("storage") or {})
+        _validate_storage_config(deep_merge(DEFAULT_APP_CONFIG["storage"], data["storage"]))
     _validate_app_config(deep_merge(DEFAULT_APP_CONFIG, data))
 
     changed_groups = sorted(key for key, value in patch.items() if isinstance(value, dict))
