@@ -94,6 +94,7 @@ export function useFreightLabel() {
   }
 
   function moduleSingular(module: FreightModule) {
+    if (module.singularKey && te(module.singularKey)) return String(t(module.singularKey))
     return tx(`freight.modules.${module.collection}.singular`, module.singular)
   }
 

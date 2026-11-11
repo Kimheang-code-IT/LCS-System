@@ -21,9 +21,39 @@ docker compose -f infrastructure/docker-compose.yml ps
 These are operational instructions, not commands executed by foundation creation.
 Local default ports: frontend 80, backend 8000, PostgreSQL 5432, Redis 6379,
 MinIO 9000/9001; env-driven bindings apply. The local backend runs Alembic on startup.
-An empty database uses `/auth/setup`; baseline provisioning is described in security.
+An empty database uses `/auth/setup`, which creates only the administrator and the
+permission/role catalog; every reference row is seeded afterwards (next section).
 Settings controls application/security/localization configuration; deployment secrets remain
 restricted. Inspect names/presence only. See [retained detailed runbook](../archive/deployment-security-history.md).
+
+## Reference data seeding (explicit, never automatic)
+
+Nothing seeds Master Data or Configuration at start-up, at setup or during a deploy — not
+even document-number sequences, the currency master or app settings. First-run `/auth/setup`
+and "Reset data" insert only the administrator account and the permission/role catalog, so a
+fresh or reset database stays empty until the seed command runs. Every reference row is
+inserted deliberately with the seed command, insert-missing only (an existing code/name is
+never edited or deleted, and no ConfigurationVersion is published):
+
+```bash
+# Local (backend directory, uv/venv already synced)
+uv run python scripts/seed.py --all --dry-run   # report only
+uv run python scripts/seed.py --all             # reference data
+uv run python scripts/seed.py --demo            # + demo rows, 5 records per table
+
+# Production host (the image ships scripts/; run it as a one-off, read-only container)
+docker compose -f /opt/lcs/docker-compose.prod.yml run --rm --no-deps backend python scripts/seed.py --all --dry-run
+docker compose -f /opt/lcs/docker-compose.prod.yml run --rm --no-deps backend python scripts/seed.py --demo
+```
+
+`--demo` adds five sample business parties and tops the Configuration groups/tabs to five
+rows; `--all` stays plain reference data (document-number sequences, app settings, trade
+directions, party/place roles, container and transport types, identity types, capacity
+units, fee types, currencies, document types, component attributes/groups/tabs and their
+links). Seeding can run repeatedly and is safe on an existing database; it never
+overwrites administrator edits. Run it right after the first `/auth/setup` (and after any
+"Reset data") — until then numbering, currency selects and the configuration lists are
+empty by design.
 
 ## Deployment and rollback
 

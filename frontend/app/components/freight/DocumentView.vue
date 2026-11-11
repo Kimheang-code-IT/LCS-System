@@ -17,7 +17,7 @@ import { FINANCIAL_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
-import { financeDomainStatus, isRecordReadOnly } from '~/utils/freight/states'
+import { financeDomainStatus, chargeDomainStatus, isRecordReadOnly } from '~/utils/freight/states'
 import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys, extraPermissionCodes } from '~/utils/role/permissions'
 import type { AppRolePermissionRow } from '~/types/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
@@ -78,6 +78,18 @@ import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
 import type { ApiResponse } from '~/types/common'
+
+/**
+ * Keys a duplicate never copies from its source quotation: identity, revision
+ * and traceability are the new record's own, and copied attachment rows would
+ * point at the original's files. Everything else (party, route, pricing lines,
+ * conditions…) is the quotation's reusable business content.
+ */
+const DUPLICATE_SKIP_KEYS = new Set([
+  'id', 'quotationId', 'quotationNo', 'revisionNo', 'status', 'rawStatus',
+  'createdBy', 'createdAt', 'updatedAt', 'serviceOrderNo',
+  'sourceServiceOrderId', 'sourceServiceOrderNo', 'revisionHistory', 'attachments',
+])
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const store = useFreightStore()
@@ -249,6 +261,11 @@ async function load() {
   if (module.value.collection === 'roles') void loadRolePermissionCatalog()
   if (isCreate.value) {
     model.value = emptyFreightRecord(module.value) as FreightRecord
+    // A standalone charge starts with one empty fee line ready to fill; an
+    // untouched line is dropped on save, never sent to the backend.
+    if (module.value.collection === 'jobCharges') {
+      model.value.feeLines = [{ feeType: '', description: '', quantity: 1, unitAmount: 0 }]
+    }
     if (module.value.collection === 'documentSequences') {
       model.value.nextNumberPreview = documentSequencePreview(model.value)
     }
@@ -258,18 +275,35 @@ async function load() {
     for (const [key, value] of Object.entries(query)) {
       if (typeof value === 'string' && value) model.value[key] = value
     }
+    if (module.value.collection === 'quotations') {
+      // Duplicate: prefill the form from the source quotation's business
+      // information and items. Identity, revision and traceability fields stay
+      // the new record's own — the backend allocates a fresh Quotation No. on
+      // save, and nothing on the source (nor its service orders) is touched.
+      const sourceId = String(query.duplicate || '').trim()
+      if (sourceId) {
+        delete model.value.duplicate
+        try {
+          const source = await moduleRecord.get(sourceId)
+          for (const [key, value] of Object.entries(source)) {
+            if (!DUPLICATE_SKIP_KEYS.has(key)) model.value[key] = value
+          }
+        }
+        catch {
+          // An unavailable source falls back to the ordinary empty form.
+        }
+      }
+      quotationEmptySnapshot.value = quotationDraftSnapshot(model.value)
+      // Unsaved edits from a previous visit (refresh, accidental navigation)
+      // come back exactly as they were left.
+      applyQuotationDraft()
+    }
     // A financial document is an invoice unless the caller asked for another type,
     // which is also the type the backend defaults to. The Overview fields, the
     // settlement group and the tab set all depend on it, so an empty document type
     // must never reach the renderer.
     if (module.value.collection === 'debitNotes' && !model.value.documentType) {
       model.value.documentType = FINANCIAL_DOCUMENT_TYPES[0]
-    }
-    if (module.value.collection === 'quotations') {
-      quotationEmptySnapshot.value = quotationDraftSnapshot(model.value)
-      // Unsaved edits from a previous visit (refresh, accidental navigation)
-      // come back exactly as they were left.
-      applyQuotationDraft()
     }
     applyRoleMatrix()
     return
@@ -333,7 +367,9 @@ watch([title, () => module.value, () => model.value.status], () => {
     { label: moduleTitle(module.value), to: module.value.path },
     { label: title.value },
   ])
-  setBadges(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
+  // Quotation Status is retired: quotations show no status badge.
+  const showStatus = module.value.collection !== 'quotations'
+  setBadges(showStatus && model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -632,7 +668,7 @@ const overflowHeaderActions = computed(() => splitHeaderActions.value.overflow)
 
 const documentSaveLabel = computed(() => {
   if (module.value?.collection === 'jobCharges') {
-    return isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges')
+    return isCreate.value ? t('freight.ui.saveCharge') : t('freight.ui.saveChanges')
   }
   return t('lcs.common.save')
 })
@@ -699,6 +735,11 @@ const formTabs = computed(() => {
       recordNo: String(model.value.id || ''),
     },
   })
+  if (module.value.collection === 'jobCharges' && isCreate.value) {
+    // A standalone charge is created from General + Fee Lines only; the
+    // Traceability tab (invoice, journal, source records) exists once saved.
+    return compiled.filter(tab => tab.id !== 'traceability')
+  }
   if (module.value.collection === 'roles') {
     // A protected system role keeps its grant read-only (the backend refuses
     // the change anyway).
@@ -753,53 +794,63 @@ provide(freightDocumentLineActionKey, (action, row) => {
   void onLineRowAction(action, row)
 })
 
-function printServiceChargeInvoice() {
-  if (!model.value.id) return
-  void navigateTo(buildPrintRoute({
-    collection: 'jobCharges',
-    recordId: String(model.value.id),
+/** Print route of the finance invoice `invoiceId`, returning to this page. */
+function chargeFinanceInvoiceRoute(invoiceId: string) {
+  return buildPrintRoute({
+    collection: 'debitNotes',
+    recordId: invoiceId,
     template: 'tax-invoice',
     returnTo: route.fullPath,
-    modulePath: '/service-charges',
-  }))
+    modulePath: '/finance/documents',
+  })
 }
 
-/** Print one fee line of the open charge; the print page narrows the snapshot. */
-function printServiceChargeLine(index: number, lineId: unknown) {
-  if (!model.value.id) return
-  void navigateTo(buildPrintRoute({
-    collection: 'jobCharges',
-    recordId: String(model.value.id),
-    template: 'tax-invoice',
-    returnTo: route.fullPath,
-    modulePath: '/service-charges',
-    lineIndex: index,
-    lineId: lineId ? String(lineId) : undefined,
-  }))
+/**
+ * Print Invoice for a saved service charge: an already-invoiced charge opens
+ * its existing finance invoice (no second draft is ever made — the backend's
+ * bill-once source link would return it anyway), an issued one is confirmed
+ * then converted through the existing charge→invoice command, and a draft one
+ * is told to be issued first. The open charge must be saved.
+ */
+async function printChargeFinanceInvoice() {
+  if (module.value?.collection !== 'jobCharges' || !model.value.id) return
+  const chargeId = String(model.value.id)
+  const linkedInvoice = linkedFinanceInvoiceForCharge(model.value, traceLookups())
+  if (linkedInvoice?.id) {
+    await navigateTo(chargeFinanceInvoiceRoute(String(linkedInvoice.id)))
+    return
+  }
+  if (chargeDomainStatus(model.value.status) !== 'ISSUED') {
+    validation.addFormError(t('freight.ui.chargeNotIssued'))
+    return
+  }
+  const ok = await confirm({
+    kind: 'submit',
+    descriptionKey: 'freight.ui.createInvoiceConfirm',
+    descriptionParams: { name: String(model.value.chargeNo || chargeId) },
+  })
+  if (!ok) return
+  await financeCommands.createInvoiceFromCharge(id => chargeFinanceInvoiceRoute(id))
 }
 
 provide(freightDocumentLineTableHeaderKey, (tableKey) => {
   if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return []
   const feeLines = Array.isArray(model.value.feeLines) ? model.value.feeLines : []
   return [{
-    label: t('freight.ui.printAll'),
+    label: t('freight.ui.printInvoice'),
     icon: 'i-lucide-printer',
     disabled: feeLines.length === 0,
-    onClick: printServiceChargeInvoice,
+    onClick: () => { void printChargeFinanceInvoice() },
   }]
 })
 
 provide(freightDocumentLineTableRowMenuKey, (tableKey) => {
   if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return undefined
-  return (row: Record<string, unknown>) => {
-    const index = Number(row._rowIndex ?? -1)
-    if (index < 0) return []
-    return [{
-      label: t('freight.ui.printInvoice'),
-      icon: 'i-lucide-printer',
-      onSelect: () => printServiceChargeLine(index, row.id),
-    }]
-  }
+  return () => [{
+    label: t('freight.ui.printInvoice'),
+    icon: 'i-lucide-printer',
+    onSelect: () => { void printChargeFinanceInvoice() },
+  }]
 })
 provide(freightDocumentModelKey, model)
 /**
@@ -931,15 +982,6 @@ function relatedServiceOrder() {
   return jobForQuotation(jobs, model.value)
 }
 
-async function openRelatedServiceOrder() {
-  const job = relatedServiceOrder()
-  if (!job?.id) {
-    toast.add({ title: t('lcs.states.notFound'), color: 'warning' })
-    return
-  }
-  await navigateTo(`/service-orders/${String(job.id)}`)
-}
-
 /** Quotation delete: guarded by status/permission and the backend link rule. */
 async function deleteQuotation() {
   if (!quotationAvailability.value.delete || !model.value.id) return
@@ -1007,16 +1049,6 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   const items: DropdownMenuItem[] = []
   const isQuotation = module.value?.collection === 'quotations'
   if (isQuotation && !isCreate.value && model.value.id) {
-    if (quotationAvailability.value.openServiceOrder) {
-      const serviceOrderNo = String(model.value.serviceOrderNo || '').trim()
-      items.push({
-        label: serviceOrderNo
-          ? `${t('freight.ui.openServiceOrder')} · ${serviceOrderNo}`
-          : t('freight.ui.openServiceOrder'),
-        icon: 'i-lucide-briefcase',
-        onSelect: () => { void openRelatedServiceOrder() },
-      })
-    }
     if (quotationAvailability.value.revise) {
       items.push({
         label: t('freight.ui.requote'),
@@ -1389,6 +1421,16 @@ async function save(status?: string) {
         return next
       })
     }
+    if (module.value.collection === 'jobCharges') {
+      // A completely empty fee line (including the auto-started one) is never
+      // saved; a partially filled line stays and is caught by validation.
+      payload.feeLines = (Array.isArray(payload.feeLines) ? payload.feeLines : []).filter((line) => {
+        const row = line as Record<string, unknown>
+        return Boolean(String(row.description ?? '').trim())
+          || Boolean(String(row.feeType ?? '').trim())
+          || Number(row.unitAmount ?? row.unitPrice ?? 0) !== 0
+      })
+    }
     if (module.value.collection === 'documentSequences') {
       payload.prefix = String(payload.prefix || '').trim()
       const sequenceYear = Number(payload.year)
@@ -1716,6 +1758,18 @@ content-wide
       </template>
 
       <template #before-form>
+        <DocumentAppDocumentContentShell
+          v-if="module.collection === 'quotations' && !isCreate && String(model.sourceServiceOrderNo || '').trim()"
+          wide
+        >
+          <div class="flex items-center gap-2 pt-4 text-sm text-muted">
+            <span>{{ t('freight.fields.sourceServiceOrder') }}:</span>
+            <ULink
+              :to="`/service-orders/${String(model.sourceServiceOrderId || '')}`"
+              class="font-medium text-highlighted hover:text-primary hover:underline"
+            >{{ String(model.sourceServiceOrderNo) }}</ULink>
+          </div>
+        </DocumentAppDocumentContentShell>
         <DocumentAppDocumentContentShell
 v-if="module.collection === 'debitNotes' && periodClosed"
 wide

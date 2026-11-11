@@ -382,10 +382,11 @@ async def seed_transport_asset_identity_types(
 ) -> None:
     """Insert the default identity-type rows that do not exist yet.
 
-    Called from ``provision_baseline`` (startup / reset) and from the test seed,
-    so a database always starts with the vocabulary an administrator may edit
-    afterwards. Idempotent by name like the place-role and party-role seeds:
-    existing rows are never touched, so renames and re-links survive a restart.
+    Called by the explicit seed command (``scripts/seed.py``) and by the test
+    seed, so a database gains the vocabulary an administrator may edit
+    afterwards. Nothing calls it at startup or setup any more. Idempotent by
+    name like the place-role and party-role seeds: existing rows are never
+    touched, so renames and re-links survive a restart.
     Pass the ``TransportType`` rows (or let them be queried) so a seeded identity
     type links to the transport type an administrator actually runs; a type
     that matches nothing seeds unlinked, which means "offered everywhere".
@@ -1009,7 +1010,7 @@ SPECS: dict[str, Spec] = {    "businessParties": Spec(
         after_create=_sync_business_party_roles,
     ),
     # The route-stop vocabulary. Administrators own this list; the default rows
-    # are seeded as data (see `provision_baseline`), never as form options.
+    # are seeded as data (see scripts/seed.py), never as form options.
     "placeRoles": Spec(
         model=PlaceRole,
         title="name",

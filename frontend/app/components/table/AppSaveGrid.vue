@@ -28,6 +28,8 @@ const props = withDefaults(defineProps<{
     disabled?: boolean
     onClick: () => void
   }>
+  /** Per-row lock forwarded to the renderer (e.g. issued/invoiced charges). */
+  rowDisabled?: (row: Record<string, unknown>) => boolean
   /** Forwarded to the renderer for `type: 'action'` cells. */
   rowActions?: (action: string, row: Record<string, unknown>) => {
     label: string
@@ -44,18 +46,29 @@ const props = withDefaults(defineProps<{
   }>
   /** Called after a `type: 'reorder'` cell moves a row. */
   onReorder?: (rows: Array<Record<string, unknown>>) => void
+  /**
+   * The page owns the save: the grid drops its own Save/Cancel buttons and the
+   * host writes the pending change set through `savePending()` on the page save.
+   */
+  hideSaveActions?: boolean
 }>(), {
   disabled: false,
   saving: false,
   headerActions: () => [],
+  rowDisabled: undefined,
   rowActions: undefined,
   extraRowMenuItems: undefined,
   onReorder: undefined,
+  hideSaveActions: false,
 })
 
 const emit = defineEmits<{
   'save': [change: SaveGridChange]
   'cancel': []
+  /** The working rows, so the host can total unsaved edits live. */
+  'update:draft': [rows: Array<Record<string, unknown>>]
+  /** Whether the grid holds unsaved changes (drives the page's dirty state). */
+  'update:dirty': [dirty: boolean]
 }>()
 
 const { t } = useI18n()
@@ -100,8 +113,18 @@ const dirty = computed(() => removedIds.value.length > 0
   || added.value.length > 0
   || updated.value.length > 0)
 
+/** The pending change set, or null when the grid matches the saved rows. */
+function changeSet(): SaveGridChange | null {
+  if (!dirty.value) return null
+  return {
+    rows: draft.value.map(row => ({ ...row })),
+    removedIds: removedIds.value,
+    added: added.value.map(row => ({ ...row })),
+  }
+}
+
 const saveActions = computed(() => {
-  if (props.disabled || !dirty.value) return []
+  if (props.disabled || props.hideSaveActions || !dirty.value) return []
   return [
     {
       label: t('actions.cancel'),
@@ -117,11 +140,10 @@ const saveActions = computed(() => {
       icon: 'i-lucide-save',
       color: 'primary' as const,
       disabled: props.saving,
-      onClick: () => emit('save', {
-        rows: draft.value.map(row => ({ ...row })),
-        removedIds: removedIds.value,
-        added: added.value.map(row => ({ ...row })),
-      }),
+      onClick: () => {
+        const change = changeSet()
+        if (change) emit('save', change)
+      },
     },
   ]
 })
@@ -131,6 +153,16 @@ const allHeaderActions = computed(() => [
   ...(props.headerActions || []),
   ...saveActions.value,
 ])
+
+// The host totals unsaved edits and tracks the page's dirty state through these.
+watch(draft, rows => emit('update:draft', rows.map(row => ({ ...row }))), { immediate: true })
+watch(dirty, value => emit('update:dirty', value), { immediate: true })
+
+defineExpose({
+  /** The change set a page-level save must write, or null when there is none. */
+  pendingChange: changeSet,
+  dirty,
+})
 </script>
 
 <template>
@@ -138,6 +170,7 @@ const allHeaderActions = computed(() => [
     :table="table"
     :model-value="draft"
     :disabled="disabled"
+    :row-disabled="rowDisabled"
     :header-actions="allHeaderActions"
     :row-actions="rowActions"
     :extra-row-menu-items="extraRowMenuItems"

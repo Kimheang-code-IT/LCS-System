@@ -42,6 +42,7 @@ def _groups_are_objects(values: dict) -> tuple[str, str, str] | None:
         "security",
         "system",
         "backup",
+        "storage",
     ):
         if group in values and not isinstance(values[group], dict):
             return group, INVALID_TYPE, "Provide a settings object."
@@ -60,6 +61,7 @@ APP_CONFIG_WRITE_SCHEMA = RecordSchema(
             "security",
             "system",
             "backup",
+            "storage",
         )
     ),
     cross_field=(CrossFieldRule(("general", "localization"), _groups_are_objects),),

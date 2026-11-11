@@ -124,6 +124,12 @@ function configuredDateParts(date: Date, timeZone: string) {
   return { year: read('year'), month: read('month'), day: read('day') }
 }
 
+/** Today's date in the configured timezone as a backend `YYYY-MM-DD` string. */
+export function todayIso() {
+  const parts = configuredDateParts(new Date(), activeConfig.timezone)
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
 function formatPattern(
   parts: { year: string, month: string, day: string },
   pattern: string,

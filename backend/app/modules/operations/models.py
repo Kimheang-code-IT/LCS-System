@@ -198,7 +198,17 @@ class ServiceOrderCharge(PKMixin, TimestampMixin, Base):
     __tablename__ = "service_order_charges"
     __table_args__ = (UniqueConstraint("charge_no", name="uq_service_order_charges_no"),)
 
-    service_order_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("service_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    #: The parent order. NULL for a standalone charge, which carries its own
+    #: customer party instead of inheriting the order's.
+    service_order_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("service_orders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    #: The customer the charge bills. Linked charges mirror their order's party
+    #: (kept denormalised so the invoice conversion never needs the order);
+    #: standalone charges take it from the picker.
+    customer_party_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("business_parties.id"), nullable=True, index=True
+    )
     charge_no: Mapped[str] = mapped_column(String(50), nullable=False)
     document_type: Mapped[str] = mapped_column(String(32), nullable=False, default="SERVICE_NOTE")
     document_date: Mapped[date] = mapped_column(Date, nullable=False)

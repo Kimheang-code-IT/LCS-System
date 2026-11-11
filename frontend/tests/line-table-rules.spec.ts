@@ -7,7 +7,6 @@ import {
   JOB_ACTUAL_CONTAINER_TABLE,
   JOB_CONTAINER_PAYMENT_TABLE,
   JOB_CONTAINER_REQUIREMENT_TABLE,
-  JOB_FINANCE_LINES_TABLE,
   JOB_ROUTE_TABLE,
 } from '../app/config/job-workspace-forms'
 import {
@@ -160,8 +159,9 @@ describe('line table config is self describing', () => {
     expect(tableOf('/sales/quotations', 'otherCharges').computeRow).toBe(computeOtherChargeLine)
     expect(JOB_CONTAINER_PAYMENT_TABLE.computeRow).toBe(computeContainerPaymentLine)
     expect(JOB_CONTAINER_PAYMENT_TABLE.rowDefaults).toBe(containerPaymentRowDefaults)
-    expect(JOB_FINANCE_LINES_TABLE.computeRow).toBe(computeJobFinanceLine)
-    expect(JOB_FINANCE_LINES_TABLE.rowDefaults).toBe(jobFinanceLineRowDefaults)
+    // The finance grid's rows are financial documents: its new rows are seeded
+    // by the Finance tab itself (document type + currency come from master
+    // data), so the table carries no own compute or row defaults.
     expect(JOB_CONTAINER_REQUIREMENT_TABLE.rowDefaults).toBe(containerRequirementRowDefaults)
     expect(JOB_ACTUAL_CONTAINER_TABLE.rowDefaults).toBe(actualContainerRowDefaults)
     expect(JOB_ROUTE_TABLE.rowDefaults).toBe(routePlaceRowDefaults)

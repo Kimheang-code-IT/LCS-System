@@ -42,8 +42,12 @@ export function createHttpQuotationRepository(): QuotationRepository {
     cancel: async (revisionId, reason, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_CANCEL(revisionId), { reason }, withIdempotency(key))),
     createRevision: async quotationId => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId), {})),
-    createFromServiceOrder: async serviceOrderId =>
-      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.QUOTATION_FROM_SERVICE_ORDER(serviceOrderId), {})),
+    createFromServiceOrder: async (serviceOrderId: string, key?: string) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(
+        ApiV1Endpoints.QUOTATION_FROM_SERVICE_ORDER(serviceOrderId),
+        {},
+        key ? withIdempotency(key) : {},
+      )),
     listRevisions: async (quotationId) => {
       const data = unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.QUOTATION_REVISIONS(quotationId)))
       return Array.isArray(data) ? data : []
@@ -81,6 +85,8 @@ export function createHttpServiceChargeRepository(): ServiceChargeRepository {
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_ISSUE(chargeId), {}, withIdempotency(key))),
     createFinanceInvoice: async (chargeId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_CREATE_INVOICE(chargeId), {}, withIdempotency(key))),
+    createCombinedInvoice: async (ids, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_COMBINED_INVOICE, { ids }, withIdempotency(key))),
     delete: async ids =>
       unwrapApiData(await api.delete<ApiResponse<{ removed: number }>>(ApiV1Endpoints.SERVICE_CHARGES, { body: { ids } })),
     listForOrder: async (orderId) => {

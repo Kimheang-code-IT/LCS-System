@@ -5,6 +5,7 @@ to import), and the import session is bound to the uploading user only.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections import defaultdict, deque
@@ -82,12 +83,19 @@ async def list_modules(
 async def download_template(
     module: str,
     request: Request,
+    format: str = "xlsx",
     context: RequestContext = Depends(get_current_context),
     session: AsyncSession = Depends(get_session),
 ) -> Any:
     _rate_limit(context, "template")
     excel_module = service.get_module(module)
     _require(context, excel_module.view_permission)
+    if format == "csv":
+        return _spreadsheet(
+            templates.build_csv_template(excel_module),
+            f"{module}-import-template.csv",
+            "text/csv; charset=utf-8",
+        )
     if excel_module.pipeline:
         from app.modules.excel_io import config_io
 
@@ -95,6 +103,41 @@ async def download_template(
     else:
         content = await templates.build_template(session, excel_module)
     return _spreadsheet(content, f"{module}-import-template.xlsx")
+
+
+@router.get("/{module}/schema")
+async def import_schema(
+    module: str,
+    request: Request,
+    context: RequestContext = Depends(get_current_context),
+) -> dict:
+    """The versioned, AI-ready import contract (§8): fields, types, enums,
+    match key and example records — deterministic from the module registry."""
+    _rate_limit(context, "modules")
+    excel_module = service.get_module(module)
+    _require(context, excel_module.view_permission)
+    return {"data": service.module_schema(excel_module)}
+
+
+@router.get("/{module}/schema/example")
+async def import_schema_example(
+    module: str,
+    request: Request,
+    context: RequestContext = Depends(get_current_context),
+) -> Any:
+    """A downloadable starter .json exactly in the shape /validate accepts."""
+    _rate_limit(context, "modules")
+    excel_module = service.get_module(module)
+    _require(context, excel_module.view_permission)
+    payload = service.json_import_example(excel_module)
+    body = json.dumps(payload, ensure_ascii=False, indent=2)
+    from fastapi import Response
+
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{module}-example.json"'},
+    )
 
 
 @router.post("/{module}/validate")
@@ -109,8 +152,19 @@ async def validate_upload(
     _rate_limit(context, "validate")
     excel_module = service.get_module(module)
     _require(context, excel_module.manage_permission)
-    if file.filename and not file.filename.lower().endswith(".xlsx"):
-        raise ValidationFailed("Only .xlsx workbooks are accepted.", {"file": "Unsupported extension"})
+    file_name = file.filename or "upload.xlsx"
+    lowered = file_name.lower()
+    if excel_module.pipeline == "config_versions":
+        if not lowered.endswith(".xlsx"):
+            raise ValidationFailed(
+                "Configuration version imports use the workbook template only.",
+                {"file": "Unsupported extension"},
+            )
+    elif not lowered.endswith((".xlsx", ".csv", ".json")):
+        raise ValidationFailed(
+            "Only .xlsx workbooks, .csv or .json files are accepted.",
+            {"file": "Unsupported extension"},
+        )
     # Reject a declared oversized body before buffering it: reading first would
     # spool the whole upload to disk before the size check could refuse it.
     declared = request.headers.get("content-length")

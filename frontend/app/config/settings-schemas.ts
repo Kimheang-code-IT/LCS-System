@@ -139,17 +139,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
         id: 'telegram',
         titleKey: 'lcs.settings.tabs.telegram',
         fields: [
-          { key: 'telegram.enabled', labelKey: 'lcs.settings.enableTelegram', type: 'boolean' },
-          { key: 'telegram.botDisplayName', labelKey: 'lcs.settings.botDisplayName', type: 'text', readOnly: true },
           { key: 'telegram.botToken', labelKey: 'lcs.settings.botToken', type: 'secret' },
-          { key: 'telegram.botUsername', labelKey: 'lcs.settings.botUsername', type: 'text', readOnly: true },
-          {
-            key: 'telegram.messageLanguage',
-            labelKey: 'lcs.settings.messageLanguage',
-            type: 'select',
-            options: LANGUAGE_OPTIONS,
-          },
-          { key: 'telegram.includeOrganization', labelKey: 'lcs.settings.includeOrganization', type: 'boolean' },
         ],
       },
     ],
@@ -210,23 +200,6 @@ export const appConfigTabs: DocumentTabSchema[] = [
             type: 'select',
             options: BACKUP_INTERVAL_OPTIONS,
           },
-          { key: 'backup.r2AccountId', labelKey: 'lcs.settings.backup.r2AccountId', type: 'text', required: true },
-          { key: 'backup.r2AccessKeyId', labelKey: 'lcs.settings.backup.r2AccessKeyId', type: 'text', required: true },
-          {
-            key: 'backup.r2SecretAccessKey',
-            labelKey: 'lcs.settings.backup.r2SecretAccessKey',
-            type: 'secret',
-            required: true,
-          },
-          { key: 'backup.r2BucketName', labelKey: 'lcs.settings.backup.r2BucketName', type: 'text', required: true },
-          {
-            key: 'backup.r2Endpoint',
-            labelKey: 'lcs.settings.backup.r2Endpoint',
-            type: 'url',
-            required: true,
-            colSpan: 2,
-          },
-          { key: 'backup.r2Prefix', labelKey: 'lcs.settings.backup.r2Prefix', type: 'text', colSpan: 2 },
         ],
       },
     ],
@@ -367,14 +340,11 @@ export const appConfigTabs: DocumentTabSchema[] = [
   },
 ]
 
-const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security', 'backup', 'storage'])
+const SYSTEM_SETTINGS_TAB_IDS = new Set(['localization', 'email', 'telegram', 'security', 'backup'])
 const SETTINGS_FIELD_HELP: Record<string, string> = {
   'email.enabled': 'lcs.fieldHelp.enableEmail',
   'email.replyToEmail': 'lcs.fieldHelp.replyTo',
-  'telegram.enabled': 'lcs.fieldHelp.enableTelegram',
   'backup.enabled': 'lcs.fieldHelp.backupEnabled',
-  'backup.r2SecretAccessKey': 'lcs.fieldHelp.backupR2Secret',
-  'backup.r2Prefix': 'lcs.fieldHelp.backupR2Prefix',
   'storage.backupEnabled': 'lcs.fieldHelp.storageBackupEnabled',
   'storage.backupIntervalHours': 'lcs.fieldHelp.storageBackupSchedule',
   'storage.providers.r2.secretAccessKey': 'lcs.fieldHelp.storageR2Secret',
@@ -387,12 +357,15 @@ const SETTINGS_FIELD_HELP: Record<string, string> = {
   'storage.backupProvider': 'lcs.fieldHelp.storageBackupProvider',
 }
 
-/** Administration system settings — Localization, Email, Telegram, Security, Backup. */
+/** The former "Storage & Backup" tab's sections, now merged into Backup. */
+const STORAGE_SECTIONS = appConfigTabs.find(tab => tab.id === 'storage')?.sections ?? []
+
+/** Administration system settings — Localization, Email, Telegram, Security, Backup (6 tabs). */
 export const systemSettingsTabs: DocumentTabSchema[] = appConfigTabs
   .filter(tab => SYSTEM_SETTINGS_TAB_IDS.has(tab.id))
   .map(tab => ({
     ...tab,
-    sections: tab.sections.map(section => ({
+    sections: (tab.id === 'backup' ? [...tab.sections, ...STORAGE_SECTIONS] : tab.sections).map(section => ({
       ...section,
       fields: section.fields.map(field => ({
         ...field,

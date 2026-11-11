@@ -107,11 +107,15 @@ async def create_revision(
 @router.post("/quotations/from-service-order/{identifier}", status_code=status.HTTP_201_CREATED)
 async def create_quotation_from_service_order(
     identifier: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     context: RequestContext = Depends(require_permission("quotation.revise")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Re-quotation: a new draft offer copied from an existing service order."""
-    return {"data": await service.create_quotation_from_service_order(session, context, identifier)}
+    record = await service.create_quotation_from_service_order(
+        session, context, identifier, idempotency_key,
+    )
+    return {"data": record}
 
 
 @router.get("/quotations/{quotation_id}/revisions")

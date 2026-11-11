@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import secrets
 import zipfile
 from dataclasses import dataclass
@@ -186,6 +187,153 @@ def _parse_sheets(workbook, module: ImportModule) -> list[dict[str, Any]]:
             values[column.key] = _import_unescape(cell.value)
         parsed.append({"_excelRow": index, **values})
     return parsed
+
+
+# --- CSV / JSON ingestion ----------------------------------------------------
+
+def _normalized_header(value: Any) -> str:
+    """Case-, space- and punctuation-insensitive header.
+
+    ``Party Code`` and ``party-code`` both normalize to ``party code``, which is
+    what the column key ``partyCode`` also normalizes to — so camelCase keys
+    match human headers without a per-module alias table.
+    """
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in str(value or "")).split()).casefold()
+
+
+# Genuinely different spellings only; normalization already covers case/spacing.
+_HEADER_ALIASES = {
+    "id": "code",
+}
+
+
+def _header_map(headers: Any, module: ImportModule) -> dict[Any, str]:
+    """Map source columns → canonical column keys; unknown headers are refused.
+
+    A source header must resolve to exactly one registry column (direct or via
+    alias); an ambiguous or unknown header stops the import — nothing silent.
+    """
+    by_normalized: dict[str, str] = {}
+    for column in module.columns:
+        by_normalized.setdefault(_normalized_header(column.key), column.key)
+    # An alias only applies when the module it targets actually has the column.
+    alias_by_normalized: dict[str, str] = {}
+    for source, target in _HEADER_ALIASES.items():
+        if any(column.key == target for column in module.columns):
+            alias_by_normalized.setdefault(_normalized_header(source), target)
+    mapped: dict[Any, str] = {}
+    targets: set[str] = set()
+    for header in headers:
+        normalized = _normalized_header(header)
+        if not normalized:
+            continue
+        key = by_normalized.get(normalized) or alias_by_normalized.get(normalized)
+        if key is None:
+            raise ValidationFailed(
+                f"Unknown column '{header}'. Download the template or schema for the accepted headers.",
+                {"file": "Unknown column"},
+            )
+        # Two source columns for the same field would silently shadow each
+        # other; refuse instead of picking one (§7 ambiguous matches).
+        if key in targets:
+            raise ValidationFailed(
+                f"Columns '{header}' and earlier input map to the same field '{key}'.",
+                {"file": "Ambiguous column"},
+            )
+        targets.add(key)
+        mapped[header] = key
+    return mapped
+
+
+def _parse_csv(content: bytes, module: ImportModule) -> list[dict[str, Any]]:
+    """CSV import: UTF-8, sniffer-detected delimiter, string values preserved
+    (leading zeros survive because only typed kinds coerce in _coerce)."""
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValidationFailed("CSV files must be UTF-8 encoded.", {"file": "Encoding is not UTF-8"}) from exc
+    sample = text[:4096]
+    try:
+        delimiter = csv.Sniffer().sniff(sample, delimiters=",;\t").delimiter
+    except csv.Error:
+        delimiter = ","
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=delimiter)
+    try:
+        header_row = next(reader)
+    except StopIteration as exc:
+        raise ValidationFailed("The CSV file has no header row.", {"file": "Empty file"}) from exc
+    mapping = _header_map(header_row, module)
+    parsed: list[dict[str, Any]] = []
+    for index, cells in enumerate(reader, start=2):
+        if not any(str(cell or "").strip() for cell in cells):
+            continue
+        if len(cells) > len(header_row):
+            raise ValidationFailed(f"Row {index}: more columns than the header.", {"row": index})
+        cells = [*cells, *(None,) * (len(header_row) - len(cells))]
+        row = {mapping[header]: value for header, value in zip(header_row, cells, strict=True) if header in mapping}
+        parsed.append({"_excelRow": index, **row})
+        if len(parsed) > MAX_IMPORT_ROWS:
+            raise ValidationFailed(
+                f"The file has more than {MAX_IMPORT_ROWS} data rows.", {"file": "Too many rows"},
+            )
+    return parsed
+
+
+def _parse_json(content: bytes, module: ImportModule) -> list[dict[str, Any]]:
+    """JSON import: a bare record list, or a versioned payload naming its module."""
+    try:
+        payload = json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValidationFailed("The file is not valid JSON.", {"file": "Invalid JSON"}) from exc
+    if isinstance(payload, list):
+        records, declared = payload, None
+    elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
+        payload_type = payload.get("module")
+        if not isinstance(payload_type, str) or payload_type != module.key:
+            raise ValidationFailed(
+                f"This import is for module '{module.key}'.", {"module": "Module mismatch"},
+            )
+        declared = payload.get("schemaVersion")
+        if declared is not None and int(declared) != module.template_version:
+            raise ValidationFailed("The schema version does not match. Download a fresh schema.", {"schemaVersion": "Outdated schema"})
+        records = payload["records"]
+    else:
+        raise ValidationFailed(
+            'Expected a record list or {"module", "schemaVersion", "records"}.', {"file": "Unsupported JSON shape"},
+        )
+    if not records:
+        raise ValidationFailed("The file has no data records.", {"file": "No data rows"})
+    if len(records) > MAX_IMPORT_ROWS:
+        raise ValidationFailed(f"The file has more than {MAX_IMPORT_ROWS} records.", {"file": "Too many rows"})
+    mapping = _header_map(list(records[0].keys()), module)
+    parsed: list[dict[str, Any]] = []
+    for index, record in enumerate(records, start=2):
+        if not isinstance(record, dict):
+            raise ValidationFailed(f"Record {index - 1} is not an object.", {"row": index})
+        row: dict[str, Any] = {}
+        for key, value in record.items():
+            canonical = mapping.get(key)
+            if canonical is None:
+                raise ValidationFailed(
+                    f"Record {index - 1}: unknown field '{key}'.", {"file": "Unknown column"},
+                )
+            row[canonical] = value
+        parsed.append({"_excelRow": index, **row})
+    return parsed
+
+
+def parse_upload(content: bytes, module: ImportModule, file_name: str) -> list[dict[str, Any]]:
+    """Format dispatch: .xlsx template workbooks, .csv, and .json payloads.
+
+    The multi-sheet configuration-versions workbook stays Excel-only; every
+    single-sheet module accepts all three CSV/JSON alongside the template.
+    """
+    lowered = (file_name or "").lower()
+    if lowered.endswith(".csv"):
+        return _parse_csv(content, module)
+    if lowered.endswith(".json"):
+        return _parse_json(content, module)
+    return parse_workbook(content, module)
 
 
 # --- Row validation ----------------------------------------------------------
@@ -405,9 +553,9 @@ async def start_import(
         preview = await config_io.validate_version_rows(db, parsed)
         rows = [parsed]
     else:
-        rows = parse_workbook(content, module)
+        rows = parse_upload(content, module, file_name)
         if not rows:
-            raise ValidationFailed("The workbook has no data rows.", {"file": "No data rows"})
+            raise ValidationFailed("The file has no data rows.", {"file": "No data rows"})
         preview = (
             await config_io.validate_rows(db, module, rows, mode)
             if module.pipeline == "component_config"
@@ -885,6 +1033,50 @@ async def export_rows(
 
 
 # --- History -----------------------------------------------------------------
+
+
+def module_schema(module: ImportModule) -> dict[str, Any]:
+    """The versioned, AI-ready import contract, deterministic from the registry.
+
+    Nothing secret or internal is exposed: every key listed here is an
+    importable column, references are names as in the template, and enums are
+    the same allowlists validation enforces — an external assistant can plan an
+    import entirely from this document without any private data.
+    """
+    updatable = any(column.updatable for column in module.columns)
+    operations = ["CREATE_ONLY", "VALIDATE_ONLY"]
+    if not module.create_only and updatable:
+        operations.insert(1, "CREATE_AND_UPDATE")
+    columns = [
+        {
+            "key": column.key,
+            "type": column.kind,
+            "required": column.required,
+            "allowedValues": list(column.enum) if column.enum else None,
+            "updatable": column.updatable,
+            "example": column.example or None,
+        }
+        for column in module.columns
+    ]
+    example = {column.key: column.example for column in module.columns if column.example}
+    return {
+        "schema": "lcs.smart-import",
+        "schemaVersion": module.template_version,
+        "module": module.key,
+        "name": module.name,
+        "matchKey": list(module.match_key),
+        "formats": ["xlsx", "csv"] if module.pipeline == "config_versions" else ["xlsx", "csv", "json"],
+        "operations": operations,
+        "permissions": {"view": module.view_permission, "manage": module.manage_permission},
+        "columns": columns,
+        "examples": [example] if example else [],
+    }
+
+
+def json_import_example(module: ImportModule) -> dict[str, Any]:
+    """The exact shape :func:`_parse_json` accepts, prefilled with examples."""
+    record = {column.key: column.example for column in module.columns}
+    return {"module": module.key, "schemaVersion": module.template_version, "records": [record]}
 
 
 async def history(db: AsyncSession, module_key: str | None, limit: int = 50) -> list[dict[str, Any]]:

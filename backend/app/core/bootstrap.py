@@ -1,17 +1,16 @@
 """Baseline provisioning shared by the setup API, the CLI and the test harness.
 
 The database ships empty. ``provision_admin`` creates the first administrator
-account with its role assignment and seeds the default configuration: document
-sequences for the current year and the default app info/config records. No
-business or finance data (accounts, periods, parties, documents) is seeded —
-every record is entered manually. ``reset_all_data`` returns the database to
-that pristine, "setup required" state.
+account with its role assignment and the permission/role catalog — nothing else.
+Every Master Data and Configuration row (currencies, document sequences, app
+settings, roles/vocabularies, fee/document types, component configuration) is
+inserted explicitly with ``python scripts/seed.py --all`` (or ``--demo``).
+``reset_all_data`` returns the database to that same empty state.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, text
@@ -148,157 +147,6 @@ async def requires_setup(session: AsyncSession) -> bool:
     return not total
 
 
-async def provision_baseline(session: AsyncSession) -> None:
-    """Seed default configuration.
-
-    Idempotent — existing rows are left untouched. Business/finance data
-    (accounts, periods, parties, documents) is never seeded. What is seeded is
-    configuration the application cannot invent at runtime:
-
-    * document-number sequences for the current year;
-    * the currency master (so every configured currency resolves to a row);
-    * the default app info/config, both in ``app_settings`` (the system of
-      record) and mirrored into the legacy ``module_records`` payload.
-    """
-    from copy import deepcopy
-
-    from app.core.localization import SUPPORTED_CURRENCIES
-    from app.core.sequences import DEFAULT_PREFIXES
-    from app.modules.finance.models import DocumentSequence
-    from app.modules.master_data.models import Currency, ModuleRecord, PartyRole, PlaceRole
-    from app.modules.settings.models import AppSetting
-    from app.modules.settings.service import (
-        APP_CONFIG_COLLECTION,
-        APP_INFO_COLLECTION,
-        APP_INFO_GROUP,
-        APP_INFO_KEY,
-        DEFAULT_APP_CONFIG,
-        DEFAULT_APP_INFO,
-        SETTINGS_RECORD_NO,
-    )
-
-    year = datetime.now(UTC).year
-
-    existing_types = set(
-        (
-            await session.execute(
-                select(DocumentSequence.document_type).where(DocumentSequence.period_year == year)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for document_type, prefix in DEFAULT_PREFIXES.items():
-        if document_type not in existing_types:
-            session.add(
-                DocumentSequence(
-                    document_type=document_type,
-                    period_year=year,
-                    prefix=prefix,
-                    last_value=0,
-                    padding_length=6,
-                    status="ACTIVE",
-                )
-            )
-
-    existing_currencies = set(
-        (await session.execute(select(Currency.code).where(Currency.deleted_at.is_(None)))).scalars().all()
-    )
-    for code in SUPPORTED_CURRENCIES:
-        if code not in existing_currencies:
-            session.add(Currency(code=code, name=code, symbol=None, status="ACTIVE"))
-
-    # The route-stop vocabulary is configuration: these are starting records an
-    # administrator may rename, reorder, deactivate or extend. They are seeded as
-    # data rather than shipped as a code-owned dropdown, and only missing codes
-    # are inserted so a rename survives a restart.
-    existing_roles = set(
-        (await session.execute(select(PlaceRole.code).where(PlaceRole.deleted_at.is_(None)))).scalars().all()
-    )
-    for index, (code, role_name, role_description) in enumerate(DEFAULT_PLACE_ROLES):
-        if code not in existing_roles:
-            session.add(
-                PlaceRole(
-                    code=code,
-                    name=role_name,
-                    description=role_description,
-                    sort_order=(index + 1) * 10,
-                    status="ACTIVE",
-                )
-            )
-
-    # The business-party vocabulary, formerly a hardcoded dropdown.
-    existing_party_roles = set(
-        (await session.execute(select(PartyRole.code).where(PartyRole.deleted_at.is_(None)))).scalars().all()
-    )
-    for code, role_name, role_description in DEFAULT_PARTY_ROLES:
-        if code not in existing_party_roles:
-            session.add(
-                PartyRole(
-                    code=code,
-                    name=role_name,
-                    description=role_description,
-                    status="ACTIVE",
-                )
-            )
-
-    # The transport-asset identity vocabulary (License Plate, IMO Number, …) was
-    # a hardcoded dropdown; it is seeded as configuration like the roles above.
-    # Transport types themselves are administrator data, so a fresh database
-    # seeds unlinked identity types (offered for every type) until the
-    # administrator links them from the Asset Identity Types master.
-    from app.modules.master_data.service import seed_capacity_units, seed_transport_asset_identity_types
-
-    await seed_transport_asset_identity_types(session)
-
-    # The capacity-unit list (KG, CBM, Pallets, …) backs the asset capacity
-    # select; seeded like the vocabulary above.
-    await seed_capacity_units(session)
-
-    existing_settings = set((await session.execute(select(AppSetting.setting_key))).scalars().all())
-    if APP_INFO_KEY not in existing_settings:
-        session.add(
-            AppSetting(
-                setting_key=APP_INFO_KEY,
-                setting_group=APP_INFO_GROUP,
-                setting_value=deepcopy(DEFAULT_APP_INFO),
-                description="Application identity, branding and support contacts.",
-            )
-        )
-    for group, defaults in DEFAULT_APP_CONFIG.items():
-        if group not in existing_settings:
-            session.add(
-                AppSetting(
-                    setting_key=group,
-                    setting_group=group,
-                    setting_value=deepcopy(defaults),
-                    description=f"Application settings group '{group}'.",
-                )
-            )
-
-    # Transitional mirror so an application rollback still reads the settings an
-    # administrator last saved. Safe to drop once the mirror is no longer needed.
-    for collection, defaults in (
-        (APP_INFO_COLLECTION, DEFAULT_APP_INFO),
-        (APP_CONFIG_COLLECTION, DEFAULT_APP_CONFIG),
-    ):
-        exists = (
-            await session.execute(
-                select(ModuleRecord.id).where(
-                    ModuleRecord.collection == collection,
-                    ModuleRecord.record_no == SETTINGS_RECORD_NO,
-                )
-            )
-        ).scalars().first()
-        if exists is None:
-            session.add(ModuleRecord(collection=collection, record_no=SETTINGS_RECORD_NO, data=deepcopy(defaults)))
-
-    await session.flush()
-    from app.modules.master_data.service import ensure_vocabulary_creation_audit
-
-    await ensure_vocabulary_creation_audit(session)
-
-
 async def provision_admin(
     session: AsyncSession,
     *,
@@ -358,7 +206,8 @@ async def provision_admin(
     if role.code not in assignment:
         await authorization.set_user_roles(session, user.id, [*assignment, role.code])
 
-    await provision_baseline(session)
+    # No reference/configuration row is inserted here: the administrator runs
+    # `python scripts/seed.py --all` (or --demo) to choose what the database holds.
     await session.commit()
     await authorization.refresh(session)
 
@@ -408,5 +257,6 @@ async def reset_all_data(session: AsyncSession) -> None:
         if table.name in preserved_tables:
             continue
         await session.execute(delete(table))
-    await provision_baseline(session)
+    # The reset leaves configuration empty as well: reseed deliberately with
+    # `python scripts/seed.py --all` (or --demo).
     await session.commit()

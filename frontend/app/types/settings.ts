@@ -109,7 +109,7 @@ export interface TelegramConfig {
   lastTestMessage?: string
   destinations: TelegramDestination[]
   messageTemplate: string
-  /** Client group: Service Order notifications (own toggle, chat id, optional token). */
+  /** Client group: Service Order notifications (own toggle, chat id). */
   clientEnabled?: boolean
   clientBotToken?: string
   clientBotTokenConfigured?: boolean
@@ -119,6 +119,14 @@ export interface TelegramConfig {
   clientBotDisplayName?: string
   clientLastTestedAt?: string
   clientLastTestMessage?: string
+  /** Admin bot: verified-recipient count (permission-based; no manual chat id). */
+  adminRecipientCount?: number
+  /** Read-only update-consumer state from the backend environment. */
+  updateMode?: string
+  workerEnabled?: boolean
+  updateStatus?: string
+  lastUpdateAt?: string | null
+  lastError?: string | null
 }
 
 export interface TelegramAlertRule {

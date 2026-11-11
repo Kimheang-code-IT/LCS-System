@@ -94,16 +94,19 @@ async def _configure_r2(session_factory) -> None:
             session,
             None,
             {
-                "backup": {
-                    "enabled": True,
-                    "intervalHours": 3,
-                    "r2AccountId": "account-id",
-                    "r2AccessKeyId": "access-key",
-                    "r2SecretAccessKey": "secret-key",
-                    "r2BucketName": "backups",
-                    "r2Endpoint": "https://account-id.r2.cloudflarestorage.com",
-                    "r2Prefix": "production/database",
-                }
+                "backup": {"enabled": True, "intervalHours": 3},
+                "storage": {
+                    "providers": {
+                        "r2": {
+                            "accountId": "account-id",
+                            "accessKeyId": "access-key",
+                            "secretAccessKey": "secret-key",
+                            "bucketName": "backups",
+                            "endpoint": "https://account-id.r2.cloudflarestorage.com",
+                            "objectPrefix": "production/database",
+                        },
+                    },
+                },
             },
         )
 
@@ -255,39 +258,58 @@ async def test_r2_settings_save_load_and_redact_secret(client):
     response = await client.patch(
         "/api/v1/settings/app-config",
         headers=headers,
-        json={
-            "backup": {
-                "r2AccountId": "account-id",
-                "r2AccessKeyId": "access-key",
-                "r2SecretAccessKey": "super-secret",
-                "r2BucketName": "backups",
-                "r2Endpoint": "https://account-id.r2.cloudflarestorage.com",
-                "r2Prefix": "nightly",
-            }
-        },
+        json={"storage": {"providers": {"r2": {
+            "accountId": "account-id",
+            "accessKeyId": "access-key",
+            "secretAccessKey": "super-secret",
+            "bucketName": "backups",
+            "endpoint": "https://account-id.r2.cloudflarestorage.com",
+            "objectPrefix": "nightly",
+        }}}},
     )
     assert response.status_code == 200, response.text
-    saved = response.json()["data"]["backup"]
-    assert "r2SecretAccessKey" not in saved
-    assert saved["r2SecretAccessKeyConfigured"] is True
+    saved = response.json()["data"]["storage"]["providers"]["r2"]
+    assert "secretAccessKey" not in saved
+    assert saved["secretAccessKeyConfigured"] is True
 
-    loaded = (await client.get("/api/v1/settings/app-config", headers=headers)).json()["data"]["backup"]
-    assert loaded["r2AccountId"] == "account-id"
-    assert loaded["r2Prefix"] == "nightly"
-    assert "r2SecretAccessKey" not in loaded
-    assert loaded["r2SecretAccessKeyConfigured"] is True
+    loaded = (await client.get("/api/v1/settings/app-config", headers=headers)).json()["data"]["storage"]["providers"]["r2"]
+    assert loaded["accountId"] == "account-id"
+    assert loaded["objectPrefix"] == "nightly"
+    assert "secretAccessKey" not in loaded
+    assert loaded["secretAccessKeyConfigured"] is True
+
+
+async def test_legacy_r2_credentials_fold_into_storage(client):
+    """Old flat backup.r2* values keep working and surface in the canonical block."""
+    headers = await login(client)
+    response = await client.patch(
+        "/api/v1/settings/app-config",
+        headers=headers,
+        json={"backup": {
+            "r2AccountId": "legacy-account",
+            "r2AccessKeyId": "legacy-key",
+            "r2SecretAccessKey": "legacy-secret",
+            "r2BucketName": "legacy-bucket",
+            "r2Endpoint": "https://legacy.r2.cloudflarestorage.com",
+        }},
+    )
+    assert response.status_code == 200, response.text
+    loaded = (await client.get("/api/v1/settings/app-config", headers=headers)).json()["data"]
+    r2 = loaded["storage"]["providers"]["r2"]
+    assert r2["accountId"] == "legacy-account"
+    assert r2["bucketName"] == "legacy-bucket"
+    assert r2["secretAccessKeyConfigured"] is True
 
 
 async def test_invalid_r2_settings_are_rejected(client):
     response = await client.patch(
         "/api/v1/settings/app-config",
         headers=await login(client),
-        json={"backup": {"r2AccountId": "account-id", "r2Endpoint": "not-a-url"}},
+        json={"storage": {"providers": {"r2": {"endpoint": "not-a-url"}}}},
     )
     assert response.status_code == 422
     errors = response.json()["field_errors"]
-    assert "backup.r2SecretAccessKey" in errors
-    assert "backup.r2Endpoint" in errors
+    assert "storage.providers.r2.endpoint" in errors
 
 
 async def test_r2_connection_success_and_failure(client, session_factory, monkeypatch):

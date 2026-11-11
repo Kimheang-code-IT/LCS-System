@@ -288,14 +288,20 @@ describe('moduleDocumentTabs', () => {
     expect(keys).not.toContain('documentDate')
     expect(keys).not.toContain('documentType')
     expect(keys).not.toContain('status')
-    // The service order link stays: the backend rejects a charge without it.
-    expect(keys).toContain('jobNo')
+    // Standalone creation has no Service Order field: linked charges are
+    // created from their order's Service Charge tab, and the saved record's
+    // Traceability tab shows the link.
+    expect(keys).not.toContain('jobNo')
 
-    // The list may show the document number and status even though the form
-    // treats them as charge-managed.
+    // The list shows the document number even though the form treats it as
+    // charge-managed; SO No., Invoice No. and Status left the list, whose
+    // description summarises the charge's fee lines instead.
     const columnKeys = module.columns.map(column => column.key)
     expect(columnKeys).toContain('chargeNo')
-    expect(columnKeys).toContain('status')
+    expect(columnKeys).not.toContain('jobNo')
+    expect(columnKeys).not.toContain('invoiceNo')
+    expect(columnKeys).not.toContain('status')
+    expect(columnKeys).toContain('description')
   })
 
   it('keeps discount and tax out of the fee-line cells with or without a job', () => {

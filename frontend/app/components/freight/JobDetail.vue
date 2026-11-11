@@ -8,7 +8,7 @@ import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordCh
 import { useJobRelated } from '~/composables/freight/useJobRelated'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
 import { useLcs } from '~/composables/freight/useLcs'
-import { useRecordStatus } from '~/composables/freight/useRecordStatus'
+import { useRequotation } from '~/composables/freight/useRequotation'
 import {
   emptyFreightRecord,
   groupedFields,
@@ -41,12 +41,16 @@ const router = useRouter()
 const { t, te } = useI18n()
 const { moduleTitle, fieldLabel } = useFreightLabel()
 const { setBreadcrumbs, setBadges, clear } = useAppHeader()
-const { confirm } = useConfirm()
+const { confirm, setLoading: setConfirmLoading, dismiss: dismissConfirm } = useConfirm()
 const lcs = useLcs()
 
 const saving = ref(false)
 const model = ref<FreightRecord>({} as FreightRecord)
 const notFound = ref(false)
+/** The Service Charge tab stays mounted after its first visit so edits survive
+ *  tab switches; its save runs with the page header's Save changes. */
+const chargesTab = ref<{ savePending: () => Promise<boolean> } | null>(null)
+const chargesVisited = ref(false)
 
 const domainStatus = computed(() => jobDomainStatus(model.value))
 // Finish locks operational editing: an editable page and a FINISHED record no
@@ -55,22 +59,6 @@ const canEdit = computed(() =>
   !isCreate.value && domainStatus.value !== 'FINISHED' && lcs.can('service_order.update'))
 const canEditPayments = computed(() =>
   !isCreate.value && lcs.can('service_order.update'))
-
-/**
- * Status changes (activate / deactivate / finish / reopen) run through the
- * shared status manager, so the job page and the list offer the same legal
- * transitions and every change is validated and audited.
- */
-const { menuItem: statusMenuItem } = useRecordStatus(module, {
-  onError: (message) => {
-    validation.reset()
-    validation.addFormError(message)
-  },
-  onChanged: async () => {
-    const refreshed = await lcs.jobs.get(String(model.value.id))
-    model.value = { ...model.value, ...refreshed }
-  },
-})
 
 const {
   listTo,
@@ -160,6 +148,14 @@ const isComponentTab = computed(() =>
   Boolean(activeTab.value) && componentTabsState.tabs.value.some(tab => tab.code === activeTab.value),
 )
 const activeComponentTab = computed(() => componentTabsState.tabByCode(activeTab.value))
+
+const { requoteFromServiceOrder } = useRequotation({
+  confirm,
+  setConfirmLoading,
+  dismissConfirm,
+  toast,
+  onError: message => validation.addFormError(message),
+})
 
 function setComponentRows(groupId: string, rows: Array<Record<string, unknown>>) {
   // Row-indexed errors belong to the previous row set; recompute on next save.
@@ -279,12 +275,18 @@ function load() {
   if (!module.value) return
   if (isCreate.value) {
     model.value = emptyFreightRecord(module.value) as FreightRecord
+    // Method A (Quotations → Convert to Service Order) lands here with the
+    // source quotation in the query; selecting it prefills the form below.
+    const fromQuery = String(route.query.quotationId || '').trim()
+    if (fromQuery) model.value = { ...model.value, quotationId: fromQuery }
     notFound.value = false
+    savedSnapshot.value = JSON.stringify(model.value)
     return
   }
   const found = store.get('jobs', recordId.value)
   notFound.value = !found
   model.value = found ? { ...found } as FreightRecord : {} as FreightRecord
+  savedSnapshot.value = JSON.stringify(model.value)
 }
 
 watch(
@@ -350,12 +352,36 @@ function patchJob(patch: Record<string, unknown>) {
   model.value = { ...model.value, ...patch }
 }
 
+/** Snapshot of the last loaded/saved record; a differing model means unsaved edits. */
+const savedSnapshot = ref('')
+/** The Service Charge tab's unsaved fee-line edits (it has no save of its own). */
+const chargesDirty = ref(false)
+const jobDirty = computed(() => chargesDirty.value
+  || (Boolean(model.value.id) && Boolean(savedSnapshot.value) && JSON.stringify(model.value) !== savedSnapshot.value))
+
+/**
+ * Unsaved edits are never silently lost: Finish and Re-Quotation warn first,
+ * and proceeding is an explicit "discard" decision.
+ */
+async function confirmUnsaved(): Promise<boolean> {
+  if (!jobDirty.value) return true
+  return await confirm({
+    kind: 'generic',
+    title: t('lcs.common.confirmTitle'),
+    description: t('lcs.document.unsavedConfirm'),
+    confirmLabel: t('lcs.common.confirm'),
+    confirmColor: 'warning',
+  })
+}
+
 /**
  * Selecting a quotation populates the reusable commercial data: business party,
  * trade direction, currency, dates, description. Route, containers and pricing
  * lines are copied server-side on save, so the order stays its own record.
+ * The watch also re-runs once the quotations list finishes loading, so a
+ * preselected quotation (deep link) prefills even when the list arrives late.
  */
-watch(() => model.value.quotationId, (id) => {
+watch([() => model.value.quotationId, () => store.list('quotations').length], ([id]) => {
   if (!isCreate.value || !id) return
   const quotation = store.list('quotations').find(row => String(row.id) === String(id))
   if (!quotation) return
@@ -390,17 +416,20 @@ async function save() {
   validation.reset()
   try {
     const failures = validateOrder()
-    // Quotation selection is mandatory for a new Service Order; the backend
-    // refuses with a field error too, but the form should say so up front.
-    if (isCreate.value && !String(model.value.quotationId || '').trim()) {
-      failures.push({ key: 'quotationId', code: 'required', label: fieldLabel({ key: 'quotationId', label: 'Quotation' }) })
-    }
+    // A quotation is optional: a Service Order can be created directly, and a
+    // selected quotation only prefills editable fields (the backend re-checks
+    // that a supplied quotation exists and is accessible).
     if (failures.length) {
       validation.applyFailures(failures)
       await validation.focusFirstInvalid()
       return
     }
     const payload = { ...model.value }
+    // The Service Charge tab has no save button: its pending fee-line edits are
+    // written with the page save. A refusal there (validation or API) stops the
+    // page save so the errors stay visible on that tab.
+    const chargesSaved = await chargesTab.value?.savePending()
+    if (chargesSaved === false) return
     if (isCreate.value || !payload.id) {
       if (isCreate.value) {
         // A retried create is a replay for the backend: the idempotency key
@@ -432,22 +461,23 @@ async function save() {
   }
 }
 
-async function deleteJob() {
-  if (!model.value.id) return
-  const ok = await confirm({ kind: 'delete', count: 1 })
-  if (!ok) return
-  store.remove('jobs', [String(model.value.id)])
-  toast.add({ title: t('lcs.actions.deletedItems', { n: 1 }), color: 'success' })
-  await navigateTo('/service-orders')
-}
-
-function openQuotation() {
-  const quotation = store.list('quotations').find(row => String(row.quotationNo || '') === String(model.value.quotationNo || ''))
-  if (!quotation) {
-    toast.add({ title: t('lcs.states.notFound'), color: 'warning' })
+/**
+ * View Quotation opens the order's own linked quotation (the real id from the
+ * API; the number is only a fallback for legacy rows). An order without a
+ * linked quotation explains that instead of navigating anywhere.
+ */
+function viewQuotation() {
+  const id = String(model.value.quotationId || '').trim()
+  if (id) {
+    void navigateTo(`/quotations/${id}`)
     return
   }
-  void navigateTo(`/quotations/${quotation.id}`)
+  const quotation = store.list('quotations').find(row => String(row.quotationNo || '') === String(model.value.quotationNo || ''))
+  if (quotation?.id) {
+    void navigateTo(`/quotations/${String(quotation.id)}`)
+    return
+  }
+  toast.add({ title: t('freight.ui.noLinkedQuotation'), color: 'warning' })
 }
 
 const jobSaveLabel = computed(() =>
@@ -472,6 +502,7 @@ async function finishJob() {
       lcs.jobs.finish(String(model.value.id), key),
     )
     model.value = { ...model.value, ...saved } as FreightRecord
+    savedSnapshot.value = JSON.stringify(model.value)
     toast.add({ title: t('freight.ui.finished'), color: 'success' })
   }
   catch (error) {
@@ -483,31 +514,46 @@ async function finishJob() {
   }
 }
 
+/** The header menu's Finish: unsaved edits are confirmed away first. */
+async function finishFromMenu() {
+  if (!await confirmUnsaved()) return
+  await finishJob()
+}
+
+async function requoteFromMenu() {
+  if (!await confirmUnsaved()) return
+  await requoteFromServiceOrder(String(model.value.id || ''), String(model.value.jobNo || ''))
+}
+
 const moreItems = computed<DropdownMenuItem[][]>(() => {
   if (isCreate.value || !model.value.id) return []
   const items: DropdownMenuItem[] = []
-  if (String(model.value.quotationNo || '').trim()) {
-    items.push({ label: t('freight.ui.viewSourceQuotation'), icon: 'i-lucide-file-search', onSelect: openQuotation })
-  }
-  // Change Status (activate / deactivate / finish / reopen) comes from the
-  // shared policy, so the same legal transitions are offered here as in the list.
-  const statusItem = statusMenuItem(model.value)
-  if (statusItem) items.push(statusItem)
-  if (lcs.can('service_order.update') && domainStatus.value === 'INACTIVE') {
-    // Only an inactive order can be deleted.
-    items.push({
-      label: t('freight.ui.delete'),
-      icon: 'i-lucide-trash-2',
-      color: 'error',
-      onSelect: () => { void deleteJob() },
-    })
+  items.push({ label: t('freight.ui.viewSourceQuotation'), icon: 'i-lucide-file-search', onSelect: viewQuotation })
+  // Finish is the record's own workflow (same confirmation, endpoint and
+  // validations as before); it is disabled once the order is finished.
+  items.push({
+    label: t('freight.ui.finish'),
+    icon: 'i-lucide-flag',
+    color: 'primary',
+    disabled: !canEdit.value,
+    onSelect: () => { void finishFromMenu() },
+  })
+  if (lcs.can('quotation.revise')) {
+    items.push({ label: t('freight.ui.requote'), icon: 'i-lucide-git-branch', onSelect: () => { void requoteFromMenu() } })
   }
   return [items]
 })
 
 function onTabChange(value: string) {
   activeTab.value = parseSection(value)
+  if (activeTab.value === 'charges') chargesVisited.value = true
 }
+
+/** The tab is mounted on first visit and then kept alive (hidden) — its draft
+ *  must survive tab switches because only the page header saves it. */
+watch(activeTab, (tab) => {
+  if (tab === 'charges') chargesVisited.value = true
+}, { immediate: true })
 </script>
 
 <template>
@@ -542,16 +588,6 @@ function onTabChange(value: string) {
     @navigate-previous="navigatePrevious"
     @navigate-next="navigateNext"
   >
-    <template #actions>
-      <CommonAppDocumentActionButton
-        v-if="canEdit && domainStatus === 'ACTIVE'"
-        icon="i-lucide-check-circle"
-        :label="t('freight.ui.finish')"
-        :loading="finishing"
-        @click="finishJob"
-      />
-    </template>
-
     <template #form>
       <DocumentAppDocumentContentShell wide>
         <div class="space-y-6 py-5">
@@ -595,13 +631,6 @@ function onTabChange(value: string) {
             @update:rows="setComponentRows"
             @save-group="saveComponentGroup"
           />
-          <FreightJobCharges
-            v-else-if="activeTab === 'charges'"
-            :job="model"
-            :job-no="jobNo"
-            :editable="canEdit"
-            @update:job="patchJob"
-          />
           <FreightJobFinance
             v-else-if="activeTab === 'finance'"
             :job="model"
@@ -620,6 +649,18 @@ function onTabChange(value: string) {
             :editable="canEdit"
             @update:job="patchJob"
           />
+          <!-- Mounted on first visit and then kept alive (hidden) so its pending
+               fee-line edits survive tab switches; the page header saves them. -->
+          <div v-if="chargesVisited" v-show="activeTab === 'charges'">
+            <FreightJobCharges
+              ref="chargesTab"
+              :job="model"
+              :job-no="jobNo"
+              :editable="canEdit"
+              @update:job="patchJob"
+              @update:dirty="chargesDirty = $event"
+            />
+          </div>
         </div>
       </DocumentAppDocumentContentShell>
     </template>

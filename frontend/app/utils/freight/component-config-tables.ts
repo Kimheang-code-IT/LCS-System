@@ -57,6 +57,7 @@ export function blankComponentAttributeRow(): ComponentConfigRow {
     isRequired: false,
     helpText: '',
     displayOrder: 0,
+    status: 'ACTIVE',
   }
 }
 
@@ -249,12 +250,19 @@ export function componentAttributePayload(row: ComponentConfigRow, fallbackCode:
   }
 }
 
+/**
+ * The seven visible columns (# and Actions are renderer utilities): the label,
+ * code, data type and required flag edit inline; status is read-only. Choices,
+ * master data, display order, rules and help text live in the row's settings
+ * dialog (`ComponentAttributeSettingsDialog` on the page), not in table cells.
+ * `_reorder` renders no column — it adds the menu's Move up/down items.
+ */
 export function componentAttributeColumns(): FreightLineColumn[] {
   return [
     { key: '_reorder', label: '', type: 'reorder' },
     {
       key: 'label',
-      label: 'Field Name',
+      label: 'Label',
       labelKm: 'ឈ្មោះចំណុច',
       type: 'text',
       required: true,
@@ -262,7 +270,7 @@ export function componentAttributeColumns(): FreightLineColumn[] {
     },
     {
       key: 'code',
-      label: 'Field Key',
+      label: 'Code',
       labelKm: 'លេខកូដចំណុច',
       type: 'text',
       required: true,
@@ -279,48 +287,29 @@ export function componentAttributeColumns(): FreightLineColumn[] {
     },
     { key: 'isRequired', label: 'Required', labelKm: 'ត្រូវសម្រាប់', type: 'checkbox' },
     {
-      key: 'displayOrder',
-      label: 'Display Order',
-      labelKm: 'លំដាប់បង្ហាញ',
-      type: 'number',
-      computed: true,
-    },
-    {
       key: 'status',
       label: 'Status',
       labelKm: 'ស្ថានភាព',
       type: 'text',
       computed: true,
     },
-    {
-      key: 'options',
-      label: 'Choices (a, b)',
-      labelKm: 'ជម្រើស',
-      type: 'text',
-      rule: { maxLength: 1000 },
-    },
-    {
-      key: 'referenceType',
-      label: 'Master Data',
-      labelKm: 'ទិន្នន័យមេ',
-      type: 'select',
-      options: COMPONENT_REFERENCE_TYPES,
-    },
-    {
-      key: 'validationRules',
-      label: 'Rules (key=value)',
-      labelKm: 'ច្បាប់ផ្ទៀងផ្ទាត់',
-      type: 'text',
-      rule: { maxLength: 500 },
-    },
-    {
-      key: 'helpText',
-      label: 'Help Text',
-      labelKm: 'អត្ថបទជំនួយ',
-      type: 'text',
-      rule: { maxLength: 255 },
-    },
   ]
+}
+
+/** Only choice-based data types carry a choices list in the settings dialog. */
+export function attributeTypeSupportsChoices(dataType: unknown): boolean {
+  const value = componentAttributeDataType(dataType)
+  return value === 'select' || value === 'multi_select'
+}
+
+/** Only reference-based attributes pick a Master Data source. */
+export function attributeTypeIsReference(dataType: unknown): boolean {
+  return componentAttributeDataType(dataType) === 'reference'
+}
+
+/** Settings-dialog items for the Master Data field, off the shared enum. */
+export function componentReferenceTypeItems() {
+  return COMPONENT_REFERENCE_TYPES.map(value => ({ label: value.replace(/_/g, ' '), value }))
 }
 
 /** Assigned-attributes grid for a component group. */

@@ -264,7 +264,7 @@ describe('service charge form (/service-charges)', () => {
 
   it('requires the customer', () => {
     expect(validateDocumentFields({ fields: module.fields, model: {}, isCreate: true, label })
-      .map(f => f.key)).toContain('customer')
+      .map(f => f.key)).toContain('customerPartyId')
   })
 
   it('locates an invalid fee line', () => {

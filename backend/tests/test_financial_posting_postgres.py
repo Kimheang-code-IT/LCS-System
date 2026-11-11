@@ -52,7 +52,7 @@ pytestmark = [
 def _url() -> str:
     return (
         f"postgresql+asyncpg://{quote_plus(PG['user'] or '')}:{quote_plus(PG['password'] or '')}"
-        f"@{PG['host']}:5432/{PG['db']}"
+        f"@{PG['host']}:{os.environ.get('LCS_TEST_PG_PORT', '5432')}/{PG['db']}"
     )
 
 

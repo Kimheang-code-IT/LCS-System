@@ -12,7 +12,8 @@ export function createHttpTelegramRepository() {
     candidate: async () => unwrapApiData(await api.get<{ name: string | null, verified: boolean }>(ApiEndpoints.TELEGRAM_GROUP_CANDIDATE)),
     confirmGroup: async (challenge: string) => unwrapApiData(await api.post(ApiEndpoints.TELEGRAM_GROUP_CONFIRM, { challenge })),
     disconnectGroup: async () => unwrapApiData(await api.delete(ApiEndpoints.TELEGRAM_GROUP)),
-    myLink: async () => unwrapApiData(await api.get<{ connected: boolean, displayName: string | null, verifiedAt: string | null, blocked: boolean }>(ApiEndpoints.TELEGRAM_MY_LINK)),
+    myLink: async () => unwrapApiData(await api.get<{ connected: boolean, displayName: string | null, username: string | null, telegramUserId: number | null, verifiedAt: string | null, blocked: boolean, updatesActive: boolean, botName: string, botUsername: string }>(ApiEndpoints.TELEGRAM_MY_LINK)),
+    verificationCode: async () => unwrapApiData(await api.post<{ code: string, expiresAt: string, botUsername: string }>(ApiEndpoints.TELEGRAM_MY_VERIFICATION_CODE, {})),
     pairPrivate: async (currentPassword: string) => unwrapApiData(await api.post<TelegramPairing>(ApiEndpoints.TELEGRAM_MY_PAIR, { current_password: currentPassword })),
     disconnectPrivate: async (currentPassword: string) => unwrapApiData(await api.post(ApiEndpoints.TELEGRAM_MY_DISCONNECT, { current_password: currentPassword })),
   }

@@ -114,6 +114,467 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### First-run setup inserts nothing but the admin — 2026-11-11
+
+`/auth/setup` and the administrative "Reset data" now insert only the administrator
+account and the permission/role catalog. The last automatic reference rows (document
+sequences, currency master, app settings + their legacy rollback mirror) were removed from
+`provision_baseline`, which is deleted; a fresh or reset database stays completely empty
+until the operator seeds deliberately. Document sequences and app settings moved into
+`scripts/seed.py` as the `document-sequences` and `app-settings` modules, so `--all` /
+`--demo` now produce a fully working database (numbering, currency selects, settings
+defaults). Startup still synchronizes the permission/role catalog only — that is the
+security baseline login depends on, not reference data. The settings API keeps answering
+from the code defaults while no `app_settings` row exists, so the UI still loads on an
+unseeded database. Tests updated: `test_setup.py` now asserts setup/reset leave sequences
+and currencies empty, and `test_seed_script.py` proves the new modules insert once then
+replay as skips. Deployment guide updated with the setup → seed order.
+
+Changed: `backend/app/core/bootstrap.py`, `backend/app/modules/master_data/service.py`
+(docstrings), `backend/scripts/seed.py`, `backend/tests/{test_setup.py,test_seed_script.py}`,
+`docs/03-development/deployment-guide.md`. Evidence: backend `pytest` → 14 passed (setup +
+seed) and 81 passed (auth sessions, maintenance, API completeness, localization, quotations);
+ruff clean. Note: Alembic's own migrations still seed the canonical financial document
+types, transport identity types and capacity units on a brand-new schema (schema bootstrap,
+idempotent with the seed command); nothing else inserts rows automatically. No Git commit.
+
+### Automatic reference-data seeding removed; explicit `--demo` seed — 2026-11-11
+
+No Master Data/Configuration row is inserted automatically any more. The `/auth/setup`
+baseline (and `reset-data`) now provision only what the application cannot run without —
+document-number sequences, the currency master, default app settings and their legacy
+mirror — plus the permission/role catalog at startup; place roles, party roles,
+transport identity types and capacity units were removed from `provision_baseline`.
+
+`backend/scripts/seed.py` stays the single explicit seeder (insert-missing only, no
+deletes, no ConfigurationVersion publish) and gains `--demo`: `--all` plus five sample
+business parties (role links resolved by code) and two extra Configuration groups / four
+extra Component tabs (linked to the seeded attributes/groups, IMPORT direction only) so
+every Master Data and Configuration table starts with five records. Links degrade to
+"skipped" when an administrator trimmed one side instead of failing the module. The script
+now puts the backend directory on `sys.path` itself, so it runs from any cwd or container,
+and `backend/Dockerfile` ships the whole `scripts/` folder for one-off production
+containers. Commands are documented in `docs/03-development/deployment-guide.md`
+(`--dry-run`, `--all`, `--demo`, and the `docker compose run --rm --no-deps backend …`
+production form). New test `backend/tests/test_seed_script.py` proves the demo rows insert
+once and replay as skips.
+
+Changed: `backend/app/core/bootstrap.py`, `backend/scripts/seed.py`,
+`backend/scripts/seed_data/{master_data.py,configuration.py}`, `backend/Dockerfile`,
+`backend/tests/test_seed_script.py`, `docs/03-development/deployment-guide.md`.
+Evidence: backend `pytest` → 13 passed (seed script + setup) and 69 passed (master data,
+transport assets, quotations); ruff clean. Not executed: a live seed against a real
+PostgreSQL database (local credentials rejected the dry run), so verify on the target host
+with `--dry-run` first. No Git commit.
+
+### Service Orders come from a Quotation only — 2026-11-11
+
+Manual Service Order creation is retired end to end. The `/service-orders` list module has
+`canCreate: false`, so the header New button is gone (search/filters/sort/pagination/row
+actions/refresh unchanged), and its dead create-gate branch was removed from
+`WorkspaceView`. The old `/service-orders/new` route now renders a redirect page: it shows
+`freight.ui.serviceOrderNeedsQuotation` ("Service Orders must be created from a Quotation.
+Please select a quotation and use Convert to Service Order.") and replaces the route with
+`/quotations`; its page-permission mapping moved to the list's view code so any user who
+can see orders is redirected rather than denied. The SO Overview's source quotation is
+now `readOnly` — visible for reference and openable through the existing View Quotation
+header action, but never editable; the backend already refused to repoint it on update.
+
+Backend: `save_service_order` refuses any new order without a source quotation
+(`ValidationFailed` on `quotationId`), so `POST /service-orders` cannot be used to bypass
+conversion; quotation existence and a revision to copy are validated as before, and the
+conversion ledger still records every create with its idempotency key. The approved
+Quotations → Convert to Service Order workflow is untouched (`convert_revision` →
+`create_service_order_from_quotation`, one quotation → many independent orders, unique SO
+numbers, quantity-expanded payment rows). Update APIs and historical orders (nullable
+`quotation_revision_id`) are preserved. Tests that relied on manual creation were
+rewritten or removed (`test_a_manual_service_order_create_is_refused`, the direct-replay
+test deleted, the payment-aggregation re-quotation test now converts a pricing-less
+quotation first) and a frontend pin covers the list/redirect/read-only field.
+
+Changed: `backend/app/modules/operations/service.py`,
+`backend/tests/test_quotation_reuse.py`, `frontend/app/config/freight-modules.ts`,
+`frontend/app/pages/service-orders/new.vue`, `frontend/app/utils/freight/page-access.ts`,
+`frontend/app/components/freight/WorkspaceView.vue`,
+`frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/{page-access.spec.ts,service-order-creation.spec.ts}`. Evidence: backend
+`pytest` → 51 passed (quotation reuse, request schemas, auth sessions) and 74 passed
+(quotations, job finance entries, created-by, movements/milestones, multi-currency);
+frontend `vitest run` → 844 passed / 102 files; eslint clean; `pnpm i18n:check` pass;
+typecheck clean except the pre-existing `TelegramSettingsPanel.vue` error. Limits: no
+browser journey; PG-only race tests still skip without a live database. No Git commit.
+
+### Service Charge tab: page-level save + live totals — 2026-11-11
+
+The Service Charge tab's line grid no longer owns a Cancel / Save changes button: its
+section header keeps only Print Invoice and Add charge, and the page header's Save
+changes writes the pending charge change set (`AppSaveGrid` exposes `pendingChange` and
+gains `hideSaveActions`; `JobCharges` exposes `savePending`, which `JobDetail.save()` calls
+before persisting the order — a refused charge save stops the page save so its inline
+errors stay visible). The tab is mounted on first visit and then kept alive (hidden) so
+unsaved fee-line rows survive tab switches, and its dirty state feeds the order's
+unsaved-changes guard. The totals block (Subtotal / Discount / Tax Rate / Tax / Grand
+Total) now follows the grid's unsaved working rows (`update:draft`) and renders as soon as
+a row exists, instead of only after a save.
+
+Changed: `frontend/app/components/table/AppSaveGrid.vue`,
+`frontend/app/components/freight/{JobCharges.vue,JobDetail.vue}`,
+`frontend/tests/service-charge-save.spec.ts`. Evidence: `vitest run` → 841 passed / 101
+files. No backend changes. No Git commit.
+
+### Service Charges page + charge-line actions completed — 2026-11-11
+
+Service Charges (`/service-charges`) list now shows exactly Checkbox (shared select
+column), SC No., Business Party, Description, Grand Total, Created By, Created At and the
+row-actions menu — SO No., Invoice No. and Status columns are gone, and the list is
+unconditionally standalone-only (linked charges live on their order's tab; the SO No.
+and Status toolbar filters went with the columns). Each charge still appears once: the
+backend payload gains a `description` summarising its fee lines (first line's
+description, "+N more" when several). The page's New button and document title say
+"Service Charge" via a new `FreightModule.singularKey`/`titleKey` override
+(`freight.modules.serviceCharges.*` added in all locales) instead of the shared
+`jobCharges` collection noun.
+
+Standalone charge detail (Fee Lines tab): rows gained the shared Delete command
+(`_delete` column; disabled while the charge is read-only), and both the table header
+("Print Invoice") and the row menu now drive the **finance** invoice workflow through the
+existing charge→invoice command — an already-invoiced charge opens its existing invoice's
+print preview, an issued one is confirmed then converted (bill-once
+`FinancialDocumentSource`, no duplicate possible), a draft one explains it must be issued
+first. `useFinanceCommands.createInvoiceFromCharge` gained an optional destination so the
+created invoice lands on its print preview; the header "Create Finance Invoice" action
+keeps its old behaviour. Additional Details (per-line discount + tax rate) and the live
+Subtotal/Discount/Tax-Rate/Tax/Grand-Total summary below the grid were already in place
+and are reused unchanged. Service Orders → Service Charge (previous entry below) is
+unchanged by this pass.
+
+Stale test pins from the interrupted finance-grid pass (Date column, no Business-Party
+column, `hideAddRow`) were aligned to the current implementation; the service-charge list
+spec was rewritten to the new columns.
+
+Changed: `frontend/app/config/freight-modules.ts`,
+`frontend/app/composables/freight/{useFreight.ts,useFinanceCommands.ts}`,
+`frontend/app/components/freight/{WorkspaceView.vue,DocumentView.vue}`,
+`backend/app/modules/operations/service.py` (payload `description` only),
+`frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/{service-charge-list.spec.ts,document-tabs.spec.ts,finance-tab.spec.ts,workspace-tables.spec.ts}`.
+Evidence: `vitest run` → 838 passed / 100 files; eslint + typecheck clean on touched
+files (`TelegramSettingsPanel.vue` remains the one pre-existing typecheck error);
+`pnpm i18n:check` → pass; backend `test_service_charge_workflows.py` +
+`test_quotation_reuse.py` → 29 passed. Limits: no browser journey; no live-PostgreSQL
+race tests. No Git commit.
+
+### Service Charge tab: inline grid cleanup + individual/combined invoice printing — 2026-11-11
+
+Service Orders → Service Charge keeps the shared `AppLineTable` (via `AppSaveGrid`) with
+exactly `#` (renderer's row-number column), Fee Type, Description, Qty, Unit Price, Line
+Total and a row-menu Delete command — the `Invoice No.` column was removed and the row's
+`financialDocumentId` now identifies the owning invoice. Every row's `...` menu reads
+Additional Details / Print Invoice / Delete: `AppLineTable` now puts its built-in
+Additional Details entry first (per-line discount + tax rate through the existing
+`AppLineDetailsDialog`, applied via `applyLineAdjustments` and saved through the existing
+save-grid change set), and Delete is a real column again (`type: 'delete'`), disabled on
+locked rows. Issued/invoiced charges are row-locked through a new `AppSaveGrid`
+`rowDisabled` passthrough (`serviceChargeRowDisabled`); document-level discount/tax rate
+stay editable from the summary's Discount/Tax-Rate buttons as before, and the Tax-Rate
+summary shows "Mixed" when lines carry several different rates instead of one wrong
+percentage.
+
+Print Invoice exists at two levels, both backed by the existing finance workflow with no
+backend changes: per-row — an already-invoiced charge opens its existing invoice's print
+preview (`/print/debitNotes/{id}?template=tax-invoice`), a DRAFT charge explains it must
+be issued first, and an ISSUED charge is confirmed then converted via the existing
+`POST /service-charges/{id}/create-finance-invoice` (idempotency key + bill-once
+`FinancialDocumentSource`, so retries and races can never draft a second invoice); top
+header — one combined invoice for all issued, uninvoiced lines after a confirmation
+listing the eligible charge numbers, reusing `POST /service-charges/combined-invoice`,
+opening the created invoice's print preview, opening the shared invoice when every line
+already belongs to one, and explaining when lines span several invoices. Add Charge is
+still the grid's own add-row button (one unsaved row, nothing persisted), and it now
+focuses the new row's first editable cell (`AppLineTable` `addRow`, generic). The old
+"Create Combined Invoice"/"Print Statement" header buttons are replaced by the single
+Print Invoice action.
+
+Fixed a latent save bug in shared code: `isDeletableCharge` compared the API's display
+status "Draft" against "DRAFT" exactly, so every saved-row edit in the tab was silently
+skipped; it now compares on the domain value.
+
+Changed: `frontend/app/components/freight/{JobCharges.vue,AppLineTable.vue}`,
+`frontend/app/components/table/AppSaveGrid.vue`,
+`frontend/app/utils/freight/job-charges.ts`, `frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/workspace-tables.spec.ts`. No backend changes — `create_invoice_from_charge`,
+`create_combined_invoice_from_charges`, the per-charge bill-once source link and the
+DRAFT-only delete guard already enforced everything. Evidence: `vitest run` → 837 passed
+/ 100 files; eslint clean on touched files; `pnpm i18n:check` → pass. Limits: no browser
+journey; the print previews and posting remain exercised by the existing finance tests.
+No Git commit.
+
+### Finance grid inline editing via AppLineTable — 2026-11-11
+
+Service Orders → Finance now uses the shared `AppLineTable` for inline row editing — no new
+table component. `AppLineTable` gained one small backward-compatible extension: a per-column
+`lockCell(row)` predicate for mixed read-only/editable grids (its existing `rowDisabled`
+already locked per row). The Finance grid columns are Type (select of Document Types master
+data; lockable only on unsaved rows), Description, Business Party and Currency (searchable
+reference selects from the store), Amount (number); `#` is the table's own row-number
+column. Add Entry appends exactly one unsaved row (`new-*` id, date and currency seeded)
+that is saved through the existing `finance.createDocument` / `finance.saveDraft` APIs via
+the row menu's Save — repeated clicks are guarded, backend field errors map back onto the
+offending cells, and user input is preserved. Posted/reversed documents and multi-line
+drafts are row-locked (View/Post/Reverse/Allocate only — accounting immutability
+preserved). Settlement types (receipts/payments) hand the unsaved row to the existing Add
+Entry dialog, which owns the mandatory Financial Account field; the dialog (also reachable
+from the header and from a draft row's Details action for Date / Fee Type / Reference /
+Remark) completes the row through the same create path. The summary now totals **POSTED
+documents only** per currency, with drafts shown as a separately labelled "Unposted drafts
+(preview)" line — drafts are never counted as posted amounts.
+
+Quotation Pricing, Fee Lines and Container Payments already run on `AppLineTable` and are
+untouched; `DynamicDataTable` remains the record-list table.
+
+Changed: `frontend/app/components/freight/{AppLineTable.vue,JobFinance.vue}`,
+`frontend/app/config/{freight-modules.ts,job-workspace-forms.ts}`,
+`frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/{finance-tab.spec.ts,workspace-tables.spec.ts,line-table-rules.spec.ts}`.
+No backend changes. Evidence: `vitest run` → 836 passed; eslint + typecheck clean for
+touched files; `pnpm i18n:check` → pass. Limits: no browser journey (inline save flows
+exercised at the API-contract level by existing finance tests). No Git commit.
+
+### Standalone charge creation simplified — 2026-11-11
+
+Root cause of "Must be a company id.": the form's Business Party picker keyed the customer
+by **legal name** (`referenceOptionSource('customer')` → `valueField: 'legalName'`), while
+the new standalone branch resolved a party **id** — a missing/None id hit
+`resolve_party_by_id`'s "Must be a company id." error. Fixed in `save_charge`: a supplied
+`customerPartyId` resolves by id, a `customer` **name** resolves (or creates) the party via
+`resolve_party_by_name` (the quotation rule), and a missing party is a clean field error;
+an edit with a supplied party id now updates it (previously ignored).
+
+Form: the `/service-charges` create form now shows General (Business Party picker by id —
+searchable, required — Currency required, Remarks) + Fee Lines only; the Service Order
+(jobNo) field is removed from the form (linked charges are created from the Service Order's
+Service Charge tab; the saved record's Traceability tab shows invoice / posted journal /
+source Service Order / quotation links, which already resolve through the existing
+traceability util); the Traceability tab is hidden during creation; the create save label is
+"Save Charge" (was "Submit"). A new charge starts with one empty fee line that is dropped on
+save when completely untouched (partially filled lines stay and are caught by the existing
+validation). Saving creates only a DRAFT charge — no invoice, no journal (existing rules).
+
+Changed: `backend/app/modules/operations/service.py`,
+`backend/tests/test_service_charge_workflows.py` (+1 name-only test, 6 total),
+`frontend/app/config/freight-modules.ts`,
+`frontend/app/components/freight/DocumentView.vue`, locales (+`saveCharge`),
+`frontend/tests/{document-form-validation.spec.ts,document-tabs.spec.ts}`. Evidence:
+`pytest test_service_charge_workflows.py` → 6 passed; charge/workflow/validation batch →
+53 passed; `vitest run` → 836 passed; eslint + ruff clean; i18n check pass. Limits: legacy
+linked charges whose party was inherited (NULL column) show an empty picker on edit and
+keep their order party unless a new one is picked. No Git commit.
+
+### Finance tab: summary + Additional Details dialog — 2026-11-11
+
+Service Order → Finance: the entries table now shows the required minimal columns (#, Type,
+Description, Business Party, Amount, Currency — Date/Status stay in the payload and the row
+menu/dialog); editing remains dialog-based through the existing row actions (the shared
+tables have no per-row mixed editability, and financial documents need the full dialog
+fields — posted rows stay protected by the existing lifecycle rules). New summary block:
+per-currency **Total Income / Total Expenses / Net Amount** — income behaviors
+(CUSTOMER_INVOICE, OTHER_INCOME) minus expense behaviors (SUPPLIER_BILL, OTHER_EXPENSE),
+resolving behaviors through Document Types master data; settlements (receipts/payments)
+are excluded to avoid double counting, REVERSED/CANCELLED documents are excluded by the
+existing status rules, currencies are never converted.
+
+Service Charge tab summary: Discount and Tax Rate are now clickable values that open the
+existing shared Additional Details dialog (`AppLineDetailsDialog`, retitled to
+"Additional Details"), which validates discount ∈ [0, subtotal] and tax rate ∈ [0, 100]
+(red borders only on real validation errors — the app's inputs otherwise use the standard
+gray Nuxt UI borders; the old always-editable inline inputs are gone from this summary).
+Save persists through the existing job-record update path (discount/vatRate), totals
+recalculate from the shared `serviceChargeTotals` util. No backend or database changes —
+all APIs, posting rules, period controls and audit behavior are the existing ones.
+
+Changed: `frontend/app/components/freight/{JobFinance.vue,JobCharges.vue}`,
+`frontend/app/config/job-workspace-forms.ts`, `frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/{finance-tab.spec.ts,workspace-tables.spec.ts}`. Evidence: `vitest run`
+→ 836 passed; `pnpm i18n:check` → pass; eslint clean; typecheck clean for touched files
+(pre-existing TelegramSettingsPanel error remains). Limits: no browser journey. No Git commit.
+
+### Unified service charges + combined invoicing — 2026-11-11
+
+The existing single charge model now supports both workflows. Standalone charges: `service_order_charges.service_order_id` became **nullable** (migration `b5c9d1e4f2a7`, additive) and a new nullable `customer_party_id` column carries the billing customer (linked charges keep mirroring their order's party at save time; existing rows are untouched and keep inheriting the order's party). `save_charge` accepts no order when a customer is supplied (customer mandatory for standalone, order's customer forced for linked); the charges list endpoint gained a `scope` query param (`all` default, `standalone` optional) and the Service Charges page hides order-linked rows unless the SO No. filter is used (client-side, so the store cache keeps serving the SO Finance tab). An invoiced charge (any charge with a `SERVICE_ORDER_CHARGE` finance source) can no longer be deleted.
+
+Combined invoicing: new finance service `create_combined_invoice_from_charges` + `POST /api/v1/service-charges/combined-invoice` (permission `service_charge.convert_to_invoice`, Idempotency-Key replay) — validates issued-only, not-already-invoiced (per-charge bill-once index), one customer, one currency; drafts ONE `CUSTOMER_INVOICE` with sequential lines from every charge and **one `FinancialDocumentSource` row per charge**, so existing bill-once/retry protection applies per charge; totals are Decimal sums; the document is a finance DRAFT that posts only through the existing workflow. Printing unchanged: combined statements (order statement print) and per-invoice print reuse the existing finance print templates; printing never posts.
+
+UI: Service Charges page shows a "Create Combined Invoice" toolbar action on selection (navigates to the drafted document); the Service Order's Service Charge tab gains a "Create Combined Invoice" header action (combines the order's issued, uninvoiced charges), relabels the ambiguous "Print All" to "Print Statement", and shows an Invoice No. reference column.
+
+Changed: `backend/app/modules/operations/{models.py,service.py,router.py}`, `backend/app/modules/finance/service.py`, migration `b5c9d1e4f2a7`, `backend/tests/{test_service_charge_workflows.py(new),test_workflows.py,test_migration_chain.py}`; frontend `repositories/{http,contracts}/lcs.ts`, `utils/constants/api-v1-endpoints.ts`, `components/freight/{WorkspaceView.vue,JobCharges.vue}`, `utils/freight/job-charges.ts`, locales. Evidence: `pytest test_service_charge_workflows.py` → 5 passed; charge/workflow/migration batch → 76 passed; full frontend `vitest run` → 836 passed; eslint + ruff clean. Limits: no live-PostgreSQL race replay; printing-creates-no-invoice covered by existing flows (print opens the existing document); combined selection UI relies on backend validation for cross-customer/mixed-status selections. No Git commit.
+
+### Detail header actions simplified — 2026-11-11
+
+Quotation detail: the "Open Service Order" header menu action is removed (relationship,
+conversion and stored references untouched); with no other valid actions the quotation
+header's three-dot trigger is hidden automatically (the shared header already hides an
+empty `moreItems`). Service Order detail: the standalone Finish button, the Change Status
+submenu and the header Delete/Deactivate actions are removed; the menu now offers exactly
+View Quotation (order's own `quotationId`, number fallback, "No quotation is linked…"
+warning otherwise), Finish (the same `finishJob` workflow — existing confirmation,
+idempotent command, status refresh, toast; disabled when finished or not editable) and
+Re-Quotation (shared `useRequotation` composable, also used by the list row menu, so no
+duplicate logic). Both Finish and Re-Quotation warn on unsaved edits first (new lightweight
+`savedSnapshot`/`jobDirty` in JobDetail; proceeding is an explicit discard decision).
+"View Source Quotation" renamed to "View Quotation" in en/km/zh; new
+`noLinkedQuotation` key. The pinned `document-action-button.spec` updated for the removed
+standalone button.
+
+Changed: `frontend/app/components/freight/{JobDetail.vue,DocumentView.vue,WorkspaceView.vue}`,
+new `frontend/app/composables/freight/useRequotation.ts`,
+`frontend/app/repositories/{http,contracts}/lcs.ts`, `frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/document-action-button.spec.ts`. No backend changes. Evidence: `vitest run`
+→ 836 passed; `pnpm i18n:check` → pass; eslint on all touched files → pass; `pnpm typecheck`
+→ no errors in touched files (one pre-existing error remains in TelegramSettingsPanel.vue,
+from prior unrelated dirty work; the committed baseline also failed typecheck). Limits: no
+browser journey. No Git commit.
+
+### Re-Quotation workflow — 2026-11-11
+
+Service Order row menus now show exactly Edit / Finish / Re-Quotation (Open, Change Status
+and per-row delete removed for jobs only; all backend functionality stays). Finish reuses
+the record's own status transition (existing confirmation/validation/permissions) and is
+disabled when the policy offers no finish transition (already FINISHED). Re-Quotation opens
+the shared confirm dialog ("Create Re-Quotation?" with the SO number, "original Service
+Order will remain unchanged"), shows loading on Confirm (keepOpenOnConfirm), then calls the
+existing `POST /api/v1/quotations/from-service-order/{id}` endpoint and navigates to
+`/quotations/{id}`. Backend: the endpoint accepts an Idempotency-Key — a retry is answered
+with the quotation it already created (key stored on the quotation's data; a deliberate
+re-quotation runs with a fresh key); when the order has no stored pricing lines, its
+container-payment rows are aggregated back into pricing lines (grouped by fee type,
+description, unit, unit price and discount/tax treatment, Decimal sums, tax derived from
+stored totals; unparseable amounts → clean ValidationFailed); orders with pricing lines
+re-quote those lines directly (they are the aggregated form of the payments). The
+quotation detail payload now exposes `sourceServiceOrderNo`, and the quotation page shows a
+clickable read-only "Source Service Order" reference above the form. `source_service_order_id`
+(nullable, indexed, non-unique, SET NULL) already existed — no migration. Locales en/km/zh
+updated.
+
+Changed: `backend/app/modules/quotations/{service.py,router.py}`,
+`backend/tests/test_quotation_reuse.py` (+4 tests),
+`frontend/app/repositories/{http,contracts}/lcs.ts`,
+`frontend/app/components/freight/{WorkspaceView.vue,DocumentView.vue}`,
+`frontend/i18n/locales/{en,km,zh}.json`. Evidence: `pytest tests/test_quotation_reuse.py`
+→ 23 passed; quotation/workflow/PG/access/migration batch → 96 passed, 3 skipped (PG-only);
+`vitest run` → 836 passed; `pnpm i18n:check` → pass (3574 keys × 3); ruff clean. Limits:
+concurrent same-key re-quotations are deduplicated sequentially (no unique index over the
+JSON key); no browser e2e. No Git commit.
+
+### Container payments: one row per quoted unit — 2026-11-11
+
+`_attach_quotation_copy` (the shared copy behind both the Convert confirmation and the
+Service Order form's quotation selector) now also generates `data.containerPayments`: each
+whole-number quotation pricing-line Qty N becomes N independent rows of Qty 1 at the line's
+unit price (line total = unit price; the rows' sum equals the line subtotal before
+adjustments; fee type, description, unit and `sourceQuotationLineId` are carried; no
+container number is fabricated). Fractional quantities (supported by pricing) and lines
+above `MAX_PAYMENT_ROWS_PER_LINE = 500` keep the line's own single billing-count row instead
+of being rounded or exploding the payload. Rows are stored once at creation — page loads,
+refreshes and later saves never regenerate them; a blank client-side `containerPayments`
+list on create is ignored (mirroring the existing places guard). No quotation changes, no
+schema change (payments stay in `service_orders.data` per the existing design); actual
+containers, invoices, payments and journals are still never copied. Legacy orders without
+stored rows keep the existing frontend derivation.
+
+Changed: `backend/app/modules/operations/service.py`, `backend/tests/test_quotation_reuse.py`
+(4 new tests). Evidence: `pytest tests/test_quotation_reuse.py` → 19 passed; quotation/
+workflow/finance/API-contract batch → 68 passed, 3 skipped (PG-only); `vitest run` → 836
+passed; ruff clean. Limits: no live-PostgreSQL race replay. No Git commit.
+
+### Convert to Service Order: confirm dialog + direct creation — 2026-11-11
+
+The row action now opens the shared confirm dialog ("Convert to Service Order?" with the
+quotation number interpolated and a note that the original quotation stays unchanged).
+Confirm shows loading on the button (new additive `keepOpenOnConfirm` option in
+`useConfirm`/`AppConfirmHost`; existing callers unchanged), then creates the order through
+the existing `POST /api/v1/quotation-revisions/{revisionId}/convert` endpoint — permission
+`quotation.convert`, atomic transaction, allocated unique SO number, independent child-row
+copies, conversion-ledger source link, idempotency replay on retry (the sessionStorage key
+survives a failed request, so a retry is answered with the created order; a later deliberate
+conversion runs with a fresh key), concurrent-retry rollback answered with the winner's
+order. Success closes the dialog, toasts and navigates to the new Service Order; failure
+closes the dialog and shows the backend refusal above the list. No new endpoint, no new
+field-mapping code: the conversion reuses `_attach_quotation_copy` (header party/direction/
+currency/description/data, route stops, container requirements + derived expected
+containers, own pricing lines and totals), which is also the copy path behind the Service
+Order form's quotation selector (Workflow B). Locales en/km/zh updated for the dialog copy.
+
+Changed: `frontend/app/components/freight/WorkspaceView.vue`,
+`frontend/app/composables/common/useConfirm.ts`, `frontend/i18n/locales/{en,km,zh}.json`.
+No backend or database changes. Evidence: `vitest run` → 836 passed; `pnpm i18n:check` → pass;
+`pytest tests/test_quotations.py tests/test_quotation_reuse.py tests/test_quotation_postgres.py
+tests/test_workflows.py tests/test_access_enforcement.py` → 78 passed, 3 skipped (PG race
+tests need live PostgreSQL). Limits: dialog loading state not unit-tested (`import.meta.client`
+is false in vitest); no browser journey. No Git commit.
+
+### Quotation row actions: Edit / Convert / Delete / Duplicate — 2026-11-11
+
+The quotation row menu now offers exactly four actions in order — Edit, Convert to Service
+Order, Delete, Duplicate — with Open, Open Service Order, Re-quote and status actions
+removed for quotations (other modules keep their menus). Delete stays clickable and shows
+the backend's `QUOTATION_HAS_SERVICE_ORDER` refusal above the list when a service order
+depends on the quotation (robust even when the jobs cache is incomplete; never cascades
+orders). `delete_quotations` now maps a commit-time FK refusal (a concurrent service-order
+creation linked the quotation between check and commit) to the same clean Conflict instead
+of a 500. Duplicate reuses the existing New Quotation form and create API: the row action
+navigates to `/quotations/new?duplicate=<id>`, DocumentView prefills business fields and
+items from the source record (identity, revision, traceability and attachment keys are
+skipped; `DUPLICATE_SKIP_KEYS`), and the backend allocates a fresh Quotation No. on save —
+so a duplicate is an ordinary create with full existing validation and permissions.
+Accidental duplicate submission protection is the form's existing double-submit guard
+(there is no server-side idempotency store for quotation creates; documented limit).
+
+Changed: `frontend/app/components/freight/{WorkspaceView.vue,DocumentView.vue}`,
+`backend/app/modules/quotations/service.py`. Evidence: `vitest run` → 836 passed;
+`pytest tests/test_quotation_reuse.py tests/test_quotations.py tests/test_quotation_versions.py
+tests/test_access_enforcement.py` → 66 passed. Limits: no PostgreSQL race replay, no browser
+journey. No Git commit.
+
+### Quotation → Service Order (1 → many) completion — 2026-11-11
+
+Implemented the two shared-path creation methods on top of the existing reusable-quotation
+design. No new pages, forms or conversion service: Method A (quotation row menu → Convert to
+Service Order) navigates to the existing Service Order form with `?quotationId=` preselected;
+Method B picks the quotation on the same form. The form's prefill watch now re-runs when the
+quotation list finishes loading, and a Service Order can be saved without any quotation.
+Backend `save_service_order` treats the quotation as optional prefill (explicit party/
+direction/currency/description win over the copied values), validates an unknown quotation,
+and records every new order — with or without a quotation — in the conversion ledger so a
+retried create stays an idempotent replay. One quotation → many Service Orders was already
+true at the schema level (`service_orders.quotation_revision_id`, nullable, non-unique FK to
+the revision, which traces to `quotations.id`); no `service_orders.quotation_id` column was
+added because the revision link already provides the optional quotation reference with FK
+integrity. Quotation Status UI is removed (list column, form field, status badge; the
+revision-history table keeps its own revision status vocabulary).
+
+Migration `d8e4b2c6f7a1` (after `c3d5f7a9b1e2`): PostgreSQL-only
+`ALTER TABLE quotation_conversions ALTER COLUMN quotation_revision_id DROP NOT NULL` so
+direct creates can record their idempotency key without a source revision. Additive;
+existing rows unchanged.
+
+Changed files: backend `app/modules/operations/service.py`, `app/modules/quotations/{models.py,service.py}`,
+`alembic/versions/d8e4b2c6f7a1_*.py`, `tests/{conftest.py,test_quotation_reuse.py,test_migration_chain.py}`;
+frontend `app/config/freight-modules.ts`, `app/utils/freight/quotation-actions.ts`,
+`app/components/freight/{WorkspaceView.vue,DocumentView.vue,JobDetail.vue}`,
+`tests/{quotation-actions.spec.ts,quotation-revisions.spec.ts}`.
+
+Evidence: `pytest tests/test_quotation_reuse.py tests/test_quotations.py` → 52 passed;
+`pytest tests/test_workflows.py tests/test_record_status.py tests/test_write_validation.py
+tests/test_request_schemas.py tests/test_migration_chain.py` → 100 passed;
+`pytest tests/test_quotation_postgres.py tests/test_deletion_policy.py
+tests/test_frontend_api_contract.py tests/test_page_api_integration.py
+tests/test_job_finance_entries.py tests/test_movements_and_milestones.py` → 34 passed, 3 skipped
+(PostgreSQL-only race tests need a live PG; SQLite cannot prove them);
+`vitest run` (frontend) → 836 passed / 100 files. Limits: no live-PostgreSQL run, no browser
+journey, no build/typecheck, single-tenant system so "workspace isolation" is the existing
+permission model (`require_permission`); old `/quotation-revisions/{id}/convert` endpoint
+retained (still used by tests/legacy callers). No Git commit.
+
 ### Compact Settings UI follow-up — 2026-11-04
 
 User clarified the compact maintenance editor also belongs in the existing Backup tab and

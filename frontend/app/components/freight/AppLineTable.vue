@@ -463,6 +463,26 @@ function addRow() {
   // payment row's container number), never from a table-key branch here.
   const seeded = props.table.rowDefaults?.({ rows: rows.value, blank }) || {}
   rows.value = [...rows.value, { ...blank, ...seeded }]
+  focusFirstEditableCell(rows.value.length - 1)
+}
+
+/**
+ * A freshly added row drops the user straight into its first editable cell, so
+ * one click on Add starts typing. Best effort: nothing happens if the cell has
+ * not mounted yet or the column is menu-only.
+ */
+function focusFirstEditableCell(index: number) {
+  const column = props.table.columns.find(column =>
+    !FREIGHT_LINE_UTILITY_COLUMN_TYPES.has(column.type) && !column.computed)
+  if (!column || !import.meta.client) return
+  const key = `${errorPrefix.value}.${index}.${column.key}`
+  void nextTick(() => {
+    const cell = document.querySelector<HTMLElement>(`[data-field-key="${CSS.escape(key)}"]`)
+    const target = cell?.matches('input, textarea, button')
+      ? cell
+      : cell?.querySelector<HTMLElement>('input, textarea, button')
+    target?.focus()
+  })
 }
 
 async function onFilesChosen(event: Event) {
@@ -554,7 +574,7 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
       meta: columnMeta(column),
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
-        const disabled = rowLocked(row.original)
+        const disabled = rowLocked(row.original) || Boolean(column.lockCell?.(row.original))
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
           return tagCell(inlineNumberFieldsCell(column, row.original, index, disabled), index, column.key)
@@ -692,6 +712,15 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
         )
         const menuItems: Array<Array<{ label: string, icon: string, color?: 'error', disabled?: boolean, onSelect?: () => void }>> = [[]]
         const actions = menuItems[0]!
+        if (table.lineDetails && !props.disabled && !rowLocked(row.original)) {
+          // Additional Details leads the menu; the caller's own actions and the
+          // shared Delete follow it.
+          actions.push({
+            label: t('freight.ui.additionalDetails'),
+            icon: 'i-lucide-sliders-horizontal',
+            onSelect: () => openLineDetails(index),
+          })
+        }
         for (const item of props.extraRowMenuItems?.(row.original) || []) {
           actions.push({
             label: item.label,
@@ -708,13 +737,6 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
             icon: action.icon,
             ...(action.color === 'error' ? { color: 'error' as const } : {}),
             onSelect: action.onSelect,
-          })
-        }
-        if (table.lineDetails && !props.disabled && !rowLocked(row.original)) {
-          actions.push({
-            label: t('freight.ui.additionalDetails'),
-            icon: 'i-lucide-sliders-horizontal',
-            onSelect: () => openLineDetails(index),
           })
         }
         if (isFileTable.value && filePreviewHref(row.original)) {

@@ -6,7 +6,8 @@ const { t } = useI18n()
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-5xl space-y-4 px-6 py-6">
+  <!-- Sits inside the page's shared content shell: no competing width/margin. -->
+  <section class="min-w-0 w-full space-y-4">
     <CommonAppFormErrorSummary :form-errors="formErrors || []" />
     <UFormField :label="t('maintenance.enabled')" data-field-key="enabled" :error="fieldErrors?.enabled">
       <USwitch

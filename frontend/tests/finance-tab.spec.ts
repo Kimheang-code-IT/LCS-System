@@ -7,18 +7,19 @@ const APP = fileURLToPath(new URL('../app', import.meta.url))
 const source = readFileSync(`${APP}/components/freight/JobFinance.vue`, 'utf8')
 
 describe('service order finance tab', () => {
-  it('shows only Type, Date, Description, Business Party, Amount and Status', () => {
+  it('edits entries inline with Date, Type, Description, Amount and Currency', () => {
+    // The Business Party is not a column: income entries default to the order
+    // customer and payee entries are completed through Additional Details.
     expect(JOB_FINANCE_LINES_TABLE.columns.map(column => column.key)).toEqual([
-      'type',
       'date',
+      'type',
       'description',
-      'party',
       'amount',
-      'status',
+      'currency',
     ])
-    expect(JOB_FINANCE_LINES_TABLE.columns.find(column => column.key === 'party')?.labelKey)
-      .toBe('freight.ui.cols.customer')
+    expect(JOB_FINANCE_LINES_TABLE.columns.find(column => column.key === 'type')?.type).toBe('select')
     expect(JOB_FINANCE_LINES_TABLE.hideAddRow).toBe(true)
+    expect(JOB_FINANCE_LINES_TABLE.hideTitle).toBe(true)
   })
 
   it('lists only financial documents linked to the current order', () => {
@@ -40,5 +41,15 @@ describe('service order finance tab', () => {
     for (const forbidden of ['MANUAL_TYPES', 'financeEntryTypes.customerCharge']) {
       expect(source).not.toContain(forbidden)
     }
+  })
+
+  it('defaults new entries to today in the configured timezone and resolves the income party', () => {
+    expect(source).toContain('todayIso()')
+    expect(source).not.toContain('new Date().toISOString().slice(0, 10)')
+    expect(source).toContain('customerPartyId')
+    expect(source).toContain('INCOME_BEHAVIORS.has(behavior)')
+    expect(source).toContain('@click="addEntry"')
+    expect(source).not.toContain('openCreate')
+    expect(source).toContain("date: 'date'")
   })
 })

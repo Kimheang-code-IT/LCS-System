@@ -57,6 +57,11 @@ services:
       FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-}
       TELEGRAM_PUBLIC_APP_URL: ${TELEGRAM_PUBLIC_APP_URL:-}
       TELEGRAM_WORKER_ENABLED: ${TELEGRAM_WORKER_ENABLED:-true}
+      # Local development consumes updates by polling. A registered webhook
+      # blocks polling unless explicitly allowed (protects a shared production
+      # bot); prefer a separate development bot token.
+      TELEGRAM_UPDATE_MODE: ${TELEGRAM_UPDATE_MODE:-polling}
+      TELEGRAM_ALLOW_WEBHOOK_DELETE: ${TELEGRAM_ALLOW_WEBHOOK_DELETE:-false}
       TELEGRAM_API_HEALTH_URL: http://127.0.0.1:8000/health
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-30}
       SESSION_REFRESH_TOKEN_EXPIRE_HOURS: ${SESSION_REFRESH_TOKEN_EXPIRE_HOURS:-12}

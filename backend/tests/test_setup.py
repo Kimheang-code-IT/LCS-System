@@ -4,7 +4,6 @@ import pytest
 
 from app.core.config import settings as _settings
 from app.core.locks import advisory_lock
-from app.core.sequences import DEFAULT_PREFIXES
 from tests.conftest import login
 
 pytestmark = pytest.mark.asyncio
@@ -34,14 +33,14 @@ async def test_reset_preserves_protected_admin_and_clears_business_data(client):
     assert accounts.status_code == 200, accounts.text
     assert accounts.json()["data"]["meta"]["total"] == 0
 
-    # Default configuration is provisioned automatically: document sequences for
-    # the current year and the default app config record.
+    # A reset leaves configuration empty as well: nothing is seeded
+    # automatically any more. `scripts/seed.py --all` recreates it on purpose.
     sequences = await client.get("/api/v1/document-sequences", headers=preserved_headers)
     assert sequences.status_code == 200, sequences.text
-    # Asserted against the registry rather than a literal, so adding a document
-    # type (credit notes) does not require editing this test as well.
-    assert {row["documentType"] for row in sequences.json()["data"]["items"]} == set(DEFAULT_PREFIXES)
+    assert sequences.json()["data"]["meta"]["total"] == 0
 
+    # The settings API still answers with the code defaults merged in, so the
+    # UI keeps working on an unseeded database.
     app_config = await client.get("/api/v1/settings/app-config", headers=preserved_headers)
     assert app_config.status_code == 200, app_config.text
     from app.core.config import settings as app_settings
@@ -122,3 +121,14 @@ async def test_setup_initialisation_creates_the_first_administrator_then_refuses
         json={"email": "admin@example.test", "password": "Abcdef12!"},
     )
     assert login_response.status_code == 200, login_response.text
+
+    # The setup inserts only the administrator and its role catalog: reference
+    # data is never provisioned automatically (seed it with scripts/seed.py).
+    token = login_response.json()["data"]["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    sequences = await client_fresh.get("/api/v1/document-sequences", headers=headers)
+    assert sequences.status_code == 200, sequences.text
+    assert sequences.json()["data"]["meta"]["total"] == 0
+    currencies = await client_fresh.get("/api/v1/currencies", headers=headers)
+    assert currencies.status_code == 200, currencies.text
+    assert currencies.json()["data"]["meta"]["total"] == 0

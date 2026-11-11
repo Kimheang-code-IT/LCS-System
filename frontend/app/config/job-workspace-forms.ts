@@ -3,10 +3,8 @@ import { SERVICE_ORDER_ROUTE_TABLE } from './route-stop-table'
 import {
   actualContainerRowDefaults,
   computeContainerPaymentLine,
-  computeJobFinanceLine,
   containerPaymentRowDefaults,
   containerRequirementRowDefaults,
-  jobFinanceLineRowDefaults,
 } from '~/utils/table/line-table-rules'
 
 function field(
@@ -90,29 +88,31 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
 
 /**
  * Single finance grid for the service-order Finance tab. It merges customer
- * charges, supplier expenses and finance documents into one row list, told
- * apart by the hidden `_kind` field. Only `_kind === 'EXPENSE'` rows are
- * editable — `JobFinance` locks the rest through `rowDisabled` and is the only
- * place that writes the grid back (expenses to `service_orders.data.expenses`).
+ * charges, supplier expenses and finance documents into one row list. The
+ * Business Party is never a column: income entries default to the Service
+ * Order customer and supplier/payee entries are completed through the row's
+ * Additional Details dialog, which the backend validates. `hideAddRow` keeps
+ * the tab's one Add Entry button as the only row source; the heading is hidden
+ * because the Finance section header above the grid is the single heading.
  */
 export const JOB_FINANCE_LINES_TABLE: FreightTable = {
   key: 'financeLines',
   title: 'Finance Lines',
   titleKm: 'បន្ទាត់ហិរញ្ញវត្ថុ',
+  hideTitle: true,
   columns: [
-    { key: 'type', label: 'Type', labelKm: 'ប្រភេទ', labelKey: 'freight.ui.cols.type', type: 'text', computed: true },
-    { key: 'date', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', labelKey: 'freight.ui.cols.date', type: 'date' },
-    { key: 'description', label: 'Description', labelKm: 'បរិយាយ', labelKey: 'freight.ui.cols.description', type: 'text', required: true },
-    { key: 'party', label: 'Business Party', labelKm: 'ដៃគូអាជីវកម្ម', labelKey: 'freight.ui.cols.customer', type: 'text' },
-    { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', labelKey: 'freight.ui.cols.amount', type: 'number', computed: true },
-    { key: 'status', label: 'Status', labelKm: 'ស្ថានភាព', labelKey: 'freight.ui.status', type: 'text', computed: true },
+    // The entry date, edited in place with the shared date picker and stored
+    // as the backend's `YYYY-MM-DD` document date.
+    { key: 'date', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', labelKey: 'freight.ui.cols.date', type: 'date', required: true },
+    // The finance entry document type; the editable select's options are
+    // supplied live by the Finance tab (Document Types master data).
+    { key: 'type', label: 'Type', labelKm: 'ប្រភេទ', labelKey: 'freight.ui.cols.type', type: 'select', required: true },
+    { key: 'description', label: 'Description', labelKm: 'បរិយាយ', labelKey: 'freight.ui.cols.description', required: true },
+    { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', labelKey: 'freight.ui.cols.amount', type: 'number', required: true },
+    { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ', labelKey: 'freight.ui.cols.currency', type: 'select', required: true },
   ],
-  // This grid is read-only; expenses are added through the tab's own dialog.
   hideAddRow: true,
-  addLabel: 'Add expense',
-  addLabelKey: 'freight.ui.addExpense',
-  computeRow: computeJobFinanceLine,
-  rowDefaults: jobFinanceLineRowDefaults,
+  addLabelKey: 'freight.ui.addEntry',
 }
 
 /**

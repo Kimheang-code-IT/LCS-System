@@ -17,7 +17,8 @@ export type ServiceChargeRow = Record<string, unknown>
 export const DELETABLE_CHARGE_STATUS = 'DRAFT'
 
 export function isDeletableCharge(row: ServiceChargeRow): boolean {
-  return String(row.status || '') === DELETABLE_CHARGE_STATUS
+  // The API returns the display form ("Draft"); compare on the domain value.
+  return String(row.status || '').toUpperCase() === DELETABLE_CHARGE_STATUS
 }
 
 /** First fee line of a charge; a charge is created with exactly one. */
@@ -47,7 +48,8 @@ export function serviceChargeToRow(charge: FreightRecord): ServiceChargeRow {
     documentDate: String(charge.documentDate || charge.date || ''),
     documentType: String(charge.documentType || 'SERVICE_NOTE'),
     status: String(charge.status || 'DRAFT'),
-    invoiceNo: String(charge.invoiceNo || ''),
+    // The finance invoice this charge was converted into, when it was.
+    financialDocumentId: String(charge.financialDocumentId || ''),
     total: Number(charge.total ?? 0),
     currency: String(charge.currency || ''),
     ...serviceChargeAmounts(line),
@@ -86,16 +88,27 @@ export function serviceChargeIsCreatable(row: ServiceChargeRow): boolean {
   return Boolean(String(row.description || '').trim())
 }
 
+/**
+ * Issued (and therefore invoiced) charges are locked in the grid: the backend
+ * only deletes and rewrites DRAFT charges, and a charge that already produced
+ * a finance invoice is that invoice's source of truth.
+ */
+export function serviceChargeRowDisabled(row: ServiceChargeRow): boolean {
+  return Boolean(row.id) && String(row.status || 'DRAFT').toUpperCase() !== 'DRAFT'
+}
+
 export function serviceChargeColumns(): FreightLineColumn[] {
-  // Review-first grid: date, document type, tax, status and invoice stay on the
-  // charge detail page and in the payload, not in the every-day list. The row
-  // menu owns open / print / delete so the grid stays narrow.
+  // Review-first grid: date, document type, tax, status and invoice stay on
+  // the charge detail page and in the payload, not in the every-day list. The
+  // row menu owns additional details / print / delete so the grid stays narrow.
   return [
     { key: 'feeType', label: 'Fee Type', labelKm: 'ប្រភេទថ្លៃ', labelKey: 'freight.ui.feeTypeCol', type: 'select' },
     { key: 'description', label: 'Description', labelKm: 'បរិយាយ', required: true },
     { key: 'quantity', label: 'Qty', labelKm: 'ចំនួន', labelKey: 'freight.ui.qty', type: 'number' },
     { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកត្តរ', labelKey: 'freight.ui.unitPriceCol', type: 'number' },
     { key: 'total', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
+    // Deletion lives in the row menu; the renderer disables it for locked rows.
+    { key: '_delete', label: '', type: 'delete' },
   ]
 }
 

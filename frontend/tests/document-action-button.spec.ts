@@ -109,15 +109,19 @@ describe('page-header actions share one component and pick the right variant', (
       ['pages/configuration/versions/[id].vue', ['check-circle-2', 'undo-2', 'git-compare', 'trash-2']],
       ['pages/configuration/versions/index.vue', ['upload-cloud']],
       ['components/freight/DocumentView.vue', []],
-      ['components/freight/JobDetail.vue', []],
+      // The Service Order header has no standalone action button: Finish lives
+      // in the shared three-dot menu.
+      ['components/freight/JobDetail.vue', ['check-circle']],
     ])) {
       const text = headerBlock(
         source(file),
         /<LayoutAppHeaderPageActions/,
         '</LayoutAppHeaderPageActions>',
       )
-      expect(text, file).toContain('CommonAppDocumentActionButton')
       for (const icon of icons) expect(text, file).not.toMatch(rawHeaderAction(icon))
+      if (file !== 'components/freight/JobDetail.vue') {
+        expect(text, file).toContain('CommonAppDocumentActionButton')
+      }
     }
   })
 })

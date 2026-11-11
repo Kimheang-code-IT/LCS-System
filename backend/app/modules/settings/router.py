@@ -98,6 +98,30 @@ async def reset_app_info(
 
 
 # --- App config --------------------------------------------------------------
+async def _attach_telegram_admin_state(session: AsyncSession, context: RequestContext, payload: dict) -> dict:
+    """Read-only Telegram status for the Settings card: recipient count and the
+    configured update consumer. Never returns secrets."""
+    from app.core.config import settings
+
+    telegram = payload.get("telegram")
+    if not isinstance(telegram, dict):
+        return payload
+    if not context.has_permission("settings.app_config.view") and not context.has_permission("configuration.manage"):
+        return payload
+    from app.modules.telegram import service as telegram_service
+    from app.modules.telegram.worker import health as telegram_worker_health
+
+    value = await telegram_service.config(session)
+    telegram["adminRecipientCount"] = await telegram_service.admin_recipient_count(session, value)
+    telegram["updateMode"] = (settings.telegram_update_mode or "webhook").strip().lower()
+    telegram["workerEnabled"] = bool(settings.telegram_worker_enabled)
+    worker = telegram_worker_health()
+    telegram["updateStatus"] = worker.get("status", "starting")
+    telegram["lastUpdateAt"] = worker.get("lastUpdateAt")
+    telegram["lastError"] = worker.get("lastError")
+    return payload
+
+
 @router.get("/settings/app-config")
 async def get_app_config(
     # Any authenticated user needs the redacted localization/format config; the
@@ -108,6 +132,8 @@ async def get_app_config(
     result = service.redact_app_config(await service.get_app_config(session, context))
     if not context.has_permission("settings.app_config.view") and not context.has_permission("configuration.manage"):
         result["telegram"] = {"enabled": bool(result.get("telegram", {}).get("enabled"))}
+    else:
+        result = await _attach_telegram_admin_state(session, context, result)
     return {"data": result}
 
 
@@ -120,7 +146,8 @@ async def update_app_config(
     values = APP_CONFIG_WRITE_SCHEMA.validate(payload, partial=True)
     if "telegram" in values:
         await enforce_rate_limit(f"telegram:config:{context.user_id}", limit=10, window_seconds=300)
-    return {"data": service.redact_app_config(await service.update_app_config(session, context, values))}
+    result = service.redact_app_config(await service.update_app_config(session, context, values))
+    return {"data": await _attach_telegram_admin_state(session, context, result)}
 
 
 @router.post("/settings/app-config/email/test-connection")
@@ -159,14 +186,28 @@ async def send_test_telegram(
     context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    from app.modules.telegram.service import client, config
+    """A real alert test to every currently eligible verified recipient."""
+    from app.modules.telegram import service
 
     await enforce_rate_limit(f"telegram:send-test:{context.user_id}", limit=3, window_seconds=300)
-    value = await config(session)
-    if not value.get("adminGroupId"):
-        raise ValidationFailed("Verify an admin group first.")
-    await client(value).send_message(value["adminGroupId"], "LCS admin-group delivery test.")
-    return {"data": {"status": "connected", "message": "Telegram accepted the test message."}}
+    value = await service.config(session)
+    if not value.get("enabled"):
+        raise ValidationFailed("Enable admin alerts first.")
+    recipients = await service.admin_recipients(session, value)
+    if not recipients:
+        raise ValidationFailed("No verified recipient holds the telegram.alerts.receive permission. Grant it to a role and connect the user's Telegram account from their profile.", {"telegram.alerts": "No eligible recipient"})
+    bot = service.client(value)
+    delivered = 0
+    first_error = None
+    for link, _user in recipients:
+        try:
+            await bot.send_message(link.chat_id, "LCS admin alert delivery test (private chat).")
+            delivered += 1
+        except TelegramError as exc:
+            first_error = first_error or exc
+    if delivered == 0 and first_error is not None:
+        raise ValidationFailed(f"Telegram could not deliver to any verified recipient: {service.describe(first_error)}", {"telegram.alerts": first_error.code}) from first_error
+    return {"data": {"status": "connected", "message": f"Telegram accepted the test alert for {delivered} recipient(s)."}}
 
 
 @router.post("/settings/app-config/telegram/client/test-connection")
@@ -185,8 +226,8 @@ async def send_test_telegram_client(
     context: RequestContext = Depends(require_any_permission("settings.app_config.update", "configuration.manage")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """A real message to the client group only; the admin group never sees it."""
-    from app.modules.telegram.service import client_sender, config
+    """A real message to the client group only; the admin bot never sees it."""
+    from app.modules.telegram.service import client_sender, config, describe
 
     await enforce_rate_limit(f"telegram:client-send-test:{context.user_id}", limit=3, window_seconds=300)
     value = await config(session)
@@ -194,12 +235,11 @@ async def send_test_telegram_client(
     try:
         await sender.send_message(chat_id, "LCS client-group delivery test.")
     except TelegramError as exc:
-        if exc.code in {"chat_not_found", "bot_was_blocked", "not_enough_rights_to_send"}:
-            raise ValidationFailed(
-                "Telegram could not deliver to the client group. Add the bot to the group and grant it permission to post.",
-                {"telegram.clientGroupId": exc.code},
-            ) from exc
-        raise
+        handle = f"@{value.get('clientBotUsername')}" if value.get("clientBotUsername") else "the bot"
+        raise ValidationFailed(
+            f"Telegram could not deliver to the client group ({describe(exc)}). Add {handle} to the group as a member with permission to post, then retry.",
+            {"telegram.clientGroupId": exc.code},
+        ) from exc
     return {"data": {"status": "connected", "message": "Telegram accepted the test message."}}
 
 

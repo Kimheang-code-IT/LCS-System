@@ -147,7 +147,10 @@ async def _database_failure() -> None:
     if _db_failed_at is None:
         _db_failed_at = now
     value = _cached_config
-    destination = value.get("maintenanceDeveloperGroupId") or value.get("adminGroupId")
+    # This out-of-band path may only use the dedicated maintenance developer
+    # group when the durable outbox is unavailable; admin alerts route to
+    # verified private chats via the outbox.
+    destination = value.get("maintenanceDeveloperGroupId")
     if not value or not value.get("enabled") or not destination:
         return
     rule = outbox.policy(value, "system")

@@ -6,10 +6,12 @@ import os
 import re
 import uuid
 import zipfile
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -342,10 +344,20 @@ async def save_service_order(
             order = await resolve_order(session, context, identifier)
         except NotFound:
             order = None
-    if order is None:
+    is_new_order = order is None
+    quotation: Quotation | None = None
+    if is_new_order:
         # A replayed create request is answered with the order it already made,
         # so a network retry never produces a second copy of the booking.
-        quotation_used = True
+        quotation_id = data.get("quotationId") or data.get("quotation_id")
+        # Manual Service Order creation is retired: every order originates from
+        # a quotation, and a create request without one is refused here so the
+        # API cannot be used to bypass the conversion workflow.
+        if quotation_id in (None, ""):
+            raise ValidationFailed(
+                "Service Orders must be created from a quotation.",
+                {"quotationId": "Convert a quotation to create a Service Order."},
+            )
         if idempotency_key:
             replay = (
                 await session.execute(
@@ -356,15 +368,15 @@ async def save_service_order(
                 existing = await session.get(ServiceOrder, replay.service_order_id)
                 if existing is not None:
                     return order_record(existing, existing.data or {})
-        # Quotation selection is mandatory for a new Service Order; the business
-        # party, trade direction and currency always come from that quotation.
-        quotation_id = data.get("quotationId") or data.get("quotation_id")
+        # The quotation prefills the reusable commercial data; anything the
+        # caller typed explicitly (party, direction, currency, description)
+        # wins below, so the prefilled order form stays editable.
         try:
             numeric_quotation_id = int(str(quotation_id))
         except (TypeError, ValueError) as exc:
             raise ValidationFailed(
-                "A quotation is required for a new service order.",
-                {"quotationId": "Required"},
+                "The selected quotation is invalid.",
+                {"quotationId": "Invalid quotation."},
             ) from exc
         quotation = await session.get(Quotation, numeric_quotation_id)
         if quotation is None:
@@ -377,23 +389,50 @@ async def save_service_order(
                 "The selected quotation has no revision to copy.",
                 {"quotationId": "No revision."},
             )
+        # Party: an explicit picker id wins, then the quotation's party, then a
+        # typed company name. A service order always names one party.
+        if data.get("customerPartyId") not in (None, ""):
+            from app.modules.quotations.service import resolve_party_by_id
+
+            party_id = (await resolve_party_by_id(session, data.get("customerPartyId"))).id
+        elif quotation is not None:
+            party_id = quotation.customer_party_id
+        elif str(data.get("customer") or "").strip():
+            party_id = (await _resolve_party(session, data.get("customer"), context)).id
+        else:
+            raise ValidationFailed(
+                "A business party is required for a service order.",
+                {"customerPartyId": "Required"},
+            )
+        if data.get("direction") not in (None, ""):
+            direction_id = (await resolve_direction(session, data.get("direction"))).id
+        elif quotation is not None:
+            direction_id = quotation.trade_direction_id
+        else:
+            raise ValidationFailed(
+                "A trade direction is required for a service order.",
+                {"direction": "Required"},
+            )
         number = data.get("jobNo") or data.get("serviceOrderNo")
         if not number or not str(number).strip():
             number = await allocate_number(session, "SERVICE_ORDER")
         order = ServiceOrder(
             service_order_no=str(number),
-            quotation_revision_id=revision.id,
-            customer_party_id=quotation.customer_party_id,
-            trade_direction_id=quotation.trade_direction_id,
+            quotation_revision_id=revision.id if revision is not None else None,
+            customer_party_id=party_id,
+            trade_direction_id=direction_id,
             status=normalize_order_status(data.get("status"), "ACTIVE"),
-            currency_code=revision.currency_code or default_currency,
-            description=revision.description,
+            currency_code=data.get("currency") or (revision.currency_code if revision is not None else None) or default_currency,
+            description=data.get("description") or (revision.description if revision is not None else None),
             created_by_user_id=context.user_id,
-            data=dict(quotation.data or {}),
+            data=dict(quotation.data or {}) if quotation is not None else {},
         )
         session.add(order)
         await session.flush()
-        await _attach_quotation_copy(session, order, quotation, revision)
+        if quotation is not None and revision is not None:
+            await _attach_quotation_copy(session, order, quotation, revision)
+        # Every new order is recorded in the ledger so a retried create is
+        # answered with the order it already made.
         session.add(
             QuotationConversion(
                 quotation_revision_id=revision.id,
@@ -403,7 +442,6 @@ async def save_service_order(
             )
         )
     else:
-        quotation_used = False
         _ensure_order_editing(order)
         # Only reassign when the caller actually supplied the field, otherwise a
         # partial save would silently repoint the order at another party/direction.
@@ -416,9 +454,12 @@ async def save_service_order(
 
     # A brand-new quotation-based order arrives with the UI's empty route
     # collections; the server-side copy is authoritative, so a blank list must
-    # not wipe the stops it just copied.
-    if quotation_used and not data.get("places"):
-        data.pop("places", None)
+    # not wipe the stops or payment rows it just generated.
+    if quotation is not None:
+        if not data.get("places"):
+            data.pop("places", None)
+        if not data.get("containerPayments"):
+            data.pop("containerPayments", None)
     if "places" in data:
         # Route stops are their own collection, not arbitrary header JSON: this
         # keeps them queryable and lets the quotation copy populate them. Row
@@ -442,7 +483,10 @@ async def save_service_order(
 
     # Transactional outbox: the notification commits with the order itself, so
     # a Telegram outage can never fail a booking and a replay cannot double-send.
-    await service_order_notification(session, order, "SERVICE_ORDER_CREATED" if quotation_used else "SERVICE_ORDER_UPDATED")
+    await service_order_notification(
+        session, order,
+        "SERVICE_ORDER_CREATED" if is_new_order else "SERVICE_ORDER_UPDATED",
+    )
     try:
         await session.commit()
     except IntegrityError:
@@ -630,6 +674,17 @@ async def delete_service_orders(session: AsyncSession, ids: list[int]) -> int:
             "ORDER_HAS_SERVICE_CHARGES",
             "Service orders with service charges cannot be deleted. Delete the charges first.",
         )
+    # The conversion ledger row records which order this quotation revision
+    # produced. It is cleared with the order in this same transaction (the
+    # quotation itself stays; a deleted order must not leave a dangling
+    # conversion row, and the RESTRICT FK then never fires at database level).
+    from sqlalchemy import delete as sql_delete
+
+    from app.modules.quotations.models import QuotationConversion
+
+    await session.execute(
+        sql_delete(QuotationConversion).where(QuotationConversion.service_order_id.in_(ids))
+    )
     for order in orders:
         await session.delete(order)
     await session.commit()
@@ -797,6 +852,84 @@ async def _attach_quotation_copy(
         )
 
     await session.flush()
+
+    # Container payments: one row per quoted unit, generated once here at
+    # conversion. The stored rows are authoritative from now on — page loads,
+    # refreshes and later saves never regenerate or append them.
+    if lines:
+        from app.modules.master_data.models import FeeType
+
+        fee_ids = {line.fee_type_id for line in lines if line.fee_type_id}
+        fee_names = dict(
+            (await session.execute(select(FeeType.id, FeeType.name).where(FeeType.id.in_(fee_ids)))).all()
+        )
+        payments = _expanded_container_payment_rows(lines, fee_names)
+        if payments:
+            order.data = jsonable({**(order.data or {}), "containerPayments": payments})
+
+
+#: One container-payment row per quoted unit; beyond this a line keeps a single
+#: billing-count row instead of exploding the order's JSON payload.
+MAX_PAYMENT_ROWS_PER_LINE = 500
+
+
+def _expanded_container_payment_rows(
+    lines: Sequence[QuotationRevisionLine], fee_names: dict[int, str]
+) -> list[dict[str, Any]]:
+    """Container-payment rows for a converted order: one row per quoted unit.
+
+    A whole-number Qty N becomes N rows of Qty 1 at the line's unit price, so
+    the rows' sum equals the line's own subtotal before adjustments (discounts
+    and tax stay sheet-level, exactly as the payment sheet applies them). A
+    fractional quantity cannot be split into units and keeps the line's own
+    single billing-count row — the existing handling for such charges — never
+    silently rounded.
+    """
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        quantity = line.quantity or Decimal(0)
+        unit_price = line.unit_price or Decimal(0)
+        fee_name = fee_names.get(line.fee_type_id)
+        base = {
+            "id": uuid4().hex,
+            "feeType": fee_name,
+            "containerNo": "",
+            "serviceOrderContainerId": "",
+            "description": line.service_description or fee_name,
+            "unit": line.unit_code or "Container",
+            "blNo": "",
+            "truckNo": "",
+            "note": "",
+            # Traceability back to the quoted line; the row itself is the order's.
+            "sourceQuotationLineId": str(line.id),
+        }
+        if quantity > 0 and quantity == quantity.to_integral_value() and quantity <= MAX_PAYMENT_ROWS_PER_LINE:
+            unit = float(unit_price)
+            for _ in range(int(quantity)):
+                rows.append({
+                    **base,
+                    "quantity": 1,
+                    "unitPrice": unit,
+                    "discountAmount": 0,
+                    "taxRate": 0,
+                    "taxAmount": 0,
+                    "lineSubtotal": unit,
+                    "lineTotal": unit,
+                    "amount": unit,
+                })
+        else:
+            rows.append({
+                **base,
+                "quantity": float(quantity),
+                "unitPrice": float(unit_price),
+                "discountAmount": float(line.line_discount or 0),
+                "taxRate": float(line.tax_rate or 0),
+                "taxAmount": float(line.line_tax or 0),
+                "lineSubtotal": float(line.line_subtotal or 0),
+                "lineTotal": float(line.line_total or 0),
+                "amount": float(line.line_total or 0),
+            })
+    return rows
 
 
 def _container_payload(container: ServiceOrderContainer, type_label: str | None = None) -> dict[str, Any]:
@@ -1041,7 +1174,8 @@ def charge_record(charge: ServiceOrderCharge, data: dict[str, Any]) -> dict[str,
         {
             "id": str(charge.id),
             "jobNo": None,
-            "serviceOrderId": str(charge.service_order_id),
+            "serviceOrderId": str(charge.service_order_id) if charge.service_order_id else None,
+            "customerPartyId": str(charge.customer_party_id) if charge.customer_party_id else None,
             "chargeNo": charge.charge_no,
             "documentNo": charge.charge_no,
             "documentType": charge.document_type,
@@ -1114,6 +1248,13 @@ async def _charge_with_details(
         }
         for line in lines
     ]
+    # Short description for list views: the first fee line's description, plus
+    # how many more lines the charge carries when it has several.
+    payload["description"] = (
+        f"{lines[0].description} (+{len(lines) - 1} more)"
+        if len(lines) > 1 and lines[0].description
+        else (lines[0].description if lines else "")
+    )
     source = (
         await session.execute(
             select(FinancialDocumentSource).where(
@@ -1129,21 +1270,35 @@ async def _charge_with_details(
             payload["invoiceNo"] = document.document_no
     if not payload.get("customer"):
         # The list needs the party even when the charge was created without its
-        # own free-text company; fall back to the linked service order's party.
-        party_name = (
-            await session.execute(
-                select(BusinessParty.display_name, BusinessParty.legal_name)
-                .join(ServiceOrder, ServiceOrder.customer_party_id == BusinessParty.id)
-                .where(ServiceOrder.id == charge.service_order_id)
-            )
-        ).first()
+        # own free-text company: its own party first, then the order's.
+        party_name = None
+        if charge.customer_party_id:
+            party_name = (
+                await session.execute(
+                    select(BusinessParty.display_name, BusinessParty.legal_name).where(
+                        BusinessParty.id == charge.customer_party_id
+                    )
+                )
+            ).first()
+        else:
+            party_name = (
+                await session.execute(
+                    select(BusinessParty.display_name, BusinessParty.legal_name)
+                    .join(ServiceOrder, ServiceOrder.customer_party_id == BusinessParty.id)
+                    .where(ServiceOrder.id == charge.service_order_id)
+                )
+            ).first()
         if party_name is not None:
             payload["customer"] = party_name[0] or party_name[1]
     return payload
 
 
-async def list_charges(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
+async def list_charges(session: AsyncSession, context: RequestContext, page: PageParams, scope: str = "all") -> dict:
     stmt = select(ServiceOrderCharge)
+    if scope == "standalone":
+        # Explicit standalone scope: top-level charges only; service-order
+        # charges live on their parent order's Service Charge tab.
+        stmt = stmt.where(ServiceOrderCharge.service_order_id.is_(None))
     if page.status:
         stmt = stmt.where(ServiceOrderCharge.status == str(page.status).upper())
     total = await count_query(session, stmt)
@@ -1214,11 +1369,38 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
     if charge_id and str(charge_id).isdigit():
         charge = await session.get(ServiceOrderCharge, int(charge_id))
     identifier = order_identifier or data.get("jobNo") or data.get("serviceOrderId") or (charge.service_order_id if charge else None)
-    if not identifier:
-        raise ValidationFailed("A service order is required.", {"jobNo": "Required"})
-    order = await resolve_order(session, context, str(identifier))
-    if order.status == "INACTIVE":
-        raise InvalidState("Cannot add charges to an inactive service order.")
+    order: ServiceOrder | None = None
+    supplied_party = data.get("customerPartyId") or data.get("customer_party_id")
+    if identifier:
+        order = await resolve_order(session, context, str(identifier))
+        if order.status == "INACTIVE":
+            raise InvalidState("Cannot add charges to an inactive service order.")
+        # A linked charge always bills the order's customer: a supplied party
+        # that disagrees is a mistake, not an override.
+        effective_party_id = order.customer_party_id
+    elif charge is not None:
+        if supplied_party not in (None, ""):
+            from app.modules.quotations.service import resolve_party_by_id
+
+            effective_party_id = (await resolve_party_by_id(session, supplied_party)).id
+        else:
+            effective_party_id = charge.customer_party_id
+    else:
+        # Standalone charge: no service order, but a customer is mandatory.
+        # The form's picker supplies the party id; older clients may send only
+        # the company name, which resolves (or creates) the party like a
+        # quotation's would.
+        customer_name = str(data.get("customer") or "").strip()
+        if supplied_party in (None, "") and not customer_name:
+            raise ValidationFailed(
+                "A business party is required.",
+                {"customerPartyId": "Required"},
+            )
+        from app.modules.quotations.service import resolve_party_by_id, resolve_party_by_name
+
+        effective_party_id = (await resolve_party_by_id(session, supplied_party)).id \
+            if supplied_party not in (None, "") \
+            else (await resolve_party_by_name(session, customer_name, context)).id
     if charge is not None and charge.status != "DRAFT":
         raise InvalidState("Only draft service charges can be edited.")
     if charge is None:
@@ -1226,17 +1408,20 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         if not number or not str(number).strip():
             number = await allocate_number(session, "SERVICE_CHARGE")
         charge = ServiceOrderCharge(
-            service_order_id=order.id,
+            service_order_id=order.id if order is not None else None,
+            customer_party_id=effective_party_id,
             charge_no=str(number),
             document_type=str(data.get("documentType") or "SERVICE_NOTE"),
             document_date=_date(data.get("documentDate")) or date.today(),
-            currency_code=data.get("currency") or order.currency_code,
+            currency_code=data.get("currency") or (order.currency_code if order is not None else None) or await get_default_currency(session),
             status="DRAFT",
             created_by_user_id=context.user_id,
             data={},
         )
         session.add(charge)
         await session.flush()
+    elif charge.customer_party_id is None:
+        charge.customer_party_id = effective_party_id
     # Only rebuild priced lines when the caller supplied them; a partial update
     # (e.g. just a status change) must not wipe the existing lines and totals.
     # `feeLines` is the document form's column; the other two spellings keep
@@ -1295,7 +1480,7 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
             container_id = _int_or_none(line.get("containerId") or line.get("serviceOrderContainerId"))
             if container_id is not None:
                 container = await session.get(ServiceOrderContainer, container_id)
-                if container is None or container.service_order_id != order.id:
+                if order is None or container is None or container.service_order_id != order.id:
                     raise ValidationFailed(
                         "A charge line container must belong to the service order.",
                         {f"{line_field}.{index}.containerId": "Container does not belong to this service order"},
@@ -1372,7 +1557,22 @@ async def issue_charge(session: AsyncSession, context: RequestContext, charge_id
 
 async def delete_charges(session: AsyncSession, ids: list[int]) -> int:
     charges = await OperationsRepository(session).charges_by_ids(ids)
-    drafts = [charge for charge in charges if charge.status == "DRAFT"]
+    # A charge that already produced a finance invoice is the invoice's source
+    # of truth; deleting it would orphan that document's traceability.
+    from app.modules.finance.models import FinancialDocumentSource
+
+    invoiced = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(FinancialDocumentSource.source_id).where(
+                    FinancialDocumentSource.source_type == "SERVICE_ORDER_CHARGE",
+                    FinancialDocumentSource.source_id.in_(ids),
+                )
+            )
+        ).all()
+    }
+    drafts = [charge for charge in charges if charge.status == "DRAFT" and charge.id not in invoiced]
     for charge in drafts:
         await session.delete(charge)
     await session.commit()
@@ -1404,6 +1604,34 @@ async def charge_to_invoice(
 
 
 # --- Attachments -------------------------------------------------------------
+#: Collections that own uploaded files (source of truth: the frontend module
+#: catalog's collections, which is where DocumentView passes `uploadContext`).
+#: New collections must be added here deliberately; unknown values are refused
+#: so a typo cannot create an attachment link nothing will ever list.
+ATTACHMENT_ENTITY_TYPES = frozenset(
+    {
+        "companies",
+        "quotations",
+        "jobs",
+        "shipments",
+        "customs",
+        "documents",
+        "deliveries",
+        "debitNotes",
+        "customerPayments",
+        "jobCharges",
+        "supplierCosts",
+        "supplierPayments",
+        "receivables",
+        "payables",
+        "profitability",
+        "users",
+        "roles",
+        "archive",
+        "auditLogs",
+    }
+)
+
 async def list_attachments(session: AsyncSession, context: RequestContext, module: str, record_no: str) -> list[dict]:
     links = (
         await session.execute(
@@ -1435,6 +1663,13 @@ async def link_attachment(
     entity_id = _int_or_none(record_no)
     if not entity_type or entity_id is None:
         return
+    if entity_type not in ATTACHMENT_ENTITY_TYPES:
+        # Refuse unknown collections instead of silently linking a file that no
+        # screen will ever show (typo/forged module value).
+        raise ValidationFailed(
+            f"Unknown attachment entity type '{entity_type}'.",
+            {"module": "Unsupported entity type"},
+        )
     existing = (
         await session.execute(
             select(AttachmentLink.id).where(

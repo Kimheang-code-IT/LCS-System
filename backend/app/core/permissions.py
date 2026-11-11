@@ -116,6 +116,8 @@ SOURCE_PERMISSIONS: tuple[tuple[str, str, str], ...] = (
     ("master.reference.view", "master", "view"),
     ("master.reference.manage", "master", "manage"),
     ("settings.manage", "settings", "manage"),
+    ("telegram.chatbot.use", "telegram.chatbot", "use"),
+    ("telegram.alerts.receive", "telegram.alerts", "receive"),
     ("backup.read", "backup", "read"),
     ("backup.manage", "backup", "manage"),
 )
@@ -171,6 +173,7 @@ MATRIX_PAGES: tuple[PageDefinition, ...] = (
     ("admin_audit_logs", "admin", "admin.audit_logs", "freight.pages.auditLogs", READ_ACTIONS),
     ("admin_archive", "admin", "admin.archive", "freight.pages.archive", ("view", "export", "restore")),
     ("settings_app_config", "settings", "settings.app_config", "freight.pages.settings", ("view", "update")),
+    ("settings_telegram", "settings", "settings.telegram", "lcs.settings.tabs.telegram", ("use", "receive")),
     ("settings_backup", "settings", "settings.backup", "freight.pages.backup", ("view", "create", "update")),
 )
 
@@ -435,6 +438,10 @@ PAGE_PERMISSION_GRANTS: dict[str, tuple[str, ...]] = {
     "settings.app_config.view": (),
     "settings.app_config.update": (),
     "settings.app_config.edit": (),
+    # Telegram chatbot access is granted from the matrix, one action per need:
+    # usage for the private chatbot, receive for operational/security alerts.
+    "settings.telegram.use": ("telegram.chatbot.use",),
+    "settings.telegram.receive": ("telegram.alerts.receive",),
     "settings.backup.view": ("backup.read",),
     "settings.backup.create": ("backup.manage",),
     "settings.backup.update": ("backup.manage",),

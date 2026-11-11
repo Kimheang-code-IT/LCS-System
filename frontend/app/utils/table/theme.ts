@@ -12,7 +12,9 @@ export const freightTableUi = {
   ].join(' '),
   th: 'sticky top-0 z-10 border border-default bg-elevated px-3 py-2.5 text-left text-xs font-semibold text-highlighted whitespace-nowrap',
   td: 'border border-default bg-default px-3 py-2.5 align-middle text-default transition-colors',
-  tr: 'cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
+  // No row cursor: clicking a row no longer navigates; only identity links do
+  // (the link cells carry their own cursor).
+  tr: 'outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary',
 } as const
 
 /** Denser rows and smaller cell type for document / line tables. */

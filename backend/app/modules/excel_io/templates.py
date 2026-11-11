@@ -11,6 +11,7 @@ against the database at import time.
 
 from __future__ import annotations
 
+import csv
 import io
 from collections.abc import Iterable
 
@@ -19,6 +20,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from app.core.exceptions import ValidationFailed
 from app.modules.excel_io.registry import ImportModule
 
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
@@ -169,6 +171,22 @@ async def build_template(session, module: ImportModule, examples: Iterable[dict[
     stream = io.BytesIO()
     workbook.save(stream)
     return stream.getvalue()
+
+
+def build_csv_template(module: ImportModule) -> bytes:
+    """UTF-8 CSV template: one header row plus one greyed example row, matching
+    the Excel template's Data sheet so both clone the same import contract."""
+    if not module.columns:
+        raise ValidationFailed(
+            "This module imports as a multi-sheet workbook; download the .xlsx template.",
+            {"file": "No CSV template"},
+        )
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow([column.key for column in module.columns])
+    writer.writerow([column.example for column in module.columns])
+    # utf-8-sig so Excel opens accented values without mojibake.
+    return stream.getvalue().encode("utf-8-sig")
 
 
 def _sheet_title(name: str) -> str:

@@ -22,8 +22,10 @@ export type QuotationActionAvailability = {
 /**
  * Single source of truth for quotation action availability. A quotation is a
  * reusable commercial reference: it stays editable under CRUD rules, Submit /
- * Send / Accept / Re-quote are retired from the UI, and deletion is refused only
- * while a service order still depends on it.
+ * Send / Accept / Re-quote are retired from the UI, "Convert to Service Order"
+ * opens the shared Service Order form with the quotation preselected (one
+ * quotation may produce many orders), and deletion is refused only while a
+ * service order still depends on it.
  */
 export function quotationActionAvailability(
   status: unknown,
@@ -37,7 +39,10 @@ export function quotationActionAvailability(
     status: domain,
     edit: can.updateDraft,
     submit: false,
-    convert: false,
+    // "Convert to Service Order" is offered for every quotation the caller may
+    // convert: a quotation is reused unlimited times, so no status or
+    // already-converted gate applies.
+    convert: can.convert,
     revise: false,
     delete: can.updateDraft && !hasServiceOrder,
     openServiceOrder: hasServiceOrder,
