@@ -288,6 +288,14 @@ export interface AppConfig {
   updatedAt: string
 }
 
+/**
+ * A settings PATCH may carry one group at a time, and a group may itself be
+ * partial — Settings → Email / Telegram panels save only the fields they edit.
+ */
+export type AppConfigPatch = Partial<Omit<AppConfig, 'telegram'>> & {
+  telegram?: Partial<TelegramConfig>
+}
+
 // --- Multi-provider file storage -------------------------------------------------
 
 export type StorageProviderTag = '' | 'r2' | 'gdrive'

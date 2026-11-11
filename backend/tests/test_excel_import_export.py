@@ -769,7 +769,7 @@ async def _upload(client, headers: dict, module: str, content: bytes, filename: 
 
 async def test_csv_import_commits_and_is_idempotent(client):
     headers = await login(client)
-    content = "code,name,description,status\nCSV-FEE,Csv Fee,Imported by CSV,ACTIVE\n".encode("utf-8")
+    content = b"code,name,description,status\nCSV-FEE,Csv Fee,Imported by CSV,ACTIVE\n"
     data = (await _upload(client, headers, "feeTypes", content, "batch.csv")).json()["data"]
     assert data["summary"]["create"] == 1, data["rows"]
     confirmed = await client.post(f"/api/v1/excel/imports/{data['token']}/commit", headers=headers)
@@ -785,13 +785,13 @@ async def test_csv_headers_may_use_case_spacing_and_id_alias(client):
     headers = await login(client)
     # ' CODE'/'Name'/'STATUS' normalize onto canonical columns; 'id' aliases to
     # 'code'; an unknown column still fails (nothing silently dropped).
-    aliased = " Name ,Description,STATUS,id\nSpace Fee,Case-insensitive,ACTIVE,ALI-FEE\n".encode("utf-8")
+    aliased = b" Name ,Description,STATUS,id\nSpace Fee,Case-insensitive,ACTIVE,ALI-FEE\n"
     data = (await _upload(client, headers, "feeTypes", aliased, "aliases.csv")).json()["data"]
     assert data["summary"]["create"] == 1
     row = data["rows"][0]
     assert row["action"] == "CREATE", row["errors"]
 
-    bad = "code,name,mystery\nMIS,Something,nope\n".encode("utf-8")
+    bad = b"code,name,mystery\nMIS,Something,nope\n"
     response = await _upload(client, headers, "feeTypes", bad, "unknown.csv")
     assert response.status_code == 422
     assert "mystery" in response.text
@@ -821,14 +821,12 @@ async def test_json_import_pattern_and_module_guard(client):
 async def test_csv_duplicate_natural_key_rolls_back_atomically(client, session_factory):
     """Two rows with the same code: the revalidated commit refuses atomically —
     no half-imported batch (§12) and nothing left behind."""
-    from sqlalchemy import func
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
-    from app.modules.excel_io.models import ImportSession
     from app.modules.master_data import service as master_data
 
     headers = await login(client)
-    content = "code,name\nDUP-FEE,First\nDUP-FEE,Second\n".encode("utf-8")
+    content = b"code,name\nDUP-FEE,First\nDUP-FEE,Second\n"
     batch = (await _upload(client, headers, "feeTypes", content, "dup.csv")).json()["data"]
     commit = await client.post(f"/api/v1/excel/imports/{batch['token']}/commit", headers=headers)
     assert commit.status_code in (200, 422), commit.text
