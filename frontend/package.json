@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.17.0",
-    "@nuxt/fonts": "^0.14.0",
+    "@nuxt/fonts": "^1.2.0",
     "@playwright/test": "1.65.0",
     "eslint": "^10.12.0",
     "typescript": "^5.9.3",
