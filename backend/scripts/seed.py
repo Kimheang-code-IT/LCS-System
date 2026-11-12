@@ -6,6 +6,7 @@
     uv run python scripts/seed.py --master-data
     uv run python scripts/seed.py --configuration
     uv run python scripts/seed.py --module fee-types
+    uv run python scripts/seed.py --module business-parties  # sample parties only
     uv run python scripts/seed.py --all --dry-run    # report only, no writes
 
 Behavior
@@ -321,8 +322,12 @@ async def seed_app_settings(session) -> tuple[int, int]:
     return inserted, skipped
 
 
-async def seed_demo_parties(session) -> tuple[int, int]:
-    """Five domain-free sample parties (``--demo``), linked to seeded party roles."""
+async def seed_business_parties(session) -> tuple[int, int]:
+    """Five domain-free sample parties, linked to seeded party roles.
+
+    Run explicitly with ``--module business-parties`` (or as part of ``--demo``).
+    They are sample master data, so ``--all`` stays pure reference data.
+    """
     from app.modules.master_data.models import BusinessParty, BusinessPartyRole, PartyRole
 
     role_ids = {
@@ -476,10 +481,12 @@ async def _run_module(session, name: str, dry_run: bool, counts: dict[str, int])
     """Run one module in its own transaction; a failure rolls back and reports."""
     try:
         if name == "demo":
-            party_counts = await seed_demo_parties(session)
+            party_counts = await seed_business_parties(session)
             config_counts = await seed_demo_configuration(session)
             inserted = party_counts[0] + config_counts[0]
             skipped = party_counts[1] + config_counts[1]
+        elif name == "business-parties":
+            inserted, skipped = await seed_business_parties(session)
         elif name == "document-sequences":
             inserted, skipped = await seed_document_sequences(session)
         elif name == "app-settings":
@@ -532,7 +539,9 @@ async def run(selected: list[str], dry_run: bool) -> int:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    all_modules = (*MASTER_MODULE_ORDER, *CONFIGURATION_MODULE_ORDER)
+    # Sample business parties are explicit opt-in (`--module business-parties`
+    # or `--demo`), so `--all` stays pure reference data.
+    all_modules = (*MASTER_MODULE_ORDER, *CONFIGURATION_MODULE_ORDER, "business-parties")
     parser = argparse.ArgumentParser(
         description="Seed LCS Master Data and Configuration reference data (insert missing only). Run from backend/.",
     )

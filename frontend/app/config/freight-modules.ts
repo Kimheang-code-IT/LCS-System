@@ -1,6 +1,7 @@
 import type { DocumentTabSchema } from '~/types/common'
 import type { FreightRecord } from '~/types/record'
 import type { FieldRule } from '~/utils/validation/field-rules'
+import { createClientId } from '~/utils/client-id'
 import {
   ACTIVE_STATUS,
   CREDIT_TERM_DOCUMENT_TYPES,
@@ -184,6 +185,12 @@ export type FreightTable = {
   addLabelKey?: string
   /** Config grids manage add via a dialog, so they hide the built-in add-row button. */
   hideAddRow?: boolean
+  /**
+   * Stamp every added row with a client-only `_rowId`. It survives row
+   * re-renders/deletes/reorders, is stripped before an API payload and before a
+   * draft write, and keeps the focused cell on its own row.
+   */
+  assignRowId?: boolean
   /** Suppresses the in-table title when the page header already shows it. */
   hideTitle?: boolean
   presets?: Array<Record<string, unknown>>
@@ -1462,7 +1469,7 @@ if (quotationModule) freightModules.push({
       { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true, rule: { required: true, min: 0 } },
       { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
       { key: 'trust', label: '', type: 'delete' },
-    ], computeRow: computePricingLine, pricing: true, lineDetails: true },
+    ], computeRow: computePricingLine, pricing: true, lineDetails: true, assignRowId: true },
     { key: 'attachments', title: 'Files', titleKm: 'ឯកសារ', addLabel: 'Upload File', addLabelKey: 'freight.ui.uploadFile', kind: 'files', columns: FILE_ATTACHMENT_COLUMNS },
     { key: 'revisionHistory', title: 'Revisions', titleKm: 'កំណែ', hideAddRow: true, columns: [
       { key: 'revisionNo', label: 'Revision No.', labelKm: 'លេខកំណែ', computed: true, width: 72 },
@@ -1585,6 +1592,9 @@ if (chargesModule) freightModules.push({
     computeRow: computeFeeLine,
     pricing: true,
     lineDetails: true,
+    // Stable client identity keeps the shared table's row selection/keyed cells
+    // anchored while a fee line is edited, added or removed.
+    rowDefaults: () => ({ clientRowId: createClientId('feeLine') }),
   }, {
     key: 'sourceRelationships', title: 'Source Relationships', titleKm: 'ទំនាក់ទំនងប្រភព', columns: SOURCE_RELATIONSHIP_COLUMNS,
   }],
@@ -1651,6 +1661,7 @@ if (invoicesModule) freightModules.push({
       ],
       computeRow: computeDocumentLine,
       pricing: true,
+      assignRowId: true,
     },
     {
       key: 'allocations', title: 'Payment Allocations', titleKm: 'ការបែងចែកការទូទាត់', addLabel: 'Allocate document',

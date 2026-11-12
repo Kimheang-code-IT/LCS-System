@@ -537,7 +537,22 @@ async def finish_service_order(session: AsyncSession, context: RequestContext, i
         await service_order_notification(session, order, "SERVICE_ORDER_FINISHED")
         await session.commit()
         await cache.bump("reports")
-    return order_record(order, order.data or {})
+    payload = order_record(order, order.data or {})
+    # Financial drafts belong to the approved Finish workflow, never to an
+    # ordinary operational save. A document failure must not undo the finish.
+    try:
+        from app.modules.finance.order_documents import refresh_service_order_financial_documents
+
+        payload["financialDocuments"] = await refresh_service_order_financial_documents(
+            session, context, order
+        )
+    except Exception as failure:  # noqa: BLE001
+        # Leave a clean session for the router's audit/status write.
+        await session.rollback()
+        payload["financialDocumentWarnings"] = [
+            f"Financial drafts were not refreshed: {failure}"
+        ]
+    return payload
 
 
 async def set_service_order_status(
@@ -1176,6 +1191,8 @@ def charge_record(charge: ServiceOrderCharge, data: dict[str, Any]) -> dict[str,
             "jobNo": None,
             "serviceOrderId": str(charge.service_order_id) if charge.service_order_id else None,
             "customerPartyId": str(charge.customer_party_id) if charge.customer_party_id else None,
+            "chargeSide": charge.charge_side or "CUSTOMER",
+            "supplierPartyId": str(charge.supplier_party_id) if charge.supplier_party_id else None,
             "chargeNo": charge.charge_no,
             "documentNo": charge.charge_no,
             "documentType": charge.document_type,
@@ -1189,6 +1206,9 @@ def charge_record(charge: ServiceOrderCharge, data: dict[str, Any]) -> dict[str,
             "tax": float(charge.tax_amount or 0),
             "total": float(charge.total_amount or 0),
             "createdAt": charge.created_at.isoformat() if charge.created_at else None,
+            # Optimistic concurrency: the client echoes this back on update so a
+            # stale editor cannot silently overwrite a newer save.
+            "updatedAt": charge.updated_at.isoformat() if charge.updated_at else None,
         }
     )
     return payload
@@ -1217,13 +1237,30 @@ async def _charge_with_details(
             .order_by(ServiceOrderChargeLine.line_no)
         )
     ).scalars().all()
-    from app.modules.master_data.models import FeeType
+    from app.modules.master_data.models import BusinessParty, FeeType
 
     fee_ids = [line.fee_type_id for line in lines if line.fee_type_id]
     fee_names = (
         dict((await session.execute(select(FeeType.id, FeeType.name).where(FeeType.id.in_(fee_ids)))).all())
         if fee_ids else {}
     )
+    if charge.supplier_party_id:
+        supplier = await session.get(BusinessParty, charge.supplier_party_id)
+        payload["supplier"] = (
+            (supplier.legal_name or supplier.display_name) if supplier is not None else None
+        )
+        generated = (
+            await session.execute(
+                select(FinancialDocument).where(
+                    FinancialDocument.generated_key
+                    == f"SO:{charge.service_order_id}:SUP:{charge.supplier_party_id}:{charge.currency_code}:SUPPLIER_BILL"
+                )
+            )
+        ).scalars().first()
+        if generated is not None:
+            payload["supplierDocumentId"] = str(generated.id)
+            payload["supplierDocumentNo"] = generated.document_no
+    payload["costTotal"] = float(sum((line.cost_amount or 0) for line in lines))
     payload["feeLines"] = [
         {
             "id": str(line.id),
@@ -1237,6 +1274,8 @@ async def _charge_with_details(
             # row must round-trip through both consumers without losing its price.
             "unitPrice": float(line.unit_price or 0),
             "unitAmount": float(line.unit_price or 0),
+            "costUnitPrice": float(line.cost_unit_price or 0),
+            "costAmount": float(line.cost_amount or 0),
             "discount": float(line.discount_amount or 0),
             "taxRate": float(line.tax_rate or 0),
             # `tax` keeps its historical meaning here (the rate); `taxAmount` is
@@ -1401,8 +1440,67 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         effective_party_id = (await resolve_party_by_id(session, supplied_party)).id \
             if supplied_party not in (None, "") \
             else (await resolve_party_by_name(session, customer_name, context)).id
+    # Idempotent create: a retry after a lost response carries the same stable
+    # client marker. Adopt the row it already created instead of inserting a
+    # second charge (two genuinely different rows have different markers).
+    if charge is None and order is not None:
+        marker = str(data.get("clientRowId") or "").strip()
+        if marker:
+            candidates = (
+                await session.execute(
+                    select(ServiceOrderCharge).where(
+                        ServiceOrderCharge.service_order_id == order.id,
+                    )
+                )
+            ).scalars().all()
+            charge = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if str((candidate.data or {}).get("clientRowId") or "").strip() == marker
+                ),
+                None,
+            )
+    charge_side = str(
+        data.get("chargeSide")
+        or (charge.charge_side if charge is not None else None)
+        or "CUSTOMER"
+    ).upper()
+    if charge_side not in {"CUSTOMER", "INTERNAL"}:
+        raise ValidationFailed("Charge side must be CUSTOMER or INTERNAL.", {"chargeSide": "Invalid charge side"})
+    supplier_raw = data.get("supplierPartyId") or data.get("supplier_party_id")
+    supplier_party_id: int | None = charge.supplier_party_id if charge is not None else None
+    if supplier_raw not in (None, ""):
+        from app.modules.quotations.service import resolve_party_by_id
+
+        supplier_party_id = (await resolve_party_by_id(session, supplier_raw)).id
+    if charge_side == "INTERNAL" and supplier_party_id is None:
+        raise ValidationFailed(
+            "An internal charge requires a supplier.",
+            {"supplierPartyId": "Required"},
+        )
     if charge is not None and charge.status != "DRAFT":
         raise InvalidState("Only draft service charges can be edited.")
+    # Optimistic concurrency: a client that loaded the charge sends its
+    # `updatedAt`; if the row moved since, the save is refused instead of
+    # silently overwriting the other session's edit. A caller that does not
+    # send the stamp (import, internal command) keeps the previous behaviour.
+    expected_updated_at = data.get("updatedAt")
+    if charge is not None and expected_updated_at not in (None, "") and charge.updated_at is not None:
+        try:
+            expected_dt = datetime.fromisoformat(str(expected_updated_at).replace("Z", "+00:00"))
+            current_dt = charge.updated_at
+            if current_dt.tzinfo is None:
+                current_dt = current_dt.replace(tzinfo=UTC)
+            if expected_dt.tzinfo is None:
+                expected_dt = expected_dt.replace(tzinfo=UTC)
+        except ValueError:
+            expected_dt = None
+        if expected_dt is not None and current_dt != expected_dt:
+            raise Conflict(
+                "STALE_CHARGE",
+                "This charge was changed by another session. Reload it before saving again.",
+            )
     if charge is None:
         number = data.get("chargeNo") or data.get("documentNo")
         if not number or not str(number).strip():
@@ -1410,6 +1508,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         charge = ServiceOrderCharge(
             service_order_id=order.id if order is not None else None,
             customer_party_id=effective_party_id,
+            charge_side=charge_side,
+            supplier_party_id=supplier_party_id,
             charge_no=str(number),
             document_type=str(data.get("documentType") or "SERVICE_NOTE"),
             document_date=_date(data.get("documentDate")) or date.today(),
@@ -1422,6 +1522,9 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         await session.flush()
     elif charge.customer_party_id is None:
         charge.customer_party_id = effective_party_id
+    if charge is not None:
+        charge.charge_side = charge_side
+        charge.supplier_party_id = supplier_party_id
     # Only rebuild priced lines when the caller supplied them; a partial update
     # (e.g. just a status change) must not wipe the existing lines and totals.
     # `feeLines` is the document form's column; the other two spellings keep
@@ -1452,6 +1555,15 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                 unit_value = line.get("unitAmount")
             quantity = parse_decimal(line.get("quantity"), f"{line_field}.{index}.quantity", Decimal("1"), places=3) or Decimal("1")
             unit_price = parse_decimal(unit_value, f"{line_field}.{index}.unitPrice", Decimal("0"), places=4)
+            cost_value = line.get("costUnitPrice")
+            if cost_value in (None, ""):
+                cost_value = line.get("cost_unit_price")
+            cost_unit_price = (
+                parse_decimal(cost_value, f"{line_field}.{index}.costUnitPrice", Decimal("0"), places=4)
+                if charge_side == "INTERNAL"
+                else Decimal("0")
+            )
+            cost_amount = quantity * cost_unit_price
             discount = parse_decimal(line.get("discount"), f"{line_field}.{index}.discount", Decimal("0"), places=4)
             base = quantity * unit_price
             if quantity <= 0:
@@ -1503,6 +1615,8 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
                     quantity=quantity,
                     unit_code=line.get("unit"),
                     unit_price=unit_price,
+                    cost_unit_price=cost_unit_price,
+                    cost_amount=cost_amount,
                     discount_amount=discount,
                     tax_rate=tax_rate,
                     tax_amount=tax_amount,
@@ -1536,6 +1650,8 @@ async def issue_charge(session: AsyncSession, context: RequestContext, charge_id
     ).scalars().first()
     if charge is None:
         raise NotFound("Service charge not found.")
+    if (charge.charge_side or "CUSTOMER").upper() == "INTERNAL":
+        raise InvalidState("Internal cost charges are billed to suppliers, not issued to the customer.")
     if charge.status not in {"DRAFT", "ISSUED"}:
         raise InvalidState(f"Cannot issue a charge in status {charge.status}.")
     lines = (

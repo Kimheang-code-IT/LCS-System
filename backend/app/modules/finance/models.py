@@ -83,8 +83,15 @@ class DocumentSequence(PKMixin, TimestampMixin, Base):
 
 class FinancialDocument(PKMixin, TimestampMixin, Base):
     __tablename__ = "financial_documents"
-    __table_args__ = (UniqueConstraint("document_no", name="uq_financial_documents_no"),)
+    __table_args__ = (
+        UniqueConstraint("document_no", name="uq_financial_documents_no"),
+        UniqueConstraint("generated_key", name="uq_financial_documents_generated_key"),
+    )
 
+    #: Stable identity of an auto-generated draft (order/container/supplier).
+    #: NULL for manually created documents; repeated order Finish/retry uses the
+    #: same key so it updates the draft instead of creating a duplicate.
+    generated_key: Mapped[str | None] = mapped_column(String(160))
     document_no: Mapped[str] = mapped_column(String(50), nullable=False)
     document_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     document_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -167,6 +174,39 @@ class FinancialDocumentSource(PKMixin, Base):
     relationship_type: Mapped[str] = mapped_column(String(32), nullable=False, default="GENERATED_FROM")
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
+
+
+class FinancialDocumentComponentAllocation(PKMixin, Base):
+    """Which source component a generated draft line came from.
+
+    A shared Service Charge can legitimately be split across several container
+    invoices, which the whole-charge ``FinancialDocumentSource`` bill-once index
+    cannot represent. These rows keep the source, container and exact Decimal
+    allocation so a retry can reconcile instead of duplicating.
+    """
+
+    __tablename__ = "financial_document_component_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "financial_document_id",
+            "source_kind",
+            "source_key",
+            "container_id",
+            name="uq_fin_component_allocation",
+        ),
+        # Explicit short name: the auto-generated
+        # `ix_financial_document_component_allocations_financial_document_id`
+        # exceeds PostgreSQL's 63-character identifier limit.
+        Index("ix_fin_component_alloc_document_id", "financial_document_id"),
+    )
+
+    financial_document_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("financial_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    container_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("service_order_containers.id"))
+    allocated_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
 
 
 class FinancialDocumentAllocation(PKMixin, Base):

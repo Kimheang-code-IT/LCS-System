@@ -152,6 +152,105 @@ async def test_linked_charges_are_listed_per_scope_and_keep_the_order_customer(c
     assert bad.status_code == 422, bad.text
 
 
+async def test_a_stale_charge_update_is_refused_and_the_fresh_one_is_accepted(client):
+    """Optimistic concurrency: a second session cannot overwrite a newer save."""
+    headers = await login(client)
+    party_id = await _party_id(client, headers)
+    created = await _standalone_charge(client, headers, party_id)
+    charge_id = created["id"]
+    stamp = created["updatedAt"]
+    assert stamp
+
+    payload = {
+        "id": charge_id,
+        "updatedAt": stamp,
+        "documentDate": created["documentDate"],
+        "currency": "USD",
+        "customerPartyId": party_id,
+        "lines": [{"description": "Edited service", "quantity": 1, "unitPrice": 30}],
+    }
+    first = await client.put(f"/api/v1/service-charges/{charge_id}", headers=headers, json=payload)
+    assert first.status_code == 200, first.text
+    assert float(first.json()["data"]["total"]) == 30
+    assert first.json()["data"]["updatedAt"] != stamp, "the update moves the concurrency stamp"
+
+    # A second save still carrying the old stamp is refused, not silently applied.
+    stale = await client.put(f"/api/v1/service-charges/{charge_id}", headers=headers, json=payload)
+    assert stale.status_code == 409, stale.text
+    assert stale.json().get("code") == "STALE_CHARGE"
+
+    # Reloading (the fresh stamp) then saving succeeds.
+    fresh = await client.put(
+        f"/api/v1/service-charges/{charge_id}",
+        headers=headers,
+        json={**payload, "updatedAt": first.json()["data"]["updatedAt"]},
+    )
+    assert fresh.status_code == 200, fresh.text
+    assert float(fresh.json()["data"]["total"]) == 30
+
+
+async def test_a_client_row_id_round_trips_for_autosave_reconciliation(client):
+    """The autosave marker survives the round trip, so a retry can adopt the row."""
+    headers = await login(client)
+    party_id = await _party_id(client, headers)
+    created = await client.post(
+        "/api/v1/service-charges",
+        headers=headers,
+        json={
+            "documentDate": date.today().isoformat(),
+            "currency": "USD",
+            "customerPartyId": party_id,
+            "clientRowId": "charge_row_test_1",
+            "lines": [{"description": "Draft service", "quantity": 1, "unitPrice": 10}],
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()["data"]
+    assert body["clientRowId"] == "charge_row_test_1"
+
+    fetched = await client.get(f"/api/v1/service-charges/{body['id']}", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["data"]["clientRowId"] == "charge_row_test_1"
+
+
+async def test_a_retried_linked_create_adopts_the_client_marker(client):
+    """A lost response + retry carries the same marker: one charge, not two."""
+    headers = await login(client)
+    quotation = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Duplicate Guard Customer",
+            "direction": "Import",
+            "currency": "USD",
+            "pricingLines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    revision_id = quotation.json()["data"]["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    order_id = converted.json()["data"]["serviceOrderId"]
+
+    payload = {
+        "documentDate": date.today().isoformat(),
+        "currency": "USD",
+        "clientRowId": "charge_retry_marker_1",
+        "feeLines": [{"description": "Retried service", "quantity": 1, "unitAmount": 40}],
+    }
+    first = await client.post(f"/api/v1/service-orders/{order_id}/charges", headers=headers, json=payload)
+    assert first.status_code == 201, first.text
+    second = await client.post(f"/api/v1/service-orders/{order_id}/charges", headers=headers, json=payload)
+    assert second.status_code == 201, second.text
+    assert second.json()["data"]["id"] == first.json()["data"]["id"]
+
+    listed = await client.get(f"/api/v1/service-orders/{order_id}/charges", headers=headers)
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()["data"]) == 1
+    assert listed.json()["data"][0]["clientRowId"] == "charge_retry_marker_1"
+
+
 async def test_an_invoiced_charge_can_no_longer_be_deleted(client):
     headers = await login(client)
     party_id = await _party_id(client, headers)

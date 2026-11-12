@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -264,35 +264,86 @@ async def _resolve_transport_by(session: AsyncSession, value: Any) -> str | None
     return str(row.id) if row is not None else text
 
 
+async def _replace_revision_requirements(
+    session: AsyncSession,
+    revision: QuotationRevision,
+    rows: list[dict[str, Any]],
+) -> dict[int, int]:
+    """Replace a revision's container rows by container type, keeping their ids.
+
+    Priced lines hold a strict FK to these rows, so a requirement whose container
+    type survives is updated in place (its id stays the line's link target); a
+    row whose type is gone is detached from every line before it is deleted.
+    Returns container type id -> requirement row id.
+    """
+    from app.modules.master_data.service import resolve_or_create_container_type
+
+    wanted: dict[int, dict[str, Any]] = {}
+    for container in rows:
+        if not isinstance(container, dict):
+            continue
+        container_type_id = container.get("containerTypeId") or container.get("container_type_id")
+        if not container_type_id:
+            container_type_id = await resolve_or_create_container_type(session, container.get("containerType"))
+        if not container_type_id:
+            raise ValidationFailed("Container type is required.", {"containerType": "Required"})
+        wanted[int(container_type_id)] = container
+
+    existing = (
+        await session.execute(
+            select(QuotationRevisionContainer).where(
+                QuotationRevisionContainer.quotation_revision_id == revision.id
+            )
+        )
+    ).scalars().all()
+    existing_by_type = {row.container_type_id: row for row in existing}
+    removed_ids = [row.id for type_id, row in existing_by_type.items() if type_id not in wanted]
+    if removed_ids:
+        await session.execute(
+            update(QuotationRevisionLine)
+            .where(QuotationRevisionLine.container_requirement_id.in_(removed_ids))
+            .values(container_requirement_id=None)
+        )
+        await session.execute(
+            delete(QuotationRevisionContainer).where(QuotationRevisionContainer.id.in_(removed_ids))
+        )
+
+    requirement_ids: dict[int, int] = {}
+    for container_type_id, container in wanted.items():
+        quantity = _decimal(container.get("quantity"), Decimal("1"))
+        gross_weight = (
+            _decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None
+        )
+        row = existing_by_type.get(container_type_id)
+        if row is None:
+            row = QuotationRevisionContainer(
+                quotation_revision_id=revision.id,
+                container_type_id=container_type_id,
+                quantity=quantity,
+                gross_weight_kg=gross_weight,
+                remarks=container.get("remarks"),
+            )
+            session.add(row)
+            await session.flush()
+        else:
+            row.quantity = quantity
+            row.gross_weight_kg = gross_weight
+            row.remarks = container.get("remarks")
+        requirement_ids[container_type_id] = row.id
+    return requirement_ids
+
+
 async def _save_revision_children(session: AsyncSession, revision: QuotationRevision, data: dict[str, Any]) -> None:
     # Replace a child collection only when the caller supplied it, so a partial
     # save (e.g. editing notes) does not erase containers or priced lines.
+    validated_requirements: list[dict[str, Any]] | None = None
     if "containerRequirements" in data:
-        data["containerRequirements"] = validate_line_items(
+        validated_requirements = validate_line_items(
             data.get("containerRequirements"),
             CONTAINER_REQUIREMENT_SCHEMA,
             field="containerRequirements",
         )
-        await session.execute(delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id))
-        for _index, container in enumerate(data.get("containerRequirements") or []):
-            if not isinstance(container, dict):
-                continue
-            container_type_id = container.get("containerTypeId") or container.get("container_type_id")
-            if not container_type_id:
-                from app.modules.master_data.service import resolve_or_create_container_type
-
-                container_type_id = await resolve_or_create_container_type(session, container.get("containerType"))
-            if not container_type_id:
-                raise ValidationFailed("Container type is required.", {"containerType": "Required"})
-            session.add(
-                QuotationRevisionContainer(
-                    quotation_revision_id=revision.id,
-                    container_type_id=int(container_type_id),
-                    quantity=_decimal(container.get("quantity"), Decimal("1")),
-                    gross_weight_kg=_decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None,
-                    remarks=container.get("remarks"),
-                )
-            )
+        data["containerRequirements"] = validated_requirements
     if "places" in data:
         # The route editor keeps a trailing blank row for data entry; only rows
         # the operator actually started are validated and persisted. Existing
@@ -310,14 +361,15 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
 
         priced = data.get("pricingLines") if "pricingLines" in data else data.get("lines")
         data["pricingLines"] = validate_line_items(priced, PRICING_LINE_SCHEMA, field="pricingLines")
-        # When the caller does not send container requirements (the quotation UI
-        # no longer has a Containers tab), they are derived from the priced
-        # lines: a line carrying a Container Type is a container-quantity charge
-        # and its Qty is the box count. Lines without a Container Type — per
-        # shipment, documentation, customs — never generate containers.
-        derived_requirements: dict[int, int] = {}
-        if "containerRequirements" not in data:
-            type_quantities: dict[int, Decimal] = {}
+        # Each line's container type decides which requirement row it links to.
+        line_container_types: dict[int, int] = {}
+        type_quantities: dict[int, Decimal] = {}
+        if validated_requirements is None:
+            # When the caller does not send container requirements (the quotation
+            # UI no longer has a Containers tab), they are derived from the priced
+            # lines: a line carrying a Container Type is a container-quantity
+            # charge and its Qty is the box count. Lines without a Container Type
+            # — per shipment, documentation, customs — never generate containers.
             errors: dict[str, str] = {}
             for index, line in enumerate(data.get("pricingLines") or []):
                 container_value = line.get("containerTypeId") or line.get("containerType")
@@ -340,15 +392,36 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                     )
                     continue
                 type_quantities[container_type_id] = container_quantity
-                line["__container_type_id"] = container_type_id
+                line_container_types[index] = container_type_id
             if errors:
                 raise ValidationFailed("Please correct the container quantities in the pricing lines.", errors)
-            # Replace the revision's requirement rows with the derived set (an
-            # empty set removes them: requirements follow the pricing lines).
+        else:
+            # The caller supplied the requirements (a full quotation save does):
+            # link each line to the matching row by its container type.
+            for index, line in enumerate(data.get("pricingLines") or []):
+                container_value = line.get("containerTypeId") or line.get("containerType")
+                if container_value in (None, ""):
+                    continue
+                container_type_id = await resolve_or_create_container_type(session, container_value)
+                if container_type_id is not None:
+                    line_container_types[index] = container_type_id
+
+        # Priced lines reference the requirement rows through a strict FK: delete
+        # them before the requirements are replaced, then re-insert them below
+        # with the (kept or newly created) requirement ids.
+        await session.execute(
+            delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id)
+        )
+        labels: dict[int, str] = {}
+        if validated_requirements is not None:
+            # Replace by container type in place: a row whose type survives keeps
+            # its id, so the lines' requirement links stay stable.
+            requirement_ids = await _replace_revision_requirements(session, revision, validated_requirements)
+        else:
             await session.execute(
                 delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id)
             )
-            labels: dict[int, str] = {}
+            requirement_ids = {}
             if type_quantities:
                 from app.modules.master_data.models import ContainerType
 
@@ -370,12 +443,11 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                     )
                     session.add(row)
                     await session.flush()
-                    derived_requirements[container_type_id] = row.id
+                    requirement_ids[container_type_id] = row.id
             data["containerRequirements"] = [
                 {"containerTypeId": str(container_type_id), "containerType": labels.get(container_type_id, str(container_type_id)), "quantity": str(container_quantity)}
                 for container_type_id, container_quantity in type_quantities.items()
             ]
-        await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
         priced_subtotal = Decimal("0")
         priced_discount = Decimal("0")
         priced_tax = Decimal("0")
@@ -437,7 +509,7 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
             priced_discount += discount
             priced_tax += tax
             priced_total += total
-            container_type_id = line.pop("__container_type_id", None)
+            container_type_id = line_container_types.get(index)
             session.add(
                 QuotationRevisionLine(
                     quotation_revision_id=revision.id,
@@ -449,7 +521,7 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                         line.get("feeType") or line.get("fee_type"),
                     ),
                     container_requirement_id=(
-                        derived_requirements.get(int(container_type_id)) if container_type_id is not None else None
+                        requirement_ids.get(container_type_id) if container_type_id is not None else None
                     ),
                     service_description=str(line.get("description") or line.get("feeType") or "Service"),
                     quantity=quantity,
@@ -469,6 +541,10 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
         revision.discount_amount = _money(priced_discount)
         revision.tax_amount = _money(priced_tax)
         revision.total_amount = _money(priced_total)
+    if validated_requirements is not None and not ("pricingLines" in data or "lines" in data):
+        # A requirements-only save still has to keep the priced lines' links:
+        # replacement happens by container type, in place.
+        await _replace_revision_requirements(session, revision, validated_requirements)
     await session.flush()
 
 

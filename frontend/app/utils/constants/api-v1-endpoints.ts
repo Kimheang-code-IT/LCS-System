@@ -53,6 +53,8 @@ export const ApiV1Endpoints = {
   SERVICE_ORDERS: '/api/v1/service-orders',
   SERVICE_ORDER: (id: number | string) => `/api/v1/service-orders/${id}`,
   SERVICE_ORDER_FINISH: (id: number | string) => `/api/v1/service-orders/${id}/finish`,
+  SERVICE_ORDER_REFRESH_FINANCIAL_DOCUMENTS: (id: number | string) =>
+    `/api/v1/service-orders/${id}/refresh-financial-documents`,
   SERVICE_ORDER_CONTAINERS: (id: number | string) => `/api/v1/service-orders/${id}/containers`,
   SERVICE_ORDER_MOVEMENTS: (id: number | string) => `/api/v1/service-orders/${id}/movements`,
   SERVICE_ORDER_MILESTONES: (id: number | string) => `/api/v1/service-orders/${id}/milestones`,

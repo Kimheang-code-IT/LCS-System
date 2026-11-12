@@ -69,6 +69,11 @@ export function createHttpJobRepository(): JobRepository {
       unwrapApiData(await api.delete<ApiResponse<{ removed: number }>>(ApiV1Endpoints.SERVICE_ORDER_CONTAINERS(serviceOrderId), { body: { ids } })),
     finish: async (id, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_FINISH(id), {}, withIdempotency(key))),
+    refreshFinancialDocuments: async (id) =>
+      unwrapApiData(await api.post<ApiResponse<{
+        documents: Array<{ id: string, documentNo: string, type: string }>
+        warnings: string[]
+      }>>(ApiV1Endpoints.SERVICE_ORDER_REFRESH_FINANCIAL_DOCUMENTS(id), {})),
   }
 }
 
@@ -79,8 +84,19 @@ export function createHttpServiceChargeRepository(): ServiceChargeRepository {
     get: async id => unwrapApiData(await api.get<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.SERVICE_CHARGES}/${id}`)),
     create: async input =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_CHARGES, stripOfficialNumberFields(input, 'jobCharges'))),
-    saveDraft: async record =>
-      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_CHARGES(String(record.jobNo || record.id)), record)),
+    saveDraft: async record => {
+      // Edit an existing charge through its own update endpoint (the same one
+      // the standalone page uses): it needs `service_charge.update`, not the
+      // create permission the order-charges POST is gated by.
+      if (record.id) {
+        return unwrapApiData(
+          await api.put<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.SERVICE_CHARGES}/${record.id}`, record),
+        )
+      }
+      return unwrapApiData(
+        await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.SERVICE_ORDER_CHARGES(String(record.jobNo || record.id)), record),
+      )
+    },
     issue: async (chargeId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.CHARGE_ISSUE(chargeId), {}, withIdempotency(key))),
     createFinanceInvoice: async (chargeId, key) =>

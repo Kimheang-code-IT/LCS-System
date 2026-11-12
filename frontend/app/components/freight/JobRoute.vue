@@ -16,7 +16,6 @@ const emit = defineEmits<{
   'update:job': [patch: Record<string, unknown>]
 }>()
 
-const store = useFreightStore()
 const table = JOB_ROUTE_TABLE
 const rows = ref<Array<Record<string, unknown>>>([])
 const canEdit = computed(() => props.editable || props.isCreate)
@@ -25,16 +24,13 @@ function loadRows() {
   rows.value = jobRoutePlaces(props.job)
 }
 
+/**
+ * Route edits stay in the page model (and therefore in the page draft) and are
+ * written by the order's own Save. A per-keystroke whole-order PUT used to race
+ * the draft's server stamp and the user's typing.
+ */
 function persist(nextRows: Array<Record<string, unknown>>) {
-  const patch = jobFieldsFromPlaces(nextRows)
-  emit('update:job', patch)
-  if (!props.isCreate && props.job.id) {
-    store.save('jobs', {
-      ...props.job,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    })
-  }
+  emit('update:job', jobFieldsFromPlaces(nextRows))
 }
 
 function setRows(value: Array<Record<string, unknown>>) {

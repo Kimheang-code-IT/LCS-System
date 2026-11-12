@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { getFreightModule } from '../app/config/freight-modules'
 import { JOB_CONTAINER_PAYMENT_TABLE } from '../app/config/job-workspace-forms'
-import { serviceChargePayload, serviceChargeTable, serviceChargeTotals } from '../app/utils/freight/job-charges'
+import { recalculateFreightRecord } from '../app/utils/freight/document-calculations'
+import { serviceChargeFormPayload, serviceChargeModule } from '../app/utils/freight/service-charge-form'
 import { applyLineAdjustments, lineSubtotal } from '../app/utils/table/line-adjustments'
-import { computePricingLine } from '../app/utils/table/line-table-rules'
+import { computeFeeLine, computePricingLine } from '../app/utils/table/line-table-rules'
 
 describe('line additional details', () => {
-  it('is offered on all four supported tables', () => {
+  it('is offered on every supported live table', () => {
     const quotation = getFreightModule('/quotations')!
     const pricing = quotation.tables!.find(table => table.key === 'pricingLines')!
-    const charges = getFreightModule('/service-charges')!.tables!.find(table => table.key === 'feeLines')!
+    const charges = serviceChargeModule().tables!.find(table => table.key === 'feeLines')!
     expect(pricing.lineDetails).toBe(true)
     expect(charges.lineDetails).toBe(true)
     expect(JOB_CONTAINER_PAYMENT_TABLE.lineDetails).toBe(true)
-    expect(serviceChargeTable().lineDetails).toBe(true)
   })
 
   it('shows the discount and tax lines in the quotation pricing summary', () => {
@@ -44,28 +44,39 @@ describe('line additional details', () => {
     expect(adjusted.taxAmount).toBe(0)
   })
 
-  it('sends the line rate so the server derives the authoritative tax', () => {
-    const payload = serviceChargePayload({
-      description: 'Freight',
-      quantity: 10,
-      unitPrice: 2320,
-      discount: 320,
-      taxRate: 10,
-      taxAmount: 2000,
-    }, 'USD')
-    expect(payload.lines[0]).toMatchObject({ discount: 320, taxRate: 10 })
+  it('sends the fee line and its discount/tax through the shared charge payload', () => {
+    const payload = serviceChargeFormPayload({
+      id: '',
+      status: 'Draft',
+      feeLines: [{
+        description: 'Freight',
+        quantity: 10,
+        unitAmount: 2320,
+        discount: 320,
+        taxRate: 10,
+        taxAmount: 200,
+      }],
+    })
+    expect(payload.feeLines[0]).toMatchObject({ discount: 320, taxRate: 10 })
+    expect(payload.total).toBe(23080)
   })
 
-  it('sums line adjustments once and ignores the sheet rate when they exist', () => {
-    const rows = [
-      { quantity: 1, unitPrice: 100, discount: 10, taxRate: 10, taxAmount: 9 },
-      { quantity: 1, unitPrice: 100, discount: 0, taxRate: 0, taxAmount: 0 },
-    ]
-    expect(serviceChargeTotals(rows, 10, 50)).toMatchObject({
-      subtotal: 200,
-      discount: 10,
-      vat: 9,
-      total: 199,
-    })
+  it('sums fee-line adjustments once through the shared record recalculation', () => {
+    const next = recalculateFreightRecord(serviceChargeModule(), {
+      id: '',
+      feeLines: [
+        { quantity: 1, unitAmount: 100, discount: 10, taxRate: 10, taxAmount: 9 },
+        { quantity: 1, unitAmount: 100, discount: 0, taxRate: 0, taxAmount: 0 },
+      ],
+    } as never)
+    expect(next.subtotal).toBe(200)
+    expect(next.discount).toBe(10)
+    expect(next.tax).toBe(9)
+    expect(next.total).toBe(199)
+  })
+
+  it('keeps the fee-line row arithmetic in the shared table rules', () => {
+    expect(computeFeeLine({ row: { quantity: 2, unitAmount: 100, discount: 20, taxAmount: 18 } }))
+      .toEqual({ amount: 198 })
   })
 })

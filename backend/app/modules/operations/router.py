@@ -277,6 +277,20 @@ async def finish_service_order(
     return {"data": record}
 
 
+@router.post("/service-orders/{identifier}/refresh-financial-documents")
+async def refresh_service_order_documents(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("financial_document.create")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Explicit retry/generation of the order's DRAFT customer invoices and supplier bills."""
+    context.require("service_order.read")
+    order = await service.resolve_order(session, context, identifier)
+    from app.modules.finance.order_documents import refresh_service_order_financial_documents
+
+    return {"data": await refresh_service_order_financial_documents(session, context, order)}
+
+
 @router.get("/service-charges")
 async def list_service_charges(
     page: PageParams = Depends(page_params),

@@ -114,6 +114,260 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Shared document drafts + editable-table cleanup — 2026-11-12
+
+One draft state machine now serves every document form. `useRecordFormDraft`
+(on the existing `useRecordDraft` storage helpers) owns the debounced write,
+restore, conflict and clear rules; the form model stays the single authoritative
+copy. Draft envelopes are v2 (collection + user scope), and v1 copies are still
+read. A newer server row produces the shared `AppDraftConflictAlert`
+(Restore/Discard) instead of a silent overwrite. Successful saves clear only
+their own record/new slot; failed saves keep the draft.
+
+Coverage: quotations, standalone Service Charges, financial documents and
+journals (DRAFT only), Service Orders (header + route/containers/files state +
+dynamic component-tab rows), the Service Order Service Charge tab (per charge,
+keyed by the stable `clientRowId` for a new charge, so a second new charge no
+longer overwrites the first) and the Service Order Finance entries (posted rows
+stay server-owned). Route and Files edits update the page model and are saved by
+the order Save instead of a per-keystroke whole-order PUT. Numbered containers
+keep their immediate API write, now single-flight through `useAutosave` and
+flushed on navigation. `AppLineTable` gained opt-in client row ids (`_rowId`,
+stripped from payloads/drafts) and `aria-busy`; it remains the only editable
+grid renderer.
+
+Removed after verifying no production consumers: `components/table/AppSaveGrid.vue`,
+`utils/freight/service-charge-autosave.ts`, the legacy one-row-per-charge grid in
+`utils/freight/job-charges.ts` (only `isDeletableCharge` remains), and the unused
+change-set helpers in `types/save-grid.ts`. Their tests were replaced with tests
+of the live `feeLines`/`serviceChargeFormPayload` path.
+
+Changed: `frontend/app/composables/common/{useRecordDraft.ts,useRecordFormDraft.ts}`,
+`frontend/app/components/common/AppDraftConflictAlert.vue`,
+`frontend/app/components/freight/{DocumentView.vue,JobDetail.vue,JobCharges.vue,JobFinance.vue,JobRoute.vue,JobFiles.vue,JobContainers.vue,AppLineTable.vue}`,
+`frontend/app/config/{freight-modules.ts,lcs-reference-modules.ts,route-stop-table.ts,job-workspace-forms.ts}`,
+`frontend/app/utils/freight/{job-charges.ts,job-workspace.ts}`,
+`frontend/app/types/save-grid.ts`; docs `02-business/ui-ux-standards.md`.
+Tests: new `record-form-draft` + `document-draft-integration`, rewritten
+`workspace-tables`/`line-details`, removed the dead save-grid/autosave specs.
+Evidence: frontend vitest 906/906, `pnpm typecheck`, `pnpm lint`,
+`pnpm i18n:check` all clean. No backend, schema, permission or posting change.
+No browser journey; no Git commit.
+
+### Internal Service Charges + generated order financial drafts — 2026-11-12
+
+Service Charges now carry a `charge_side` (`CUSTOMER`/`INTERNAL`). Internal fee
+lines store supplier cost (`cost_unit_price`, `cost_amount`) beside the existing
+selling price/discount/tax fields and require a supplier. Customer documents never
+read cost fields; internal charges cannot be issued or invoiced to the customer.
+The embedded tab has separate Customer/Internal fee-line views, both using the
+shared `AppLineTable`.
+
+Finish (and an explicit `POST /service-orders/{id}/refresh-financial-documents`
+retry) generates only DRAFT documents; ordinary Save never generates invoices or
+bills. One customer invoice is generated per container, with container pricing,
+issued customer charge selling lines and eligible internal selling lines. Shared
+components are allocated by direct container charge-out using Decimal arithmetic,
+with the rounding remainder on the last container. Internal cost is generated as
+one supplier bill per supplier + currency + order context. Every generated document
+has a unique `generated_key`; component sources/amounts are recorded in
+`financial_document_component_allocations`. Posted/reversed documents are never
+modified and repeated Finish/retry updates the same drafts.
+
+The Finance summary adds internal cost preview only until its supplier draft exists,
+then uses the supplier bill, avoiding double counting. It keeps the existing
+Total Charge-out / Charged / Uncharged / Total Expenses / Estimated Net Margin /
+Outstanding cards and per-currency grouping.
+
+Migration `c1a2b3d4e5f6` is additive: charge side/supplier/cost columns,
+`financial_documents.generated_key`, and the component-allocation table. Existing
+charges backfill to CUSTOMER and cost fields to zero. Schema DDL/descriptions and
+deployment head documentation were regenerated. Evidence: latest focused backend
+pytest 99 passed (generated documents, service charges/tax, quotation reuse,
+finance entries, schema docs, migration chain and schema integrity); broader
+backend suite 909 passed / 19 skipped before the final guards; frontend vitest
+912/912, eslint/typecheck clean, i18n check pass, `pnpm generate` pass. No Git
+commit. Limits: real-PostgreSQL upgrade/downgrade was not exercised in this
+environment; generated supplier bills are grouped per supplier/currency/order,
+not per existing supplier invoice.
+
+### Service Order Finance summary + fee-line-only embedded Service Charge — 2026-11-12
+
+The Finance tab now starts with six compact summary cards (Total Charges, Charged,
+Uncharged, Total Expenses, Net Amount, Outstanding Balance) above the existing entry
+grid, grouped per currency. Posted documents contribute their authoritative totals and
+`outstanding`; only DRAFT documents/charges use live edited amounts, and the card group
+is marked Estimated when any contribution is unposted. Arithmetic runs on 4-dp scaled
+integers (BigInt) so credits, discounts and taxes never drift; negative uncharged/net
+values are shown, not clamped. Outstanding is posted receivable balance only (never raw
+cash/journal rows). `store.isLoaded` keeps zeroes hidden until the related collections
+finish loading.
+
+The Finance entries grid remains the shared `FreightAppLineTable`, now with the
+supplier-bill/other-finance documents included and a cached supplemental document read
+for configured behaviours that the invoice/bill projections omit. The table gained
+optional `loading`/`emptyText` props and stable row identity (`id` → `clientRowId` →
+index); existing callers are unchanged. Finance entries have their own debounced
+`localStorage` draft (user + order + schema version), restoring new rows and edits to
+DRAFT documents only, never posted/reversed rows; stale draft documents are skipped with
+a visible count. Successful row saves adopt the confirmed server row and clear the
+committed draft; failed saves keep it. A delayed response only adopts identity/stamp,
+never overwriting cells typed while the request was in flight.
+
+The embedded Service Charge tab now renders only the approved Fee Lines tab of the same
+`ServiceChargeForm`/`DocumentAppForm`/`FreightAppLineTable` stack (`fee-lines-only`), with
+the linked-charge selector kept unobtrusive. Standalone `/service-charges` keeps its
+General/Traceability tabs and save. The tab emits its live charge totals to the Service
+Order so the Finance summary preview follows fee-line, discount and tax edits without a
+second calculation. No backend or schema change; persistence and posting rules are
+unchanged.
+
+Changed: `frontend/app/components/freight/{JobFinance.vue,JobCharges.vue,JobDetail.vue,ServiceChargeForm.vue,AppLineTable.vue}`,
+`frontend/app/stores/freight.ts`,
+`frontend/app/utils/freight/{finance-summary.ts,finance-draft.ts,service-charge-form.ts}`,
+`frontend/app/utils/constants/document-types.ts`, i18n bundles; tests
+`frontend/tests/{finance-summary,finance-draft,app-line-table,service-charge-shared-form}.spec.ts`.
+Evidence: frontend vitest 899/899, eslint clean, typecheck clean, i18n check pass.
+No backend change, no migration, no Git commit.
+
+### Service Order breadcrumb, page draft, shared Service Charge form — 2026-11-12
+
+The Service Order header now derives `Service Orders > {so number}` from the API's
+`jobNo`/`serviceOrderNo` (never the database id), keeps the parent crumb linked to the
+list, and shows a placeholder while loading / only the parent for a missing record.
+
+Tab data loss had two causes: tabs were `v-if`-mounted (destroying local controls on
+every switch) and no page-level draft existed for refresh/reopen. Every visited editable
+tab now stays mounted (`v-show`), and `JobDetail` writes a versioned, debounced
+`localStorage` draft keyed by user + Service Order. It restores only when the server
+`updatedAt` still matches the draft base; a newer server row produces a Restore/Discard
+banner instead of a silent overwrite. Successful save/finish clears only that record's
+draft. File/Blob values, credentials and server-owned attachment/activity copies are
+excluded. Storage corruption/denial degrades to no draft.
+
+The Service Order Service Charge tab now renders the same `ServiceChargeForm` as the
+standalone `/service-charges` page (`DocumentAppForm` + `jobCharges` module config +
+`moduleDocumentTabs` + `recalculateFreightRecord` + record/table validation). The tab
+owns its save boundary (page Save never creates/posts charges), loads the order's linked
+charges, creates a linked draft with the existing `createForOrder`, edits through
+`saveDraft`, and keeps a per-order/charge draft. Repeated clicks are blocked; a retried
+create adopts the row by its stable `clientRowId` (backend also returns the existing
+linked charge for the same marker) so no duplicate is inserted. Permissions, draft-only
+status checks, optimistic `updatedAt` conflicts and financial posting paths are unchanged.
+
+Changed: `frontend/app/components/freight/{JobDetail.vue,JobCharges.vue,ServiceChargeForm.vue,DocumentView.vue}`,
+`frontend/app/utils/freight/{job-workspace.ts,service-charge-form.ts}`,
+`frontend/app/composables/common/useRecordDraft.ts`,
+`frontend/i18n/locales/{en,km,zh}.json`,
+`backend/app/modules/operations/service.py`,
+tests `frontend/tests/{service-charge-save,service-order-breadcrumb,service-order-draft,service-charge-shared-form}.spec.ts`
+and `backend/tests/test_service_charge_workflows.py`. Evidence: frontend vitest 878/878,
+eslint clean, typecheck clean, i18n check pass; backend focused pytest 47 passed,
+ruff clean. No migration. No Git commit.
+
+### Autosave made reusable + duplicate-charge and concurrency fixes — 2026-11-12
+
+The draft autosave moved out of the Service Charge tab into the shared
+`AppSaveGrid` (the wrapper every `AppLineTable` save-grid uses): optional
+`autosave-key`, `persist`, `canAutosave`, `reconcile`, `prepareRestored`, draft
+record/stamp props, and exposed `flushAutosave`/`retryAutosave`/`saveFailed`/
+`clearLocalDraft`. Any grid can opt in; `JobCharges` now supplies only the business
+mapping (charge API call, persistability rule, marker reconciliation) and contains no
+second autosave implementation. Configuration grids are unaffected (the feature is
+opt-in).
+
+Duplicate-charge root cause: a created row was re-identified by matching **rendered field
+values** against the response, so editing the row while its POST was in flight (or a lost
+response) left the row id-less and the next autosave created it again. Every new row now
+gets a stable `clientRowId` (from the table's `rowDefaults`) that travels in the charge's
+`data` and comes back on create/list; ids are reattached by that marker only. Before
+creating, the tab checks the loaded charges for the marker (adopting a row whose response
+was lost), retry reloads first, and a row deleted while its create was in flight has the
+just-created charge removed instead of reappearing. Older local drafts are stamped with a
+marker before reconciliation.
+
+Optimistic concurrency: charge payloads now expose `updatedAt`; `save_charge` refuses an
+update whose `updatedAt` no longer matches with `409 STALE_CHARGE` (callers that omit the
+stamp keep working). Autosave keeps the local draft and shows the inline Retry on a
+conflict; Retry reloads first. No migration was needed.
+
+Changed: `frontend/app/components/table/AppSaveGrid.vue`,
+`frontend/app/components/freight/JobCharges.vue`,
+`frontend/app/utils/freight/{job-charges.ts,service-charge-autosave.ts}`,
+`backend/app/modules/operations/service.py`,
+`backend/tests/test_service_charge_workflows.py`,
+`frontend/tests/{service-charge-autosave.spec.ts,service-charge-save.spec.ts}`. Evidence:
+frontend `vitest run` → 861 passed / 104 files, eslint + typecheck clean; backend
+`pytest -q -n auto` → 905 passed, 19 skipped (PostgreSQL-only), exit 0. Frontend image
+rebuilt/recreated locally. No Git commit.
+
+### Service Charge autosave: status indicator removed, Route-pattern preservation — 2026-11-12
+
+Removed the "Unsaved changes" / Saving… / Saved / Save failed header indicator introduced
+with the autosave pass: `AppHeader` no longer renders a save status, and the
+`saveState`/`chargeSaveStatus` plumbing was withdrawn from `AppDocumentPage`,
+`AppHeaderPageActions`, `useAppHeader` and `JobDetail`; the four `freight.ui.autosave*`
+locale keys were deleted. A failed draft save still shows the inline form-error summary
+above the grid and now offers a small **Retry** action there (not a save button).
+Everything else is unchanged and reuses the established draft behaviour: the editable
+tabs keep their values in the page model like the Route tab (Route also background-saves
+via the store), Service Charge and Finance stay mounted after their first visit, and the
+Service Charge draft keeps autosaving 800 ms after edits with a localStorage restore, so
+tab switches, refreshes and reopens never drop entered fee lines.
+
+Changed: `frontend/app/components/layout/{AppHeader.vue,AppHeaderPageActions.vue}`,
+`frontend/app/components/document/AppDocumentPage.vue`,
+`frontend/app/components/freight/{JobCharges.vue,JobDetail.vue}`,
+`frontend/app/composables/layout/useAppHeader.ts`,
+`frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/service-charge-save.spec.ts`. Evidence: `vitest run` → 853 passed / 103
+files; eslint clean; `pnpm typecheck` clean; `pnpm i18n:check` pass; frontend image
+rebuilt and recreated locally. No backend change. No Git commit.
+
+### Service Charge autosave + local draft (no data loss across tabs/refresh) — 2026-11-12
+
+Root cause of the reported loss: the Service Charge tab is a component-local draft
+(one charge record per row, kept in `AppSaveGrid`) and switching Service Order tabs used
+to unmount it; the page save was the only persistence, so an unmounted draft and a
+refresh lost the rows. Additionally `AppSaveGrid` reset its draft on every `rows` prop
+change, so a background reload could erase edits made while a request was in flight.
+
+Now: `useAutosave` (new, debounced 800 ms, single-flight with one queued trailing run)
+persists the changed/new/deleted charge rows through the existing
+`createForOrder`/`saveDraft`/`delete` endpoints — no new API, no schema change, no
+financial posting (charges stay DRAFT SERVICE_NOTE documents). Incomplete new rows are
+kept in a `localStorage` record draft (reusing `useRecordDraft`, now with a storage
+choice) and re-attached after a refresh/reopen; successful, fully persisted saves clear
+it. Created rows adopt their server ids by value fingerprint, so a later save updates
+instead of duplicating, and `AppSaveGrid` no longer resets a dirty draft on a prop
+refresh. Leaving the tab (tab button or URL/back navigation) flushes the pending save,
+and the page header's Save changes waits for/flushes the autosave before its strict
+validation pass.
+
+UI: a quiet status next to Save changes — Unsaved changes / Saving… / Saved / Save
+failed with a Retry action (`AppHeader` save-status config threaded through
+`AppDocumentPage` → `AppHeaderPageActions`); autosave shows no success toast. The Finance
+tab is now kept alive on first visit too, since its inline entries are the same kind of
+local draft. No other tab changed shape: their values live in the page model.
+
+Known limits: concurrency is guarded client-side (never two requests in flight, one
+queued follow-up, no reload clobber) rather than by a server version column; a row edited
+while its create is in flight and whose values no longer match the created snapshot is
+saved as a second row on the next autosave (the original stays editable/deletable). No
+migration was needed.
+
+Changed: `frontend/app/composables/common/{useAutosave.ts,useRecordDraft.ts}`,
+`frontend/app/components/table/AppSaveGrid.vue`,
+`frontend/app/components/freight/{JobCharges.vue,JobDetail.vue}`,
+`frontend/app/components/document/AppDocumentPage.vue`,
+`frontend/app/components/layout/{AppHeader.vue,AppHeaderPageActions.vue}`,
+`frontend/app/composables/layout/useAppHeader.ts`,
+`frontend/i18n/locales/{en,km,zh}.json`,
+`frontend/tests/{autosave.spec.ts,service-charge-save.spec.ts}`. Evidence: `vitest run` →
+852 passed / 103 files; eslint clean; `pnpm typecheck` clean; `pnpm i18n:check` pass; the
+production frontend image was rebuilt and recreated locally. No backend change. No Git
+commit.
+
 ### First-run setup inserts nothing but the admin — 2026-11-11
 
 `/auth/setup` and the administrative "Reset data" now insert only the administrator

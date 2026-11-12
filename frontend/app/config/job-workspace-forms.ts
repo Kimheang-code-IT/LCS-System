@@ -31,9 +31,10 @@ export const JOB_CONTAINER_REQUIREMENT_TABLE: FreightTable = {
     { key: 'remaining', label: 'Remaining', labelKey: 'freight.ui.remainingCol', type: 'number', computed: true },
     { key: 'description', label: 'Description', labelKey: 'freight.fields.description', type: 'text' },
   ],
-addLabel: 'Add requirement',
-    addLabelKey: 'freight.ui.addRequirement',
+  addLabel: 'Add requirement',
+  addLabelKey: 'freight.ui.addRequirement',
   rowDefaults: containerRequirementRowDefaults,
+  assignRowId: true,
 }
 
 export const JOB_ACTUAL_CONTAINER_TABLE: FreightTable = {
@@ -54,6 +55,7 @@ export const JOB_ACTUAL_CONTAINER_TABLE: FreightTable = {
   addLabel: 'Add Container',
   addLabelKey: 'freight.ui.addContainer',
   rowDefaults: actualContainerRowDefaults,
+  assignRowId: true,
 }
 
 /**
@@ -82,6 +84,7 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
   addLabelKey: 'freight.ui.addPayment',
   computeRow: computeContainerPaymentLine,
   rowDefaults: containerPaymentRowDefaults,
+  assignRowId: true,
   pricing: true,
   lineDetails: true,
 }

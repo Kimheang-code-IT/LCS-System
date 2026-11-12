@@ -121,7 +121,10 @@ Never run destructive migration operations without an approved backup and migrat
 
 ### Current chain and rollback boundary
 
-- Current Alembic head: `c0d1e2f3a4b5` (service-order movement sequence
+- Current Alembic head: `c1a2b3d4e5f6` (internal Service Charges, generated
+  document key and component allocations; additive columns/table, `downgrade()`
+  reverses them). Below it: `b5c9d1e4f2a7` (standalone service charges), then
+  `c0d1e2f3a4b5` (service-order movement sequence
   uniqueness: creates `uq_service_order_movements_sequence` on
   `service_order_movements`; `downgrade()` drops the constraint). Below it:
   `a8c0e2e4b6d8` (accounting period management: adds the

@@ -19,7 +19,6 @@ const emit = defineEmits<{
   'update:job': [patch: Record<string, unknown>]
 }>()
 
-const store = useFreightStore()
 const table = JOB_FILE_TABLE
 const rows = ref<Array<Record<string, unknown>>>([])
 const canEdit = computed(() => props.editable || props.isCreate)
@@ -38,16 +37,12 @@ function loadRows() {
   rows.value = jobFileAttachments(props.job, props.documents)
 }
 
+/**
+ * Upload/remove/note writes already go through the attachment API; the order
+ * only carries the metadata rows and saves them with its own Save (and draft).
+ */
 function persist(nextRows: Array<Record<string, unknown>>) {
-  const patch = { attachments: nextRows }
-  emit('update:job', patch)
-  if (!props.isCreate && props.job.id) {
-    store.save('jobs', {
-      ...props.job,
-      ...patch,
-      updatedAt: new Date().toISOString(),
-    })
-  }
+  emit('update:job', { attachments: nextRows })
 }
 
 function setRows(value: Array<Record<string, unknown>>) {

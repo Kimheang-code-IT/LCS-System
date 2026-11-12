@@ -55,6 +55,12 @@ async def test_sequences_and_settings_seed_once(seeded, session_factory):
     assert replay_settings[0] == 0
 
 
+def test_business_parties_is_an_explicit_module():
+    """Sample parties are opt-in, so `--all` stays pure reference data."""
+    args = seed.parse_args(["--module", "business-parties"])
+    assert args.module == "business-parties"
+
+
 async def test_demo_seed_fills_tables_once_per_code(seeded, session_factory):
     from app.modules.master_data.models import BusinessParty, ComponentGroup, ComponentTab
 
@@ -62,9 +68,9 @@ async def test_demo_seed_fills_tables_once_per_code(seeded, session_factory):
         parties_before = await session.scalar(
             select(func.count()).select_from(BusinessParty).where(BusinessParty.deleted_at.is_(None))
         )
-        first_inserted, first_skipped = await seed.seed_demo_parties(session)
+        first_inserted, first_skipped = await seed.seed_business_parties(session)
         await session.commit()
-        second = await seed.seed_demo_parties(session)
+        second = await seed.seed_business_parties(session)
         await session.commit()
         parties_after = await session.scalar(
             select(func.count()).select_from(BusinessParty).where(BusinessParty.deleted_at.is_(None))

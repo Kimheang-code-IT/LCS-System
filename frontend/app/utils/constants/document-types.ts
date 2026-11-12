@@ -35,6 +35,19 @@ export const FINANCE_ENTRY_BEHAVIORS = new Set<string>([
   'OTHER_EXPENSE',
 ])
 
+/** Accounting behaviours that add to revenue / cost in the Service Order summary. */
+export const INCOME_BEHAVIORS = new Set<string>(['CUSTOMER_INVOICE', 'OTHER_INCOME'])
+export const EXPENSE_BEHAVIORS = new Set<string>(['SUPPLIER_BILL', 'OTHER_EXPENSE'])
+/** Approved credit adjustments reduce the matching side of the summary. */
+export const INCOME_CREDIT_BEHAVIORS = new Set<string>(['CREDIT_NOTE'])
+export const EXPENSE_CREDIT_BEHAVIORS = new Set<string>(['SUPPLIER_CREDIT_NOTE'])
+
+/**
+ * Reversed/cancelled documents stay auditable but no longer contribute to a
+ * summary; settlements are excluded because they move cash, not margin.
+ */
+export const EXCLUDED_FINANCE_SUMMARY_STATUSES = new Set<string>(['REVERSED', 'CANCELLED'])
+
 export function documentTypeCategoryLabel(category: string) {
   return `freight.documentTypes.categories.${String(category).toLowerCase()}`
 }

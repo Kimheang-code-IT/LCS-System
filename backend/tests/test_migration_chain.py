@@ -138,7 +138,7 @@ def test_every_revision_defines_a_working_downgrade():
 
 def test_the_chain_reaches_the_expected_head():
     heads = sorted(set(_down_revisions()) - {p for p in _down_revisions().values() if p})
-    assert heads == ["b5c9d1e4f2a7"], (
+    assert heads == ["c1a2b3d4e5f6"], (
         "the head changed; update docs/archive/deployment-security-history.md and the deployed "
         f"revision expectation (found {heads})"
     )

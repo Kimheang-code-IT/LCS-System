@@ -320,6 +320,40 @@ async def test_quotation_pricing_line_can_change_its_transport_type(client):
     assert line["quantity"] == 2
 
 
+async def test_resaving_a_quotation_with_its_requirements_keeps_the_lines_linked(client):
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(
+        client,
+        headers,
+        {
+            "customerPartyId": party["id"],
+            "pricingLines": [{"containerType": "40HC", "quantity": 2, "unitPrice": 100}],
+        },
+    )
+
+    # The UI posts the whole record (Duplicate → change direction → Save), so an
+    # existing quotation is re-saved with its requirements AND priced lines. The
+    # line→requirement FK is strict on PostgreSQL, so the requirements must be
+    # replaced after the lines (or in place), never deleted first.
+    updated = await client.put(
+        f"/api/v1/quotations/{created['id']}",
+        headers=headers,
+        json={
+            "direction": "Export",
+            "containerRequirements": created["containerRequirements"],
+            "pricingLines": created["pricingLines"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()["data"]
+    assert body["direction"] == "Export"
+    assert len(body["pricingLines"]) == 1
+    assert float(body["pricingLines"][0]["quantity"]) == 2
+    assert len(body["containerRequirements"]) == 1
+    assert float(body["containerRequirements"][0]["quantity"]) == 2
+
+
 async def test_sent_quotation_revision_keeps_the_transport_type_when_edited(client):
     headers = await login(client)
     party = await _first_party(client, headers, role="Customer")

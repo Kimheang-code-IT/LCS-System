@@ -83,6 +83,7 @@ const REFERENCE_SELECT_SOURCES: Record<string, ReferenceOptionSource> = {
   // The business party on a financial document: a customer on a receivable, a
   // supplier on a payable, so both roles are offered and the backend stores the id.
   partyId: { collection: 'businessParties', valueField: 'id', labelField: 'legalName', statuses: ['ACTIVE'] },
+  supplierPartyId: { collection: 'businessParties', valueField: 'id', labelField: 'legalName', statuses: ['ACTIVE'] },
   // The bank/cash account a receipt or payment settles through; the backend stores
   // the row id, so the payload carries the name separately for printing.
   financialAccountId: { collection: 'financialAccounts', valueField: 'id', labelField: 'accountName', statuses: ['ACTIVE'] },

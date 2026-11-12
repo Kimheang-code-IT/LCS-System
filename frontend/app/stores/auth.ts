@@ -5,6 +5,7 @@ import { AUTH_STORAGE_KEY, compactAuthUser } from '~/utils/auth/session'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { csrfRequestHeaders } from '~/utils/security/csrf'
 import { authErrorCode, authErrorStatus, createRenewalCoordinator, renewalLeadMillis, type SessionResponse } from '~/utils/auth/renewal'
+import { clearRecordDraftsForUser } from '~/composables/common/useRecordDraft'
 
 const SESSION_EVENT = 'lcs-session-event'
 type SessionEvent = { kind: 'renewed' | 'logout', id: string, expiresAt?: number }
@@ -227,6 +228,8 @@ export const useAuthStore = defineStore('auth', () => {
     renewal.schedule(expiration)
   }
   function clearSession() {
+    // A signed-out workstation must not keep another account's unsaved forms.
+    clearRecordDraftsForUser(String(user.value?.id || ''))
     epoch++
     renewal.invalidate()
     persist(null)

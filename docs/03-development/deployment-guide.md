@@ -39,6 +39,7 @@ never edited or deleted, and no ConfigurationVersion is published):
 # Local (backend directory, uv/venv already synced)
 uv run python scripts/seed.py --all --dry-run   # report only
 uv run python scripts/seed.py --all             # reference data
+uv run python scripts/seed.py --module business-parties  # sample parties only
 uv run python scripts/seed.py --demo            # + demo rows, 5 records per table
 
 # Production host (the image ships scripts/; run it as a one-off, read-only container)

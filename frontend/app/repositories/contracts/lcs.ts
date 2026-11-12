@@ -59,6 +59,10 @@ export interface JobRepository {
   addActualContainer: (serviceOrderId: string, payload: Record<string, unknown>) => Promise<FreightRecord>
   deleteActualContainers: (serviceOrderId: string, ids: string[]) => Promise<{ removed: number }>
   finish: (id: string, idempotencyKey: string) => Promise<FreightRecord>
+  refreshFinancialDocuments: (id: string) => Promise<{
+    documents: Array<{ id: string, documentNo: string, type: string }>
+    warnings: string[]
+  }>
 }
 
 export interface ServiceChargeRepository {

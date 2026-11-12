@@ -115,6 +115,8 @@ CHARGE_WRITE_SCHEMA = RecordSchema(
     (
         FieldSpec("jobNo", max_length=64, aliases=("job_no",)),
         FieldSpec("serviceOrderId", kind="reference", aliases=("service_order_id",)),
+        FieldSpec("chargeSide", max_length=16, aliases=("charge_side",)),
+        FieldSpec("supplierPartyId", kind="reference", aliases=("supplier_party_id",)),
         FieldSpec("chargeNo", max_length=50, aliases=("charge_no", "documentNo", "document_no")),
         FieldSpec("documentType", choices=CHARGE_DOCUMENT_TYPES, max_length=32, aliases=("document_type",)),
         FieldSpec("documentDate", kind="date", aliases=("document_date",)),
@@ -136,6 +138,8 @@ CHARGE_LINE_SCHEMA = RecordSchema(
             kind="decimal",
             aliases=("unit_amount",),
         ),
+        FieldSpec("costUnitPrice", kind="decimal", minimum=0, aliases=("cost_unit_price",)),
+        FieldSpec("costAmount", kind="decimal", minimum=0, aliases=("cost_amount",)),
         FieldSpec("discount", kind="decimal", minimum=0),
         FieldSpec("taxRate", kind="decimal", minimum=0, maximum=100, aliases=("tax_rate",)),
         FieldSpec("tax", kind="decimal", minimum=0, maximum=100),

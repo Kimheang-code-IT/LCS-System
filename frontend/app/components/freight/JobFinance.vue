@@ -8,8 +8,26 @@ import { useConfirm } from '~/composables/common/useConfirm'
 import { getFreightModule } from '~/config/freight-modules'
 import { useModuleRepository } from '~/repositories'
 import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
-import { FINANCE_ENTRY_BEHAVIORS } from '~/utils/constants/document-types'
+import {
+  FINANCE_ENTRY_BEHAVIORS,
+  INCOME_BEHAVIORS,
+} from '~/utils/constants/document-types'
 import { todayIso } from '~/utils/format/format-service'
+import {
+  buildFinanceSummary,
+  financeDocumentBehavior,
+  type FinanceSummaryEntry,
+  type FinanceSummaryGroup,
+} from '~/utils/freight/finance-summary'
+import {
+  FINANCE_DRAFT_FIELDS,
+  financeDocumentFingerprint,
+  financeDraftSnapshot,
+  mergeFinanceDraftRows,
+  type FinanceDraftRow,
+} from '~/utils/freight/finance-draft'
+import { readRecordDraft } from '~/composables/common/useRecordDraft'
+import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 
 const props = withDefaults(defineProps<{
   job: FreightRecord
@@ -18,18 +36,62 @@ const props = withDefaults(defineProps<{
   documents: FreightRecord[]
   supplierCosts?: FreightRecord[]
   receivables?: FreightRecord[]
+  /** Linked Service Charges, including the Service Charge tab's live preview. */
+  charges?: FreightRecord[]
+  /** True until the Service Order itself is loaded (summary shows placeholders). */
+  summaryLoading?: boolean
   editable?: boolean
 }>(), {
   editable: false,
   supplierCosts: () => [],
   receivables: () => [],
+  charges: () => [],
+  summaryLoading: false,
 })
 
 const { t } = useI18n()
 const toast = useToast()
 const store = useFreightStore()
 const lcs = useLcs()
+const auth = useAuthStore()
 const { confirm } = useConfirm()
+
+/**
+ * Every financial document linked to this order. The two store projections
+ * cover customer invoices and supplier bills; one cached list fills in the
+ * remaining configured behaviours (other income/expense, settlements) without
+ * asking the API again on each render.
+ */
+const remoteDocuments = ref<FreightRecord[]>([])
+const remoteDocumentsOrder = ref('')
+const financeDocuments = computed<FreightRecord[]>(() => {
+  const rows = [...props.documents, ...(props.supplierCosts || []), ...remoteDocuments.value]
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    const id = String(row.id || '')
+    if (!id || seen.has(id) || !isLinkedToJob(row)) return false
+    seen.add(id)
+    return true
+  })
+})
+
+async function loadFinanceDocuments(force = false) {
+  const orderId = String(props.job.id || '')
+  if (!orderId || (!force && remoteDocumentsOrder.value === orderId)) return
+  remoteDocumentsOrder.value = orderId
+  try {
+    const page = await lcs.finance.listDocuments({ page_size: 500 })
+    remoteDocuments.value = page.items.filter(isLinkedToJob)
+  }
+  catch {
+    // The invoice/bill projections still render the common cases; a failed
+    // supplemental read must not break the Finance tab. Leave it retryable.
+    remoteDocuments.value = []
+    remoteDocumentsOrder.value = ''
+  }
+}
+
+watch(() => props.job.id, () => { void loadFinanceDocuments() }, { immediate: true })
 
 const settlementTypes = new Set(['CUSTOMER_RECEIPT', 'SUPPLIER_PAYMENT'])
 
@@ -63,6 +125,8 @@ function money(value: number, currency: string) {
 }
 
 const canCreate = computed(() => props.editable && lcs.can('financial_document.create'))
+/** Draft generation is also available after Finish (financial work continues). */
+const canGenerateDocuments = computed(() => Boolean(props.job.id) && lcs.can('financial_document.create'))
 const canEdit = computed(() => lcs.can('financial_document.update_draft'))
 const canPost = computed(() => lcs.can('financial_document.post'))
 const canReverse = computed(() => lcs.can('financial_document.reverse'))
@@ -90,6 +154,8 @@ type FinanceRow = {
   id: string
   _isNew?: boolean
   _source?: FreightRecord
+  /** Server stamp of the draft document this row was edited against. */
+  _baseUpdatedAt?: string
   type: string
   description: string
   partyId: string
@@ -113,6 +179,7 @@ function rowFromDocument(document: FreightRecord): FinanceRow {
   return {
     id: String(document.id || ''),
     _source: document,
+    _baseUpdatedAt: String(document.updatedAt || financeDocumentFingerprint(document)),
     type: String(document.documentTypeCode || document.documentType || '').toUpperCase(),
     description: String(document.description || lines[0]?.description || ''),
     partyId: String(document.partyId || ''),
@@ -133,15 +200,16 @@ function rowFromDocument(document: FreightRecord): FinanceRow {
  */
 function syncRows() {
   const previous = new Map(entries.value.map(row => [row.id, row]))
-  const saved = props.documents
+  const saved = financeDocuments.value
     .filter(isLinkedToJob)
     .map((document) => {
       const row = rowFromDocument(document)
       const prior = previous.get(row.id)
       if (prior && isDraft(row._source)) {
-        // A draft the user is editing inline keeps their cell values, the
-        // edited date included: a reload never silently moves it.
-        return { ...row, date: prior.date, type: prior.type, description: prior.description, partyId: prior.partyId, amount: prior.amount, currency: prior.currency }
+        // A draft the user is editing keeps every edited field: a reload never
+        // silently moves a date, party, reference or remark.
+        const kept = Object.fromEntries(FINANCE_DRAFT_FIELDS.map(field => [field, prior[field]]))
+        return { ...row, ...kept }
       }
       return row
     })
@@ -149,11 +217,94 @@ function syncRows() {
   entries.value = [...saved, ...pending]
 }
 
+// --- Finance entries draft -----------------------------------------------------
+// The table keeps unsaved new rows and edits to DRAFT financial documents in a
+// versioned local draft, keyed by user + order. Posted documents are never
+// restored from a local copy: their server values stay authoritative.
+const financeDraftRestored = ref(false)
+
+function rowDraftChanged(row: FinanceRow): boolean {
+  if (row._isNew) return true
+  const source = row._source
+  if (!source) return false
+  if (String(source.status || '').toUpperCase() !== 'DRAFT') return false
+  const canonical = rowFromDocument(source)
+  return FINANCE_DRAFT_FIELDS.some(field =>
+    String(row[field] ?? '') !== String(canonical[field] ?? ''))
+}
+
+const financeDraftDirty = computed(() => entries.value.some(rowDraftChanged))
+
+const formDraft = useRecordFormDraft<Record<string, unknown>>({
+  collection: () => 'serviceOrderFinance',
+  scope: () => String(auth.user?.id || 'anon'),
+  recordId: () => String(props.job.id || props.jobNo || ''),
+  baseUpdatedAt: () => '',
+  model: () => ({ rows: financeDraftSnapshot(entries.value.filter(rowDraftChanged)) }),
+  apply: (stored) => {
+    const rows = (stored as { rows?: unknown }).rows
+    if (!Array.isArray(rows) || !rows.length) return
+    const merged = mergeFinanceDraftRows(entries.value, rows as FinanceDraftRow[], row => ({
+      id: row.id,
+      status: row._source?.status,
+      // `_baseUpdatedAt` holds the server stamp or a content fingerprint.
+      updatedAt: row._baseUpdatedAt,
+    }))
+    entries.value = merged.rows
+    if (merged.skipped) {
+      actionError.value = t('freight.ui.financeDraftPartial', { count: merged.skipped })
+    }
+  },
+  isDirty: () => financeDraftDirty.value,
+  canDraft: () => props.editable && financeDraftRestored.value,
+})
+
+function restoreFinanceDraft() {
+  if (financeDraftRestored.value) return
+  if (!props.editable) {
+    financeDraftRestored.value = true
+    return
+  }
+  const key = formDraft.key.value
+  if (!key) return
+  const stored = readRecordDraft(key, 'local')
+  // Wait for the related collections before declaring "no draft": an empty
+  // first render must not consume the recovery slot.
+  if (!stored && !financeDocuments.value.length && !entries.value.some(row => row._isNew)) return
+  financeDraftRestored.value = true
+  formDraft.bind()
+  formDraft.restore()
+}
+
 watch(
-  () => props.documents.map(document => String(document.id || '')).join(','),
-  syncRows,
+  entries,
+  () => {
+    if (!financeDraftRestored.value) restoreFinanceDraft()
+    if (!financeDraftRestored.value) return
+    if (financeDraftDirty.value) formDraft.schedule()
+    else formDraft.flush()
+  },
+  { deep: true },
+)
+
+watch(
+  () => financeDocuments.value.map(document => `${String(document.id || '')}:${String(document.updatedAt || '')}`).join(','),
+  () => {
+    syncRows()
+    restoreFinanceDraft()
+  },
   { immediate: true },
 )
+
+/** Navigating to another order keeps the tab mounted: file the old draft under
+ *  its own key before switching to the new order's entries. */
+watch(() => props.job.id, () => {
+  formDraft.flush()
+  financeDraftRestored.value = false
+  actionError.value = ''
+  syncRows()
+  restoreFinanceDraft()
+})
 
 /** One unsaved inline row: today's date in the configured timezone, the Service Order currency. */
 function newFinanceRow(): FinanceRow {
@@ -348,15 +499,39 @@ async function saveRow(row: FinanceRow) {
       financialAccountId: row.financialAccountId || undefined,
       lines: [entryLine(row)],
     }
-    if (row._isNew) {
-      await lcs.finance.createDocument(payload)
-      entries.value = entries.value.filter(item => item.id !== row.id)
-    }
-    else {
-      await lcs.finance.saveDraft(payload as FreightRecord)
+    const saved = row._isNew
+      ? await lcs.finance.createDocument(payload)
+      : await lcs.finance.saveDraft(payload as FreightRecord)
+    if (saved?.id) {
+      // A delayed response must not replace a cell edited while the request was
+      // in flight. Adopt the server identity/stamp only; newer local values stay.
+      const current = entries.value.find(item => item.id === row.id)
+      const changedSinceRequest = current
+        ? FINANCE_DRAFT_FIELDS.some(field => String(current[field] ?? '') !== String(row[field] ?? ''))
+        : false
+      if (!current) {
+        // Nothing to adopt.
+      }
+      else if (row._isNew) {
+        entries.value = changedSinceRequest
+          ? entries.value.map(item => item.id === row.id
+            ? { ...item, id: String(saved.id), _isNew: false, _source: saved, _baseUpdatedAt: String(saved.updatedAt || '') }
+            : item)
+          : entries.value.filter(item => item.id !== row.id)
+      }
+      else if (!changedSinceRequest) {
+        entries.value = entries.value.map(item =>
+          item.id === row.id ? rowFromDocument(saved) : item)
+      }
+      else {
+        entries.value = entries.value.map(item => item.id === row.id
+          ? { ...item, _source: saved, _baseUpdatedAt: String(saved.updatedAt || '') }
+          : item)
+      }
     }
     cellErrors.value = {}
     store.reload()
+    void loadFinanceDocuments(true)
     toast.add({ title: t('lcs.common.saved'), color: 'success' })
   }
   catch (error) {
@@ -554,7 +729,7 @@ async function saveEntry() {
     }
     if (editingId.value) {
       const source = entries.value.find(row => row.id === editingId.value)?._source
-      await lcs.finance.saveDraft({
+      const saved = await lcs.finance.saveDraft({
         ...(source || {}),
         id: editingId.value,
         date: draft.value.date,
@@ -566,6 +741,10 @@ async function saveEntry() {
         remark: draft.value.remark,
         lines: [line],
       })
+      if (saved?.id) {
+        entries.value = entries.value.map(item =>
+          item.id === editingId.value ? rowFromDocument(saved) : item)
+      }
     }
     else {
       await lcs.finance.createDocument({
@@ -589,6 +768,7 @@ async function saveEntry() {
       }
     }
     store.reload()
+    void loadFinanceDocuments(true)
     toast.add({ title: t('lcs.common.saved'), color: 'success' })
     dialogOpen.value = false
   }
@@ -693,6 +873,7 @@ async function deleteDocument(id: string) {
     await useModuleRepository(module).remove([id])
     entries.value = entries.value.filter(row => row.id !== id)
     store.reload()
+    void loadFinanceDocuments(true)
     actionError.value = ''
     toast.add({ title: t('actions.delete'), color: 'success' })
   }
@@ -704,60 +885,117 @@ async function deleteDocument(id: string) {
 // --- Finance summary -------------------------------------------------------------
 
 /**
- * Income / expense summary, grouped by currency. Posted documents only:
- * drafts are amounts not yet accounted for, so they appear as a separately
- * labelled preview when present. Settlements (receipts/payments) are never
- * counted — they move cash, they are not income — and reversed or cancelled
- * documents are excluded by the existing status rules. Currencies are never
- * silently converted.
+ * Summary inputs use the same rows the table shows. Posted documents contribute
+ * their authoritative `total`/`outstanding`; only DRAFT rows use a live edited
+ * amount. Linked Service Charges already include their approved discount/tax
+ * totals (and the Service Charge tab's unsaved preview when it is mounted).
  */
-const INCOME_BEHAVIORS = new Set(['CUSTOMER_INVOICE', 'OTHER_INCOME'])
-const EXPENSE_BEHAVIORS = new Set(['SUPPLIER_BILL', 'OTHER_EXPENSE'])
-const EXCLUDED_SUMMARY_STATUSES = new Set(['REVERSED', 'CANCELLED'])
-
 function documentBehavior(document: FreightRecord) {
-  const code = String(document.documentType || '').toUpperCase()
-  const typeRecord = store.list('documentTypes')
-    .find(row => String(row.code || '').toUpperCase() === code)
-  return String(typeRecord?.accountingBehavior || code).toUpperCase()
+  return financeDocumentBehavior(document, store.list('documentTypes'))
 }
 
-type SummaryGroup = { currency: string, income: number, expense: number, net: number, draftNet: number }
+const summaryEntries = computed<FinanceSummaryEntry[]>(() => entries.value.map((row) => {
+  const source = row._source
+  const status = source ? financeDomainStatus(source.status) : 'DRAFT'
+  const behavior = source ? documentBehavior(source) : behaviorOfCode(row.type)
+  const authoritative = status === 'POSTED'
+  const total = authoritative ? Number(source?.total ?? row.amount) : Number(row.amount)
+  const paid = authoritative ? Number(source?.paidAmount ?? 0) : 0
+  const outstanding = authoritative
+    ? Number(source?.outstanding ?? (total - paid))
+    : 0
+  return {
+    id: row.id,
+    status,
+    currency: row.currency || String(source?.currency || ''),
+    behavior,
+    total,
+    paidAmount: paid,
+    outstanding,
+  }
+}))
 
-const financeSummary = computed<SummaryGroup[]>(() => {
-  const byCurrency = new Map<string, SummaryGroup>()
-  const group = (currency: string) => {
-    const entry = byCurrency.get(currency) || { currency, income: 0, expense: 0, net: 0, draftNet: 0 }
-    byCurrency.set(currency, entry)
-    return entry
+const financeSummary = computed(() => buildFinanceSummary({
+  charges: props.charges || [],
+  entries: summaryEntries.value,
+  internalCharges: (props.charges || [])
+    .filter(charge => String(charge.chargeSide || 'CUSTOMER').toUpperCase() === 'INTERNAL')
+    .map((charge) => {
+      const currency = String(charge.currency || props.job.currency || '')
+      const generatedKey = `SO:${String(props.job.id || '')}:SUP:${String(charge.supplierPartyId || '')}:${currency}:SUPPLIER_BILL`
+      const generated = entries.value.some(row =>
+        String(row._source?.generatedKey || '') === generatedKey)
+      return {
+        currency,
+        costTotal: charge.costTotal,
+        supplierDocumentId: charge.supplierDocumentId || (generated ? generatedKey : ''),
+      }
+    }),
+  primaryCurrency: String(props.job.currency || ''),
+}))
+
+type SummaryMetricKey =
+  | 'totalCharges'
+  | 'chargedAmount'
+  | 'unchargedAmount'
+  | 'totalExpenses'
+  | 'netAmount'
+  | 'outstandingBalance'
+
+const summaryMetrics: Array<{ key: SummaryMetricKey, labelKey: string }> = [
+  { key: 'totalCharges', labelKey: 'freight.ui.totalCharges' },
+  { key: 'chargedAmount', labelKey: 'freight.ui.chargedAmount' },
+  { key: 'unchargedAmount', labelKey: 'freight.ui.unchargedAmount' },
+  { key: 'totalExpenses', labelKey: 'freight.ui.totalExpenses' },
+  { key: 'netAmount', labelKey: 'freight.ui.netAmount' },
+  { key: 'outstandingBalance', labelKey: 'freight.ui.outstandingBalance' },
+]
+
+function metricValue(group: FinanceSummaryGroup, key: SummaryMetricKey) {
+  return group[key]
+}
+
+function metricTone(group: FinanceSummaryGroup, key: SummaryMetricKey) {
+  const value = group[key]
+  if (key === 'netAmount') return value < 0 ? 'text-error' : 'text-primary'
+  if (key === 'unchargedAmount') return value < 0 ? 'text-warning' : 'text-highlighted'
+  return 'text-highlighted'
+}
+
+/** Do not keep a permanent skeleton if a supplemental collection is denied or
+ *  unreachable; after this window the available (possibly empty) data is shown. */
+const summaryWaitExpired = ref(false)
+const summaryWaitTimer = setTimeout(() => { summaryWaitExpired.value = true }, 8000)
+onBeforeUnmount(() => clearTimeout(summaryWaitTimer))
+
+const summaryLoading = computed(() => !summaryWaitExpired.value && (props.summaryLoading
+  || (!(props.charges || []).length && !store.isLoaded('jobCharges'))
+  || !store.isLoaded('debitNotes')
+  || !store.isLoaded('supplierCosts')))
+const multiCurrencySummary = computed(() => financeSummary.value.length > 1)
+
+// --- Generated draft documents -------------------------------------------------
+const refreshingDocuments = ref(false)
+
+/** Explicit retry/generation; ordinary Save never calls this. */
+async function refreshFinancialDocuments() {
+  if (refreshingDocuments.value || !props.job.id) return
+  refreshingDocuments.value = true
+  actionError.value = ''
+  try {
+    const result = await lcs.jobs.refreshFinancialDocuments(String(props.job.id))
+    if (result.warnings?.length) actionError.value = result.warnings.join(' ')
+    toast.add({ title: t('freight.ui.financialDraftsRefreshed'), color: 'success' })
+    store.reload()
+    await loadFinanceDocuments(true)
   }
-  for (const row of entries.value) {
-    const document = row._source
-    if (!document) continue
-    const status = String(document.status || '').toUpperCase()
-    if (EXCLUDED_SUMMARY_STATUSES.has(status)) continue
-    const behavior = documentBehavior(document)
-    const isIncome = INCOME_BEHAVIORS.has(behavior)
-    const isExpense = EXPENSE_BEHAVIORS.has(behavior)
-    if (!isIncome && !isExpense) continue
-    const entry = group(String(document.currency || ''))
-    const amount = Number(document.total ?? 0)
-    if (status === 'POSTED') {
-      if (isIncome) entry.income += amount
-      else entry.expense += amount
-    }
-    else {
-      entry.draftNet += isIncome ? amount : -amount
-    }
+  catch (error) {
+    actionError.value = apiErrorMessage(error, t('freight.ui.saveFailed'))
   }
-  return [...byCurrency.values()].map(entry => ({
-    ...entry,
-    income: Number(entry.income.toFixed(2)),
-    expense: Number(entry.expense.toFixed(2)),
-    net: Number((entry.income - entry.expense).toFixed(2)),
-    draftNet: Number(entry.draftNet.toFixed(2)),
-  }))
-})
+  finally {
+    refreshingDocuments.value = false
+  }
+}
 
 function clearCellError(cellKey: string) {
   if (!cellErrors.value[cellKey]) return
@@ -771,16 +1009,94 @@ function clearCellError(cellKey: string) {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <FreightJobSectionHeader :title="t('freight.jobSections.finance')" />
-      <UButton
-        v-if="canCreate"
-        icon="i-lucide-plus"
-        color="neutral"
-        variant="soft"
-        :label="t('freight.ui.addEntry')"
-        @click="addEntry" />
+      <div class="flex flex-wrap items-center gap-2">
+        <UButton
+          v-if="canGenerateDocuments"
+          icon="i-lucide-refresh-cw"
+          color="neutral"
+          variant="outline"
+          :label="t('freight.ui.refreshFinancialDrafts')"
+          :loading="refreshingDocuments"
+          @click="refreshFinancialDocuments" />
+        <UButton
+          v-if="canCreate"
+          icon="i-lucide-plus"
+          color="neutral"
+          variant="soft"
+          :label="t('freight.ui.addEntry')"
+          @click="addEntry" />
+      </div>
     </div>
 
     <CommonAppFormErrorSummary v-if="actionError" :form-errors="[actionError]" />
+
+    <section class="space-y-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold text-highlighted">
+          {{ t('freight.ui.financeSummary') }}
+        </h3>
+        <UBadge
+          v-if="!summaryLoading && financeSummary.some(group => group.estimated)"
+          color="warning"
+          variant="subtle"
+          size="sm">
+          {{ t('freight.ui.estimated') }}
+        </UBadge>
+      </div>
+
+      <div
+        v-if="summaryLoading"
+        class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
+        aria-busy="true">
+        <div
+          v-for="metric in summaryMetrics"
+          :key="metric.key"
+          class="min-h-[4.5rem] rounded-lg border border-default bg-elevated/50 p-3">
+          <p class="truncate text-xs text-muted">{{ t(metric.labelKey) }}</p>
+          <p class="mt-1 text-lg font-semibold tabular-nums text-muted">—</p>
+        </div>
+      </div>
+
+      <div
+        v-else-if="!financeSummary.length"
+        class="rounded-lg border border-default bg-elevated/50 p-3 text-sm text-muted">
+        {{ t('freight.ui.summaryUnavailable') }}
+      </div>
+
+      <div v-else class="space-y-3">
+        <div v-for="group in financeSummary" :key="group.currency" class="space-y-1.5">
+          <p v-if="multiCurrencySummary" class="text-xs font-medium text-muted">
+            {{ group.currency || t('freight.ui.cols.currency') }}
+          </p>
+          <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <div
+              v-for="metric in summaryMetrics"
+              :key="metric.key"
+              class="min-h-[4.5rem] rounded-lg border border-default bg-elevated/50 p-3">
+              <p class="truncate text-xs text-muted">{{ t(metric.labelKey) }}</p>
+              <p
+                class="mt-1 truncate text-lg font-semibold tabular-nums"
+                :class="metricTone(group, metric.key)">
+                {{ money(metricValue(group, metric.key), group.currency) }}
+              </p>
+              <p
+                v-if="metric.key === 'netAmount'"
+                class="mt-0.5 truncate text-[11px] text-muted">
+                {{ group.estimated ? t('freight.ui.estimatedMargin') : t('freight.ui.postedMargin') }}
+              </p>
+              <p
+                v-else-if="metric.key === 'outstandingBalance'"
+                class="mt-0.5 truncate text-[11px] text-muted">
+                {{ t('freight.ui.posted') }}
+              </p>
+            </div>
+          </div>
+        </div>
+        <p v-if="multiCurrencySummary" class="text-[11px] text-muted">
+          {{ t('freight.ui.summaryPerCurrency') }}
+        </p>
+      </div>
+    </section>
 
     <FreightAppLineTable
       v-if="entries.length || canCreate"
@@ -790,39 +1106,14 @@ function clearCellError(cellKey: string) {
       :row-disabled="rowDisabled"
       :extra-row-menu-items="rowMenuItems"
       :field-errors="cellErrors"
-      :on-cell-edit="clearCellError" />
+      :on-cell-edit="clearCellError"
+      :empty-text="t('freight.ui.noFinanceEntries')" />
 
     <FreightJobEmptyState
       v-else
       :title="t('freight.ui.noFinanceEntries')"
       :description="t('freight.ui.addEntry')"
       icon="i-lucide-banknote" />
-
-    <div
-      v-if="financeSummary.length"
-      class="ms-auto grid w-full max-w-sm gap-1.5 px-1 py-2 text-sm">
-      <template v-for="group in financeSummary" :key="group.currency">
-        <div class="flex items-center justify-between gap-4">
-          <span class="text-muted">{{ t('freight.ui.totalIncome') }} ({{ group.currency }})</span>
-          <span class="font-medium tabular-nums text-highlighted">{{ money(group.income, group.currency) }}</span>
-        </div>
-        <div class="flex items-center justify-between gap-4">
-          <span class="text-muted">{{ t('freight.ui.totalExpenses') }} ({{ group.currency }})</span>
-          <span class="font-medium tabular-nums text-highlighted">{{ money(group.expense, group.currency) }}</span>
-        </div>
-        <div class="mb-1 flex items-center justify-between gap-4 border-t border-default pt-2 text-base">
-          <span class="font-semibold text-highlighted">{{ t('freight.ui.netAmount') }} ({{ group.currency }})</span>
-          <span
-            class="font-bold tabular-nums"
-            :class="group.net < 0 ? 'text-error' : 'text-primary'"
-          >{{ money(group.net, group.currency) }}</span>
-        </div>
-        <div v-if="group.draftNet" class="flex items-center justify-between gap-4">
-          <span class="text-muted">{{ t('freight.ui.unpostedDrafts') }}</span>
-          <span class="tabular-nums text-muted">{{ money(group.draftNet, group.currency) }}</span>
-        </div>
-      </template>
-    </div>
 
     <CommonAppEntityDialog
       v-model:open="dialogOpen"

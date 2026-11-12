@@ -112,7 +112,7 @@ describe('record draft persistence', () => {
   it('writes a versioned draft and reads it back unchanged', () => {
     writeRecordDraft(key, { recordId: '', baseUpdatedAt: '', model: { date: '2026-11-01', customerPartyId: '9' } })
     const draft = readRecordDraft(key)!
-    expect(draft.v).toBe(1)
+    expect(draft.v).toBe(2)
     expect(draft.recordId).toBe('')
     expect(draft.model.customerPartyId).toBe('9')
   })

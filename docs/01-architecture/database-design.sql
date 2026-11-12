@@ -2303,7 +2303,7 @@ CREATE TABLE quotation_conversions (
     -- Revision the order was created from. NOT unique: a quotation is a
     -- reusable reference and may create many orders; the index keeps the
     -- ledger queryable.
-    quotation_revision_id BIGINT NOT NULL,
+    quotation_revision_id BIGINT,
     -- Service order created from the revision. UNIQUE, so an order originates
     -- from at most one revision.
     service_order_id BIGINT NOT NULL,
@@ -2323,6 +2323,7 @@ CREATE TABLE quotation_conversions (
     CONSTRAINT pk_quotation_conversions PRIMARY KEY (id),
     CONSTRAINT fk_quotation_conversions_quotation_revision_id_quotatio_6c51 FOREIGN KEY(quotation_revision_id) REFERENCES quotation_revisions (id),
     CONSTRAINT uq_quotation_conversions_service_order_id UNIQUE (service_order_id),
+    CONSTRAINT fk_quotation_conversions_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE RESTRICT,
     CONSTRAINT fk_quotation_conversions_converted_by_user_id_users FOREIGN KEY(converted_by_user_id) REFERENCES users (id),
     CONSTRAINT uq_quotation_conversions_idempotency_key UNIQUE (idempotency_key)
 );
@@ -2336,79 +2337,6 @@ COMMENT ON COLUMN quotation_conversions.converted_at IS 'Timestamp the conversio
 COMMENT ON COLUMN quotation_conversions.notes IS 'Free-text notes recorded at conversion time.';
 COMMENT ON COLUMN quotation_conversions.idempotency_key IS 'Client-supplied key that makes a repeated conversion request a no-op. UNIQUE.';
 COMMENT ON COLUMN quotation_conversions.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-
--- --------------------------------------------------------------------------
--- Table: service_order_charges
--- Module: Service Operations  [app.modules.operations.models]
--- Customer-facing invoice or service note raised from a service order.
--- --------------------------------------------------------------------------
-CREATE TABLE service_order_charges (
-    -- Service order the charge belongs to. CASCADE on order deletion.
-    service_order_id BIGINT NOT NULL,
-    -- Document number allocated from document_sequences. UNIQUE across all
-    -- charges.
-    charge_no VARCHAR(50) NOT NULL,
-    -- Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE,
-    -- CREDIT_NOTE).
-    document_type VARCHAR(32) NOT NULL,
-    -- Date printed on the document.
-    document_date DATE NOT NULL,
-    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
-    -- the row are denominated in this currency.
-    currency_code VARCHAR(3) NOT NULL,
-    -- Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed
-    -- because the charges list filters on it.
-    status VARCHAR(20) NOT NULL,
-    -- Sum of line amounts before discount and tax.
-    subtotal_amount NUMERIC(19, 4) NOT NULL,
-    -- Total discount applied across all charge lines.
-    discount_amount NUMERIC(19, 4) NOT NULL,
-    -- Total tax (VAT) charged across all charge lines.
-    tax_amount NUMERIC(19, 4) NOT NULL,
-    -- Payable total: subtotal minus discount plus tax.
-    total_amount NUMERIC(19, 4) NOT NULL,
-    -- Free-text remark printed at the foot of the document.
-    remark TEXT,
-    -- Identifier of the user who created this record. NULL when the action
-    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
-    -- the user is removed.
-    created_by_user_id BIGINT,
-    -- JSONB payload for module-specific fields not covered by dedicated
-    -- columns.
-    data JSONB NOT NULL,
-    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
-    id BIGSERIAL NOT NULL,
-    -- Row creation timestamp (UTC, timezone-aware). Written once; server
-    -- default now().
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
-    -- application on every update.
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
-    CONSTRAINT pk_service_order_charges PRIMARY KEY (id),
-    CONSTRAINT uq_service_order_charges_no UNIQUE (charge_no),
-    CONSTRAINT fk_service_order_charges_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
-    CONSTRAINT fk_service_order_charges_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
-);
-CREATE INDEX ix_service_order_charges_service_order_id ON service_order_charges (service_order_id);
-CREATE INDEX ix_service_order_charges_status ON service_order_charges (status);
-
-COMMENT ON TABLE service_order_charges IS 'Customer-facing invoice or service note raised from a service order.';
-COMMENT ON COLUMN service_order_charges.service_order_id IS 'Service order the charge belongs to. CASCADE on order deletion.';
-COMMENT ON COLUMN service_order_charges.charge_no IS 'Document number allocated from document_sequences. UNIQUE across all charges.';
-COMMENT ON COLUMN service_order_charges.document_type IS 'Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE, CREDIT_NOTE).';
-COMMENT ON COLUMN service_order_charges.document_date IS 'Date printed on the document.';
-COMMENT ON COLUMN service_order_charges.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
-COMMENT ON COLUMN service_order_charges.status IS 'Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed because the charges list filters on it.';
-COMMENT ON COLUMN service_order_charges.subtotal_amount IS 'Sum of line amounts before discount and tax.';
-COMMENT ON COLUMN service_order_charges.discount_amount IS 'Total discount applied across all charge lines.';
-COMMENT ON COLUMN service_order_charges.tax_amount IS 'Total tax (VAT) charged across all charge lines.';
-COMMENT ON COLUMN service_order_charges.total_amount IS 'Payable total: subtotal minus discount plus tax.';
-COMMENT ON COLUMN service_order_charges.remark IS 'Free-text remark printed at the foot of the document.';
-COMMENT ON COLUMN service_order_charges.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
-COMMENT ON COLUMN service_order_charges.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
-COMMENT ON COLUMN service_order_charges.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
-COMMENT ON COLUMN service_order_charges.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
-COMMENT ON COLUMN service_order_charges.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: service_order_milestones
@@ -3144,6 +3072,10 @@ COMMENT ON COLUMN customer_customs_accounts.updated_at IS 'Last modification tim
 -- produced when it is posted.
 -- --------------------------------------------------------------------------
 CREATE TABLE financial_documents (
+    -- Stable identity of an automatically generated draft (order/container or
+    -- order/supplier/currency). NULL for manual documents; UNIQUE when set so
+    -- Finish and retry update the same draft instead of creating duplicates.
+    generated_key VARCHAR(160),
     -- Document number allocated from document_sequences. UNIQUE.
     document_no VARCHAR(50) NOT NULL,
     -- Document kind: TAX_INVOICE, PROFORMA_INVOICE, CREDIT_NOTE, DEBIT_NOTE,
@@ -3234,6 +3166,7 @@ CREATE TABLE financial_documents (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     CONSTRAINT pk_financial_documents PRIMARY KEY (id),
     CONSTRAINT uq_financial_documents_no UNIQUE (document_no),
+    CONSTRAINT uq_financial_documents_generated_key UNIQUE (generated_key),
     CONSTRAINT fk_financial_documents_party_id_business_parties FOREIGN KEY(party_id) REFERENCES business_parties (id),
     CONSTRAINT fk_financial_documents_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id),
     CONSTRAINT fk_financial_documents_financial_account_id_financial_accounts FOREIGN KEY(financial_account_id) REFERENCES financial_accounts (id),
@@ -3245,6 +3178,7 @@ CREATE INDEX ix_financial_documents_document_type ON financial_documents (docume
 CREATE INDEX ix_financial_documents_status ON financial_documents (status);
 
 COMMENT ON TABLE financial_documents IS 'Financial document header (tax invoice, proforma, credit note, receipt, payment). Holds the monetary totals and the link to the journal entry produced when it is posted.';
+COMMENT ON COLUMN financial_documents.generated_key IS 'Stable identity of an automatically generated draft (order/container or order/supplier/currency). NULL for manual documents; UNIQUE when set so Finish and retry update the same draft instead of creating duplicates.';
 COMMENT ON COLUMN financial_documents.document_no IS 'Document number allocated from document_sequences. UNIQUE.';
 COMMENT ON COLUMN financial_documents.document_type IS 'Document kind: TAX_INVOICE, PROFORMA_INVOICE, CREDIT_NOTE, DEBIT_NOTE, RECEIPT or PAYMENT.';
 COMMENT ON COLUMN financial_documents.document_date IS 'Date of the document as printed.';
@@ -3446,6 +3380,99 @@ COMMENT ON COLUMN quotation_revision_places.planned_at IS 'Planned date/time for
 COMMENT ON COLUMN quotation_revision_places.free_text IS 'Free-text location typed for the stop, kept for printing and history.';
 COMMENT ON COLUMN quotation_revision_places.notes IS 'Free-text notes about this stop.';
 COMMENT ON COLUMN quotation_revision_places.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
+-- Table: service_order_charges
+-- Module: Service Operations  [app.modules.operations.models]
+-- Customer-facing service note or an internal cost charge raised from a
+-- service order. charge_side separates billable customer charges from
+-- supplier-cost charges.
+-- --------------------------------------------------------------------------
+CREATE TABLE service_order_charges (
+    -- Service order the charge belongs to. NULL for a standalone charge
+    -- created outside an order; CASCADE on order deletion.
+    service_order_id BIGINT,
+    -- Customer the charge bills. Linked charges mirror their order's party
+    -- (kept denormalised so invoice conversion never needs the order);
+    -- standalone charges take it from the picker. NULL when neither is set.
+    customer_party_id BIGINT,
+    -- CUSTOMER for a billable customer charge, INTERNAL for a supplier cost +
+    -- selling-price charge. Indexed for the two views.
+    charge_side VARCHAR(16) NOT NULL,
+    -- Supplier billed for an INTERNAL charge; NULL on customer charges.
+    supplier_party_id BIGINT,
+    -- Document number allocated from document_sequences. UNIQUE across all
+    -- charges.
+    charge_no VARCHAR(50) NOT NULL,
+    -- Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE,
+    -- CREDIT_NOTE).
+    document_type VARCHAR(32) NOT NULL,
+    -- Date printed on the document.
+    document_date DATE NOT NULL,
+    -- ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on
+    -- the row are denominated in this currency.
+    currency_code VARCHAR(3) NOT NULL,
+    -- Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed
+    -- because the charges list filters on it.
+    status VARCHAR(20) NOT NULL,
+    -- Sum of line amounts before discount and tax.
+    subtotal_amount NUMERIC(19, 4) NOT NULL,
+    -- Total discount applied across all charge lines.
+    discount_amount NUMERIC(19, 4) NOT NULL,
+    -- Total tax (VAT) charged across all charge lines.
+    tax_amount NUMERIC(19, 4) NOT NULL,
+    -- Payable total: subtotal minus discount plus tax.
+    total_amount NUMERIC(19, 4) NOT NULL,
+    -- Free-text remark printed at the foot of the document.
+    remark TEXT,
+    -- Identifier of the user who created this record. NULL when the action
+    -- was performed by the system, or set to NULL by ON DELETE SET NULL once
+    -- the user is removed.
+    created_by_user_id BIGINT,
+    -- JSONB payload for module-specific fields not covered by dedicated
+    -- columns.
+    data JSONB NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    -- Row creation timestamp (UTC, timezone-aware). Written once; server
+    -- default now().
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    -- Last modification timestamp (UTC, timezone-aware). Refreshed by the
+    -- application on every update.
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    CONSTRAINT pk_service_order_charges PRIMARY KEY (id),
+    CONSTRAINT uq_service_order_charges_no UNIQUE (charge_no),
+    CONSTRAINT fk_service_order_charges_service_order_id_service_orders FOREIGN KEY(service_order_id) REFERENCES service_orders (id) ON DELETE CASCADE,
+    CONSTRAINT fk_service_order_charges_customer_party_id_business_parties FOREIGN KEY(customer_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_service_order_charges_supplier_party_id_business_parties FOREIGN KEY(supplier_party_id) REFERENCES business_parties (id),
+    CONSTRAINT fk_service_order_charges_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id)
+);
+CREATE INDEX ix_service_order_charges_charge_side ON service_order_charges (charge_side);
+CREATE INDEX ix_service_order_charges_customer_party_id ON service_order_charges (customer_party_id);
+CREATE INDEX ix_service_order_charges_service_order_id ON service_order_charges (service_order_id);
+CREATE INDEX ix_service_order_charges_status ON service_order_charges (status);
+CREATE INDEX ix_service_order_charges_supplier_party_id ON service_order_charges (supplier_party_id);
+
+COMMENT ON TABLE service_order_charges IS 'Customer-facing service note or an internal cost charge raised from a service order. charge_side separates billable customer charges from supplier-cost charges.';
+COMMENT ON COLUMN service_order_charges.service_order_id IS 'Service order the charge belongs to. NULL for a standalone charge created outside an order; CASCADE on order deletion.';
+COMMENT ON COLUMN service_order_charges.customer_party_id IS 'Customer the charge bills. Linked charges mirror their order''s party (kept denormalised so invoice conversion never needs the order); standalone charges take it from the picker. NULL when neither is set.';
+COMMENT ON COLUMN service_order_charges.charge_side IS 'CUSTOMER for a billable customer charge, INTERNAL for a supplier cost + selling-price charge. Indexed for the two views.';
+COMMENT ON COLUMN service_order_charges.supplier_party_id IS 'Supplier billed for an INTERNAL charge; NULL on customer charges.';
+COMMENT ON COLUMN service_order_charges.charge_no IS 'Document number allocated from document_sequences. UNIQUE across all charges.';
+COMMENT ON COLUMN service_order_charges.document_type IS 'Document kind (SERVICE_NOTE, PROFORMA_INVOICE, TAX_INVOICE, CREDIT_NOTE).';
+COMMENT ON COLUMN service_order_charges.document_date IS 'Date printed on the document.';
+COMMENT ON COLUMN service_order_charges.currency_code IS 'ISO 4217 alphabetic currency code (e.g. USD, KHR). Monetary amounts on the row are denominated in this currency.';
+COMMENT ON COLUMN service_order_charges.status IS 'Charge lifecycle state (DRAFT, ISSUED, SENT, PAID, VOID). Indexed because the charges list filters on it.';
+COMMENT ON COLUMN service_order_charges.subtotal_amount IS 'Sum of line amounts before discount and tax.';
+COMMENT ON COLUMN service_order_charges.discount_amount IS 'Total discount applied across all charge lines.';
+COMMENT ON COLUMN service_order_charges.tax_amount IS 'Total tax (VAT) charged across all charge lines.';
+COMMENT ON COLUMN service_order_charges.total_amount IS 'Payable total: subtotal minus discount plus tax.';
+COMMENT ON COLUMN service_order_charges.remark IS 'Free-text remark printed at the foot of the document.';
+COMMENT ON COLUMN service_order_charges.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
+COMMENT ON COLUMN service_order_charges.data IS 'JSONB payload for module-specific fields not covered by dedicated columns.';
+COMMENT ON COLUMN service_order_charges.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+COMMENT ON COLUMN service_order_charges.created_at IS 'Row creation timestamp (UTC, timezone-aware). Written once; server default now().';
+COMMENT ON COLUMN service_order_charges.updated_at IS 'Last modification timestamp (UTC, timezone-aware). Refreshed by the application on every update.';
 
 -- --------------------------------------------------------------------------
 -- Table: service_order_component_rows
@@ -4434,6 +4461,43 @@ COMMENT ON COLUMN service_order_pricing_lines.line_total IS 'Final payable amoun
 COMMENT ON COLUMN service_order_pricing_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------
+-- Table: financial_document_component_allocations
+-- Module: Double-Entry Finance  [app.modules.finance.models]
+-- Decimal allocation of one source component (container pricing, customer
+-- charge line or internal charge line) to a generated draft document. Allows
+-- shared charges to be prorated across container invoices while preserving
+-- exact source traceability.
+-- --------------------------------------------------------------------------
+CREATE TABLE financial_document_component_allocations (
+    -- Generated draft document receiving this component. CASCADE on deletion.
+    financial_document_id BIGINT NOT NULL,
+    -- CONTAINER_PRICING, CUSTOMER_CHARGE_LINE or INTERNAL_CHARGE_LINE.
+    source_kind VARCHAR(32) NOT NULL,
+    -- Stable id of the source row (JSON row uuid or charge-line id).
+    source_key VARCHAR(64) NOT NULL,
+    -- Container invoice receiving the component; NULL for an order-level or
+    -- supplier bill.
+    container_id BIGINT,
+    -- Decimal amount of this source component in the generated document.
+    allocated_amount NUMERIC(19, 4) NOT NULL,
+    -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
+    id BIGSERIAL NOT NULL,
+    CONSTRAINT pk_financial_document_component_allocations PRIMARY KEY (id),
+    CONSTRAINT uq_fin_component_allocation UNIQUE (financial_document_id, source_kind, source_key, container_id),
+    CONSTRAINT fk_financial_document_component_allocations_financial_d_41d5 FOREIGN KEY(financial_document_id) REFERENCES financial_documents (id) ON DELETE CASCADE,
+    CONSTRAINT fk_financial_document_component_allocations_container_i_283c FOREIGN KEY(container_id) REFERENCES service_order_containers (id)
+);
+CREATE INDEX ix_fin_component_alloc_document_id ON financial_document_component_allocations (financial_document_id);
+
+COMMENT ON TABLE financial_document_component_allocations IS 'Decimal allocation of one source component (container pricing, customer charge line or internal charge line) to a generated draft document. Allows shared charges to be prorated across container invoices while preserving exact source traceability.';
+COMMENT ON COLUMN financial_document_component_allocations.financial_document_id IS 'Generated draft document receiving this component. CASCADE on deletion.';
+COMMENT ON COLUMN financial_document_component_allocations.source_kind IS 'CONTAINER_PRICING, CUSTOMER_CHARGE_LINE or INTERNAL_CHARGE_LINE.';
+COMMENT ON COLUMN financial_document_component_allocations.source_key IS 'Stable id of the source row (JSON row uuid or charge-line id).';
+COMMENT ON COLUMN financial_document_component_allocations.container_id IS 'Container invoice receiving the component; NULL for an order-level or supplier bill.';
+COMMENT ON COLUMN financial_document_component_allocations.allocated_amount IS 'Decimal amount of this source component in the generated document.';
+COMMENT ON COLUMN financial_document_component_allocations.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
+
+-- --------------------------------------------------------------------------
 -- Table: financial_document_lines
 -- Module: Double-Entry Finance  [app.modules.finance.models]
 -- Line of a financial document.
@@ -4502,7 +4566,9 @@ COMMENT ON COLUMN financial_document_lines.id IS 'Surrogate primary key. BIGSERI
 -- --------------------------------------------------------------------------
 -- Table: service_order_charge_lines
 -- Module: Service Operations  [app.modules.operations.models]
--- Chargeable line of a service order charge.
+-- Chargeable line of a service order charge. Internal lines carry the
+-- supplier cost beside the selling price; customer lines leave the cost
+-- fields at zero.
 -- --------------------------------------------------------------------------
 CREATE TABLE service_order_charge_lines (
     -- Charge document the line belongs to. CASCADE on deletion.
@@ -4522,8 +4588,14 @@ CREATE TABLE service_order_charge_lines (
     -- Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG,
     -- PERCENT).
     unit_code VARCHAR(32),
-    -- Price per unit in currency_code, before discount and tax.
+    -- Selling price per unit in currency_code, before discount and tax.
     unit_price NUMERIC(19, 4) NOT NULL,
+    -- Supplier cost per unit for an INTERNAL line. Zero on customer lines;
+    -- never included in a customer invoice.
+    cost_unit_price NUMERIC(19, 4) NOT NULL,
+    -- Quantity x cost_unit_price for an INTERNAL line. Zero on customer
+    -- lines.
+    cost_amount NUMERIC(19, 4) NOT NULL,
     -- Absolute discount deducted from the line subtotal.
     discount_amount NUMERIC(19, 4) NOT NULL,
     -- Tax/VAT rate applied to the line (NUMERIC(7,4)).
@@ -4542,7 +4614,7 @@ CREATE TABLE service_order_charge_lines (
 );
 CREATE INDEX ix_service_order_charge_lines_service_order_charge_id ON service_order_charge_lines (service_order_charge_id);
 
-COMMENT ON TABLE service_order_charge_lines IS 'Chargeable line of a service order charge.';
+COMMENT ON TABLE service_order_charge_lines IS 'Chargeable line of a service order charge. Internal lines carry the supplier cost beside the selling price; customer lines leave the cost fields at zero.';
 COMMENT ON COLUMN service_order_charge_lines.service_order_charge_id IS 'Charge document the line belongs to. CASCADE on deletion.';
 COMMENT ON COLUMN service_order_charge_lines.line_no IS 'Sequential line number within the parent document, 1-based and displayed in order.';
 COMMENT ON COLUMN service_order_charge_lines.fee_type_id IS 'Catalogue fee billed by this line.';
@@ -4550,7 +4622,9 @@ COMMENT ON COLUMN service_order_charge_lines.service_order_container_id IS 'Cont
 COMMENT ON COLUMN service_order_charge_lines.description IS 'Description printed on the charge for this line.';
 COMMENT ON COLUMN service_order_charge_lines.quantity IS 'Billed quantity (NUMERIC(12,3)).';
 COMMENT ON COLUMN service_order_charge_lines.unit_code IS 'Unit of measure code for quantity (e.g. SET, CONTAINER, BL, KG, PERCENT).';
-COMMENT ON COLUMN service_order_charge_lines.unit_price IS 'Price per unit in currency_code, before discount and tax.';
+COMMENT ON COLUMN service_order_charge_lines.unit_price IS 'Selling price per unit in currency_code, before discount and tax.';
+COMMENT ON COLUMN service_order_charge_lines.cost_unit_price IS 'Supplier cost per unit for an INTERNAL line. Zero on customer lines; never included in a customer invoice.';
+COMMENT ON COLUMN service_order_charge_lines.cost_amount IS 'Quantity x cost_unit_price for an INTERNAL line. Zero on customer lines.';
 COMMENT ON COLUMN service_order_charge_lines.discount_amount IS 'Absolute discount deducted from the line subtotal.';
 COMMENT ON COLUMN service_order_charge_lines.tax_rate IS 'Tax/VAT rate applied to the line (NUMERIC(7,4)).';
 COMMENT ON COLUMN service_order_charge_lines.tax_amount IS 'Absolute tax charged on this line.';
@@ -4558,5 +4632,5 @@ COMMENT ON COLUMN service_order_charge_lines.line_amount IS 'Final payable amoun
 COMMENT ON COLUMN service_order_charge_lines.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- ==========================================================================
--- END OF SCHEMA - 79 tables
+-- END OF SCHEMA - 80 tables
 -- ==========================================================================

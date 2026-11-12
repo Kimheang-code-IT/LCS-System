@@ -22,6 +22,7 @@ from app.modules.finance.models import (
     FinancialAccount,
     FinancialDocument,
     FinancialDocumentAllocation,
+    FinancialDocumentComponentAllocation,
     FinancialDocumentLine,
     FinancialDocumentPosting,
     FinancialDocumentSource,
@@ -724,6 +725,8 @@ def document_payload(
             "id": str(document.id),
             "documentNo": document.document_no,
             "debitNoteNo": document.document_no,
+            "generatedKey": document.generated_key,
+            "generatedDocument": bool(document.generated_key),
             "documentType": document.document_type,
             "documentTypeId": str((document.data or {}).get("documentTypeId") or ""),
             "documentTypeCode": (document.data or {}).get("documentTypeCode"),
@@ -1815,6 +1818,30 @@ async def allocate_payment(
     }
 
 
+async def _charge_in_generated_draft(session: AsyncSession, charge_id: int) -> bool:
+    """True when a generated container invoice already carries this charge's lines."""
+    line_ids = (
+        await session.execute(
+            select(ServiceOrderChargeLine.id).where(
+                ServiceOrderChargeLine.service_order_charge_id == charge_id
+            )
+        )
+    ).scalars().all()
+    if not line_ids:
+        return False
+    return (
+        await session.scalar(
+            select(FinancialDocumentComponentAllocation.id).where(
+                FinancialDocumentComponentAllocation.source_kind == "CUSTOMER_CHARGE_LINE",
+                or_(*[
+                    FinancialDocumentComponentAllocation.source_key.like(f"charge-line:{line_id}:%")
+                    for line_id in line_ids
+                ]),
+            )
+        )
+    ) is not None
+
+
 async def create_invoice_from_charge(
     session: AsyncSession,
     context: RequestContext,
@@ -1823,6 +1850,8 @@ async def create_invoice_from_charge(
     commit: bool = True,
     idempotency_key: str | None = None,
 ) -> dict:
+    if (charge.charge_side or "CUSTOMER").upper() == "INTERNAL":
+        raise InvalidState("An internal cost charge cannot be invoiced to the customer.")
     if charge.status != "ISSUED":
         raise InvalidState("Only an issued service charge can create a finance invoice.")
     if idempotency_key:
@@ -1851,6 +1880,11 @@ async def create_invoice_from_charge(
         document = await session.get(FinancialDocument, existing.financial_document_id)
         if document is not None:
             return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+    if await _charge_in_generated_draft(session, charge.id):
+        raise Conflict(
+            "CHARGE_ALREADY_INVOICED",
+            "This charge is already included in a generated container invoice.",
+        )
     order = await session.get(ServiceOrder, charge.service_order_id)
     number = await allocate_number(session, "CUSTOMER_INVOICE")
     # The charge keeps its currency and is never rewritten. The invoice resolves
@@ -2200,12 +2234,15 @@ async def create_invoice_from_service_order(session: AsyncSession, context: Requ
     charges = (
         await session.execute(
             select(ServiceOrderCharge)
-            .where(ServiceOrderCharge.service_order_id == order.id)
+            .where(
+                ServiceOrderCharge.service_order_id == order.id,
+                or_(ServiceOrderCharge.charge_side == "CUSTOMER", ServiceOrderCharge.charge_side.is_(None)),
+            )
             .order_by(ServiceOrderCharge.id)
         )
     ).scalars().all()
     if not charges:
-        raise ValidationFailed("No service charges to invoice.")
+        raise ValidationFailed("No customer service charges to invoice.")
     charge_ids = [charge.id for charge in charges]
     invoiced_ids = set(
         (
@@ -2217,7 +2254,13 @@ async def create_invoice_from_service_order(session: AsyncSession, context: Requ
             )
         ).scalars().all()
     )
-    pending = [charge for charge in charges if charge.id not in invoiced_ids]
+    pending = []
+    for charge in charges:
+        if charge.id in invoiced_ids:
+            continue
+        if await _charge_in_generated_draft(session, charge.id):
+            continue
+        pending.append(charge)
     if not pending:
         raise ValidationFailed("All service charges for this order are already invoiced.")
     zero = Decimal("0")

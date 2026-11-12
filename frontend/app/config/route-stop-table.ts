@@ -72,6 +72,7 @@ export const QUOTATION_ROUTE_TABLE: FreightTable = {
   addLabelKey: 'freight.ui.addRoute',
   columns: routeColumns(false),
   rowDefaults: routePlaceRowDefaults,
+  assignRowId: true,
 }
 
 /** Service Order Route tab: the same table plus actual date/time. */
@@ -83,4 +84,5 @@ export const SERVICE_ORDER_ROUTE_TABLE: FreightTable = {
   addLabelKey: 'freight.ui.addRoute',
   columns: routeColumns(true),
   rowDefaults: routePlaceRowDefaults,
+  assignRowId: true,
 }

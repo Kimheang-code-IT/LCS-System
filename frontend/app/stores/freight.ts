@@ -184,6 +184,11 @@ export const useFreightStore = defineStore('freight', () => {
     return list(collection).find(row => String(row.id) === String(id)) || null
   }
 
+  /** True once a collection's first request completed (success or empty). */
+  function isLoaded(collection: string) {
+    return Boolean(remoteLoaded.value[collection])
+  }
+
   function save(collection: string, record: FreightRecord): FreightRecord {
     const next = { ...record, updatedAt: new Date().toISOString() } as FreightRecord
     upsertRemoteCache(collection, next)
@@ -242,6 +247,7 @@ export const useFreightStore = defineStore('freight', () => {
     reload,
     list,
     get,
+    isLoaded,
     save,
     create,
     remove,

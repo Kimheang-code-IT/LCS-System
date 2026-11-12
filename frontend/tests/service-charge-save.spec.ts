@@ -6,34 +6,58 @@ const APP = fileURLToPath(new URL('../app', import.meta.url))
 const read = (path: string) => readFileSync(`${APP}/${path}`, 'utf8')
 
 const charges = read('components/freight/JobCharges.vue')
+const sharedForm = read('components/freight/ServiceChargeForm.vue')
 const detail = read('components/freight/JobDetail.vue')
-const saveGrid = read('components/table/AppSaveGrid.vue')
+const standalone = read('components/freight/DocumentView.vue')
+const formModel = read('utils/freight/service-charge-form.ts')
 
-describe('service charge tab saves with the page header', () => {
-  it('drops the grid save/cancel buttons and writes the pending change instead', () => {
-    expect(charges).toContain('hide-save-actions')
-    expect(charges).toContain('defineExpose({ savePending })')
-    // One page save writes the grid's change set; nothing saves on its own.
-    expect(saveGrid).toContain('pendingChange: changeSet')
-    expect(saveGrid).toContain('props.hideSaveActions')
-    expect(detail).toContain('chargesTab.value?.savePending()')
-    // A refused charge save stops the page save (errors stay on the tab).
-    expect(detail).toContain('if (chargesSaved === false) return')
-    // The tab stays mounted after its first visit so unsaved rows survive a
-    // tab switch; only the page header persists them.
-    expect(detail).toContain('v-show="activeTab === \'charges\'"')
+describe('shared service charge form', () => {
+  it('renders the standalone page and the Service Order tab through one component', () => {
+    // Standalone Service Charge page.
+    expect(standalone).toContain('<FreightServiceChargeForm')
+    expect(standalone).toContain("module.collection === 'jobCharges'")
+    // Embedded tab.
+    expect(charges).toContain('<FreightServiceChargeForm')
+    // The component is the existing config-driven document form, not a copy.
+    expect(sharedForm).toContain('DocumentAppDocumentForm')
+    expect(sharedForm).toContain('SERVICE_CHARGE_MODULE_PATH')
+    expect(sharedForm).toContain('recalculateFreightRecord')
+    expect(sharedForm).toContain('validateDocumentFields')
+    expect(sharedForm).toContain('validateTableRows')
   })
 
-  it('totals the unsaved working rows, not just the saved ones', () => {
-    expect(charges).toContain('@update:draft="draftRows = $event"')
-    expect(charges).toContain('const summaryRows = computed(() => draftRows.value.length ? draftRows.value : rows.value)')
-    expect(charges).toContain('serviceChargeTotals(summaryRows.value')
-    expect(charges).toContain('v-if="summaryRows.length"')
+  it('keeps the same tabs, fee lines and totals in both hosts', () => {
+    expect(formModel).toContain('serviceChargeFormTabs')
+    expect(formModel).toContain('moduleDocumentTabs')
+    expect(formModel).toContain("tab.id !== 'traceability'")
+    expect(formModel).toContain('serviceChargeFormPayload')
+    expect(sharedForm).toContain('feeLines')
+    expect(sharedForm).toContain('payload')
   })
 
-  it('reports the grid dirty state to the page', () => {
-    expect(charges).toContain('@update:dirty="emit(\'update:dirty\', $event)"')
-    expect(detail).toContain('chargesDirty')
-    expect(detail).toContain('const jobDirty = computed(() => chargesDirty.value')
+  it('has its own save boundary — the page save never touches charges', () => {
+    expect(charges).toContain('async function save()')
+    expect(charges).toContain('createForOrder')
+    expect(charges).toContain('saveDraft')
+    expect(detail).not.toContain('chargesTab.value?.savePending()')
+    expect(detail).toContain('never creates or posts one')
+    // The page save still exists and only writes the order.
+    expect(detail).toContain('moduleRecord.update')
+  })
+
+  it('prevents duplicate creation from repeated clicks or a lost response', () => {
+    expect(charges).toContain('saving.value || !canEditCurrent.value')
+    expect(charges).toContain('clientRowId')
+    expect(charges).toContain('charges.value.find')
+    expect(formModel).toContain('createClientId')
+    expect(formModel).toContain('clientRowId')
+  })
+
+  it('keeps its editable state across tab switches and refreshes', () => {
+    expect(detail).toContain("v-if=\"chargesVisited\" v-show=\"activeTab === 'charges'\"")
+    expect(charges).toContain('useRecordFormDraft')
+    expect(charges).toContain('formDraft.restore')
+    expect(charges).toContain('formDraft.conflict')
+    expect(charges).toContain('formDraft.clear')
   })
 })

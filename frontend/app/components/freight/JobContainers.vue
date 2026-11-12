@@ -7,6 +7,7 @@ import {
 } from '~/config/job-workspace-forms'
 import { formatMoney } from '~/composables/freight/useFreight'
 import { useLcs } from '~/composables/freight/useLcs'
+import { useAutosave } from '~/composables/common/useAutosave'
 import { useAppLocalization } from '~/composables/settings/useAppLocalization'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import { createClientId } from '~/utils/client-id'
@@ -146,23 +147,6 @@ function loadRows() {
   })
 }
 
-function syncCollection(collection: string, rows: Array<Record<string, unknown>>) {
-  const jobNo = String(props.job.jobNo || '')
-  if (!jobNo) return
-  const existing = store.list(collection).filter(row => String(row.jobNo || '') === jobNo)
-  const nextIds = new Set(rows.map(row => String(row.id || '')).filter(Boolean))
-  const removeIds = existing.filter(row => !nextIds.has(row.id)).map(row => row.id)
-  if (removeIds.length) store.remove(collection, removeIds)
-  for (const row of rows) {
-    store.save(collection, {
-      ...row,
-      jobNo,
-      serviceOrderId: props.job.id,
-      id: String(row.id),
-    } as FreightRecord)
-  }
-}
-
 function serverContainerId(value: unknown) {
   const id = String(value ?? '').trim()
   return /^\d+$/.test(id) ? id : ''
@@ -219,7 +203,31 @@ async function syncActualContainers(rows: Array<Record<string, unknown>>) {
   return next
 }
 
-async function persist() {
+function buildPatch(actuals: Array<Record<string, unknown>>) {
+  const requirements = persistableRequirements(requirementRows.value)
+  const payments = persistablePayments(paymentRows.value)
+  const nextTotals = jobContainerPaymentTotals(payments, props.job.vatRate, props.job.discount)
+  const firstActual = actuals[0] || {}
+  return {
+    containerRequirements: requirements,
+    actualContainers: actuals,
+    containerPayments: payments,
+    containerNo: String(firstActual.containerNo || props.job.containerNo || ''),
+    containerType: String(firstActual.containerType || requirements[0]?.containerType || props.job.containerType || ''),
+    sealNo: String(firstActual.sealNo || props.job.sealNo || ''),
+    subtotal: nextTotals.subtotal,
+    vat: nextTotals.vat,
+    total: nextTotals.total,
+    amount: nextTotals.total,
+  }
+}
+
+/**
+ * Numbered containers are written immediately (the API owns their ids); the
+ * requirement/payment rows only update the page model, so the order Save and
+ * its local draft own them. Nothing here writes the whole order per keystroke.
+ */
+async function persist(): Promise<Record<string, unknown>> {
   syncError.value = ''
   let actuals = persistableActuals(actualRows.value)
   if (!props.isCreate && props.job.id) {
@@ -255,36 +263,28 @@ async function persist() {
       paymentRows.value = syncPaymentContainerReferences(paymentRows.value, actuals)
     }
     catch (error) {
+      // Keep the typed rows and the parent model: a failed sync must not discard
+      // an operator's input. The next save retries the write.
       syncError.value = apiErrorMessage(error, t('freight.ui.saveFailed'))
-      return
     }
   }
-  const requirements = persistableRequirements(requirementRows.value)
-  const payments = persistablePayments(paymentRows.value)
-  const nextTotals = jobContainerPaymentTotals(payments, props.job.vatRate, props.job.discount)
-  const firstActual = actuals[0] || {}
-  const patch = {
-    containerRequirements: requirements,
-    actualContainers: actuals,
-    containerPayments: payments,
-    containerNo: String(firstActual.containerNo || props.job.containerNo || ''),
-    containerType: String(firstActual.containerType || requirements[0]?.containerType || props.job.containerType || ''),
-    sealNo: String(firstActual.sealNo || props.job.sealNo || ''),
-    subtotal: nextTotals.subtotal,
-    vat: nextTotals.vat,
-    total: nextTotals.total,
-    amount: nextTotals.total,
-  }
+  const patch = buildPatch(actuals)
   emit('update:job', patch)
+  return patch
+}
+
+/** Print reads the server copy, so persist the model patch first (explicit action). */
+async function persistForPrint() {
+  await autosave.flush()
+  const patch = buildPatch(persistableActuals(actualRows.value))
   if (!props.isCreate && props.job.id) {
     store.save('jobs', {
       ...props.job,
       ...patch,
       updatedAt: new Date().toISOString(),
     })
-    syncCollection('containerRequirements', requirements)
-    syncCollection('actualContainers', actuals)
   }
+  return patch
 }
 
 const ISSUE_MESSAGES: Record<ContainerRowIssue['code'], string> = {
@@ -337,13 +337,24 @@ async function setActuals(value: Array<Record<string, unknown>>) {
   schedulePersist()
 }
 
-/** Trailing write: keystrokes coalesce into one POST instead of racing each
- * other's in-flight responses back onto the rows. */
-let persistHandle: ReturnType<typeof setTimeout> | null = null
+/**
+ * Single-flight trailing write: keystrokes coalesce into one POST and a second
+ * run waits for the first, so responses cannot land out of order.
+ */
+const autosave = useAutosave(async () => {
+  await persist()
+  return true
+}, { delay: 400 })
+
 function schedulePersist() {
-  if (persistHandle) clearTimeout(persistHandle)
-  persistHandle = setTimeout(() => { void persist() }, 400)
+  autosave.schedule()
 }
+
+onBeforeUnmount(() => {
+  // A quick navigation must not drop the last typed container.
+  void autosave.flush()
+  autosave.dispose()
+})
 
 async function setPayments(value: Array<Record<string, unknown>>) {
   paymentRows.value = withIds(value, 'cp')
@@ -375,7 +386,7 @@ function actualContainerPrintActions(row: Record<string, unknown>) {
     icon: 'i-lucide-credit-card',
     color: 'primary' as const,
     onSelect: async () => {
-      await persist()
+      await persistForPrint()
       void navigateTo(debitInvoicePrintRoute(index))
     },
   }]
@@ -393,7 +404,7 @@ function paymentRowAction(action: string, row: Record<string, unknown>) {
     icon: 'i-lucide-receipt-text',
     color: 'primary' as const,
     onSelect: async () => {
-      await persist()
+      await persistForPrint()
       const { path, query } = buildPrintRoute({
         collection: 'jobs',
         recordId: String(props.job.id),
