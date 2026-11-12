@@ -431,7 +431,7 @@ entries.
 | `components/common/` | `AppConfirmDialog`, `AppDateRangeFilter`, `AppExportDialog`, `AppFilterSelect`, `AppFormErrorSummary`, `AppReferenceSelect`, `AppRolePermissionMatrix`, `AppSecretInput`, `AppSortableList` |
 | `components/document/` | `AppDocumentForm`, `AppDocumentPage`, `AppDocumentTabBar`, `AppDynamicFieldRenderer`, `AppDynamicTableField`, `AppFieldGrid` |
 | `components/freight/` | `WorkspaceView`, `ModulePage`, `DocumentView`, `DynamicDataTable`, `JobDetail`, `JobOverview`, `JobRoute`, `JobContainers`, `JobCharges`, `JobFiles`, `JobFinance`, `ReportsView` |
-| `components/table/` | `AppListTable`, `AppRelatedRecords`, `AppSaveGrid`, `AppTableRowMeta` |
+| `components/table/` | `AppListTable`, `AppRelatedRecords`, `AppTableRowMeta` |
 | `components/print/` | `DocumentPreview`, `TaxInvoiceLayout`, `DebitNoteLayout`, `LinesTable`, `TotalsBlock`, `SignatureBlock` |
 | `components/layout/` | `AppHeader`, `AppHeaderPageActions`, `AppSlidebar`, `AppUserProfileDialog`, `AppAboutDialog` |
 | `components/dashboard/` | `AppSummaryCard`, `AppChartGrid` |
@@ -439,7 +439,7 @@ entries.
 ### Editable grids must not re-create a focused control
 
 `AppLineTable` is the single renderer for every editable grid (document line
-tables, dynamic component tables, `AppSaveGrid`). Its column definitions carry
+tables, dynamic component tables, Service Charge fee lines). Its column definitions carry
 the cell renderers, and TanStack mounts a cell renderer as a functional
 component — so a *new* renderer replaces the cell's DOM, and the input the user
 is typing in loses focus and caret after one character.
@@ -457,10 +457,37 @@ Rules that follow from it:
 
 - Never render a control behind a value-dependent `v-if` or a value-derived
   `:key`; tabs use `v-show` so a hidden panel keeps its inputs.
-- A repeatable row's identity is its array position (`get-row-id` is
-  `_rowIndex`), never a generated or value-derived id.
+- A repeatable row's identity prefers the server `id`, then `clientRowId`, then
+  the opt-in client-only `_rowId`, and only then the array position
+  (`_rowIndex`). `_rowId` is stripped from API payloads and draft writes.
 - `e2e/form-typing.spec.ts` locks this in: it types character by character and
   asserts the same DOM element stays focused.
+
+### Unsaved document drafts
+
+Every editable detail form (documents, master data, configuration and
+administration) keeps its unsaved state through `useRecordFormDraft`
+(`app/composables/common/useRecordFormDraft.ts`) on top of the storage helpers
+in `useRecordDraft.ts`:
+
+- One authoritative form model per document; the draft is a debounced mirror.
+- Key = user + collection + record (a new record uses its `new`/`<parent>:new`
+  slot; a charge uses its stable `clientRowId` marker).
+- A draft written against an older server `updatedAt` is never applied; the
+  newer server copy wins and the stale local draft is dropped without a prompt.
+- A successful save clears the draft; a failed save leaves it untouched.
+- Drafts are local-only. Restoring or switching tabs never saves, submits or
+  posts a document. Read-only/posted forms are never drafted; workflow documents
+  (charges, financial documents, journals) only draft while their status is
+  still Draft. Master data/configuration forms draft regardless of their
+  Active/Inactive status, but their real status vocabulary is unchanged.
+- Password and create-only fields are stripped before a draft is written.
+- Server-owned collections (attachments, activity, allocations, journal rows)
+  are excluded; credentials and `File`/`Blob` values are stripped.
+- Service Orders include their dynamic component-tab rows in the same draft.
+- Route and file grids update the page model only; the order Save persists them.
+  Numbered containers keep their immediate API write, coalesced by `useAutosave`
+  and flushed before navigation.
 
 
 ## 10. Internationalisation, Formatting, and Print

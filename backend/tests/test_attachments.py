@@ -133,6 +133,28 @@ async def _upload(client, headers, name: str = "document.png", note: str | None 
     return response.json()["data"]
 
 
+async def test_attachment_module_must_be_a_supported_collection(client):
+    headers = await login(client)
+    rejected = await client.post(
+        "/api/v1/attachments/upload",
+        headers=headers,
+        data={"module": "not-a-real-module", "record_no": "1"},
+        files={"file": ("document.png", _PNG, "image/png")},
+    )
+    assert rejected.status_code == 422, rejected.text
+    assert "Unsupported entity type" in rejected.text
+
+    linked = await client.post(
+        "/api/v1/attachments/upload",
+        headers=headers,
+        data={"module": "jobs", "record_no": "1"},
+        files={"file": ("document.png", _PNG, "image/png")},
+    )
+    assert linked.status_code == 201, linked.text
+    listed = await client.get("/api/v1/attachments", headers=headers, params={"module": "jobs", "record_no": "1"})
+    assert any(item["id"] == linked.json()["data"]["id"] for item in listed.json()["data"])
+
+
 async def test_an_upload_note_is_saved_listed_and_editable(client):
     headers = await login(client)
     attachment = await _upload(client, headers, note="  Signed copy  ")

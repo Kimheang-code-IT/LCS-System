@@ -36,7 +36,7 @@ class TelegramClient:
         self._transport = transport
 
     async def call(self, method: str, payload: dict | None = None, *, retries: int = 0) -> Any:
-        if method not in {"getMe", "sendMessage", "setWebhook", "getWebhookInfo", "deleteWebhook", "getChat", "getChatMember"}:
+        if method not in {"getMe", "sendMessage", "setWebhook", "getWebhookInfo", "deleteWebhook", "getChat", "getChatMember", "getUpdates"}:
             raise TelegramError("unsupported_method")
         for attempt in range(min(max(retries, 0), 2) + 1):
             try:
@@ -54,7 +54,7 @@ class TelegramClient:
                 parameters = body.get("parameters") or {}
                 retry_after = parameters.get("retry_after", 0)
                 retry_after = retry_after if isinstance(retry_after, int) else 0
-                errors = {401: "invalid_bot_token", 403: "destination_blocked", 429: "rate_limited", 400: "invalid_destination"}
+                errors = {401: "invalid_bot_token", 403: "destination_blocked", 409: "webhook_active", 429: "rate_limited", 400: "invalid_destination"}
                 raise TelegramError(errors.get(code, "telegram_unavailable"), retryable=code == 429 or isinstance(code, int) and code >= 500, retry_after=retry_after)
             except httpx.HTTPError:
                 error = TelegramError("transport_unavailable", retryable=True)

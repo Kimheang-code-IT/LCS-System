@@ -12,7 +12,9 @@ export const PAGE_ROUTE_PERMISSIONS: Readonly<Record<string, string>> = {
   '/quotations': 'sales.quotations.view',
   '/quotations/new': 'sales.quotations.create',
   '/service-orders': 'operations.service_orders.view',
-  '/service-orders/new': 'operations.service_orders.create',
+  // Manual creation is retired: the old create route redirects to Quotations,
+  // so it only needs the list's view permission.
+  '/service-orders/new': 'operations.service_orders.view',
   '/service-charges': 'finance.service_charges.view',
   '/service-charges/new': 'finance.service_charges.create',
   '/finance/documents': 'finance.financial_documents.view',

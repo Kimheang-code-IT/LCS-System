@@ -1,7 +1,7 @@
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -73,7 +73,21 @@ class Settings(BaseSettings):
     backup_scheduler_tick_seconds: int = Field(default=60, alias="BACKUP_SCHEDULER_TICK_SECONDS")
     telegram_public_app_url: str = ""
     telegram_worker_enabled: bool = True
+    # webhook = production (needs a public HTTPS origin); polling = development
+    # only. Polling deletes any registered webhook and uses one update consumer.
+    telegram_update_mode: str = Field(default="webhook", alias="TELEGRAM_UPDATE_MODE")
+    # Polling must not silently steal updates from another deployment's webhook.
+    # A registered webhook blocks polling unless explicitly allowed here.
+    telegram_allow_webhook_delete: bool = Field(default=False, alias="TELEGRAM_ALLOW_WEBHOOK_DELETE")
     telegram_api_health_url: str = "http://127.0.0.1:8000/health"
+
+    @field_validator("telegram_update_mode", mode="before")
+    @classmethod
+    def _normalize_telegram_update_mode(cls, value: object) -> str:
+        mode = str(value or "").strip().lower() or "webhook"
+        if mode not in {"polling", "webhook"}:
+            raise ValueError("TELEGRAM_UPDATE_MODE must be 'polling' (development) or 'webhook' (production).")
+        return mode
 
     # File attachment storage (Cloudflare R2 / Google Drive) is configured in
     # Settings → Storage & Backup. Uploaded objects are processed in memory and
@@ -143,6 +157,22 @@ class Settings(BaseSettings):
             errors.append("ALLOWED_HOSTS must contain only explicit production hostnames")
         if self.cookie_domain:
             errors.append("COOKIE_DOMAIN must be empty so cookies remain host-only")
+        if self.telegram_update_mode != "webhook":
+            errors.append("TELEGRAM_UPDATE_MODE must be webhook in production (polling is development-only)")
+        telegram_origin = urlsplit(self.telegram_public_app_url.rstrip("/"))
+        if (
+            telegram_origin.scheme != "https"
+            or not telegram_origin.hostname
+            or telegram_origin.username is not None
+            or telegram_origin.password is not None
+            or telegram_origin.path not in ("", "/")
+            or telegram_origin.query
+            or telegram_origin.fragment
+            or telegram_origin.hostname in {"localhost", "127.0.0.1", "::1"}
+        ):
+            errors.append("TELEGRAM_PUBLIC_APP_URL must be the public HTTPS application origin for webhook mode")
+        if self.telegram_allow_webhook_delete:
+            errors.append("TELEGRAM_ALLOW_WEBHOOK_DELETE must be false in production")
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))
         return self

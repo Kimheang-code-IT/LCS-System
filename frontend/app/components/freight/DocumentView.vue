@@ -17,7 +17,7 @@ import { FINANCIAL_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
-import { financeDomainStatus, isRecordReadOnly } from '~/utils/freight/states'
+import { financeDomainStatus, chargeDomainStatus, isRecordReadOnly } from '~/utils/freight/states'
 import { normalizePermissionRows, permissionRowsFromFlatKeys, permissionRowsToFlatKeys, extraPermissionCodes } from '~/utils/role/permissions'
 import type { AppRolePermissionRow } from '~/types/entities'
 import { documentSequencePreview, documentSequenceTypeLabel } from '~/utils/document-sequences'
@@ -58,13 +58,8 @@ import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import { useFormValidation } from '~/composables/common/useFormValidation'
 import { validateDocumentFields, validateTableRows } from '~/utils/validation/record-validation'
 import { focusField } from '~/utils/validation/focus'
-import {
-  clearRecordDraft,
-  draftAppliesTo,
-  readRecordDraft,
-  recordDraftKey,
-  writeRecordDraft,
-} from '~/composables/common/useRecordDraft'
+import { sanitizeDraftModel } from '~/composables/common/useRecordDraft'
+import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 import { parseRowKey } from '~/utils/validation/error-paths'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
@@ -78,6 +73,18 @@ import { useFinanceCommands } from '~/composables/freight/useFinanceCommands'
 import { ApiV1Endpoints } from '~/utils/constants/api-v1-endpoints'
 import { unwrapApiData } from '~/repositories/http/response'
 import type { ApiResponse } from '~/types/common'
+
+/**
+ * Keys a duplicate never copies from its source quotation: identity, revision
+ * and traceability are the new record's own, and copied attachment rows would
+ * point at the original's files. Everything else (party, route, pricing lines,
+ * conditions…) is the quotation's reusable business content.
+ */
+const DUPLICATE_SKIP_KEYS = new Set([
+  'id', 'quotationId', 'quotationNo', 'revisionNo', 'status', 'rawStatus',
+  'createdBy', 'createdAt', 'updatedAt', 'serviceOrderNo',
+  'sourceServiceOrderId', 'sourceServiceOrderNo', 'revisionHistory', 'attachments',
+])
 
 const { module, isCreate, recordId, route } = useFreightRouteModule()
 const store = useFreightStore()
@@ -246,9 +253,19 @@ function applyRoleMatrix() {
 
 async function load() {
   if (!module.value) return
+  // The route may already address another record: file the current edits under
+  // the record they belong to before replacing the model.
+  formDraft.flush()
+  draftLoading.value = true
   if (module.value.collection === 'roles') void loadRolePermissionCatalog()
   if (isCreate.value) {
+    pristineDraftSnapshot.value = null
     model.value = emptyFreightRecord(module.value) as FreightRecord
+    // A standalone charge starts with one empty fee line ready to fill; an
+    // untouched line is dropped on save, never sent to the backend.
+    if (module.value.collection === 'jobCharges') {
+      model.value.feeLines = [{ feeType: '', description: '', quantity: 1, unitAmount: 0 }]
+    }
     if (module.value.collection === 'documentSequences') {
       model.value.nextNumberPreview = documentSequencePreview(model.value)
     }
@@ -258,6 +275,25 @@ async function load() {
     for (const [key, value] of Object.entries(query)) {
       if (typeof value === 'string' && value) model.value[key] = value
     }
+    if (module.value.collection === 'quotations') {
+      // Duplicate: prefill the form from the source quotation's business
+      // information and items. Identity, revision and traceability fields stay
+      // the new record's own — the backend allocates a fresh Quotation No. on
+      // save, and nothing on the source (nor its service orders) is touched.
+      const sourceId = String(query.duplicate || '').trim()
+      if (sourceId) {
+        delete model.value.duplicate
+        try {
+          const source = await moduleRecord.get(sourceId)
+          for (const [key, value] of Object.entries(source)) {
+            if (!DUPLICATE_SKIP_KEYS.has(key)) model.value[key] = value
+          }
+        }
+        catch {
+          // An unavailable source falls back to the ordinary empty form.
+        }
+      }
+    }
     // A financial document is an invoice unless the caller asked for another type,
     // which is also the type the backend defaults to. The Overview fields, the
     // settlement group and the tab set all depend on it, so an empty document type
@@ -265,13 +301,13 @@ async function load() {
     if (module.value.collection === 'debitNotes' && !model.value.documentType) {
       model.value.documentType = FINANCIAL_DOCUMENT_TYPES[0]
     }
-    if (module.value.collection === 'quotations') {
-      quotationEmptySnapshot.value = quotationDraftSnapshot(model.value)
-      // Unsaved edits from a previous visit (refresh, accidental navigation)
-      // come back exactly as they were left.
-      applyQuotationDraft()
-    }
+    // A pristine new form is not a draft: only real edits are kept.
+    pristineDraftSnapshot.value = draftSnapshot(model.value)
+    // Unsaved edits from a previous visit (refresh, accidental navigation) come
+    // back exactly as they were left; a newer server copy offers Restore/Discard.
+    restoreFormDraft()
     applyRoleMatrix()
+    draftLoading.value = false
     return
   }
   try {
@@ -286,21 +322,35 @@ async function load() {
       : found
     model.value = { ...normalized } as FreightRecord
     originalModel.value = { ...normalized } as FreightRecord
-    if (module.value.collection === 'quotations') applyQuotationDraft()
+    pristineDraftSnapshot.value = null
+    restoreFormDraft()
   }
   catch {
     notFound.value = true
     model.value = emptyFreightRecord(module.value) as FreightRecord
     originalModel.value = null
+    draftLoading.value = false
   }
   applyRoleMatrix()
+  draftLoading.value = false
+}
+
+/**
+ * Refresh never discards typed values: the draft is written first, then `load`
+ * re-offers it (or raises the Restore/Discard banner when the server changed).
+ */
+function refreshForm() {
+  formDraft.flush()
+  void load()
 }
 
 watch(
   [() => module.value?.path, recordId, isCreate],
   () => { void load() },
-  { immediate: true },
 )
+// Mounted rather than immediate: the draft composable is created below this
+// point in setup, and the first load must not run before it exists.
+onMounted(() => { void load() })
 
 // User Code is editable; seed it from the username only while it is still empty.
 watch(
@@ -333,15 +383,12 @@ watch([title, () => module.value, () => model.value.status], () => {
     { label: moduleTitle(module.value), to: module.value.path },
     { label: title.value },
   ])
-  setBadges(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
+  // Quotation Status is retired: quotations show no status badge.
+  const showStatus = module.value.collection !== 'quotations'
+  setBadges(showStatus && model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
 }, { immediate: true })
 
-onBeforeUnmount(() => {
-  clear()
-  window.removeEventListener('beforeunload', beforeUnloadWarning)
-  if (draftTimer.value) clearTimeout(draftTimer.value)
-})
-onMounted(() => window.addEventListener('beforeunload', beforeUnloadWarning))
+onBeforeUnmount(clear)
 usePageSeo({ title: () => title.value })
 
 const compactBusinessDocument = computed(() => false)
@@ -446,85 +493,106 @@ function headerActionMenuItem(action: FreightAction): DropdownMenuItem {
   }
 }
 
-function quotationDraftSnapshot(record: FreightRecord) {
-  const { comments, activity, updatedAt, createdAt, ...rest } = record
-  return JSON.stringify(rest)
+/**
+ * Server-owned or volatile collections are not editable draft state. Attachments
+ * are already persisted by the upload API and the rest are projections.
+ */
+const DRAFT_SKIP_KEYS = new Set([
+  'comments',
+  'activity',
+  'attachments',
+  'allocations',
+  'journalEntries',
+  'sourceRelationships',
+  'revisionHistory',
+])
+
+/**
+ * Workflow documents may only hold a local draft while the record is still a
+ * draft. Every other editable detail page (master data, configuration,
+ * administration) keeps one regardless of its Active/Inactive status.
+ */
+const DRAFT_STATUS_COLLECTIONS = new Set(['jobCharges', 'debitNotes', 'journals'])
+
+function draftSnapshot(record: FreightRecord) {
+  const snapshot: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'updatedAt' || key === 'createdAt' || DRAFT_SKIP_KEYS.has(key)) continue
+    snapshot[key] = value
+  }
+  return JSON.stringify(snapshot)
 }
 
-const quotationDraftDirty = computed(() => {
-  if (module.value?.collection !== 'quotations') return false
-  if (isCreate.value || !originalModel.value) return true
-  return quotationDraftSnapshot(model.value) !== quotationDraftSnapshot(originalModel.value)
+/** Snapshot of the pristine new form; any difference means real content. */
+const pristineDraftSnapshot = ref<string | null>(null)
+
+const draftCollection = computed(() => String(module.value?.collection || ''))
+/** Every editable detail form keeps a local draft, like the quotation page. */
+const draftEligible = computed(() => Boolean(module.value && !module.value.readOnly))
+/** Posted/issued/read-only documents are never drafted: the server stays authoritative. */
+const draftAllowed = computed(() => {
+  if (!draftEligible.value || readOnly.value) return false
+  if (DRAFT_STATUS_COLLECTIONS.has(draftCollection.value)) {
+    return isCreate.value || String(model.value.status || '').toUpperCase() === 'DRAFT'
+  }
+  return true
 })
 
-// --- Unsaved-quotation draft --------------------------------------------------
-//
-// The quotation form holds its state in this component's `model` ref, which
-// dies with the route: navigation to Master Data (the legacy Add New round
-// trip), a tab strip, an accidental refresh or an API failure used to throw
-// everything the operator typed away. The draft below keeps a versioned copy
-// in sessionStorage and restores it on the next mount; the server copy stays
-// authoritative whenever it changed since the draft was written.
+const quotationDraftDirty = computed(() => {
+  if (!draftAllowed.value) return false
+  if (isCreate.value) {
+    return pristineDraftSnapshot.value !== null
+      && draftSnapshot(model.value) !== pristineDraftSnapshot.value
+  }
+  if (!originalModel.value) return false
+  return draftSnapshot(model.value) !== draftSnapshot(originalModel.value)
+})
 
-const draftKey = computed(() => module.value?.collection === 'quotations'
-  ? recordDraftKey(String(auth.user?.id || auth.user?.name || 'anon'), 'quotations', isCreate.value ? '' : recordId.value)
-  : '')
-const draftTimer = ref<ReturnType<typeof setTimeout> | null>(null)
-/** Snapshot of the pristine new-quotation form; any difference means content. */
-const quotationEmptySnapshot = ref<string | null>(null)
+/** True while a record is being fetched: no draft may be written from the old model. */
+const draftLoading = ref(false)
 
-function clearQuotationDrafts() {
-  const user = String(auth.user?.id || auth.user?.name || 'anon')
-  clearRecordDraft(recordDraftKey(user, 'quotations', ''))
-  if (recordId.value) clearRecordDraft(recordDraftKey(user, 'quotations', recordId.value))
-}
+/** Password / create-only fields never enter browser storage. */
+const draftSecretKeys = computed(() => new Set(
+  (module.value?.fields || [])
+    .filter(field => field.type === 'password' || field.createOnly)
+    .map(field => field.key),
+))
 
-function applyQuotationDraft() {
-  const key = draftKey.value
-  if (!key) return
-  const draft = readRecordDraft(key)
-  if (!draft || !draftAppliesTo(draft, isCreate.value ? '' : recordId.value, model.value.updatedAt)) return
-  model.value = { ...model.value, ...draft.model } as FreightRecord
+const formDraft = useRecordFormDraft<FreightRecord>({
+  collection: () => draftCollection.value || 'document',
+  scope: () => String(auth.user?.id || 'anon'),
+  recordId: () => isCreate.value ? '' : recordId.value,
+  baseUpdatedAt: () => String(model.value.updatedAt || ''),
+  model: () => model.value,
+  apply: (stored) => { model.value = { ...model.value, ...stored } as FreightRecord },
+  isDirty: () => quotationDraftDirty.value,
+  canDraft: () => draftAllowed.value,
+  suspend: () => draftLoading.value,
+  sanitize: (record) => Object.fromEntries(
+    Object.entries(sanitizeDraftModel(record)).filter(([key]) =>
+      !DRAFT_SKIP_KEYS.has(key) && !draftSecretKeys.value.has(key)),
+  ),
+  warnOnUnload: true,
+})
+
+/** Point the draft at the record now in `model` and offer any stored copy. */
+function restoreFormDraft() {
+  formDraft.bind()
+  if (!draftEligible.value) return
+  formDraft.restore()
 }
 
 watch(
-  [draftKey, quotationDraftDirty, () => quotationDraftSnapshot(model.value)],
-  ([key, dirty, snapshot]) => {
-    if (!key) return
-    if (draftTimer.value) clearTimeout(draftTimer.value)
-    // A saved quotation without edits must not keep a stale local copy, and a
-    // record that has left DRAFT (submitted, converted) is not editable here:
-    // the server response is what comes back next time.
-    if (!isCreate.value && String(model.value.status || '').toLowerCase() !== 'draft') {
-      clearRecordDraft(key)
+  [draftAllowed, quotationDraftDirty, () => draftSnapshot(model.value)],
+  ([allowed, dirty]) => {
+    if (!allowed || !dirty) {
+      // A clean/read-only form must not keep a stale local copy.
+      formDraft.flush()
       return
     }
-    if (isCreate.value && quotationEmptySnapshot.value !== null) {
-      // A pristine new form is not a draft; only real edits are kept.
-      if (snapshot === quotationEmptySnapshot.value) {
-        clearRecordDraft(key)
-        return
-      }
-    }
-    else if (!dirty) {
-      // The saved quotation response is authoritative — no local copy should
-      // survive a clean comparison.
-      clearRecordDraft(key)
-      return
-    }
-    draftTimer.value = setTimeout(() => writeRecordDraft(key, {
-      recordId: isCreate.value ? '' : recordId.value,
-      baseUpdatedAt: String(model.value.updatedAt || ''),
-      model: JSON.parse(snapshot) as Record<string, unknown>,
-    }), 400)
+    formDraft.schedule()
   },
 )
-
-function beforeUnloadWarning(event: BeforeUnloadEvent) {
-  if (module.value?.collection !== 'quotations' || !quotationDraftDirty.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 
 // A quotation is a reusable CRUD reference: the only header actions are Save
 // and Save changes. Submit / Send / Accept / Re-quote / Convert are retired from
@@ -632,7 +700,7 @@ const overflowHeaderActions = computed(() => splitHeaderActions.value.overflow)
 
 const documentSaveLabel = computed(() => {
   if (module.value?.collection === 'jobCharges') {
-    return isCreate.value ? t('freight.ui.submit') : t('freight.ui.saveChanges')
+    return isCreate.value ? t('freight.ui.saveCharge') : t('freight.ui.saveChanges')
   }
   return t('lcs.common.save')
 })
@@ -699,6 +767,11 @@ const formTabs = computed(() => {
       recordNo: String(model.value.id || ''),
     },
   })
+  if (module.value.collection === 'jobCharges' && isCreate.value) {
+    // A standalone charge is created from General + Fee Lines only; the
+    // Traceability tab (invoice, journal, source records) exists once saved.
+    return compiled.filter(tab => tab.id !== 'traceability')
+  }
   if (module.value.collection === 'roles') {
     // A protected system role keeps its grant read-only (the backend refuses
     // the change anyway).
@@ -753,53 +826,63 @@ provide(freightDocumentLineActionKey, (action, row) => {
   void onLineRowAction(action, row)
 })
 
-function printServiceChargeInvoice() {
-  if (!model.value.id) return
-  void navigateTo(buildPrintRoute({
-    collection: 'jobCharges',
-    recordId: String(model.value.id),
+/** Print route of the finance invoice `invoiceId`, returning to this page. */
+function chargeFinanceInvoiceRoute(invoiceId: string) {
+  return buildPrintRoute({
+    collection: 'debitNotes',
+    recordId: invoiceId,
     template: 'tax-invoice',
     returnTo: route.fullPath,
-    modulePath: '/service-charges',
-  }))
+    modulePath: '/finance/documents',
+  })
 }
 
-/** Print one fee line of the open charge; the print page narrows the snapshot. */
-function printServiceChargeLine(index: number, lineId: unknown) {
-  if (!model.value.id) return
-  void navigateTo(buildPrintRoute({
-    collection: 'jobCharges',
-    recordId: String(model.value.id),
-    template: 'tax-invoice',
-    returnTo: route.fullPath,
-    modulePath: '/service-charges',
-    lineIndex: index,
-    lineId: lineId ? String(lineId) : undefined,
-  }))
+/**
+ * Print Invoice for a saved service charge: an already-invoiced charge opens
+ * its existing finance invoice (no second draft is ever made — the backend's
+ * bill-once source link would return it anyway), an issued one is confirmed
+ * then converted through the existing charge→invoice command, and a draft one
+ * is told to be issued first. The open charge must be saved.
+ */
+async function printChargeFinanceInvoice() {
+  if (module.value?.collection !== 'jobCharges' || !model.value.id) return
+  const chargeId = String(model.value.id)
+  const linkedInvoice = linkedFinanceInvoiceForCharge(model.value, traceLookups())
+  if (linkedInvoice?.id) {
+    await navigateTo(chargeFinanceInvoiceRoute(String(linkedInvoice.id)))
+    return
+  }
+  if (chargeDomainStatus(model.value.status) !== 'ISSUED') {
+    validation.addFormError(t('freight.ui.chargeNotIssued'))
+    return
+  }
+  const ok = await confirm({
+    kind: 'submit',
+    descriptionKey: 'freight.ui.createInvoiceConfirm',
+    descriptionParams: { name: String(model.value.chargeNo || chargeId) },
+  })
+  if (!ok) return
+  await financeCommands.createInvoiceFromCharge(id => chargeFinanceInvoiceRoute(id))
 }
 
 provide(freightDocumentLineTableHeaderKey, (tableKey) => {
   if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return []
   const feeLines = Array.isArray(model.value.feeLines) ? model.value.feeLines : []
   return [{
-    label: t('freight.ui.printAll'),
+    label: t('freight.ui.printInvoice'),
     icon: 'i-lucide-printer',
     disabled: feeLines.length === 0,
-    onClick: printServiceChargeInvoice,
+    onClick: () => { void printChargeFinanceInvoice() },
   }]
 })
 
 provide(freightDocumentLineTableRowMenuKey, (tableKey) => {
   if (module.value?.collection !== 'jobCharges' || tableKey !== 'feeLines' || isCreate.value) return undefined
-  return (row: Record<string, unknown>) => {
-    const index = Number(row._rowIndex ?? -1)
-    if (index < 0) return []
-    return [{
-      label: t('freight.ui.printInvoice'),
-      icon: 'i-lucide-printer',
-      onSelect: () => printServiceChargeLine(index, row.id),
-    }]
-  }
+  return () => [{
+    label: t('freight.ui.printInvoice'),
+    icon: 'i-lucide-printer',
+    onSelect: () => { void printChargeFinanceInvoice() },
+  }]
 })
 provide(freightDocumentModelKey, model)
 /**
@@ -931,15 +1014,6 @@ function relatedServiceOrder() {
   return jobForQuotation(jobs, model.value)
 }
 
-async function openRelatedServiceOrder() {
-  const job = relatedServiceOrder()
-  if (!job?.id) {
-    toast.add({ title: t('lcs.states.notFound'), color: 'warning' })
-    return
-  }
-  await navigateTo(`/service-orders/${String(job.id)}`)
-}
-
 /** Quotation delete: guarded by status/permission and the backend link rule. */
 async function deleteQuotation() {
   if (!quotationAvailability.value.delete || !model.value.id) return
@@ -1007,16 +1081,6 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
   const items: DropdownMenuItem[] = []
   const isQuotation = module.value?.collection === 'quotations'
   if (isQuotation && !isCreate.value && model.value.id) {
-    if (quotationAvailability.value.openServiceOrder) {
-      const serviceOrderNo = String(model.value.serviceOrderNo || '').trim()
-      items.push({
-        label: serviceOrderNo
-          ? `${t('freight.ui.openServiceOrder')} · ${serviceOrderNo}`
-          : t('freight.ui.openServiceOrder'),
-        icon: 'i-lucide-briefcase',
-        onSelect: () => { void openRelatedServiceOrder() },
-      })
-    }
     if (quotationAvailability.value.revise) {
       items.push({
         label: t('freight.ui.requote'),
@@ -1129,6 +1193,13 @@ function setFieldValue(key: string, value: unknown) {
     return
   }
   setField(key, value)
+}
+
+/** The shared Service Charge form owns recalculation; drop row errors only when
+ *  the fee-line set itself changed (add/remove/reorder), as `setTable` did. */
+function setChargeModel(next: FreightRecord) {
+  if (model.value.feeLines !== next.feeLines) validation.clearTableErrors('feeLines')
+  model.value = next
 }
 
 function setTable(key: string, rows: Array<Record<string, unknown>>) {
@@ -1389,6 +1460,16 @@ async function save(status?: string) {
         return next
       })
     }
+    if (module.value.collection === 'jobCharges') {
+      // A completely empty fee line (including the auto-started one) is never
+      // saved; a partially filled line stays and is caught by validation.
+      payload.feeLines = (Array.isArray(payload.feeLines) ? payload.feeLines : []).filter((line) => {
+        const row = line as Record<string, unknown>
+        return Boolean(String(row.description ?? '').trim())
+          || Boolean(String(row.feeType ?? '').trim())
+          || Number(row.unitAmount ?? row.unitPrice ?? 0) !== 0
+      })
+    }
     if (module.value.collection === 'documentSequences') {
       payload.prefix = String(payload.prefix || '').trim()
       const sequenceYear = Number(payload.year)
@@ -1456,13 +1537,13 @@ async function save(status?: string) {
       payload.status ||= defaultStatusForModule(module.value)
       payload.currency ||= localization.value.currency
     }
+    const submitted = draftSnapshot(model.value)
     const saved = await documentActions.persistRecord(payload, isNew)
     if (!saved) return
-    if (module.value.collection === 'quotations') {
-      // Persisted: the server copy is authoritative, so no local draft may
-      // survive to resurrect older edits on the next visit.
-      clearQuotationDrafts()
-    }
+    // Persisted: clear only what the server actually accepted. Edits typed while
+    // the request was open stay in the draft and are restored on the next visit.
+    if (draftSnapshot(model.value) === submitted) formDraft.clear()
+    else formDraft.flush()
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     // A newly created account's password cannot be read back afterwards — the
     // server keeps only a digest — so it is shown once, here, before leaving the
@@ -1692,7 +1773,7 @@ content-wide
 @update:active-tab="activeTab = $event"
       @update:attachments="setChromeField('attachments', $event)"
       @save="save()"
-@refresh="load"
+@refresh="refreshForm"
 @navigate-previous="navigatePrevious"
 @navigate-next="navigateNext">
       <FreightUserPasswordDialog
@@ -1717,6 +1798,18 @@ content-wide
 
       <template #before-form>
         <DocumentAppDocumentContentShell
+          v-if="module.collection === 'quotations' && !isCreate && String(model.sourceServiceOrderNo || '').trim()"
+          wide
+        >
+          <div class="flex items-center gap-2 pt-4 text-sm text-muted">
+            <span>{{ t('freight.fields.sourceServiceOrder') }}:</span>
+            <ULink
+              :to="`/service-orders/${String(model.sourceServiceOrderId || '')}`"
+              class="font-medium text-highlighted hover:text-primary hover:underline"
+            >{{ String(model.sourceServiceOrderNo) }}</ULink>
+          </div>
+        </DocumentAppDocumentContentShell>
+        <DocumentAppDocumentContentShell
 v-if="module.collection === 'debitNotes' && periodClosed"
 wide
           class="space-y-4 pt-6">
@@ -1726,6 +1819,34 @@ variant="subtle"
             icon="i-lucide-calendar-off"
 :title="$t('lcs.finance.periodClosed')" />
         </DocumentAppDocumentContentShell>
+      </template>
+
+      <template #form>
+        <!-- The Service Charge page and the Service Order tab render the same
+             shared form; every other document keeps the generic form. -->
+        <FreightServiceChargeForm
+          v-if="module.collection === 'jobCharges'"
+          :model="model"
+          :tabs="tabs"
+          :active-tab="activeTab"
+          :show-tab-bar="false"
+          :read-only="readOnly"
+          :field-errors="fieldErrors"
+          :on-field-edit="clearFieldError"
+          :on-field-blur="validateFieldOnBlur"
+          wide
+          @update:model="setChargeModel" />
+        <DocumentAppDocumentForm
+          v-else
+          :tabs="tabs"
+          :active-tab="activeTab"
+          :field-value="fieldValue"
+          :set-field-value="setFieldValue"
+          :read-only="readOnly"
+          :field-errors="fieldErrors"
+          :on-field-edit="clearFieldError"
+          :on-field-blur="validateFieldOnBlur"
+          wide />
       </template>
 
       <template #tab-extra="{ tabId }">

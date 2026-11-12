@@ -206,8 +206,14 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
     ),
     "service_order_movements": "Planned versus actual movement leg of a service order.",
     "service_order_milestones": "Checkpoint on a service order's timeline (booking confirmed, gate-in, loaded, arrived).",
-    "service_order_charges": "Customer-facing invoice or service note raised from a service order.",
-    "service_order_charge_lines": "Chargeable line of a service order charge.",
+    "service_order_charges": (
+        "Customer-facing service note or an internal cost charge raised from a service order.\n"
+        "charge_side separates billable customer charges from supplier-cost charges."
+    ),
+    "service_order_charge_lines": (
+        "Chargeable line of a service order charge. Internal lines carry the supplier cost\n"
+        "beside the selling price; customer lines leave the cost fields at zero."
+    ),
     "attachments": (
         "Metadata for a file held in object storage (R2/Drive) or local disk. File bytes never live in\n"
         "PostgreSQL."
@@ -251,6 +257,11 @@ TABLE_DESCRIPTIONS: dict[str, str] = {
         "posted."
     ),
     "financial_document_lines": "Line of a financial document.",
+    "financial_document_component_allocations": (
+        "Decimal allocation of one source component (container pricing, customer charge line\n"
+        "or internal charge line) to a generated draft document. Allows shared charges to be\n"
+        "prorated across container invoices while preserving exact source traceability."
+    ),
     "financial_document_sources": (
         "Tracks which business record generated a financial document, so a service order or\n"
         "quotation can be traced to the invoices it produced."
@@ -1114,7 +1125,22 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         "data": "JSONB payload for module-specific fields not covered by dedicated columns.",
     },
     "service_order_charges": {
-        "service_order_id": "Service order the charge belongs to. CASCADE on order deletion.",
+        "service_order_id": (
+            "Service order the charge belongs to. NULL for a standalone charge created\n"
+            "outside an order; CASCADE on order deletion."
+        ),
+        "customer_party_id": (
+            "Customer the charge bills. Linked charges mirror their order's party (kept\n"
+            "denormalised so invoice conversion never needs the order); standalone charges\n"
+            "take it from the picker. NULL when neither is set."
+        ),
+        "charge_side": (
+            "CUSTOMER for a billable customer charge, INTERNAL for a supplier cost +\n"
+            "selling-price charge. Indexed for the two views."
+        ),
+        "supplier_party_id": (
+            "Supplier billed for an INTERNAL charge; NULL on customer charges."
+        ),
         "charge_no": (
             "Document number allocated from document_sequences. UNIQUE across all charges."
         ),
@@ -1142,7 +1168,14 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
         ),
         "description": "Description printed on the charge for this line.",
         "quantity": "Billed quantity (NUMERIC(12,3)).",
-        "unit_price": "Price per unit in currency_code, before discount and tax.",
+        "unit_price": "Selling price per unit in currency_code, before discount and tax.",
+        "cost_unit_price": (
+            "Supplier cost per unit for an INTERNAL line. Zero on customer lines; never\n"
+            "included in a customer invoice."
+        ),
+        "cost_amount": (
+            "Quantity x cost_unit_price for an INTERNAL line. Zero on customer lines."
+        ),
         "discount_amount": "Absolute discount deducted from the line subtotal.",
         "tax_rate": "Tax/VAT rate applied to the line (NUMERIC(7,4)).",
         "tax_amount": "Absolute tax charged on this line.",
@@ -1239,6 +1272,11 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
     "financial_documents": {
         "document_no": "Document number allocated from document_sequences. UNIQUE.",
+        "generated_key": (
+            "Stable identity of an automatically generated draft (order/container or\n"
+            "order/supplier/currency). NULL for manual documents; UNIQUE when set so Finish\n"
+            "and retry update the same draft instead of creating duplicates."
+        ),
         "document_type": (
             "Document kind: TAX_INVOICE, PROFORMA_INVOICE, CREDIT_NOTE, DEBIT_NOTE, RECEIPT or\n"
             "PAYMENT."
@@ -1325,6 +1363,13 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "different source is refused. Retained with the relationship, like allocation keys."
         ),
         "created_at": "Timestamp the link was created.",
+    },
+    "financial_document_component_allocations": {
+        "financial_document_id": "Generated draft document receiving this component. CASCADE on deletion.",
+        "source_kind": "CONTAINER_PRICING, CUSTOMER_CHARGE_LINE or INTERNAL_CHARGE_LINE.",
+        "source_key": "Stable id of the source row (JSON row uuid or charge-line id).",
+        "container_id": "Container invoice receiving the component; NULL for an order-level or supplier bill.",
+        "allocated_amount": "Decimal amount of this source component in the generated document.",
     },
     "financial_document_allocations": {
         "payment_document_id": "Payment or receipt document that holds the money.",

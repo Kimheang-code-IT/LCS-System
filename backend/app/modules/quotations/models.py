@@ -114,10 +114,18 @@ class QuotationConversion(PKMixin, Base):
 
     #: One revision can produce many service orders (the quotation is a reusable
     #: commercial reference); the idempotency key keeps a retried request a replay.
-    quotation_revision_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("quotation_revisions.id"), nullable=False, index=True
+    #: Nullable: a Service Order created directly (no quotation selected) still
+    #: records its idempotency key here so a retried request stays a replay.
+    quotation_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quotation_revisions.id"), nullable=True, index=True
     )
-    service_order_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    #: The created order. Unique (one conversion per order) and RESTRICT: the
+    #: conversion ledger is the historical proof a quotation produced this job,
+    #: so an order with a conversion row cannot be hard-deleted (the service
+    #: returns a clean conflict before the FK ever fires).
+    service_order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("service_orders.id", ondelete="RESTRICT"), nullable=False, unique=True
+    )
     converted_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     converted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()

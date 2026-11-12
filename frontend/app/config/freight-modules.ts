@@ -1,6 +1,7 @@
 import type { DocumentTabSchema } from '~/types/common'
 import type { FreightRecord } from '~/types/record'
 import type { FieldRule } from '~/utils/validation/field-rules'
+import { createClientId } from '~/utils/client-id'
 import {
   ACTIVE_STATUS,
   CREDIT_TERM_DOCUMENT_TYPES,
@@ -114,6 +115,12 @@ export type FreightLineColumn = {
   /** Select labels when they differ from stored values (e.g. container requirement id). */
   optionItems?: Array<{ label: string, value: string }>
   /**
+   * Per-row cell lock for mixed read-only/editable grids (e.g. a finance table
+   * where posted rows stay untouched while draft rows edit). Returning true
+   * renders the cell read-only for that row only.
+   */
+  lockCell?: (row: Record<string, unknown>) => boolean
+  /**
    * Field width: CSS pixels, or a class string an admin-supplied column config
    * may carry. The column is sized from it so the field fills its column; see
    * `lineTableColumnMetrics`.
@@ -178,6 +185,12 @@ export type FreightTable = {
   addLabelKey?: string
   /** Config grids manage add via a dialog, so they hide the built-in add-row button. */
   hideAddRow?: boolean
+  /**
+   * Stamp every added row with a client-only `_rowId`. It survives row
+   * re-renders/deletes/reorders, is stripped before an API payload and before a
+   * draft write, and keeps the focused cell on its own row.
+   */
+  assignRowId?: boolean
   /** Suppresses the in-table title when the page header already shows it. */
   hideTitle?: boolean
   presets?: Array<Record<string, unknown>>
@@ -256,6 +269,11 @@ export type FreightModule = {
   titleKm: string
   singular: string
   singularKm: string
+  /**
+   * i18n key for the singular noun, when several pages share one collection
+   * (the Service Charges page is not "a Job Charge").
+   */
+  singularKey?: string
   description: string
   descriptionKm: string
   icon: string
@@ -1416,12 +1434,13 @@ if (quotationModule) freightModules.push({
   documentForm: 'quotation',
   columns: [
     col('quotationNo', 'Quotation No.', 'លេខសម្រង់'),
-    col('serviceOrderNo', 'SO No.', 'លេខ SO', { labelKey: 'freight.ui.cols.jobNo' }),
+    // SO No. is not a list column: one quotation links many service orders, so
+    // a single-value column cannot represent it (the row menu's Convert/Open
+    // actions and the order's own Quotation No. field carry the relationship).
     col('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', { labelKey: 'freight.fields.customerPartyId' }),
     col('revisionNo', 'Revision', 'កំណែ', { labelKey: 'freight.ui.cols.revision' }),
     col('direction', 'Trade Direction', 'ទិសដៅពាណិជ្ជកម្ម', { labelKey: 'freight.ui.cols.direction' }),
     col('total', 'Grand Total', 'សរុបធំ'),
-    col('status', 'Status', 'ស្ថានភាព'),
     col('createdBy', 'Created By', 'បង្កើតដោយ', { labelKey: 'freight.fields.createdBy' }),
     col('createdAt', 'Created At', 'បង្កើតនៅ', { labelKey: 'freight.fields.createdAt', type: 'datetime' }),
   ],
@@ -1435,7 +1454,6 @@ if (quotationModule) freightModules.push({
     f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Header', 'ក្បាល', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }), f('revisionNo', 'Revision No.', 'លេខកំណែ', 'Header', 'ក្បាល', 'number', undefined, { computed: true }),
     f('date', 'Quotation Date', 'កាលបរិច្ឆេទសម្រង់', 'Header', 'ក្បាល', 'date', undefined, { required: true }), f('validUntil', 'Valid Until', 'មានសុពលភាពដល់', 'Header', 'ក្បាល', 'date'),
     f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Header', 'ក្បាល', 'select', undefined, { required: true }), f('description', 'Description', 'បរិយាយ', 'Header', 'ក្បាល', 'textarea', undefined, { colSpan: 2 }),
-    f('status', 'Status', 'ស្ថានភាព', 'Header', 'ក្បាល', 'select', QUOTATION_STATUS),
     f('subtotal', 'Subtotal', 'សរុបរង', 'Totals', 'សរុប', 'number', undefined, { computed: true }), f('discount', 'Discount', 'បញ្ចុះតម្លៃ', 'Totals', 'សរុប', 'number', undefined, { computed: true }), f('tax', 'Tax', 'ពន្ធ', 'Totals', 'សរុប', 'number', undefined, { computed: true }), f('total', 'Total', 'សរុប', 'Totals', 'សរុប', 'number', undefined, { computed: true }),
   ],
   tables: [
@@ -1451,7 +1469,7 @@ if (quotationModule) freightModules.push({
       { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true, rule: { required: true, min: 0 } },
       { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },
       { key: 'trust', label: '', type: 'delete' },
-    ], computeRow: computePricingLine, pricing: true, lineDetails: true },
+    ], computeRow: computePricingLine, pricing: true, lineDetails: true, assignRowId: true },
     { key: 'attachments', title: 'Files', titleKm: 'ឯកសារ', addLabel: 'Upload File', addLabelKey: 'freight.ui.uploadFile', kind: 'files', columns: FILE_ATTACHMENT_COLUMNS },
     { key: 'revisionHistory', title: 'Revisions', titleKm: 'កំណែ', hideAddRow: true, columns: [
       { key: 'revisionNo', label: 'Revision No.', labelKm: 'លេខកំណែ', computed: true, width: 72 },
@@ -1464,6 +1482,10 @@ if (quotationModule) freightModules.push({
   actions: [
     { key: 'saveDraft', label: 'Save Data', labelKm: 'រក្សាទុកទិន្នន័យ', icon: 'i-lucide-save', color: 'primary' },
   ],
+  // Quotation Status is retired: quotations are plain CRUD records, so no
+  // status field, column, filter or menu is rendered. The single-entry list
+  // only seeds the record default so new quotations store DRAFT.
+  statuses: ['Draft'],
   filters: [f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', '', '', 'select', undefined, { labelKey: 'freight.fields.customerPartyId' }), f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', '', '', 'select', undefined, { labelKey: 'freight.ui.cols.direction' })],
 })
 
@@ -1471,6 +1493,9 @@ if (jobsModule) freightModules.push({
   ...jobsModule,
   path: '/service-orders',
   permission: 'operations.service_orders.view',
+  // Manual creation is retired: every Service Order is created from a
+  // quotation through Convert to Service Order, so the list has no New button.
+  canCreate: false,
   title: 'Service Orders',
   titleKm: 'បញ្ជាសេវាកម្ម',
   titleKey: 'freight.pages.serviceOrders',
@@ -1494,7 +1519,10 @@ if (jobsModule) freightModules.push({
   // The Service Order Overview is intentionally minimal: the quotation-style
   // header fields, the reference block and a single operational remark.
   fields: [
-    f('quotationId', 'Quotation', 'សម្រង់តម្លៃ', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { labelKey: 'freight.ui.cols.quotation', helpKey: 'freight.fieldHelp.orderQuotation' }),
+    // The source quotation is set once by the conversion workflow and is never
+    // editable afterwards: an order cannot be repointed at another quotation.
+    // View Quotation in the page header opens it.
+    f('quotationId', 'Quotation', 'សម្រង់តម្លៃ', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { readOnly: true, labelKey: 'freight.ui.cols.quotation', helpKey: 'freight.fieldHelp.orderQuotation' }),
     f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true, labelKey: 'freight.fields.customerPartyId' }),
     f('direction', 'Trade Directions', 'ទិសដៅពាណិជ្ជកម្ម', 'Job Information', 'ព័ត៌មានការងារ', 'select', undefined, { required: true, labelKey: 'freight.ui.cols.direction' }),
     f('date', 'Quotation Date', 'កាលបរិច្ឆេទ', 'Job Information', 'ព័ត៌មានការងារ', 'date', undefined, { required: true }),
@@ -1524,23 +1552,28 @@ if (chargesModule) freightModules.push({
   permission: 'finance.service_charges.view',
   title: 'Service Charges',
   titleKm: 'ថ្លៃសេវាកម្ម',
+  titleKey: 'freight.pages.serviceCharges',
   singular: 'Service Charge',
   singularKm: 'ថ្លៃសេវាកម្ម',
+  singularKey: 'freight.modules.serviceCharges.singular',
   description: 'Informational customer charges that do not post accounting until explicitly converted and posted.',
   descriptionKm: 'ថ្លៃព័ត៌មានអតិថិជនដែលមិនចុះគណនី រហូតដល់បម្លែង និងចុះបញ្ជីដោយច្បាស់លាស់។',
   titleField: 'chargeNo',
   columns: [
+    // Checkbox and row actions are the shared list table's own columns; each
+    // charge appears once and the description summarises its fee lines.
     col('chargeNo', 'SC No.', 'លេខ SC'),
-    col('jobNo', 'SO No.', 'លេខ SO', { labelKey: 'freight.ui.cols.jobNo' }),
     col('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', { labelKey: 'freight.fields.customerPartyId' }),
+    col('description', 'Description', 'បរិយាយ', { labelKey: 'freight.ui.cols.description' }),
     col('total', 'Grand Total', 'សរុបធំ', { labelKey: 'freight.fields.total' }),
-    col('invoiceNo', 'Invoice No.', 'លេខវិក្កយបត្រ', { labelKey: 'freight.ui.cols.invoiceNoCol' }),
-    col('status', 'Status', 'ស្ថានភាព', { labelKey: 'freight.ui.status' }),
     col('createdBy', 'Created By', 'បង្កើតដោយ', { labelKey: 'freight.fields.createdBy' }),
     col('createdAt', 'Created At', 'បង្កើតនៅ', { labelKey: 'freight.fields.createdAt', type: 'datetime' }),
   ],
   fields: [
-    f('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម', 'General', 'ទូទៅ', 'text', undefined, { helpKey: 'freight.fieldHelp.chargeJobNo' }), f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', 'General', 'ទូទៅ', 'select', undefined, { required: true, labelKey: 'freight.fields.customerPartyId' }), f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'General', 'ទូទៅ', 'select'), f('remarks', 'Remarks', 'កំណត់សម្គាល់', 'General', 'ទូទៅ', 'textarea', undefined, { colSpan: 2, helpKey: 'freight.fieldHelp.remarks' }),
+    // Standalone charges pick a customer directly; linked charges are created
+    // from their Service Order's Service Charge tab, so the form has no
+    // Service Order field — the saved record's Traceability tab shows it.
+    f('customerPartyId', 'Business Party', 'ដៃគូអាជីវកម្ម', 'General', 'ទូទៅ', 'select', undefined, { required: true, labelKey: 'freight.fields.customerPartyId' }), f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'General', 'ទូទៅ', 'select', undefined, { required: true }), f('remarks', 'Remarks', 'កំណត់សម្គាល់', 'General', 'ទូទៅ', 'textarea', undefined, { colSpan: 2, helpKey: 'freight.fieldHelp.remarks' }),
     f('invoiceNo', 'Finance Invoice', 'វិក្កយបត្រហិរញ្ញវត្ថុ', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeInvoiceNo' }),
     f('journalId', 'Posted Journal', 'ទិនានុប្បវត្តិបានចុះបញ្ជី', 'Traceability', 'ការតាមដាន', 'text', undefined, { computed: true, helpKey: 'freight.fieldHelp.chargeJournalId' }),
   ],
@@ -1552,17 +1585,23 @@ if (chargesModule) freightModules.push({
       {
         key: 'amount', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true,
       },
+      // Deletion lives in the row menu alongside Additional Details and
+      // Print Invoice; the renderer disables it while the charge is read-only.
+      { key: '_delete', label: '', type: 'delete' },
     ],
     computeRow: computeFeeLine,
     pricing: true,
     lineDetails: true,
+    // Stable client identity keeps the shared table's row selection/keyed cells
+    // anchored while a fee line is edited, added or removed.
+    rowDefaults: () => ({ clientRowId: createClientId('feeLine') }),
   }, {
     key: 'sourceRelationships', title: 'Source Relationships', titleKm: 'ទំនាក់ទំនងប្រភព', columns: SOURCE_RELATIONSHIP_COLUMNS,
   }],
   actions: [
     { key: 'saveDraft', label: 'Save Draft', labelKm: 'រក្សាទុកព្រាង', icon: 'i-lucide-save' }, { key: 'issue', label: 'Issue', labelKm: 'ចេញ', icon: 'i-lucide-send', color: 'success' }, { key: 'print', label: 'Print / Download', labelKm: 'បោះពុម្ព / ទាញយក', icon: 'i-lucide-printer' }, { key: 'createInvoice', label: 'Create Finance Invoice', labelKm: 'បង្កើតវិក្កយបត្រហិរញ្ញវត្ថុ', icon: 'i-lucide-file-plus-2', color: 'primary' }, { key: 'viewInvoice', label: 'View Finance Invoice', labelKm: 'មើលវិក្កយបត្រហិរញ្ញវត្ថុ', icon: 'i-lucide-receipt-text', color: 'primary' },
   ],
-  filters: [f('jobNo', 'SO No.', 'លេខ SO', '', '', 'text', undefined, { labelKey: 'freight.ui.cols.jobNo' }), f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', '', '', 'select', undefined, { labelKey: 'freight.fields.customerPartyId' }), f('documentType', 'Document Type', 'ប្រភេទឯកសារ', '', '', 'select', ['SERVICE_NOTE', 'DEBIT_NOTE', 'PRO_FORMA']), f('status', 'Status', 'ស្ថានភាព', '', '', 'select', SERVICE_CHARGE_STATUS)],
+  filters: [f('customer', 'Business Party', 'ដៃគូអាជីវកម្ម', '', '', 'select', undefined, { labelKey: 'freight.fields.customerPartyId' }), f('documentType', 'Document Type', 'ប្រភេទឯកសារ', '', '', 'select', ['SERVICE_NOTE', 'DEBIT_NOTE', 'PRO_FORMA'])],
 })
 
 if (invoicesModule) freightModules.push({
@@ -1622,6 +1661,7 @@ if (invoicesModule) freightModules.push({
       ],
       computeRow: computeDocumentLine,
       pricing: true,
+      assignRowId: true,
     },
     {
       key: 'allocations', title: 'Payment Allocations', titleKm: 'ការបែងចែកការទូទាត់', addLabel: 'Allocate document',

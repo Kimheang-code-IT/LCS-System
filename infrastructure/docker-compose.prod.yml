@@ -95,6 +95,10 @@ services:
       FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
       TELEGRAM_PUBLIC_APP_URL: ${TELEGRAM_PUBLIC_APP_URL:-}
       TELEGRAM_WORKER_ENABLED: ${TELEGRAM_WORKER_ENABLED:-true}
+      # Production must receive updates through the registered HTTPS webhook.
+      # Hard-set (not env-overridable) so a development .env cannot leak polling.
+      TELEGRAM_UPDATE_MODE: "webhook"
+      TELEGRAM_ALLOW_WEBHOOK_DELETE: "false"
       TELEGRAM_API_HEALTH_URL: http://127.0.0.1:8000/health
       AUTH_RETURN_TOKENS: "false"
       ACCESS_TOKEN_EXPIRE_MINUTES: "15"

@@ -254,16 +254,17 @@ function settingsLabel(key: string) {
  */
 function settingsRules(): Record<string, FieldRule> {
   const emailEnabled = Boolean(model.value?.email.enabled)
-  const telegramEnabled = Boolean(model.value?.telegram.enabled)
   const backupEnabled = Boolean(model.value?.backup.enabled)
+  // R2 credentials: needed by an activated storage provider or by DB backups.
+  const r2Active = backupEnabled
+    || model.value?.storage.primaryProvider === 'r2'
+    || model.value?.storage.backupProvider === 'r2'
   return {
     'general.maxUploadSizeMb': { number: true, integer: true, min: 1, max: 100 },
     'email.smtpHost': { required: emailEnabled, maxLength: 255 },
     'email.smtpPort': { number: true, integer: true, min: 1, max: 65535, required: emailEnabled },
     'email.username': { maxLength: 255 },
-    'telegram.botDisplayName': { maxLength: 255 },
-    'telegram.botUsername': { maxLength: 255 },
-    'telegram.botToken': { required: telegramEnabled && !model.value?.telegram.botTokenConfigured, maxLength: 512 },
+    'telegram.botToken': { required: Boolean(model.value?.telegram.enabled || model.value?.telegram.clientEnabled) && !model.value?.telegram.botTokenConfigured, maxLength: 512 },
     'notifications.deliveryRetries': { number: true, integer: true, min: 0, max: 10 },
     'security.sessionTimeoutMinutes': { number: true, integer: true, min: 1, max: 1440 },
     'security.accessTokenMinutes': { number: true, integer: true, min: 1, max: 30 },
@@ -272,19 +273,14 @@ function settingsRules(): Record<string, FieldRule> {
     'security.accountLockMinutes': { number: true, integer: true, min: 1, max: 1440 },
     'security.passwordExpiryDays': { number: true, integer: true, min: 0, max: 3650 },
     'backup.intervalHours': { number: true, integer: true, min: 1, max: 168 },
-    'backup.r2AccountId': { required: backupEnabled, maxLength: 128 },
-    'backup.r2AccessKeyId': { required: backupEnabled, maxLength: 255 },
-    'backup.r2SecretAccessKey': { required: backupEnabled, maxLength: 512 },
-    'backup.r2BucketName': { required: backupEnabled, maxLength: 255 },
-    'backup.r2Endpoint': { required: backupEnabled, url: true, maxLength: 500 },
-    'backup.r2Prefix': { maxLength: 255 },
-    // Storage & Backup: required only when the block was started (any r2 value)
-    // or a provider was activated — the backend re-validates the same rules.
-    'storage.providers.r2.accountId': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 128 },
-    'storage.providers.r2.bucketName': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 255 },
-    'storage.providers.r2.accessKeyId': { required: !!(model.value?.storage.primaryProvider || model.value?.storage.backupProvider), maxLength: 255 },
-    'storage.providers.r2.secretAccessKey': { maxLength: 512 },
-    'storage.providers.r2.endpoint': { url: true, maxLength: 500 },
+    // Canonical R2 credentials serve both file storage and the DB backup
+    // destination; they are required when a provider is activated or backup
+    // is enabled. The secret stays optional once configured (blank = keep).
+    'storage.providers.r2.accountId': { required: r2Active, maxLength: 128 },
+    'storage.providers.r2.bucketName': { required: r2Active, maxLength: 255 },
+    'storage.providers.r2.accessKeyId': { required: r2Active, maxLength: 255 },
+    'storage.providers.r2.secretAccessKey': { required: r2Active && !model.value?.storage.providers.r2.secretAccessKeyConfigured, maxLength: 512 },
+    'storage.providers.r2.endpoint': { required: r2Active, url: true, maxLength: 500 },
     'storage.providers.r2.objectPrefix': { maxLength: 255 },
     'storage.providers.gdrive.clientId': { maxLength: 255 },
     'storage.providers.gdrive.rootFolderId': { maxLength: 255 },
@@ -328,10 +324,13 @@ async function save() {
     const ownsMaintenance = activeTab.value === 'maintenance'
     if (ownsMaintenance && !maintenance.validate()) return
     if (activeTab.value === 'telegram' && telegramPanel.value?.validate() === false) return
-    const group = activeTab.value as keyof AppConfig
-    const groupChanged = activeTab.value !== 'maintenance' && JSON.stringify(model.value[group]) !== savedGroups.value[group]
     const fields = systemSettingsTabs.find(tab => tab.id === activeTab.value)?.sections.flatMap(section => section.fields.map(field => field.key)) || []
-    const failures = groupChanged ? collectSettingsFailures(fields) : []
+    // A tab can span several config groups (the merged Backup tab edits both
+    // the "backup" and "storage" groups); each changed group is saved alone.
+    const current = model.value
+    const changedGroups = [...new Set(fields.map(field => field.split('.')[0] as keyof AppConfig))]
+      .filter(group => JSON.stringify(current[group]) !== savedGroups.value[group])
+    const failures = changedGroups.length ? collectSettingsFailures(fields) : []
     if (failures.length) {
       validation.applyFailures(failures)
       await validation.focusFirstInvalid()
@@ -339,7 +338,9 @@ async function save() {
     }
     // Reopen first when permitted; activate only after Backup settings finish saving.
     if (ownsMaintenance && !maintenance.draft.value.enabled && !await maintenance.save()) return
-    if (groupChanged) {
+    // Sequential with early abort: later groups validate against config the
+    // earlier request just stored (e.g. R2 credentials before enabling backup).
+    for (const group of changedGroups) {
       const updated = await appConfig.update({ [group]: model.value[group] })
       Object.assign(model.value, { [group]: updated[group] })
       savedGroups.value[group] = JSON.stringify(updated[group])
@@ -474,27 +475,33 @@ useAppPageTitle(() => t('freight.pages.settings'))
     @refresh="load"
   >
     <template #tab-extra>
-      <DocumentMaintenanceSettingsPanel
-        v-if="activeTab === 'maintenance' && canConfigure"
-        v-model="maintenance.draft.value"
-        :disabled="saving || pending"
-        :field-errors="maintenance.validation.fieldErrors.value"
-        :form-errors="maintenance.validation.formErrors.value"
-        @edit="maintenance.validation.clearFieldError"
-      />
-      <DocumentTelegramSettingsPanel
-v-if="activeTab === 'telegram' && model"
-ref="telegramPanel"
-:config="model.telegram"
-:can-manage="canConfigure"
-@update:rules="value => { if (model) model.telegram.rules = value }"
-@refresh="load" />
-      <DocumentStorageSettingsPanel
-        v-if="activeTab === 'storage' && model"
-        :can-manage="canConfigure"
-        :can-manage-backup="canManageBackup"
-        :saved-at="storageSavedAt"
-      />
+      <!-- One shared content shell for every panel tab: identical width and
+           horizontal padding as the schema field grid, so panels never define
+           their own competing margins (max-w / mx-auto / px). -->
+      <DocumentAppDocumentContentShell wide class="space-y-6 py-6">
+        <DocumentMaintenanceSettingsPanel
+          v-if="activeTab === 'maintenance' && canConfigure"
+          v-model="maintenance.draft.value"
+          :disabled="saving || pending"
+          :field-errors="maintenance.validation.fieldErrors.value"
+          :form-errors="maintenance.validation.formErrors.value"
+          @edit="maintenance.validation.clearFieldError"
+        />
+        <DocumentTelegramSettingsPanel
+          v-if="activeTab === 'telegram' && model"
+          ref="telegramPanel"
+          :config="model.telegram"
+          :can-manage="canConfigure"
+          @update:rules="value => { if (model) model.telegram.rules = value }"
+          @update:config="patch => { if (model) Object.assign(model.telegram, patch) }"
+          @refresh="load" />
+        <DocumentStorageSettingsPanel
+          v-if="activeTab === 'backup' && model"
+          :can-manage="canConfigure"
+          :can-manage-backup="canManageBackup"
+          :saved-at="storageSavedAt"
+        />
+      </DocumentAppDocumentContentShell>
     </template>
   </DocumentAppDocumentPage>
 

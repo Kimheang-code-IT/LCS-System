@@ -65,6 +65,29 @@ async def provider_block(session: AsyncSession, tag: str) -> dict[str, Any]:
     from app.modules.settings.models import AppSetting
     from app.modules.settings.service import DEFAULT_APP_CONFIG
 
+    if tag == "r2":
+        # One R2 credential set serves file storage and DB backups; older
+        # builds stored it under the flat backup.r2* keys of the backup row.
+        backup_row = (
+            await session.execute(select(AppSetting).where(AppSetting.setting_key == "backup"))
+        ).scalars().first()
+        legacy = dict(backup_row.setting_value or {}) if backup_row else {}
+        legacy_r2 = {storage_key: legacy.get(legacy_key) for legacy_key, storage_key in (
+            ("r2AccountId", "accountId"),
+            ("r2AccessKeyId", "accessKeyId"),
+            ("r2SecretAccessKey", "secretAccessKey"),
+            ("r2BucketName", "bucketName"),
+            ("r2Endpoint", "endpoint"),
+            ("r2Prefix", "objectPrefix"),
+        )}
+        block: dict[str, Any] = dict(DEFAULT_APP_CONFIG["storage"]["providers"][tag])
+        block.update({k: v for k, v in legacy_r2.items() if str(v or "").strip()})
+        stored_row = (
+            await session.execute(select(AppSetting).where(AppSetting.setting_key == "storage"))
+        ).scalars().one_or_none()
+        stored = dict(stored_row.setting_value or {}) if stored_row else {}
+        block.update(stored.get("providers", {}).get(tag) or {})
+        return block
     row = (
         await session.execute(select(AppSetting).where(AppSetting.setting_key == "storage"))
     ).scalar_one_or_none()

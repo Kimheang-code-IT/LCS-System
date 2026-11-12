@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { DropdownMenuItem, TableColumn, TableRow } from '@nuxt/ui'
+import type { DropdownMenuItem, TableColumn } from '@nuxt/ui'
+
 import type { PaginationState } from '@tanstack/vue-table'
 import { h } from 'vue'
-import { UBadge, UButton, UDropdownMenu } from '#components'
+import { UBadge, UButton, UDropdownMenu, ULink } from '#components'
 import type { ConfigurationVersion } from '~/types/component-config'
 import type { ListSortSelection } from '~/utils/table/list-sort'
 import { useComponentConfig } from '~/composables/freight/useComponentConfig'
@@ -246,7 +247,12 @@ const versionColumns: TableColumn<ConfigurationVersion>[] = [
     accessorKey: 'versionNo',
     header: 'Version',
     meta: { sortKind: 'number' },
-    cell: ({ row }) => h('span', { class: 'font-medium tabular-nums' }, `v${row.original.versionNo}`),
+    // ERPNext-style row navigation lives on the identifier cell: the version
+    // number links to the version detail; other cells are plain text.
+    cell: ({ row }) => h(ULink, {
+      to: versionPath(row.original),
+      class: 'font-medium tabular-nums hover:text-primary hover:underline',
+    }, () => `v${row.original.versionNo}`),
   },
   {
     accessorKey: 'changeNote',
@@ -309,12 +315,6 @@ const versionColumns: TableColumn<ConfigurationVersion>[] = [
 const columns = versionColumns as unknown as TableColumn<Record<string, unknown>>[]
 const tableRows = computed(() => rows.value as unknown as Record<string, unknown>[])
 
-function onRowSelect(event: Event, row: TableRow<Record<string, unknown>>) {
-  const target = event.target as HTMLElement | null
-  if (target?.closest('a, button, input, [role="checkbox"], [role="menuitem"], [data-slot="dropdown-menu"]')) return
-  void openVersion(row.original as unknown as ConfigurationVersion)
-}
-
 watch([q, statusFilter, sort], () => { void refreshHistory(true) }, { deep: true })
 watch(pagination, () => { void refreshHistory() }, { deep: true })
 
@@ -375,7 +375,6 @@ onMounted(refreshAll)
       empty-icon="i-lucide-history"
       empty-title="No configuration versions yet"
       empty-description="Publish the live configuration to start the version history."
-      @select="onRowSelect"
     >
       <template #filters>
         <USelect

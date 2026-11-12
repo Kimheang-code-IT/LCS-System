@@ -64,6 +64,8 @@ def _production_settings(**overrides) -> Settings:
         "RATE_LIMIT_ENABLED": True,
         "CORS_ORIGINS": "https://app.example.com",
         "ALLOWED_HOSTS": "app.example.com",
+        "TELEGRAM_PUBLIC_APP_URL": "https://app.example.com",
+        "TELEGRAM_UPDATE_MODE": "webhook",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -77,4 +79,22 @@ def test_production_configuration_requires_https_origin():
 def test_production_configuration_rejects_reused_secrets():
     with pytest.raises(ValueError, match="must all be different"):
         _production_settings(CSRF_SECRET_KEY="j" * 32)
+
+
+def test_production_configuration_requires_webhook_mode_and_https_origin():
+    with pytest.raises(ValueError, match="TELEGRAM_UPDATE_MODE must be webhook"):
+        _production_settings(TELEGRAM_UPDATE_MODE="polling")
+    with pytest.raises(ValueError, match="TELEGRAM_PUBLIC_APP_URL"):
+        _production_settings(TELEGRAM_PUBLIC_APP_URL="")
+    with pytest.raises(ValueError, match="TELEGRAM_PUBLIC_APP_URL"):
+        _production_settings(TELEGRAM_PUBLIC_APP_URL="http://app.example.com")
+    with pytest.raises(ValueError, match="TELEGRAM_ALLOW_WEBHOOK_DELETE"):
+        _production_settings(TELEGRAM_ALLOW_WEBHOOK_DELETE=True)
+
+
+def test_telegram_update_mode_is_normalized_and_validated():
+    assert Settings(_env_file=None, TELEGRAM_UPDATE_MODE=" Polling ").telegram_update_mode == "polling"
+    assert Settings(_env_file=None, TELEGRAM_UPDATE_MODE="").telegram_update_mode == "webhook"
+    with pytest.raises(ValueError, match="TELEGRAM_UPDATE_MODE"):
+        Settings(_env_file=None, TELEGRAM_UPDATE_MODE="longpoll")
 

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  attributeTypeIsReference,
+  attributeTypeSupportsChoices,
   blankComponentAttributeRow,
   componentAttributeColumns,
   componentAttributeDataType,
@@ -9,6 +11,7 @@ import {
   componentDataTypeItems,
   componentGroupAttributeColumns,
   componentGroupAttributeRows,
+  componentReferenceTypeItems,
   componentTabGroupColumns,
   componentTabGroupRows,
   formatAttributeOptions,
@@ -42,23 +45,39 @@ describe('component config grid tables', () => {
       'code',
       'dataType',
       'isRequired',
-      'displayOrder',
       'status',
-      'options',
-      'referenceType',
-      'validationRules',
-      'helpText',
     ])
     const column = (key: string) => componentAttributeColumns().find(item => item.key === key)
+    // The settings columns live in the row's settings dialog, not the table.
+    for (const hidden of ['displayOrder', 'options', 'referenceType', 'validationRules', 'helpText']) {
+      expect(column(hidden)).toBeUndefined()
+    }
     expect(column('_reorder')?.type).toBe('reorder')
     expect(column('isRequired')?.type).toBe('checkbox')
-    expect(column('displayOrder')?.computed).toBe(true)
     expect(column('status')?.computed).toBe(true)
     expect(column('code')?.required).toBe(true)
     expect(column('code')?.rule).toMatchObject({ required: true, maxLength: 64 })
     expect(column('label')?.required).toBe(true)
     expect(column('label')?.rule).toMatchObject({ required: true, maxLength: 255 })
-    expect(column('helpText')?.rule).toMatchObject({ maxLength: 255 })
+  })
+
+  it('shows type-specific settings only for the data types that use them', () => {
+    expect(attributeTypeSupportsChoices('select')).toBe(true)
+    expect(attributeTypeSupportsChoices('multi_select')).toBe(true)
+    for (const unsupported of ['text', 'number', 'reference', 'date', 'checkbox']) {
+      expect(attributeTypeSupportsChoices(unsupported)).toBe(false)
+    }
+    expect(attributeTypeIsReference('reference')).toBe(true)
+    expect(attributeTypeIsReference('select')).toBe(false)
+    // The dialog items come off the shared enum, never a hardcoded list.
+    expect(componentReferenceTypeItems().map(item => item.value)).toEqual([
+      'business_party',
+      'transport_asset',
+      'transport_type',
+      'container',
+      'fee_type',
+      'user',
+    ])
   })
 
   it('offers every backend data type the dynamic form can render', () => {
@@ -102,6 +121,7 @@ describe('component config grid tables', () => {
       options: ['Original', { label: 'Replaced', value: 'Replaced' }],
       validationRules: { min: 0, pattern: '^[A-Z]+$' },
       displayOrder: 4,
+      status: 'ACTIVE',
     } as never])).toEqual([{
       id: 'ca-1',
       code: 'seal_no',
@@ -114,6 +134,7 @@ describe('component config grid tables', () => {
       isRequired: true,
       helpText: 'Enter the seal number',
       displayOrder: 4,
+      status: 'ACTIVE',
     }])
   })
 
@@ -199,6 +220,7 @@ describe('component config grid tables', () => {
       isRequired: false,
       helpText: '',
       displayOrder: 0,
+      status: 'ACTIVE',
     })
   })
 

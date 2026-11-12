@@ -320,6 +320,40 @@ async def test_quotation_pricing_line_can_change_its_transport_type(client):
     assert line["quantity"] == 2
 
 
+async def test_resaving_a_quotation_with_its_requirements_keeps_the_lines_linked(client):
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(
+        client,
+        headers,
+        {
+            "customerPartyId": party["id"],
+            "pricingLines": [{"containerType": "40HC", "quantity": 2, "unitPrice": 100}],
+        },
+    )
+
+    # The UI posts the whole record (Duplicate → change direction → Save), so an
+    # existing quotation is re-saved with its requirements AND priced lines. The
+    # line→requirement FK is strict on PostgreSQL, so the requirements must be
+    # replaced after the lines (or in place), never deleted first.
+    updated = await client.put(
+        f"/api/v1/quotations/{created['id']}",
+        headers=headers,
+        json={
+            "direction": "Export",
+            "containerRequirements": created["containerRequirements"],
+            "pricingLines": created["pricingLines"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()["data"]
+    assert body["direction"] == "Export"
+    assert len(body["pricingLines"]) == 1
+    assert float(body["pricingLines"][0]["quantity"]) == 2
+    assert len(body["containerRequirements"]) == 1
+    assert float(body["containerRequirements"][0]["quantity"]) == 2
+
+
 async def test_sent_quotation_revision_keeps_the_transport_type_when_edited(client):
     headers = await login(client)
     party = await _first_party(client, headers, role="Customer")
@@ -575,6 +609,41 @@ async def test_delete_is_blocked_once_quotation_has_service_order(client):
     deletable = await client.request("DELETE", "/api/v1/quotations", headers=headers, json={"ids": [created["id"]]})
     assert deletable.status_code == 200, deletable.text
     assert deletable.json()["data"]["removed"] == 1
+
+
+async def test_deleting_an_order_clears_its_conversion_ledger(client, session_factory):
+    """The conversion row is the order's own audit link: deleting the order in
+    the application removes it in the same transaction, so no dangling rows are
+    left behind (the new RESTRICT FK would otherwise refuse the delete)."""
+    from sqlalchemy import func, select
+
+    from app.modules.quotations.models import QuotationConversion
+
+    headers = await login(client)
+    party = await _first_party(client, headers, role="Customer")
+    created = await _create_quotation(client, headers, {"customerPartyId": party["id"]})
+    revision_id = created["revisionId"]
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})
+    await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    order_id = int(converted.json()["data"]["serviceOrderId"])
+
+    async with session_factory() as session:
+        before = await session.scalar(
+            select(func.count()).select_from(QuotationConversion).where(QuotationConversion.service_order_id == order_id)
+        )
+    assert before == 1
+
+    await client.put(f"/api/v1/service-orders/{order_id}", headers=headers, json={"id": order_id, "status": "INACTIVE"})
+    removed = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert removed.status_code == 200, removed.text
+
+    async with session_factory() as session:
+        after = await session.scalar(
+            select(func.count()).select_from(QuotationConversion).where(QuotationConversion.service_order_id == order_id)
+        )
+    assert after == 0
 
 
 async def test_draft_quotation_can_be_deleted(client):

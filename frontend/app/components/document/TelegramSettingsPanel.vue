@@ -1,31 +1,28 @@
 <script setup lang="ts">
-import { useSettingsRepositories, useTelegramRepository } from '~/repositories'
+import { useSettingsRepositories } from '~/repositories'
 import { apiErrorMessage } from '~/utils/validation/api-error'
+import { isValidTelegramGroupChatId } from '~/utils/validation/telegram-chat-id'
 import type { TelegramConfig } from '~/types/settings'
 
 /**
- * Settings → Telegram Configuration. Exactly two configuration blocks:
- * Client Group (Service Order notifications) and Admin Group (system alerts).
- * The shared bot credential stays in the tab's form fields above (masked).
+ * Settings → Telegram. Exactly two destinations as two aligned cards:
+ * Client Group (Service Order notifications) and Admin Bot (system alerts to a
+ * verified administrator's private chat). The shared Bot Token stays in the
+ * tab's schema field above. Every control writes through the page's existing
+ * Save Changes workflow — this panel has no save button of its own.
  */
 const props = defineProps<{ config: TelegramConfig, canManage: boolean }>()
-const emit = defineEmits<{ refresh: [], 'update:rules': [value: TelegramConfig['rules']] }>()
+const emit = defineEmits<{
+  refresh: [],
+  'update:rules': [value: TelegramConfig['rules']],
+  'update:config': [value: Partial<TelegramConfig>],
+}>()
 const { t } = useI18n()
-const toast = useToast()
-const repo = useTelegramRepository()
 const { appConfig } = useSettingsRepositories()
 
 const pending = ref(false)
 const error = ref('')
 const status = ref('')
-const pairing = ref<TelegramPairing | null>(null)
-const candidate = ref<{ name: string | null, verified: boolean } | null>(null)
-
-// --- Client Group draft -------------------------------------------------------
-const clientEnabled = ref(props.config.clientEnabled ?? false)
-const clientGroupId = ref(props.config.clientGroupId ?? '')
-const clientBotToken = ref('')
-const clientEvents = ref<Record<string, boolean>>({ ...(props.config.clientEvents ?? {}) })
 
 const CLIENT_EVENT_KEYS = [
   'SERVICE_ORDER_CREATED',
@@ -42,92 +39,113 @@ const CLIENT_EVENT_LABELS: Record<(typeof CLIENT_EVENT_KEYS)[number], string> = 
   SERVICE_ORDER_CANCELLED: 'telegram.eventCancelled',
 }
 
+/** Backend alert registry categories; recovery stays server-governed and can
+ * only reach previously verified private chats, never this screen. */
+const ALERT_CATEGORY_KEYS = ['security', 'backup', 'system'] as const
+const alertRules = computed(() => props.config.rules ?? {})
+const recipientCount = computed(() => props.config.adminRecipientCount ?? 0)
+/** Telegram cannot receive /start or /verify without a running, configured consumer. */
+const updatesInactive = computed(() => props.config.workerEnabled === false
+  || ['disabled', 'misconfigured', 'failed'].includes(props.config.updateStatus ?? '')
+  || (props.config.updateMode !== 'polling' && props.config.webhookStatus !== 'registered'))
+const workerStatusText = computed(() => {
+  const mode = props.config.updateMode ?? 'webhook'
+  const status = props.config.updateStatus ?? 'starting'
+  const error = props.config.lastError ? ` · ${props.config.lastError}` : ''
+  return `${mode} · ${status}${error}`
+})
+
+function patch(value: Partial<TelegramConfig>) {
+  emit('update:config', value)
+}
+
+function updateClientEvent(key: string, enabled: boolean) {
+  patch({ clientEvents: { ...(props.config.clientEvents ?? {}), [key]: enabled } })
+}
+
+function updateRule(key: string, enabled: boolean) {
+  const rule = alertRules.value[key]
+  if (!rule) return
+  emit('update:rules', { ...alertRules.value, [key]: { ...rule, enabled } })
+}
+
 function statusText(value: string | undefined): string {
   if (!value || value === 'not_tested') return t('telegram.notTested')
   if (value === 'connected') return t('telegram.connected')
   return t('telegram.sendFailed')
 }
 
-async function perform(action: () => Promise<unknown>, success?: () => void) {
+/** Testing verifies what is stored; persist only this destination's fields so a
+ * half-typed value in the other card can never block the test. */
+async function perform(save: Partial<TelegramConfig>, action: () => Promise<{ message: string }>) {
   if (pending.value) return
   pending.value = true
   error.value = ''
+  status.value = ''
   try {
-    await action()
-    success?.()
+    await appConfig.update({ telegram: save })
+    status.value = (await action()).message
+    emit('refresh')
   }
   catch (err) { error.value = apiErrorMessage(err, t('telegram.failed')) }
   finally { pending.value = false }
 }
 
-async function saveClientGroup(updated?: boolean) {
-  // Send the full section like the page Save does: the backend preserves blank
-  // secrets, so an untouched token field can never wipe a stored credential.
-  const patch: TelegramConfig = {
-    ...props.config,
-    clientEnabled: clientEnabled.value,
-    clientGroupId: clientGroupId.value.trim(),
-    clientEvents: { ...(props.config.clientEvents ?? {}), ...clientEvents.value },
-    ...(clientBotToken.value.trim() ? { clientBotToken: clientBotToken.value.trim() } : {}),
+async function sendTest(action: () => Promise<{ message: string }>) {
+  if (pending.value) return
+  pending.value = true
+  error.value = ''
+  status.value = ''
+  try {
+    status.value = (await action()).message
   }
-  await appConfig.update({ telegram: patch })
-  clientBotToken.value = ''
-  if (updated) status.value = t('telegram.clientSaved')
-  emit('refresh')
+  catch (err) { error.value = apiErrorMessage(err, t('telegram.failed')) }
+  finally { pending.value = false }
 }
 
-async function pair() { pairing.value = await repo.pairGroup(); candidate.value = null }
-async function check() { candidate.value = await repo.candidate() }
-async function confirm() {
-  if (!pairing.value) return
-  await repo.confirmGroup(pairing.value.challenge)
-  pairing.value = null
-  candidate.value = null
-  emit('refresh')
+/** Page Save hook: validate the client destination before the request. */
+function validate(): boolean {
+  if (props.config.clientEnabled && !isValidTelegramGroupChatId(props.config.clientGroupId ?? '')) {
+    error.value = t('telegram.invalidClientChatId')
+    return false
+  }
+  return true
 }
-async function disableIntegration(removeBotToken = false) {
-  await appConfig.update({ telegram: { ...props.config, enabled: false, botToken: '', ...(removeBotToken ? { removeBotToken: true } : {}) } })
-  emit('refresh')
-}
-/** Admin alert categories toggle in place; never invent rules when none stored. */
-const alertRules = computed(() => props.config.rules ?? {})
-function toggleRule(key: string, value: boolean | 'indeterminate') {
-  const rule = alertRules.value[key]
-  if (!rule) return
-  emit('update:rules', { ...alertRules.value, [key]: { ...rule, enabled: value === true } })
-}
+defineExpose({ validate })
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-5xl space-y-5 px-6 py-6">
+  <!-- Sits inside the page's shared content shell: no competing width/margin. -->
+  <section class="min-w-0 w-full space-y-5">
     <CommonAppFormErrorSummary :form-errors="error ? [error] : []" />
     <p v-if="status" role="status" class="text-sm text-success">{{ status }}</p>
-    <div class="grid gap-5 sm:grid-cols-2">
-      <!-- Block A: Client Group — Service Order notifications -->
+    <p v-if="config.botTokenConfigured" class="text-sm text-muted">{{ t('telegram.botTokenSaved') }}</p>
+    <UAlert
+      v-if="updatesInactive"
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-plug-zap-off"
+      :description="t('telegram.updatesInactive')" />
+    <p class="text-xs text-muted">{{ t('telegram.workerStatus') }}: {{ workerStatusText }}</p>
+    <div class="grid gap-4 sm:grid-cols-2">
+      <!-- Card A: Client Group — Service Order notifications to one group -->
       <fieldset class="space-y-3 rounded-lg border border-default p-4">
         <legend class="px-1 text-sm font-semibold">{{ t('telegram.clientGroup') }}</legend>
         <p class="text-sm text-muted">{{ t('telegram.clientPurpose') }}</p>
         <USwitch
-          v-model="clientEnabled"
+          :model-value="config.clientEnabled ?? false"
           :disabled="!canManage || pending"
-          :label="t('telegram.enableNotifications')" />
+          :label="t('telegram.enableNotifications')"
+          @update:model-value="value => patch({ clientEnabled: value })" />
         <UFormField :label="t('telegram.clientChatId')">
           <UInput
-            v-model="clientGroupId"
+            :model-value="config.clientGroupId ?? ''"
             type="text"
             inputmode="numeric"
             placeholder="-1001234567890"
             :disabled="!canManage || pending"
-            class="w-full font-mono" />
-        </UFormField>
-        <UFormField
-          :label="t('telegram.clientBotToken')"
-          :help="config.clientBotTokenConfigured ? t('telegram.tokenConfigured') : t('telegram.sharedBotToken')">
-          <UInput
-            v-model="clientBotToken"
-            type="password"
-            :disabled="!canManage || pending"
-            class="w-full" />
+            class="w-full font-mono"
+            @update:model-value="value => patch({ clientGroupId: String(value ?? '') })" />
         </UFormField>
         <p class="text-sm">
           {{ t('telegram.connectionStatus') }}:
@@ -141,100 +159,63 @@ function toggleRule(key: string, value: boolean | 'indeterminate') {
           <UCheckbox
             v-for="key in CLIENT_EVENT_KEYS"
             :key="key"
-            v-model="clientEvents[key]"
+            :model-value="config.clientEvents?.[key] ?? true"
             :label="t(CLIENT_EVENT_LABELS[key])"
-            :disabled="!canManage || pending" />
+            :disabled="!canManage || pending"
+            @update:model-value="value => updateClientEvent(key, value === true)" />
         </div>
         <div v-if="canManage" class="flex flex-wrap gap-2">
           <UButton
             variant="outline"
             :loading="pending"
             :label="t('lcs.connection.test')"
-            @click="perform(async () => { status = (await appConfig.testTelegramClientConnection()).message; emit('refresh') })" />
+            @click="perform({ clientEnabled: config.clientEnabled, clientGroupId: config.clientGroupId, clientEvents: config.clientEvents }, () => appConfig.testTelegramClientConnection())" />
           <UButton
             variant="outline"
             :loading="pending"
             :disabled="!config.clientGroupId"
             :label="t('telegram.sendTest')"
-            @click="perform(async () => { status = (await appConfig.sendTestTelegramClientMessage()).message })" />
-          <UButton
-            :loading="pending"
-            :label="t('telegram.saveConfig')"
-            @click="perform(() => saveClientGroup(true), () => toast.add({ title: t('telegram.saved'), color: 'success' }))" />
+            @click="sendTest(() => appConfig.sendTestTelegramClientMessage())" />
         </div>
       </fieldset>
 
-      <!-- Block B: Admin Group — system health and operational alerts -->
+      <!-- Card B: Admin Bot — alerts to the verified administrator private chat -->
       <fieldset class="space-y-3 rounded-lg border border-default p-4">
-        <legend class="px-1 text-sm font-semibold">{{ t('telegram.adminGroupTitle') }}</legend>
+        <legend class="px-1 text-sm font-semibold">{{ t('telegram.adminBot') }}</legend>
         <p class="text-sm text-muted">{{ t('telegram.adminPurpose') }}</p>
+        <USwitch
+          :model-value="config.enabled ?? false"
+          :disabled="!canManage || pending"
+          :label="t('telegram.enableAdminAlerts')"
+          @update:model-value="value => patch({ enabled: value })" />
         <p class="text-sm">
-          {{ t('telegram.connectionStatus') }}:
-          <UBadge :color="config.adminGroupName ? 'success' : 'neutral'" variant="subtle">
-            {{ config.adminGroupName || t('telegram.notConnected') }}
+          {{ t('telegram.verifiedRecipients') }}:
+          <UBadge :color="recipientCount > 0 ? 'success' : 'neutral'" variant="subtle">
+            {{ recipientCount }}
           </UBadge>
         </p>
-        <p v-if="config.adminGroupVerifiedAt" class="text-xs text-muted">{{ config.adminGroupVerifiedAt }}</p>
+        <p class="text-xs text-muted">{{ t('telegram.recipientsHelp') }}</p>
         <div class="space-y-1">
-          <p class="text-sm font-medium">{{ t('telegram.alertRules') }}</p>
+          <p class="text-sm font-medium">{{ t('telegram.alertEvents') }}</p>
           <UCheckbox
-            v-for="(rule, key) in alertRules"
+            v-for="key in ALERT_CATEGORY_KEYS"
             :key="key"
-            :model-value="rule.enabled"
+            :model-value="alertRules[key]?.enabled ?? false"
             :label="t(`telegram.${key}`)"
             :disabled="!canManage || pending"
-            @update:model-value="toggleRule(key, $event)" />
+            @update:model-value="value => updateRule(key, value === true)" />
         </div>
-        <p class="text-sm text-muted">{{ config.lastTestMessage || statusText(config.connectionStatus) }}</p>
         <div v-if="canManage" class="flex flex-wrap gap-2">
           <UButton
-            v-if="config.enabled"
+            v-if="recipientCount > 0"
+            variant="outline"
             :loading="pending"
-            :label="t('telegram.registerWebhook')"
-            @click="perform(async () => { status = (await repo.registerWebhook()).status })" />
-          <UButton :loading="pending" :label="t('telegram.pairGroup')" @click="perform(pair)" />
-          <UButton
-            v-if="config.adminGroupVerifiedAt"
-            variant="outline"
-            :disabled="pending"
-            :label="t('lcs.connection.test')"
-            @click="perform(async () => { status = (await appConfig.sendTestTelegramMessage()).message })" />
-          <UButton
-            v-if="config.adminGroupVerifiedAt"
-            color="neutral"
-            variant="outline"
-            :disabled="pending"
-            :label="t('telegram.disconnect')"
-            @click="perform(async () => { await repo.disconnectGroup(); emit('refresh') })" />
+            :disabled="!config.enabled"
+            :label="t('telegram.sendTestAlert')"
+            @click="sendTest(() => appConfig.sendTestTelegramMessage())" />
+          <p v-else class="text-xs text-muted">{{ t('telegram.noRecipients') }}</p>
         </div>
       </fieldset>
-    </div>
-    <div v-if="pairing" class="space-y-3 rounded-md border border-default p-4">
-      <p class="text-sm">{{ t('telegram.groupInstructions') }}</p>
-      <code class="block break-all rounded bg-muted p-3">{{ pairing.command }}</code>
-      <p class="text-sm text-muted">{{ t('telegram.expires') }}: {{ pairing.expiresAt }}</p>
-      <UButton :disabled="pending" :label="t('telegram.checkCandidate')" @click="perform(check)" />
-      <p v-if="candidate">{{ candidate.name || t('telegram.waiting') }}</p>
-      <UButton
-        v-if="candidate?.verified"
-        :disabled="pending"
-        :label="t('telegram.confirmGroup')"
-        @click="perform(confirm)" />
-    </div>
-    <p class="text-sm text-muted">{{ t('telegram.privateOnly') }}</p>
-    <div v-if="canManage" class="flex flex-wrap gap-2 border-t border-default pt-4">
-      <UButton
-        color="neutral"
-        variant="outline"
-        :disabled="pending"
-        :label="t('telegram.disable')"
-        @click="perform(() => disableIntegration())" />
-      <UButton
-        color="error"
-        variant="outline"
-        :disabled="pending"
-        :label="t('telegram.removeToken')"
-        @click="perform(() => disableIntegration(true))" />
     </div>
   </section>
 </template>

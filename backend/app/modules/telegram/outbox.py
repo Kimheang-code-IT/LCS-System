@@ -105,26 +105,44 @@ async def enqueue_client(session: AsyncSession, event: str, *, order_no: str, st
 async def enqueue_admin(session: AsyncSession, event: str, category: str, severity: str, *, reference: str, summary: str, dedup: str) -> NotificationOutbox | None:
     value = await service.config(session)
     rule = policy(value, category)
-    destination = value.get("adminGroupId")
     audience = None
+    destination = None
     if category == "system":
         from app.modules.settings.maintenance import load
         maintenance = await load(session)
         if maintenance.get("developerGroupId"):
             destination, audience = int(maintenance["developerGroupId"]), "developer"
-    if not value.get("enabled") or not destination or not rule["enabled"] or SEVERITY[severity] < SEVERITY[rule["minimumSeverity"]]:
-        return None
-    if await session.scalar(select(NotificationOutbox.id).where(NotificationOutbox.deduplication_key == dedup)):
+    if not value.get("enabled") or not rule["enabled"] or SEVERITY[severity] < SEVERITY[rule["minimumSeverity"]]:
         return None
     if category in {"security", "backup"} and event != "BACKUP_SUCCEEDED" and event != "BACKUP_FAILED":
         recent = await session.scalar(select(NotificationOutbox.id).where(NotificationOutbox.event_type == event, NotificationOutbox.category == category, NotificationOutbox.created_at > utcnow() - timedelta(minutes=rule["cooldownMinutes"])))
         if recent:
             return None
     # Producers pass controlled summaries, never exceptions, request bodies or credentials.
-    row = NotificationOutbox(event_type=event, category=category, severity=severity, destination_type="ADMIN", destination_reference=destination, payload={"text": f"LCS {category.title()} Alert\nSeverity: {severity}\nEvent: {summary[:600]}\nReference: {reference[:100]}\nTime: {utcnow().isoformat()}", "bot_id": value.get("botId"), **({"maintenanceAudience": audience} if audience else {})}, expires_at=utcnow() + timedelta(days=1), max_attempts=rule["maxAttempts"], deduplication_key=dedup)
-    session.add(row)
-    await session.flush()
-    return row
+    text = f"LCS {category.title()} Alert\nSeverity: {severity}\nEvent: {summary[:600]}\nReference: {reference[:100]}\nTime: {utcnow().isoformat()}"
+    if destination is not None:
+        # Maintenance developer audience keeps its dedicated group destination,
+        # which is owned by the unrelated Maintenance settings tab.
+        row = NotificationOutbox(event_type=event, category=category, severity=severity, destination_type="ADMIN", destination_reference=destination, payload={"text": text, "bot_id": value.get("botId"), "maintenanceAudience": audience}, expires_at=utcnow() + timedelta(days=1), max_attempts=rule["maxAttempts"], deduplication_key=dedup)
+        session.add(row)
+        await session.flush()
+        return row
+    # Alerts go to every currently eligible verified recipient: an active user
+    # holding ``telegram.alerts.receive`` with a private link to this bot.
+    recipients = await service.admin_recipients(session, value)
+    if not recipients:
+        return None
+    sent: NotificationOutbox | None = None
+    for link, user in recipients:
+        key = f"{dedup}:u{user.id}"
+        if await session.scalar(select(NotificationOutbox.id).where(NotificationOutbox.deduplication_key == key)):
+            continue
+        row = NotificationOutbox(event_type=event, category=category, severity=severity, destination_type="PRIVATE", destination_reference=link.chat_id, payload={"text": text, "bot_id": value.get("botId"), "user_id": user.id}, expires_at=utcnow() + timedelta(days=1), max_attempts=rule["maxAttempts"], deduplication_key=key)
+        session.add(row)
+        sent = sent or row
+    if sent:
+        await session.flush()
+    return sent
 
 
 async def claim(session: AsyncSession, *, batch_size: int = 5) -> list[tuple[int, str]]:
@@ -187,6 +205,16 @@ async def deliver(row_id: int, claim_token: str, *, session_factory=SessionLocal
             if row.category == "recovery":
                 reset = await session.get(PasswordResetToken, row.payload.get("reset_id"))
                 eligible = eligible and policy(value, "recovery")["enabled"] and reset is not None and reset.used_at is None and service.aware(reset.expires_at) > utcnow()
+            elif row.category in service.DEFAULT_RULES:
+                # Admin alerts (system/backup/security) delivered privately to the
+                # configured, verified administrator chat; a group is never valid.
+                from app.core.authorization import service as authorization
+
+                eligible = (
+                    eligible and not row.sensitive_payload
+                    and policy(value, row.category)["enabled"]
+                    and authorization.can(user.id, service.ALERTS_PERMISSION)
+                )
         if not eligible:
             row.status, row.last_error, row.sensitive_payload = "CANCELLED", "destination_ineligible", None
             await session.execute(update(NotificationOutbox).where(NotificationOutbox.id == row_id, NotificationOutbox.claim_token == claim_token, NotificationOutbox.status == "PROCESSING").values(status=row.status, last_error=row.last_error, sensitive_payload=None, claim_token=None, locked_until=None))

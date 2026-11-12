@@ -106,6 +106,7 @@ export const ROLE_DOCUMENT_TYPES: readonly RoleDocumentTypeDefinition[] = [
   { ...group('admin'), value: 'admin_archive', labelKey: 'freight.pages.archive', permissionPrefix: 'admin.archive', actions: ['view', 'export', 'restore'] },
 
   { ...group('settings'), value: 'settings_app_config', labelKey: 'freight.pages.settings', permissionPrefix: 'settings.app_config', actions: SETTINGS_ACTIONS },
+  { ...group('settings'), value: 'settings_telegram', labelKey: 'lcs.settings.tabs.telegram', permissionPrefix: 'settings.telegram', actions: ['use', 'receive'] },
   { ...group('settings'), value: 'settings_backup', labelKey: 'freight.pages.backup', permissionPrefix: 'settings.backup', actions: BACKUP_ACTIONS },
 ] as const
 

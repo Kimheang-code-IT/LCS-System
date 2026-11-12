@@ -115,13 +115,21 @@ async function closePreview() {
             >
               {{ t('freight.excel.downloadTemplate') }}
             </UButton>
+            <UButton
+              icon="i-lucide-braces"
+              variant="outline"
+              size="sm"
+              @click="api.schemaExample(props.collection)"
+            >
+              {{ t('freight.excel.downloadSchema') }}
+            </UButton>
           </div>
-          <UFormField :label="t('freight.excel.uploadFile')" name="import-file">
+          <UFormField :label="t('freight.excel.uploadFormats')" name="import-file">
             <!-- Client-side type filtering is a hint only: the backend still rejects
-                 non-.xlsx workbooks and bodies over MAX_FILE_BYTES at validate time. -->
+                  unsupported formats and oversized bodies at validate time. -->
             <UFileUpload
               v-model="file"
-              accept=".xlsx"
+              accept=".xlsx,.csv,.json"
               layout="grid"
               :interactive="false"
               data-field-key="import.file"

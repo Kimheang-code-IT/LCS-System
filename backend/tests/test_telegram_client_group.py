@@ -76,6 +76,9 @@ async def test_client_config_persists_blank_token_preserves_and_redacts(client, 
     bad_id = await client.patch(CONFIG, headers=headers, json={"telegram": {"clientGroupId": "not-a-chat"}})
     assert bad_id.status_code == 422
     assert "telegram.clientGroupId" in bad_id.json()["field_errors"]
+    # A private (positive) chat id is not a client group.
+    positive = await client.patch(CONFIG, headers=headers, json={"telegram": {"clientGroupId": "123456"}})
+    assert positive.status_code == 422
 
 
 async def test_client_connection_and_test_message_target_the_client_group_only(client, session_factory, telegram_mock):

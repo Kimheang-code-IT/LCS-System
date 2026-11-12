@@ -277,13 +277,28 @@ async def finish_service_order(
     return {"data": record}
 
 
+@router.post("/service-orders/{identifier}/refresh-financial-documents")
+async def refresh_service_order_documents(
+    identifier: str,
+    context: RequestContext = Depends(require_permission("financial_document.create")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Explicit retry/generation of the order's DRAFT customer invoices and supplier bills."""
+    context.require("service_order.read")
+    order = await service.resolve_order(session, context, identifier)
+    from app.modules.finance.order_documents import refresh_service_order_financial_documents
+
+    return {"data": await refresh_service_order_financial_documents(session, context, order)}
+
+
 @router.get("/service-charges")
 async def list_service_charges(
     page: PageParams = Depends(page_params),
+    scope: str = "all",
     context: RequestContext = Depends(require_permission("service_charge.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_charges(session, context, page)}
+    return {"data": await service.list_charges(session, context, page, scope=scope)}
 
 
 @router.post("/service-charges", status_code=status.HTTP_201_CREATED)
@@ -323,6 +338,24 @@ async def delete_service_charges(
     ids = validate_id_list(payload)
     removed = await service.delete_charges(session, ids)
     return {"data": {"removed": removed}}
+
+
+@router.post("/service-charges/combined-invoice", status_code=status.HTTP_201_CREATED)
+async def create_combined_invoice(
+    payload: dict = Body(default={}),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_permission("service_charge.convert_to_invoice")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """One finance invoice drafted from several issued service charges."""
+    from app.core.validation import validate_id_list
+    from app.modules.finance import service as finance_service
+
+    ids = validate_id_list(payload)
+    document = await finance_service.create_combined_invoice_from_charges(
+        session, context, ids, idempotency_key=idempotency_key,
+    )
+    return {"data": document}
 
 
 @router.post("/service-charges/{charge_id}/issue")

@@ -417,6 +417,10 @@ jobs:
           CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'https://lcslog.minidev.in' }}
+          TELEGRAM_PUBLIC_APP_URL: ${{ vars.TELEGRAM_PUBLIC_APP_URL }}
+          TELEGRAM_UPDATE_MODE: webhook
+          TELEGRAM_WORKER_ENABLED: "true"
+          TELEGRAM_ALLOW_WEBHOOK_DELETE: "false"
         with:
           host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
           username: ${{ vars.AWS_USER || secrets.AWS_USER }}
@@ -424,7 +428,7 @@ jobs:
           port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
-          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,CORS_ORIGINS
+          envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,CORS_ORIGINS,TELEGRAM_PUBLIC_APP_URL,TELEGRAM_UPDATE_MODE,TELEGRAM_WORKER_ENABLED,TELEGRAM_ALLOW_WEBHOOK_DELETE
           script: |
             set -eu
             cd "$DEPLOY_DIR"
@@ -450,6 +454,17 @@ jobs:
             require_value "${JWT_SECRET_KEY:-}" JWT_SECRET_KEY
             require_value "${CSRF_SECRET_KEY:-}" CSRF_SECRET_KEY
             require_value "${FIELD_ENCRYPTION_KEY:-}" FIELD_ENCRYPTION_KEY
+            # Telegram updates in production require a public HTTPS webhook
+            # origin; polling is refused by the backend in production.
+            require_value "${TELEGRAM_PUBLIC_APP_URL:-}" TELEGRAM_PUBLIC_APP_URL
+            case "$TELEGRAM_PUBLIC_APP_URL" in
+              https://*.*) ;;
+              *) echo "TELEGRAM_PUBLIC_APP_URL must be a public https origin." >&2; exit 1 ;;
+            esac
+            if [ "${TELEGRAM_UPDATE_MODE:-webhook}" != "webhook" ]; then
+              echo "TELEGRAM_UPDATE_MODE must be webhook in production." >&2
+              exit 1
+            fi
 
             # Image names must be lowercase.
             IMAGE_PREFIX="$(printf '%s' "$IMAGE_PREFIX" | tr '[:upper:]' '[:lower:]')"
@@ -496,6 +511,10 @@ jobs:
               write_kv CSRF_SECRET_KEY "$CSRF_SECRET_KEY"
               write_kv FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
               write_kv CORS_ORIGINS "$CORS_ORIGINS"
+              write_kv TELEGRAM_PUBLIC_APP_URL "$TELEGRAM_PUBLIC_APP_URL"
+              write_kv TELEGRAM_UPDATE_MODE "$TELEGRAM_UPDATE_MODE"
+              write_kv TELEGRAM_WORKER_ENABLED "$TELEGRAM_WORKER_ENABLED"
+              write_kv TELEGRAM_ALLOW_WEBHOOK_DELETE "$TELEGRAM_ALLOW_WEBHOOK_DELETE"
             } > "$TMP"
             chmod 600 "$TMP"
             mv -f "$TMP" "$ENV_FILE"

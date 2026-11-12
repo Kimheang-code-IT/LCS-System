@@ -5,8 +5,8 @@ from sqlalchemy import select
 from app.core.database import utcnow
 from app.modules.audit.service import write_audit
 from app.modules.backup.models import BackupRun
-from app.modules.telegram import monitor, service
-from app.modules.telegram.models import NotificationIncident, NotificationOutbox
+from app.modules.telegram import monitor, outbox, service
+from app.modules.telegram.models import NotificationIncident, NotificationOutbox, TelegramLink
 from tests.test_telegram_recovery import recovery_setup
 
 
@@ -14,7 +14,6 @@ async def enable_alerts(client, session_factory, monkeypatch):
     headers, user_id = await recovery_setup(client, session_factory, monkeypatch)
     async with session_factory() as session:
         value = await service.config(session)
-        value["adminGroupId"] = -10012
         value["rules"].update({category: {**service.DEFAULT_RULES[category], "enabled": True, "minimumSeverity": "INFO"} for category in ("security", "backup", "system")})
         await service.save_internal(session, value)
         await session.commit()
@@ -33,7 +32,7 @@ async def test_security_alert_threshold_dedup_and_private_minimization(client, s
         await monitor.security_events(session)
         await session.flush()
         rows = (await session.execute(select(NotificationOutbox).where(NotificationOutbox.event_type == "LOGIN_FAILED"))).scalars().all()
-        assert len(rows) == 1 and rows[0].destination_type == "ADMIN"
+        assert len(rows) == 1 and rows[0].destination_type == "PRIVATE" and rows[0].destination_reference == 123
         assert "do-not-send-this" not in str(rows[0].payload)
         await monitor.security_events(session)
         await session.flush()
@@ -91,6 +90,39 @@ async def test_backup_results_and_overdue_are_real_and_deduplicated(client, sess
         await monitor.backup_events(session)
         await session.flush()
         assert len((await session.execute(select(NotificationOutbox))).scalars().all()) == count
+
+
+async def test_alerts_reach_only_verified_admin_private_chats(client, session_factory, telegram_mock, monkeypatch):
+    from sqlalchemy import select
+
+    from app.modules.auth.models import User
+
+    headers, _admin_id = await enable_alerts(client, session_factory, monkeypatch)
+    role = await client.post("/api/v1/roles", headers=headers, json={"code": "NO_ALERTS", "name": "No settings", "permissions": ["master.reference.view"]})
+    assert role.status_code == 201
+    created = await client.post("/api/v1/users", headers=headers, json={"username": "alertoutsider", "displayName": "Outsider", "email": "alertoutsider@example.com", "password": "Original-Str0ng!", "role": "NO_ALERTS"})
+    assert created.status_code == 201, created.text
+    async with session_factory() as session:
+        outsider = (await session.execute(select(User).where(User.username == "alertoutsider"))).scalar_one()
+        session.add(TelegramLink(user_id=outsider.id, telegram_user_id=456, bot_id=99, chat_id=456, display_name="Outsider"))
+        session.add(BackupRun(status="failed", trigger="manual", started_at=utcnow() - timedelta(minutes=1), finished_at=utcnow(), detail={"failure_stage": "R2 upload"}, message="secret exception should never be forwarded"))
+        await session.flush()
+        await monitor.backup_events(session)
+        await session.flush()
+        await session.commit()
+        rows = (await session.execute(select(NotificationOutbox).where(NotificationOutbox.category == "backup"))).scalars().all()
+        failed = [row for row in rows if row.event_type == "BACKUP_FAILED"]
+        # The alert exists once, privately, for the verified administrator only.
+        assert failed and all(row.destination_type == "PRIVATE" for row in rows)
+        assert {row.destination_reference for row in failed} == {123}
+        assert all(row.sensitive_payload is None for row in failed)
+        assert all("secret exception" not in str(row.payload) for row in rows)
+    async with session_factory() as session:
+        claims = await outbox.claim(session)
+    for row_id, token in claims:
+        await outbox.deliver(row_id, token, session_factory=session_factory)
+    sent = [c for c in telegram_mock if c[0] == "sendMessage"]
+    assert sent and all(c[1]["chat_id"] == 123 for c in sent)
 
 
 async def test_runtime_measurements_drive_alerts(client, session_factory, telegram_mock, monkeypatch):

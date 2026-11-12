@@ -44,7 +44,9 @@ export function useFinanceCommands(options: {
     toast({ title: t('freight.ui.chargeIssued'), color: 'success' })
   }
 
-  async function createInvoiceFromCharge() {
+  async function createInvoiceFromCharge(
+    destination?: (invoiceId: string) => { path: string, query: Record<string, string> },
+  ) {
     const invoice = await lcs.runCommand('charge.create-invoice', String(model.value.id), keyValue =>
       lcs.charges.createFinanceInvoice(String(model.value.id), keyValue),
     )
@@ -52,7 +54,7 @@ export function useFinanceCommands(options: {
     const refreshed = store.get('jobCharges', String(model.value.id))
     if (refreshed) model.value = refreshed
     toast({ title: t('freight.ui.draftInvoiceCreated'), color: 'success' })
-    await navigateTo(`/finance/documents/${invoice.id}`)
+    await navigateTo(destination ? destination(String(invoice.id)) : `/finance/documents/${invoice.id}`)
   }
 
   async function viewInvoiceFromCharge() {

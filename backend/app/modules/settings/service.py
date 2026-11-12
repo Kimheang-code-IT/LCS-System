@@ -3,7 +3,7 @@ from __future__ import annotations
 import weakref
 from collections.abc import Iterable
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -186,6 +186,55 @@ DEFAULT_APP_CONFIG: dict[str, Any] = {
 }
 
 
+# One R2 credential set serves both SQLite-free DB backups (legacy flat
+# ``backup.r2*`` keys) and file storage (``storage.providers.r2``). Legacy
+# values are folded into the canonical storage block at read time — never
+# overwriting a stored storage value — so a single Object Storage section can
+# configure both; the next settings save persists the folded values.
+_R2_LEGACY_TO_STORAGE = (
+    ("r2AccountId", "accountId"),
+    ("r2AccessKeyId", "accessKeyId"),
+    ("r2SecretAccessKey", "secretAccessKey"),
+    ("r2BucketName", "bucketName"),
+    ("r2Endpoint", "endpoint"),
+    ("r2Prefix", "objectPrefix"),
+)
+
+
+def _fill_blank(target: dict[str, Any], key: str, value: Any) -> bool:
+    """Set a blank target slot; True when something was actually filled in."""
+    if str(target.get(key) or "").strip() or not str(value or "").strip():
+        return False
+    target[key] = value
+    return True
+
+
+def backfill_r2_credentials(config: dict[str, Any]) -> dict[str, Any]:
+    """Fold legacy ``backup.r2*`` values into ``storage.providers.r2`` in place."""
+    backup = config.get("backup")
+    storage = config.get("storage")
+    if not isinstance(backup, dict) or not isinstance(storage, dict):
+        return config
+    providers = storage.setdefault("providers", {})
+    r2 = providers.setdefault("r2", {})
+    if isinstance(r2, dict) and isinstance(backup, dict):
+        for legacy_key, storage_key in _R2_LEGACY_TO_STORAGE:
+            _fill_blank(r2, storage_key, backup.get(legacy_key))
+    return config
+
+
+def overlay_r2_credentials(backup_config: dict[str, Any], storage_config: dict[str, Any]) -> dict[str, Any]:
+    """Map the canonical ``storage.providers.r2`` block onto the flat ``backup.r2*``
+    names the backup destination expects. Storage values win (they are what the
+    Settings UI shows); a stored legacy flat value is kept only as a fallback
+    when the canonical slot is still blank."""
+    r2 = (storage_config.get("providers") or {}).get("r2") or {}
+    for legacy_key, storage_key in _R2_LEGACY_TO_STORAGE:
+        fallback = str(backup_config.get(legacy_key) or "").strip()
+        backup_config[legacy_key] = str(r2.get(storage_key) or "").strip() or fallback
+    return backup_config
+
+
 def deep_merge(base: Any, override: Any) -> Any:
     if not isinstance(base, dict) or not isinstance(override, dict):
         return override
@@ -227,7 +276,13 @@ async def _load_settings(session: AsyncSession, keys: Iterable[str] | None = Non
 
 def _latest_updated_at(records: Iterable[Any]) -> datetime | None:
     stamps = [record.updated_at for record in records if getattr(record, "updated_at", None) is not None]
-    return max(stamps) if stamps else None
+    if not stamps:
+        return None
+    # A row updated in this session carries the aware utcnow() value while a
+    # row only read back from SQLite is naive (offsets are not persisted on
+    # that dialect). Treat naive server stamps as UTC — the mixin's default.
+    stamps = [stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp for stamp in stamps]
+    return max(stamps)
 
 
 def _with_timestamp(data: dict[str, Any], updated_at: datetime | None) -> dict[str, Any]:
@@ -355,6 +410,7 @@ async def get_app_config(session: AsyncSession, context: RequestContext | None =
     stored, updated_at = await _current_app_config(session)
     merged = deep_merge(DEFAULT_APP_CONFIG, stored)
     merged["localization"] = normalize_localization(merged.get("localization"))
+    backfill_r2_credentials(merged)
     merged["system"] = {**(merged.get("system") or {}), **await _system_status(session, merged)}
     return _with_timestamp(merged, updated_at)
 
@@ -560,18 +616,24 @@ def _validate_backup_config(config: dict[str, Any]) -> None:
     r2_keys = ("r2AccountId", "r2AccessKeyId", "r2SecretAccessKey", "r2BucketName", "r2Endpoint")
     has_any_r2_value = any(str(config.get(key) or "").strip() for key in r2_keys)
     if has_any_r2_value:
+        # Field keys point at the canonical storage block the UI renders.
         field_errors = {
-            f"backup.{key}": "This field is required for Cloudflare R2 backups."
-            for key in r2_keys
-            if not str(config.get(key) or "").strip()
+            f"storage.providers.r2.{storage_key}": "This field is required for Cloudflare R2 backups."
+            for legacy_key, storage_key in (
+                ("r2AccountId", "accountId"),
+                ("r2AccessKeyId", "accessKeyId"),
+                ("r2SecretAccessKey", "secretAccessKey"),
+                ("r2BucketName", "bucketName"),
+            )
+            if not str(config.get(legacy_key) or "").strip()
         }
         endpoint = str(config.get("r2Endpoint") or "").strip()
         parsed = urlparse(endpoint)
         if endpoint and (parsed.scheme not in {"http", "https"} or not parsed.netloc):
-            field_errors["backup.r2Endpoint"] = "Enter a valid HTTP or HTTPS S3 endpoint."
+            field_errors["storage.providers.r2.endpoint"] = "Enter a valid HTTP or HTTPS S3 endpoint."
         prefix = str(config.get("r2Prefix") or "").strip()
         if prefix.startswith("/") or ".." in prefix.split("/"):
-            field_errors["backup.r2Prefix"] = "Use a relative object prefix without '..' segments."
+            field_errors["storage.providers.r2.objectPrefix"] = "Use a relative object prefix without '..' segments."
         if field_errors:
             raise ValidationFailed("Cloudflare R2 configuration is incomplete or invalid.", field_errors)
 
@@ -581,7 +643,7 @@ def _validate_backup_config(config: dict[str, Any]) -> None:
         if not sheets_configured and not r2_configured:
             raise ValidationFailed(
                 "Automatic backup requires a configured destination.",
-                {"backup.r2Endpoint": "Configure Cloudflare R2 before enabling automatic backup."},
+                {"storage.providers.r2.endpoint": "Configure Cloudflare R2 before enabling automatic backup."},
             )
 
 
@@ -636,7 +698,12 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
         # the currently stored JSON payload.
         data["telegram"] = {**telegram, "messageLanguage": normalize_message_language(telegram["messageLanguage"])}
     if "backup" in patch:
-        _validate_backup_config(deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}))
+        _validate_backup_config(
+            overlay_r2_credentials(
+                deep_merge(DEFAULT_APP_CONFIG["backup"], data.get("backup") or {}),
+                deep_merge(DEFAULT_APP_CONFIG["storage"], (data.get("storage") or {})),
+            )
+        )
     if "storage" in patch:
         data["storage"] = _strip_storage_managed_fields(data.get("storage") or {}, current.get("storage") or {})
         _validate_storage_config(deep_merge(DEFAULT_APP_CONFIG["storage"], data["storage"]))

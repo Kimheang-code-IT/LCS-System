@@ -32,7 +32,13 @@ from app.core.exceptions import Conflict
 from app.modules.auth.models import User
 from app.modules.operations.models import ServiceOrder
 from app.modules.quotations import service as quotations
-from app.modules.quotations.models import Quotation, QuotationConversion, QuotationRevision
+from app.modules.quotations.models import (
+    Quotation,
+    QuotationConversion,
+    QuotationRevision,
+    QuotationRevisionContainer,
+    QuotationRevisionLine,
+)
 from tests.seed import ensure_seed_data, seed_demo_data
 
 PG = {
@@ -50,7 +56,7 @@ pytestmark = [
 def _url() -> str:
     return (
         f"postgresql+asyncpg://{quote_plus(PG['user'] or '')}:{quote_plus(PG['password'] or '')}"
-        f"@{PG['host']}:5432/{PG['db']}"
+        f"@{PG['host']}:{os.environ.get('LCS_TEST_PG_PORT', '5432')}/{PG['db']}"
     )
 
 
@@ -133,6 +139,62 @@ async def _counts(factory: async_sessionmaker[AsyncSession], revision_id: int) -
             .where(QuotationConversion.quotation_revision_id == revision_id)
         )
     return int(orders or 0), int(conversions or 0)
+
+
+async def test_resaving_the_whole_quotation_replaces_requirements_after_the_lines(pg_factory):
+    """Duplicate → change direction → Save posts requirements and lines together.
+
+    PostgreSQL enforces the line→requirement FK, so deleting the requirement rows
+    before the priced lines used to fail with a 500 (IntegrityError). The update
+    must succeed and keep the surviving link.
+    """
+    context = await _context(pg_factory)
+    async with pg_factory() as session:
+        record = await quotations.save_quotation(
+            session,
+            context,
+            {
+                "date": date.today().isoformat(),
+                "customer": "Requirement Customer",
+                "direction": "Import",
+                "currency": "USD",
+                "pricingLines": [{"containerType": "40HC", "quantity": 2, "unitPrice": 100}],
+            },
+        )
+    requirements = record["containerRequirements"]
+    assert requirements and float(requirements[0]["quantity"]) == 2
+
+    async with pg_factory() as session:
+        updated = await quotations.save_quotation(
+            session,
+            context,
+            {
+                "id": record["id"],
+                "direction": "Export",
+                "containerRequirements": requirements,
+                "pricingLines": record["pricingLines"],
+            },
+        )
+    assert updated["direction"] == "Export"
+    assert len(updated["containerRequirements"]) == 1
+    assert float(updated["containerRequirements"][0]["quantity"]) == 2
+
+    async with pg_factory() as session:
+        revision_id = int(updated["revisionId"])
+        line = (
+            await session.execute(
+                select(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision_id)
+            )
+        ).scalars().first()
+        requirement = (
+            await session.execute(
+                select(QuotationRevisionContainer).where(
+                    QuotationRevisionContainer.quotation_revision_id == revision_id
+                )
+            )
+        ).scalars().first()
+    assert line is not None and requirement is not None
+    assert line.container_requirement_id == requirement.id
 
 
 async def test_concurrent_conversions_create_two_independent_orders(pg_factory):

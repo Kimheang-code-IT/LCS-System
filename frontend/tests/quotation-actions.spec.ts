@@ -5,23 +5,24 @@ const allAllowed = { updateDraft: true, submit: true, convert: true }
 const readOnly = { updateDraft: false, submit: false, convert: false }
 
 describe('quotationActionAvailability', () => {
-  it('treats every quotation as editable: CRUD only, no submit or convert', () => {
+  it('treats every quotation as editable: CRUD only, no submit', () => {
     for (const status of ['Draft', 'Submitted', 'Sent', 'Accepted', 'Converted']) {
       const availability = quotationActionAvailability(status, allAllowed)
       expect(availability).toMatchObject({
         edit: true,
         submit: false,
-        convert: false,
         revise: false,
       })
     }
   })
 
-  it('keeps legacy statuses convertible-free: they were sent or accepted before', () => {
-    // Legacy rows keep their status readable; the workflow vocabulary is
-    // retired, so no submit/convert action is offered from any status.
-    expect(quotationActionAvailability('Sent', allAllowed).submit).toBe(false)
-    expect(quotationActionAvailability('Accepted', allAllowed).convert).toBe(false)
+  it('offers Convert to Service Order for every convertible quotation', () => {
+    // A quotation is a reusable reference: one quotation may produce many
+    // service orders, so convert never gates on status or prior conversions.
+    for (const status of ['Draft', 'Submitted', 'Sent', 'Accepted', 'Converted']) {
+      expect(quotationActionAvailability(status, allAllowed).convert).toBe(true)
+    }
+    expect(quotationActionAvailability('Accepted', readOnly).convert).toBe(false)
   })
 
   it('offers delete only while no service order depends on the quotation', () => {

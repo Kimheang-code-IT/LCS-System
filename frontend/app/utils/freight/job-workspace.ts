@@ -5,6 +5,25 @@ export const JOB_WORKSPACE_SECTIONS = JOB_CORE_WORKSPACE_SECTIONS
 export type JobWorkspaceSection = string
 
 /**
+ * Header breadcrumbs for a Service Order detail page. The number is the real
+ * document number returned by the API (`jobNo`/`serviceOrderNo`), never the
+ * database id. A loading record shows a neutral placeholder; a missing record
+ * keeps only the list crumb so the error state never prints a fake number.
+ */
+export function serviceOrderBreadcrumbs(
+  moduleLabel: string,
+  modulePath: string,
+  record: Record<string, unknown>,
+  options: { loading?: boolean, notFound?: boolean } = {},
+): Array<{ label: string, to?: string }> {
+  const items: Array<{ label: string, to?: string }> = [{ label: moduleLabel, to: modulePath }]
+  const number = String(record.jobNo || record.serviceOrderNo || '').trim()
+  if (number) items.push({ label: number })
+  else if (options.loading && !options.notFound) items.push({ label: '…' })
+  return items
+}
+
+/**
  * Leading overview group. Its heading is redundant — the tab is already titled
  * "Overview" — so the overview form renders the fields without a label.
  */

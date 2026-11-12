@@ -17,6 +17,7 @@ import { isMoneyColumnKey, lineTableColumnCellClass, lineTableColumnMetrics, lin
 import { tableColumnSignature } from '~/utils/table/table-shape'
 import { applyLineAdjustments, lineSubtotal } from '~/utils/table/line-adjustments'
 import { referenceItemForValue, referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { createClientId } from '~/utils/client-id'
 
 const props = withDefaults(defineProps<{
   table: FreightTable
@@ -24,6 +25,10 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   compact?: boolean
   viewOnlyActions?: boolean
+  /** Show a loading status instead of the grid while the host fetches rows. */
+  loading?: boolean
+  /** Optional empty message; omit to keep the existing header-only empty grid. */
+  emptyText?: string
   /** Locks individual rows (not the whole table) — used by mixed read-only/editable grids. */
   rowDisabled?: (row: Record<string, unknown>) => boolean
   headerActions?: Array<{
@@ -82,6 +87,8 @@ const props = withDefaults(defineProps<{
   onCellBlur?: (cellKey: string, change: { index: number, key: string }) => void
 }>(), {
   compact: false,
+  loading: false,
+  emptyText: '',
   rowDisabled: undefined,
   headerActions: () => [],
   extraRowMenuItems: undefined,
@@ -462,7 +469,31 @@ function addRow() {
   // Seed values come from the table's own `rowDefaults` (e.g. carry the previous
   // payment row's container number), never from a table-key branch here.
   const seeded = props.table.rowDefaults?.({ rows: rows.value, blank }) || {}
-  rows.value = [...rows.value, { ...blank, ...seeded }]
+  const row = { ...blank, ...seeded }
+  // `_rowId` is client-only (stripped from payloads/drafts) and keeps this row's
+  // keyed cells stable while it is edited, deleted or reordered.
+  if (props.table.assignRowId === true && !row._rowId) row._rowId = createClientId('row')
+  rows.value = [...rows.value, row]
+  focusFirstEditableCell(rows.value.length - 1)
+}
+
+/**
+ * A freshly added row drops the user straight into its first editable cell, so
+ * one click on Add starts typing. Best effort: nothing happens if the cell has
+ * not mounted yet or the column is menu-only.
+ */
+function focusFirstEditableCell(index: number) {
+  const column = props.table.columns.find(column =>
+    !FREIGHT_LINE_UTILITY_COLUMN_TYPES.has(column.type) && !column.computed)
+  if (!column || !import.meta.client) return
+  const key = `${errorPrefix.value}.${index}.${column.key}`
+  void nextTick(() => {
+    const cell = document.querySelector<HTMLElement>(`[data-field-key="${CSS.escape(key)}"]`)
+    const target = cell?.matches('input, textarea, button')
+      ? cell
+      : cell?.querySelector<HTMLElement>('input, textarea, button')
+    target?.focus()
+  })
 }
 
 async function onFilesChosen(event: Event) {
@@ -554,7 +585,7 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
       meta: columnMeta(column),
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
-        const disabled = rowLocked(row.original)
+        const disabled = rowLocked(row.original) || Boolean(column.lockCell?.(row.original))
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {
           return tagCell(inlineNumberFieldsCell(column, row.original, index, disabled), index, column.key)
@@ -692,6 +723,15 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
         )
         const menuItems: Array<Array<{ label: string, icon: string, color?: 'error', disabled?: boolean, onSelect?: () => void }>> = [[]]
         const actions = menuItems[0]!
+        if (table.lineDetails && !props.disabled && !rowLocked(row.original)) {
+          // Additional Details leads the menu; the caller's own actions and the
+          // shared Delete follow it.
+          actions.push({
+            label: t('freight.ui.additionalDetails'),
+            icon: 'i-lucide-sliders-horizontal',
+            onSelect: () => openLineDetails(index),
+          })
+        }
         for (const item of props.extraRowMenuItems?.(row.original) || []) {
           actions.push({
             label: item.label,
@@ -708,13 +748,6 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
             icon: action.icon,
             ...(action.color === 'error' ? { color: 'error' as const } : {}),
             onSelect: action.onSelect,
-          })
-        }
-        if (table.lineDetails && !props.disabled && !rowLocked(row.original)) {
-          actions.push({
-            label: t('freight.ui.additionalDetails'),
-            icon: 'i-lucide-sliders-horizontal',
-            onSelect: () => openLineDetails(index),
           })
         }
         if (isFileTable.value && filePreviewHref(row.original)) {
@@ -868,11 +901,24 @@ class="hidden"
       :form-errors="rejected"
       :title="t('freight.ui.fileRejectedTitle')"
     />
-    <div class="overflow-x-auto">
+    <div
+      v-if="loading"
+      class="flex items-center justify-center gap-2 py-8 text-sm text-muted"
+      role="status"
+      aria-busy="true">
+      <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
+      {{ t('freight.ui.loadingData') }}
+    </div>
+    <div
+      v-else-if="!rows.length && emptyText"
+      class="rounded-lg border border-default bg-elevated/50 px-3 py-6 text-center text-sm text-muted">
+      {{ emptyText }}
+    </div>
+    <div v-else class="overflow-x-auto">
       <UTable
 :data="tableRows"
 :columns="columns"
-        :get-row-id="(row: Record<string, unknown>) => String(row._rowIndex ?? '')"
+        :get-row-id="(row: Record<string, unknown>) => String(row.id || row.clientRowId || row._rowId || row._rowIndex || '')"
         :class="['freight-table w-full min-w-max', compact ? 'freight-table-compact' : '']"
 :ui="tableUi" />
     </div>

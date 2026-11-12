@@ -109,7 +109,7 @@ export interface TelegramConfig {
   lastTestMessage?: string
   destinations: TelegramDestination[]
   messageTemplate: string
-  /** Client group: Service Order notifications (own toggle, chat id, optional token). */
+  /** Client group: Service Order notifications (own toggle, chat id). */
   clientEnabled?: boolean
   clientBotToken?: string
   clientBotTokenConfigured?: boolean
@@ -119,6 +119,14 @@ export interface TelegramConfig {
   clientBotDisplayName?: string
   clientLastTestedAt?: string
   clientLastTestMessage?: string
+  /** Admin bot: verified-recipient count (permission-based; no manual chat id). */
+  adminRecipientCount?: number
+  /** Read-only update-consumer state from the backend environment. */
+  updateMode?: string
+  workerEnabled?: boolean
+  updateStatus?: string
+  lastUpdateAt?: string | null
+  lastError?: string | null
 }
 
 export interface TelegramAlertRule {
@@ -278,6 +286,14 @@ export interface AppConfig {
   backup: AppConfigBackup
   storage: StorageConfig
   updatedAt: string
+}
+
+/**
+ * A settings PATCH may carry one group at a time, and a group may itself be
+ * partial — Settings → Email / Telegram panels save only the fields they edit.
+ */
+export type AppConfigPatch = Partial<Omit<AppConfig, 'telegram'>> & {
+  telegram?: Partial<TelegramConfig>
 }
 
 // --- Multi-provider file storage -------------------------------------------------

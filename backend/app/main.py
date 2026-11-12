@@ -336,7 +336,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.get("/health")
 async def root_health() -> dict:
-    return {"status": "ok"}
+    # Safe, secret-free worker visibility: a healthy API must not hide a
+    # Telegram consumer that is disabled, misconfigured or failing.
+    from app.modules.telegram.worker import health as telegram_worker_health
+
+    return {"status": "ok", "telegram": telegram_worker_health()}
 
 
 @app.get("/health/ready")

@@ -45,7 +45,7 @@ export interface QuotationRepository {
   reject: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
   cancel: (revisionId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
   createRevision: (quotationId: string) => Promise<FreightRecord>
-  createFromServiceOrder: (serviceOrderId: string) => Promise<FreightRecord>
+  createFromServiceOrder: (serviceOrderId: string, idempotencyKey?: string) => Promise<FreightRecord>
   listRevisions: (quotationId: string) => Promise<FreightRecord[]>
   submit: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
   convert: (revisionId: string, idempotencyKey: string) => Promise<FreightRecord>
@@ -59,6 +59,10 @@ export interface JobRepository {
   addActualContainer: (serviceOrderId: string, payload: Record<string, unknown>) => Promise<FreightRecord>
   deleteActualContainers: (serviceOrderId: string, ids: string[]) => Promise<{ removed: number }>
   finish: (id: string, idempotencyKey: string) => Promise<FreightRecord>
+  refreshFinancialDocuments: (id: string) => Promise<{
+    documents: Array<{ id: string, documentNo: string, type: string }>
+    warnings: string[]
+  }>
 }
 
 export interface ServiceChargeRepository {
@@ -68,6 +72,7 @@ export interface ServiceChargeRepository {
   saveDraft: (record: FreightRecord) => Promise<FreightRecord>
   issue: (chargeId: string, idempotencyKey: string) => Promise<FreightRecord>
   createFinanceInvoice: (chargeId: string, idempotencyKey: string) => Promise<FreightRecord>
+  createCombinedInvoice: (chargeIds: string[], idempotencyKey: string) => Promise<FreightRecord>
   /** Bulk delete. The backend only removes charges still in DRAFT. */
   delete: (ids: string[]) => Promise<{ removed: number }>
   listForOrder: (orderId: string) => Promise<FreightRecord[]>

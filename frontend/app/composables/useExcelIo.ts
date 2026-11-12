@@ -129,6 +129,9 @@ export function useExcelIo() {
   return {
     modules: () => json<ExcelModuleInfo[]>('/api/v1/excel/modules'),
     template: (module: string) => downloadFile(`/api/v1/excel/${module}/template`),
+    csvTemplate: (module: string) => downloadFile(`/api/v1/excel/${module}/template?format=csv`),
+    /** The versioned AI-ready import contract, as a starter .json upload. */
+    schemaExample: (module: string) => downloadFile(`/api/v1/excel/${module}/schema/example`),
     validate: async (module: string, file: File, mode: ImportMode) => {
       const form = new FormData()
       form.append('file', file)

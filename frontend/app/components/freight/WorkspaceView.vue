@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { DropdownMenuItem, TableColumn, TableRow } from '@nuxt/ui'
+import type { DropdownMenuItem, TableColumn } from '@nuxt/ui'
 import type { PaginationState } from '@tanstack/vue-table'
 import { h } from 'vue'
 import { UBadge, ULink } from '#components'
@@ -18,7 +18,7 @@ import type { ExportFilters, ExportRequest } from '~/types/export'
 import type { SourcePermission } from '~/types/domain'
 import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
 import type { ExcelModuleInfo } from '~/composables/useExcelIo'
-import { chargeDomainStatus, financeDomainStatus } from '~/utils/freight/states'
+import { chargeDomainStatus, financeDomainStatus, serviceOrderStatusLabel } from '~/utils/freight/states'
 import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
 import { formatRevisionNo } from '~/utils/freight/quotation-revisions'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
@@ -33,6 +33,7 @@ import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/docum
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
 import { useModuleList } from '~/composables/freight/useModuleList'
 import { useModuleRecord } from '~/composables/freight/useModuleRecord'
+import { useRequotation } from '~/composables/freight/useRequotation'
 import { useRecordStatus } from '~/composables/freight/useRecordStatus'
 import { useLcsRepositories } from '~/repositories'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
@@ -45,7 +46,7 @@ const lcs = useLcs()
 const { t } = useI18n()
 const { fieldLabel, moduleTitle, moduleSingular } = useFreightLabel()
 const { setTitle, setBreadcrumbs, clear } = useAppHeader()
-const { confirm } = useConfirm()
+const { confirm, setLoading: setConfirmLoading, dismiss: dismissConfirm } = useConfirm()
 const toast = useToast()
 
 const q = ref('')
@@ -77,6 +78,7 @@ const {
   busyId,
   menuItem: statusMenuItem,
   transitionsOf,
+  run: statusRun,
 } = useRecordStatus(module, {
   onError: (message) => { pageErrors.value = [message] },
   onChanged: refreshList,
@@ -105,6 +107,13 @@ const validationReport = ref<Record<string, unknown> | null>(null)
 const validationError = ref('')
 
 const financeRepo = useLcsRepositories().finance
+const { requoteFromServiceOrder } = useRequotation({
+  confirm,
+  setConfirmLoading,
+  dismissConfirm,
+  toast,
+  onError: message => { pageErrors.value = [message] },
+})
 
 /** Collection-scoped empty state copy (e.g. "No accounting periods found"). */
 const emptyTitle = computed(() =>
@@ -185,6 +194,11 @@ const result = computed(() => {
       shipments: store.list('shipments'),
     })
   }
+  // The Service Charges page lists standalone charges only: linked charges
+  // belong to their Service Order's Service Charge tab.
+  if (current.value?.collection === 'jobCharges') {
+    all = all.filter(row => !String(row.jobNo || '').trim())
+  }
   // The backend module list endpoints don't understand the toolbar filter
   // fields, so apply them (and the search box) on the loaded page client-side.
   all = all.filter(rowMatchesToolbarFilters)
@@ -242,7 +256,6 @@ const PAGE_CREATE_GATES: Record<string, { capability: SourcePermission | '', leg
 
 const canCreate = computed(() => {
   if (!current.value?.canCreate || current.value.readOnly) return false
-  if (isJobList.value) return lcs.can('service_order.create')
   if (current.value.group === 'master') return canMasterAction('create')
   const gate = PAGE_CREATE_GATES[current.value.collection]
   if (gate) {
@@ -413,6 +426,33 @@ function runBulkAction() {
   else void deactivateIds(selectedIds.value)
 }
 
+/** Service Charges page: one combined finance invoice from the selected charges. */
+const showCombinedInvoice = computed(() =>
+  current.value?.collection === 'jobCharges'
+  && selectedIds.value.length > 0
+  && lcs.can('service_charge.convert_to_invoice'))
+
+const combinedInvoiceBusy = ref(false)
+
+async function createCombinedInvoiceForSelection() {
+  pageErrors.value = []
+  const ids = selectedIds.value
+  combinedInvoiceBusy.value = true
+  try {
+    const invoice = await lcs.runCommand('charge.combined-invoice', ids.join(','), key =>
+      lcs.charges.createCombinedInvoice(ids, key))
+    rowSelection.value = {}
+    toast.add({ title: t('freight.ui.draftInvoiceCreated'), color: 'success' })
+    await navigateTo(`/finance/documents/${String(invoice.id)}`)
+  }
+  catch (error) {
+    pageErrors.value = [lcs.errorMessage(error)]
+  }
+  finally {
+    combinedInvoiceBusy.value = false
+  }
+}
+
 /** Lights the collapsed filter-menu button when any toolbar filter is set. */
 const hasActiveFilters = computed(() => Boolean(
   Object.values(filters).some(value => isFilterValueActive(value))
@@ -472,6 +512,9 @@ function recordPath(id: unknown) {
 function cellText(row: Record<string, unknown>, key: string) {
   const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row as FreightRecord) : row
   if (key === 'revisionNo') return formatRevisionNo(source[key])
+  // Service Orders present a working ACTIVE order as "Draft"; the stored value
+  // and every report keep the backend lifecycle.
+  if (key === 'status' && current.value?.collection === 'jobs') return serviceOrderStatusLabel(source[key])
   // The revision roll-up is authoritative; older JSON copies may only carry `amount`.
   const value = key === 'total' && source.total == null ? source.amount : source[key]
   return formatFreightCell(value, key, String(source.currency || '').trim() || undefined)
@@ -525,14 +568,18 @@ const pageSummary = computed(() =>
 )
 
 function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
-  const items: DropdownMenuItem[] = [
-    {
-      label: t('freight.ui.open'),
-      icon: 'i-lucide-eye',
-      onSelect: () => openRow(row),
-    },
-  ]
   const collection = current.value?.collection
+  // Quotations (Edit / Convert / Delete / Duplicate) and Service Orders
+  // (Edit / Finish / Re-Quotation) own their exact action sets.
+  const items: DropdownMenuItem[] = collection === 'quotations' || collection === 'jobs'
+    ? []
+    : [
+        {
+          label: t('freight.ui.open'),
+          icon: 'i-lucide-eye',
+          onSelect: () => openRow(row),
+        },
+      ]
   if (collection === 'documentSequences') {
     items[0] = {
       label: t('lcs.rowActions.detail'),
@@ -561,23 +608,39 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (availability.edit) {
       items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     }
-    // Submit / Convert are retired: a quotation is a CRUD reference now, so the
-    // status menu offers nothing and the row keeps Edit / Delete / Open order.
-    const statusItem = statusMenuItem(row, {
-      allowTransition: (transition) => {
-        if (['send', 'accept', 'submit', 'convert', 'reject', 'cancel'].includes(transition.action)) return false
-        return true
-      },
+    // A quotation stays a reusable commercial reference: "Convert to Service
+    // Order" confirms, then creates the order directly (the shared backend
+    // conversion also backs the Service Order form's quotation selector).
+    if (availability.convert && lcs.can('service_order.create')) {
+      items.push({ label: t('freight.ui.convertServiceOrder'), icon: 'i-lucide-arrow-right', onSelect: () => { void convertRowToServiceOrder(row) } })
+    }
+    // Deletion is refused by the backend while a service order depends on the
+    // quotation; the refusal message renders above the list.
+    if (canMutate.value && lcs.can('quotation.delete')) {
+      items.push({ label: t('lcs.rowActions.delete'), icon: 'i-lucide-trash-2', color: 'error', onSelect: () => { void runRowAction('delete', row) } })
+    }
+    // Duplicate opens the existing New Quotation form prefilled from this
+    // quotation; a new Quotation No. is allocated only on save.
+    if (lcs.can('quotation.create')) {
+      items.push({ label: t('lcs.rowActions.duplicate'), icon: 'i-lucide-copy', onSelect: () => { void navigateTo(`/quotations/new?duplicate=${row.id}`) } })
+    }
+  }
+  else if (collection === 'jobs') {
+    // Exactly three actions: Edit, Finish, Re-Quotation. Finish is the record's
+    // own status transition (its confirmation, validation and permission come
+    // from the backend policy); it is disabled when the order is already
+    // finished, so no other status action is offered here.
+    items.push({ label: t('freight.ui.edit'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
+    const finishTransition = transitionsOf(row).find(transition => transition.action === 'finish')
+    items.push({
+      label: t('freight.statusActions.finish'),
+      icon: 'i-lucide-flag',
+      color: 'primary',
+      disabled: !finishTransition,
+      onSelect: () => { if (finishTransition) void statusRun(row, finishTransition) },
     })
-    if (statusItem) items.push(statusItem)
-    if (availability.revise) {
-      items.push({ label: t('freight.ui.requote'), icon: 'i-lucide-git-branch', onSelect: () => { void runRowAction('createRevision', row) } })
-    }
-    if (availability.delete) {
-      items.push({ label: t('freight.ui.delete'), icon: 'i-lucide-trash-2', color: 'error', onSelect: () => { void runRowAction('delete', row) } })
-    }
-    if (relatedJob) {
-      items.push({ label: t('freight.ui.openServiceOrder'), icon: 'i-lucide-briefcase', onSelect: () => { void navigateTo(`/service-orders/${relatedJob.id}`) } })
+    if (lcs.can('quotation.revise')) {
+      items.push({ label: t('freight.ui.requote'), icon: 'i-lucide-git-branch', onSelect: () => { void requoteRowFromServiceOrder(row) } })
     }
   }
   else if (collection === 'jobCharges') {
@@ -595,7 +658,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     if (status === 'DRAFT' && lcs.can('financial_document.update_draft')) items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
     if (status === 'POSTED' && lcs.can('financial_document.allocate')) items.push({ label: t('freight.ui.allocate'), icon: 'i-lucide-split', onSelect: () => openRow(row) })
   }
-  if (collection !== 'quotations' && !isProtectedManagementRecord(collection, row)) {
+  if (collection !== 'quotations' && collection !== 'jobs' && !isProtectedManagementRecord(collection, row)) {
     // Change Status. The transitions come from the backend policy — legal from
     // this record's status and permitted for this caller — so an action can
     // never be offered that the API would refuse for being invalid. This also
@@ -607,7 +670,7 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     })
     if (statusItem) items.push(statusItem)
   }
-  if (canMutate.value && collection !== 'quotations' && !isProtectedManagementRecord(collection, row)
+  if (canMutate.value && collection !== 'quotations' && collection !== 'jobs' && !isProtectedManagementRecord(collection, row)
     && recordStatusValue(row) === 'INACTIVE') {
     // Active records must be deactivated first; only inactive records can be deleted.
     items.push({
@@ -633,6 +696,53 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     String(item.status).toUpperCase() === 'DRAFT' && Number(item.balanceDifference || 0) !== 0,
   ).length
   return `${draftDocuments} unposted documents · ${unallocated} unallocated payments · ${unbalanced} journal issues. Closed periods reject new postings.`
+}
+
+/**
+ * "Convert to Service Order" from the row menu: confirm, then create the order
+ * immediately through the same backend conversion the Service Order form's
+ * quotation selector copies from. The remembered idempotency key survives a
+ * failed request, so a retry is answered with the order already created
+ * instead of a second copy; a later deliberate conversion runs with a fresh key.
+ */
+async function convertRowToServiceOrder(row: Record<string, unknown>) {
+  pageErrors.value = []
+  const revisionId = String(row.revisionId || row.id || '')
+  const ok = await confirm({
+    kind: 'submit',
+    title: t('freight.ui.quotationConvertTitle'),
+    description: t('freight.ui.quotationConvertDescription', { quotationNo: String(row.quotationNo || '') }),
+    confirmLabel: t('freight.ui.convertServiceOrder'),
+    confirmColor: 'primary',
+    keepOpenOnConfirm: true,
+  })
+  if (!ok) return
+  setConfirmLoading(true)
+  try {
+    const job = await lcs.runCommand('quotation.convert', revisionId, keyValue =>
+      lcs.quotations.convert(revisionId, keyValue),
+    )
+    dismissConfirm()
+    toast.add({ title: t('freight.ui.convertedToJob'), color: 'success' })
+    await navigateTo(`/service-orders/${String(job.serviceOrderId || job.id)}`)
+  }
+  catch (error) {
+    dismissConfirm()
+    pageErrors.value = [lcs.errorMessage(error)]
+  }
+  finally {
+    setConfirmLoading(false)
+  }
+}
+
+/**
+ * "Re-Quotation" from the Service Order row menu — the shared flow (confirm →
+ * create → toast → navigate) lives in useRequotation, so the list and the
+ * detail header offer the same operation.
+ */
+function requoteRowFromServiceOrder(row: Record<string, unknown>) {
+  pageErrors.value = []
+  void requoteFromServiceOrder(String(row.id || ''), String(row.jobNo || ''))
 }
 
 async function runRowAction(action: string, row: Record<string, unknown>) {
@@ -677,10 +787,17 @@ function columnSortKind(column: FreightField): ListSortKind {
   return listSortKindFor(column.key)
 }
 
+/**
+ * Column keys that identify the row's own record. A cell holding one of them
+ * renders as the row's primary link (Code / Name / document-number family);
+ * every other cell is plain text.
+ */
+const IDENTITY_LINK_KEYS = new Set(['code', 'partyCode', 'assetCode', 'assetName', 'displayName'])
+
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   if (!current.value) return []
   const titleKey = current.value.titleField
-  const dataColumns = current.value.columns.map((column, index) => ({
+  const dataColumns = current.value.columns.map((column) => ({
     accessorKey: column.key,
     enableSorting: true,
     header: fieldLabel(column),
@@ -692,7 +809,6 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     },
     cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
       const text = cellText(row.original, column.key)
-      const isTitle = column.key === titleKey || (index === 0 && !current.value!.columns.some(item => item.key === titleKey))
       const jobTo = column.key === 'jobNo' && current.value!.collection !== 'jobs'
         ? jobLinkFor(row.original.jobNo)
         : ''
@@ -743,15 +859,21 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
           class: 'font-medium text-highlighted hover:text-primary hover:underline',
         }, () => text)
       }
-      if (isTitle && !isTableOnly.value) {
+      // Identity cells: the row's own Code/Name/document-number links to the
+      // record (the module's titleField plus its Code-family columns).
+      // Cross-record links above (jobNo, invoiceNo…) keep taking precedence.
+      if (!isTableOnly.value && row.original.id && text && text !== '—'
+        && (IDENTITY_LINK_KEYS.has(column.key) || column.key === titleKey)) {
         return h(ULink, {
           to: recordPath(row.original.id),
           class: 'font-medium text-highlighted hover:text-primary hover:underline',
         }, () => text)
       }
       if (column.key === 'status' || column.key.toLowerCase().includes('status')) {
+        const raw = row.original[column.key] || row.original.workflowStatus || row.original.status
         return freightStatusBadge(
-          row.original[column.key] || row.original.workflowStatus || row.original.status,
+          // The Service Order list shows "Draft" and its warning tone.
+          current.value?.collection === 'jobs' ? text : raw,
           column.key,
           text,
         )
@@ -789,12 +911,10 @@ function openRow(row: Record<string, unknown>) {
   navigateTo(recordPath(row.id))
 }
 
-function onRowSelect(event: Event, row: TableRow<Record<string, unknown>>) {
-  if (isTableOnly.value) return
-  const target = event.target as HTMLElement | null
-  if (target?.closest('a, button, input, [role="checkbox"], [role="menuitem"], [data-slot="dropdown-menu"]')) return
-  openRow(row.original)
-}
+/**
+ * Row clicks navigate nothing: the record opens from the identity links
+ * (Code / Name / document number cells) and the row's ⋯ menu, ERPNext-style.
+ */
 
 async function deleteIds(ids: string[]) {
   if (!current.value || !canMutate.value || !ids.length) return
@@ -924,7 +1044,6 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       :show-date-range="Boolean(dateField)"
       :filters-active="hasActiveFilters"
       :empty-title="emptyTitle"
-      @select="onRowSelect"
     >
       <template #filters="{ compact }">
         <CommonAppFilterSelect
@@ -938,6 +1057,17 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
         />
       </template>
       <template #actions>
+        <UButton
+          v-if="showCombinedInvoice"
+          color="primary"
+          variant="soft"
+          size="sm"
+          icon="i-lucide-receipt-text"
+          class="shrink-0"
+          :loading="combinedInvoiceBusy"
+          :label="t('freight.ui.createCombinedInvoice')"
+          @click="createCombinedInvoiceForSelection"
+        />
         <template v-if="bulkAction">
           <UButton
             :color="bulkAction.color"

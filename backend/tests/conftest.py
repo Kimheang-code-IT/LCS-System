@@ -162,7 +162,7 @@ async def seed_quotation(client, headers: dict, payload: dict | None = None) -> 
 
 
 async def seed_service_order(client, headers: dict, payload: dict | None = None) -> dict:
-    """Create one service order from a fresh quotation (quotation mandatory)."""
+    """Create one service order from a fresh quotation (the helper always links one)."""
     quotation = await seed_quotation(client, headers)
     response = await client.post(
         "/api/v1/service-orders",
@@ -207,7 +207,7 @@ def telegram_mock(monkeypatch):
         async def call(self, method, payload=None, **kwargs):
             calls.append((method, payload))
             if method == "getChat":
-                return {"id": payload["chat_id"], "type": "supergroup", "title": "Private admins"}
+                return {"id": payload["chat_id"], "type": "private" if payload["chat_id"] > 0 else "supergroup", "title": "Private admins"}
             if method == "getChatMember":
                 return {"status": "administrator"}
             if method == "getWebhookInfo":

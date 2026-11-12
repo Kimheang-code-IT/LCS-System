@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -264,35 +264,86 @@ async def _resolve_transport_by(session: AsyncSession, value: Any) -> str | None
     return str(row.id) if row is not None else text
 
 
+async def _replace_revision_requirements(
+    session: AsyncSession,
+    revision: QuotationRevision,
+    rows: list[dict[str, Any]],
+) -> dict[int, int]:
+    """Replace a revision's container rows by container type, keeping their ids.
+
+    Priced lines hold a strict FK to these rows, so a requirement whose container
+    type survives is updated in place (its id stays the line's link target); a
+    row whose type is gone is detached from every line before it is deleted.
+    Returns container type id -> requirement row id.
+    """
+    from app.modules.master_data.service import resolve_or_create_container_type
+
+    wanted: dict[int, dict[str, Any]] = {}
+    for container in rows:
+        if not isinstance(container, dict):
+            continue
+        container_type_id = container.get("containerTypeId") or container.get("container_type_id")
+        if not container_type_id:
+            container_type_id = await resolve_or_create_container_type(session, container.get("containerType"))
+        if not container_type_id:
+            raise ValidationFailed("Container type is required.", {"containerType": "Required"})
+        wanted[int(container_type_id)] = container
+
+    existing = (
+        await session.execute(
+            select(QuotationRevisionContainer).where(
+                QuotationRevisionContainer.quotation_revision_id == revision.id
+            )
+        )
+    ).scalars().all()
+    existing_by_type = {row.container_type_id: row for row in existing}
+    removed_ids = [row.id for type_id, row in existing_by_type.items() if type_id not in wanted]
+    if removed_ids:
+        await session.execute(
+            update(QuotationRevisionLine)
+            .where(QuotationRevisionLine.container_requirement_id.in_(removed_ids))
+            .values(container_requirement_id=None)
+        )
+        await session.execute(
+            delete(QuotationRevisionContainer).where(QuotationRevisionContainer.id.in_(removed_ids))
+        )
+
+    requirement_ids: dict[int, int] = {}
+    for container_type_id, container in wanted.items():
+        quantity = _decimal(container.get("quantity"), Decimal("1"))
+        gross_weight = (
+            _decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None
+        )
+        row = existing_by_type.get(container_type_id)
+        if row is None:
+            row = QuotationRevisionContainer(
+                quotation_revision_id=revision.id,
+                container_type_id=container_type_id,
+                quantity=quantity,
+                gross_weight_kg=gross_weight,
+                remarks=container.get("remarks"),
+            )
+            session.add(row)
+            await session.flush()
+        else:
+            row.quantity = quantity
+            row.gross_weight_kg = gross_weight
+            row.remarks = container.get("remarks")
+        requirement_ids[container_type_id] = row.id
+    return requirement_ids
+
+
 async def _save_revision_children(session: AsyncSession, revision: QuotationRevision, data: dict[str, Any]) -> None:
     # Replace a child collection only when the caller supplied it, so a partial
     # save (e.g. editing notes) does not erase containers or priced lines.
+    validated_requirements: list[dict[str, Any]] | None = None
     if "containerRequirements" in data:
-        data["containerRequirements"] = validate_line_items(
+        validated_requirements = validate_line_items(
             data.get("containerRequirements"),
             CONTAINER_REQUIREMENT_SCHEMA,
             field="containerRequirements",
         )
-        await session.execute(delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id))
-        for _index, container in enumerate(data.get("containerRequirements") or []):
-            if not isinstance(container, dict):
-                continue
-            container_type_id = container.get("containerTypeId") or container.get("container_type_id")
-            if not container_type_id:
-                from app.modules.master_data.service import resolve_or_create_container_type
-
-                container_type_id = await resolve_or_create_container_type(session, container.get("containerType"))
-            if not container_type_id:
-                raise ValidationFailed("Container type is required.", {"containerType": "Required"})
-            session.add(
-                QuotationRevisionContainer(
-                    quotation_revision_id=revision.id,
-                    container_type_id=int(container_type_id),
-                    quantity=_decimal(container.get("quantity"), Decimal("1")),
-                    gross_weight_kg=_decimal(container.get("grossWeightKg"), None) if container.get("grossWeightKg") else None,
-                    remarks=container.get("remarks"),
-                )
-            )
+        data["containerRequirements"] = validated_requirements
     if "places" in data:
         # The route editor keeps a trailing blank row for data entry; only rows
         # the operator actually started are validated and persisted. Existing
@@ -310,14 +361,15 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
 
         priced = data.get("pricingLines") if "pricingLines" in data else data.get("lines")
         data["pricingLines"] = validate_line_items(priced, PRICING_LINE_SCHEMA, field="pricingLines")
-        # When the caller does not send container requirements (the quotation UI
-        # no longer has a Containers tab), they are derived from the priced
-        # lines: a line carrying a Container Type is a container-quantity charge
-        # and its Qty is the box count. Lines without a Container Type — per
-        # shipment, documentation, customs — never generate containers.
-        derived_requirements: dict[int, int] = {}
-        if "containerRequirements" not in data:
-            type_quantities: dict[int, Decimal] = {}
+        # Each line's container type decides which requirement row it links to.
+        line_container_types: dict[int, int] = {}
+        type_quantities: dict[int, Decimal] = {}
+        if validated_requirements is None:
+            # When the caller does not send container requirements (the quotation
+            # UI no longer has a Containers tab), they are derived from the priced
+            # lines: a line carrying a Container Type is a container-quantity
+            # charge and its Qty is the box count. Lines without a Container Type
+            # — per shipment, documentation, customs — never generate containers.
             errors: dict[str, str] = {}
             for index, line in enumerate(data.get("pricingLines") or []):
                 container_value = line.get("containerTypeId") or line.get("containerType")
@@ -340,15 +392,36 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                     )
                     continue
                 type_quantities[container_type_id] = container_quantity
-                line["__container_type_id"] = container_type_id
+                line_container_types[index] = container_type_id
             if errors:
                 raise ValidationFailed("Please correct the container quantities in the pricing lines.", errors)
-            # Replace the revision's requirement rows with the derived set (an
-            # empty set removes them: requirements follow the pricing lines).
+        else:
+            # The caller supplied the requirements (a full quotation save does):
+            # link each line to the matching row by its container type.
+            for index, line in enumerate(data.get("pricingLines") or []):
+                container_value = line.get("containerTypeId") or line.get("containerType")
+                if container_value in (None, ""):
+                    continue
+                container_type_id = await resolve_or_create_container_type(session, container_value)
+                if container_type_id is not None:
+                    line_container_types[index] = container_type_id
+
+        # Priced lines reference the requirement rows through a strict FK: delete
+        # them before the requirements are replaced, then re-insert them below
+        # with the (kept or newly created) requirement ids.
+        await session.execute(
+            delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id)
+        )
+        labels: dict[int, str] = {}
+        if validated_requirements is not None:
+            # Replace by container type in place: a row whose type survives keeps
+            # its id, so the lines' requirement links stay stable.
+            requirement_ids = await _replace_revision_requirements(session, revision, validated_requirements)
+        else:
             await session.execute(
                 delete(QuotationRevisionContainer).where(QuotationRevisionContainer.quotation_revision_id == revision.id)
             )
-            labels: dict[int, str] = {}
+            requirement_ids = {}
             if type_quantities:
                 from app.modules.master_data.models import ContainerType
 
@@ -370,12 +443,11 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                     )
                     session.add(row)
                     await session.flush()
-                    derived_requirements[container_type_id] = row.id
+                    requirement_ids[container_type_id] = row.id
             data["containerRequirements"] = [
                 {"containerTypeId": str(container_type_id), "containerType": labels.get(container_type_id, str(container_type_id)), "quantity": str(container_quantity)}
                 for container_type_id, container_quantity in type_quantities.items()
             ]
-        await session.execute(delete(QuotationRevisionLine).where(QuotationRevisionLine.quotation_revision_id == revision.id))
         priced_subtotal = Decimal("0")
         priced_discount = Decimal("0")
         priced_tax = Decimal("0")
@@ -437,7 +509,7 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
             priced_discount += discount
             priced_tax += tax
             priced_total += total
-            container_type_id = line.pop("__container_type_id", None)
+            container_type_id = line_container_types.get(index)
             session.add(
                 QuotationRevisionLine(
                     quotation_revision_id=revision.id,
@@ -449,7 +521,7 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
                         line.get("feeType") or line.get("fee_type"),
                     ),
                     container_requirement_id=(
-                        derived_requirements.get(int(container_type_id)) if container_type_id is not None else None
+                        requirement_ids.get(container_type_id) if container_type_id is not None else None
                     ),
                     service_description=str(line.get("description") or line.get("feeType") or "Service"),
                     quantity=quantity,
@@ -469,6 +541,10 @@ async def _save_revision_children(session: AsyncSession, revision: QuotationRevi
         revision.discount_amount = _money(priced_discount)
         revision.tax_amount = _money(priced_tax)
         revision.total_amount = _money(priced_total)
+    if validated_requirements is not None and not ("pricingLines" in data or "lines" in data):
+        # A requirements-only save still has to keep the priced lines' links:
+        # replacement happens by container type, in place.
+        await _replace_revision_requirements(session, revision, validated_requirements)
     await session.flush()
 
 
@@ -516,6 +592,15 @@ async def get_quotation(session: AsyncSession, context: RequestContext, quotatio
     revision = await get_latest_revision(session, quotation)
     conversions = await _conversions_for(session, [quotation.id])
     record = quotation_record(quotation, revision, quotation.data or {}, conversions.get(quotation.id))
+    if quotation.source_service_order_id:
+        # The re-quoted quotation shows a clickable source-order reference.
+        from app.modules.operations.models import ServiceOrder
+
+        source_no = await session.scalar(
+            select(ServiceOrder.service_order_no).where(ServiceOrder.id == quotation.source_service_order_id)
+        )
+        if source_no:
+            record["sourceServiceOrderNo"] = source_no
     if revision is not None:
         from sqlalchemy import select as _select
 
@@ -1082,9 +1167,13 @@ async def _conversion_payload(session: AsyncSession, conversion: QuotationConver
 
     from app.modules.operations.models import ServiceOrder
 
-    quotation, revision = await _revision_with_quotation(session, conversion.quotation_revision_id)
     order = await session.get(ServiceOrder, conversion.service_order_id)
-    payload = quotation_record(quotation, revision, quotation.data or {})
+    if conversion.quotation_revision_id is None:
+        # A direct create (no quotation): the replay answer is the order alone.
+        payload: dict = {}
+    else:
+        quotation, revision = await _revision_with_quotation(session, conversion.quotation_revision_id)
+        payload = quotation_record(quotation, revision, quotation.data or {})
     payload["serviceOrderId"] = str(conversion.service_order_id)
     payload["serviceOrderNo"] = order.service_order_no if order is not None else ""
     return payload
@@ -1135,7 +1224,7 @@ async def convert_revision(
 
 
 async def create_quotation_from_service_order(
-    session: AsyncSession, context: RequestContext, identifier: str | int
+    session: AsyncSession, context: RequestContext, identifier: str | int, idempotency_key: str | None = None
 ) -> dict:
     """Re-quotation: a new draft quotation copied from an existing service order.
 
@@ -1153,6 +1242,27 @@ async def create_quotation_from_service_order(
     from app.modules.operations.service import resolve_order
 
     order = await resolve_order(session, context, identifier)
+
+    if idempotency_key:
+        # A retried re-quotation is answered with the quotation it already
+        # created; a fresh request (no remembered key) creates a new quotation,
+        # so one service order may produce many deliberate re-quotations.
+        replay = (
+            await session.execute(
+                select(Quotation).where(
+                    Quotation.source_service_order_id == order.id,
+                    Quotation.data["reQuotationIdempotencyKey"].as_string() == idempotency_key,
+                )
+            )
+        ).scalars().first()
+        if replay is not None:
+            return {
+                "id": str(replay.id),
+                "quotationNo": replay.quotation_no,
+                "sourceServiceOrderId": str(order.id),
+                "sourceServiceOrderNo": order.service_order_no,
+            }
+
     direction = await session.get(TradeDirection, order.trade_direction_id)
     if direction is None:
         raise ValidationFailed("The service order has no trade direction.", {"direction": "Required"})
@@ -1181,6 +1291,31 @@ async def create_quotation_from_service_order(
                 .order_by(ServiceOrderPricingLine.line_no, ServiceOrderPricingLine.id)
             )
         ).scalars().all()
+
+    # The order's own pricing lines are already the aggregated form of its
+    # container payments (payments were expanded FROM them, one row per unit).
+    # An order priced only through its payment sheet has no stored lines, so
+    # the payment rows are aggregated back into pricing lines instead.
+    pricing_payload: list[dict[str, Any]] | None = None
+    if priced_lines:
+        pricing_payload = [
+            {
+                "feeTypeId": str(line.fee_type_id) if line.fee_type_id else None,
+                "description": line.description,
+                "quantity": str(line.quantity or 0),
+                "unit": line.unit_code,
+                "unitPrice": str(line.unit_price or 0),
+                "discount": str(line.discount_rate or 0),
+                "tax": str(max(
+                    Decimal("0"),
+                    (line.line_total or Decimal("0"))
+                    - ((line.quantity or Decimal("0")) * (line.unit_price or Decimal("0")) - (line.discount_rate or Decimal("0"))),
+                )),
+            }
+            for line in priced_lines
+        ]
+    else:
+        pricing_payload = _aggregated_payment_lines(order.data or {}).get("pricingLines")
 
     record = await save_quotation(
         session,
@@ -1222,32 +1357,84 @@ async def create_quotation_from_service_order(
             # The stored line discount is an amount; the tax amount is derived
             # from the stored total, so a re-quotation reproduces the same money
             # whether the source line recorded a rate or an amount.
-            "pricingLines": [
-                {
-                    "feeTypeId": str(line.fee_type_id) if line.fee_type_id else None,
-                    "description": line.description,
-                    "quantity": str(line.quantity or 0),
-                    "unit": line.unit_code,
-                    "unitPrice": str(line.unit_price or 0),
-                    "discount": str(line.discount_rate or 0),
-                    "tax": str(max(
-                        Decimal("0"),
-                        (line.line_total or Decimal("0"))
-                        - ((line.quantity or Decimal("0")) * (line.unit_price or Decimal("0")) - (line.discount_rate or Decimal("0"))),
-                    )),
-                }
-                for line in priced_lines
-            ],
+            "pricingLines": pricing_payload or [],
         },
     )
 
     quotation = await session.get(Quotation, int(record["id"]))
     if quotation is not None:
         quotation.source_service_order_id = order.id
+        if idempotency_key:
+            # Written with the quotation so a retried request finds it above.
+            quotation.data = jsonable({**(quotation.data or {}), "reQuotationIdempotencyKey": idempotency_key})
         await session.commit()
     record["sourceServiceOrderId"] = str(order.id)
     record["sourceServiceOrderNo"] = order.service_order_no
     return record
+
+
+def _aggregated_payment_lines(order_data: dict[str, Any]) -> dict[str, Any]:
+    """Reverse of container-payment expansion: group payment rows into pricing lines.
+
+    Rows are grouped by every attribute that makes two charges materially
+    different — fee type, description, unit, unit price, discount and tax
+    treatment — so two charges that merely share a fee type stay separate.
+    Quantities are summed with exact Decimal arithmetic and the line tax is
+    derived from the stored row totals, so the lines reconcile with the source
+    charges. Unparseable amounts raise a validation error instead of producing
+    a wrong quotation.
+    """
+    from decimal import InvalidOperation
+
+    payments = order_data.get("containerPayments")
+    if not isinstance(payments, list) or not payments:
+        return {}
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in payments:
+        if not isinstance(row, dict):
+            continue
+        fee_type = str(row.get("feeType") or "").strip()
+        description = str(row.get("description") or fee_type).strip()
+        if not fee_type and not description:
+            continue
+        unit = str(row.get("unit") or "").strip()
+        try:
+            values = {
+                key: Decimal(str(row.get(key) or 0))
+                for key in ("quantity", "unitPrice", "discountAmount", "taxRate", "taxAmount", "lineTotal")
+            }
+        except InvalidOperation as exc:
+            raise ValidationFailed(
+                "The service order's container payments contain an invalid amount; "
+                "correct them before re-quoting.",
+                {"containerPayments": "Invalid amount."},
+            ) from exc
+        key = (
+            fee_type, description, unit,
+            values["unitPrice"], values["discountAmount"], values["taxRate"], values["taxAmount"],
+        )
+        entry = grouped.get(key)
+        if entry is None:
+            grouped[key] = entry = {**values, "feeType": fee_type, "description": description, "unit": unit}
+        else:
+            entry["quantity"] += values["quantity"]
+            entry["lineTotal"] += values["lineTotal"]
+    lines = []
+    for entry in grouped.values():
+        # Tax is derived the same way the stored pricing lines report it:
+        # line total minus the net (qty x price - discount) amount.
+        net = entry["quantity"] * entry["unitPrice"] - entry["discountAmount"]
+        tax = max(Decimal("0"), entry["lineTotal"] - net)
+        lines.append({
+            "feeType": entry["feeType"] or None,
+            "description": entry["description"],
+            "quantity": str(entry["quantity"]),
+            "unit": entry["unit"] or None,
+            "unitPrice": str(entry["unitPrice"]),
+            "discount": str(entry["discountAmount"]),
+            "tax": str(tax),
+        })
+    return {"pricingLines": lines}
 
 
 async def delete_quotations(session: AsyncSession, context: RequestContext, ids: list[int]) -> None:
@@ -1292,4 +1479,15 @@ async def delete_quotations(session: AsyncSession, context: RequestContext, ids:
                 )
             )
         await session.delete(quotation)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent service-order creation linked this quotation between the
+        # dependency check and the commit: the revision cascade's RESTRICT FK
+        # stops the delete, so the caller gets the same clean refusal the
+        # pre-check produces instead of a 500. No order is ever cascaded away.
+        await session.rollback()
+        raise Conflict(
+            "QUOTATION_HAS_SERVICE_ORDER",
+            "This quotation is linked to a service order and cannot be deleted.",
+        ) from None

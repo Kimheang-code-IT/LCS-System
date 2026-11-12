@@ -9,18 +9,18 @@ import {
 const revisionTable = getFreightModule('/quotations')!.tables!.find(table => table.key === 'revisionHistory')!
 
 describe('quotation list columns', () => {
-  it('shows the seven business columns in order', () => {
+  it('shows the business columns in order and no Status or SO No. column', () => {
     expect(getFreightModule('/quotations')!.columns.map(column => column.key)).toEqual([
       'quotationNo',
-      'serviceOrderNo',
       'customer',
       'revisionNo',
       'direction',
       'total',
-      'status',
       'createdBy',
       'createdAt',
     ])
+    expect(getFreightModule('/quotations')!.columns.some(column => column.key === 'status')).toBe(false)
+    expect(getFreightModule('/quotations')!.columns.some(column => column.key === 'serviceOrderNo')).toBe(false)
   })
 
   it('labels the party column and filter as Business Party', () => {

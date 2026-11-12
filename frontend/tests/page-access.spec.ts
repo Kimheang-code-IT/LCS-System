@@ -13,7 +13,9 @@ describe('page access', () => {
   })
 
   it('uses the create action for new-record routes', () => {
-    expect(requiredPagePermissionForPath('/service-orders/new')).toBe('operations.service_orders.create')
+    // Manual Service Order creation is retired: the old route redirects to
+    // Quotations, so it only needs the list's view permission.
+    expect(requiredPagePermissionForPath('/service-orders/new')).toBe('operations.service_orders.view')
     expect(requiredPagePermissionForPath('/service-orders/42')).toBe('operations.service_orders.view')
   })
 

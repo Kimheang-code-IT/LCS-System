@@ -16,6 +16,21 @@ RUN groupadd --system --gid 10001 app \
 
 WORKDIR /app
 
+# PostgreSQL client tools: required by the full disaster-recovery workflow
+# (pg_dump / pg_restore in app/modules/backup/dr.py and scripts/full_backup.py).
+# Version 16 comes from PGDG and must match the deployment server: pg_dump 17
+# writes `SET transaction_timeout` that a PostgreSQL 16 server rejects during
+# restore. The Dockerfile base is Debian trixie.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt trixie-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependency layer (cached): resolve from the committed lockfile.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
@@ -26,6 +41,9 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
+# Maintenance CLIs, runnable in a one-off container (nothing here runs on start):
+# full disaster-recovery backup, and the explicit master-data/configuration seed.
+COPY scripts ./scripts
 
 # No storage directory: uploaded objects are processed in memory and written
 # directly to Cloudflare R2 / Google Drive (Settings → Storage & Backup).

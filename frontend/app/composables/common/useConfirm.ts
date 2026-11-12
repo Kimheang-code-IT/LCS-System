@@ -19,6 +19,11 @@ export interface ConfirmOptions {
   confirmColor?: ConfirmColor
   /** Used by delete preset: number of items. */
   count?: number
+  /**
+   * Keep the dialog open after Confirm so the Confirm button shows the work in
+   * progress: the caller drives `setLoading` and closes the dialog itself.
+   */
+  keepOpenOnConfirm?: boolean
 }
 
 type ConfirmState = {
@@ -34,6 +39,7 @@ type ConfirmState = {
   cancelLabelKey?: string
   confirmColor: ConfirmColor
   loading: boolean
+  keepOpenOnConfirm?: boolean
 }
 
 const PRESETS: Record<ConfirmKind, Partial<ConfirmOptions> & { confirmColor: ConfirmColor }> = {
@@ -114,6 +120,7 @@ export function useConfirm() {
     confirmState.cancelLabel = options.cancelLabel
     confirmState.cancelLabelKey = options.cancelLabelKey || preset.cancelLabelKey
     confirmState.confirmColor = options.confirmColor || preset.confirmColor
+    confirmState.keepOpenOnConfirm = options.keepOpenOnConfirm
     confirmState.loading = false
     confirmState.open = true
 
@@ -127,6 +134,15 @@ export function useConfirm() {
   }
 
   function accept() {
+    if (confirmState.keepOpenOnConfirm) {
+      // The caller owns the dialog now: resolve so it can run the work with the
+      // Confirm button spinning, then close (or keep open for a retry) itself.
+      const resolve = pendingResolve
+      pendingResolve = null
+      confirmState.loading = true
+      resolve?.(true)
+      return
+    }
     close(true)
   }
 

@@ -80,8 +80,10 @@ class BackupStorageError(RuntimeError):
 
 # --- configuration -----------------------------------------------------------
 async def _load_backup_config(session: AsyncSession) -> dict[str, Any]:
-    config = await settings_service.get_app_config(session)
-    return dict(config.get("backup") or {})
+    config = await settings_service.get_app_config(session)  # legacy backup.r2* already folded into storage
+    backup = dict(config.get("backup") or {})
+    settings_service.overlay_r2_credentials(backup, config.get("storage") or {})
+    return backup
 
 
 async def _store_backup_status(session: AsyncSession, *, status: str, message: str, when: str) -> None:

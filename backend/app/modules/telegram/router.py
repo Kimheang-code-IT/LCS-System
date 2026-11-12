@@ -11,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.context import RequestContext
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.database import get_session
-from app.core.deps import get_current_context, require_any_permission
+from app.core.deps import require_any_permission, require_permission
 from app.core.exceptions import AccessDenied, ValidationFailed
 from app.core.rate_limit import enforce_rate_limit
+from app.modules.audit.service import write_audit
 from app.modules.auth.models import PasswordResetToken, User
 from app.modules.telegram import service
 from app.modules.telegram.models import NotificationOutbox, TelegramLink, TelegramPairing
@@ -21,6 +22,7 @@ from app.modules.telegram.models import NotificationOutbox, TelegramLink, Telegr
 router = APIRouter()
 manage = require_any_permission("settings.app_config.update", "configuration.manage")
 view = require_any_permission("settings.app_config.view", "configuration.manage")
+chatbot = require_permission("telegram.chatbot.use")
 
 
 class PasswordProof(BaseModel):
@@ -113,23 +115,52 @@ async def group_disconnect(context: RequestContext = Depends(manage), session: A
 
 
 @router.get("/auth/me/telegram")
-async def my_link(context: RequestContext = Depends(get_current_context), session: AsyncSession = Depends(get_session)) -> dict:
+async def my_link(context: RequestContext = Depends(chatbot), session: AsyncSession = Depends(get_session)) -> dict:
     link = await session.get(TelegramLink, context.user_id)
-    return {"data": {"connected": bool(link), "displayName": link.display_name if link else None, "verifiedAt": link.verified_at.isoformat() if link else None, "blocked": bool(link and link.blocked_at)}}
+    value = await service.config(session)
+    from app.core.config import settings
+    from app.modules.telegram.worker import health as worker_health
+
+    worker = worker_health()
+    mode = (settings.telegram_update_mode or "webhook").strip().lower()
+    updates_active = bool(settings.telegram_worker_enabled) and worker.get("status") not in {"disabled", "misconfigured", "failed"} and (
+        mode == "polling" or value.get("webhookStatus") == "registered"
+    )
+    return {"data": {
+        "connected": bool(link),
+        "displayName": link.display_name if link else None,
+        "verifiedAt": link.verified_at.isoformat() if link else None,
+        "blocked": bool(link and link.blocked_at),
+        "telegramUserId": link.telegram_user_id if link else None,
+        "username": link.display_name if link else None,
+        "updatesActive": updates_active,
+        **service.bot_identity(value),
+    }}
+
+
+@router.post("/auth/me/telegram/verification-code")
+async def telegram_verification_code(context: RequestContext = Depends(chatbot), session: AsyncSession = Depends(get_session)) -> dict:
+    """Issue a 6-digit code; only its hash is stored and /verify consumes it."""
+    if not await service.within_rate_budget(f"telegram:code:{context.user_id}", limit=5, window_seconds=600):
+        raise ValidationFailed("Too many verification codes requested. Try again later.")
+    return {"data": await service.create_verification_code(session, context)}
 
 
 @router.post("/auth/me/telegram/pair")
-async def private_pair(payload: PasswordProof, context: RequestContext = Depends(get_current_context), session: AsyncSession = Depends(get_session)) -> dict:
+async def private_pair(payload: PasswordProof, context: RequestContext = Depends(chatbot), session: AsyncSession = Depends(get_session)) -> dict:
     await enforce_rate_limit(f"telegram:private:{context.user_id}", limit=3, window_seconds=600)
     await session.execute(select(User.id).where(User.id == context.user_id).with_for_update())
     await service.reauthenticate(session, context.user_id, payload.current_password)
     if await session.get(TelegramLink, context.user_id):
         raise ValidationFailed("Disconnect the current Telegram account before pairing another.")
-    return {"data": await service.create_pairing(session, context, "PRIVATE")}
+    pairing = await service.create_pairing(session, context, "PRIVATE")
+    await write_audit(session, context, event_type="TELEGRAM_PAIRING_STARTED", entity_type="user", entity_id=context.user_id, action="pair")
+    await session.commit()
+    return {"data": pairing}
 
 
 @router.post("/auth/me/telegram/disconnect")
-async def private_disconnect(payload: PasswordProof, context: RequestContext = Depends(get_current_context), session: AsyncSession = Depends(get_session)) -> dict:
+async def private_disconnect(payload: PasswordProof, context: RequestContext = Depends(chatbot), session: AsyncSession = Depends(get_session)) -> dict:
     await enforce_rate_limit(f"telegram:private:{context.user_id}", limit=3, window_seconds=600)
     await session.execute(select(User.id).where(User.id == context.user_id).with_for_update())
     await service.reauthenticate(session, context.user_id, payload.current_password)
@@ -145,6 +176,7 @@ async def private_disconnect(payload: PasswordProof, context: RequestContext = D
         await enqueue_private(session, context.user_id, "TELEGRAM_UNLINKED")
         await session.delete(link)
     await session.execute(delete(TelegramPairing).where(TelegramPairing.user_id == context.user_id))
+    await write_audit(session, context, event_type="TELEGRAM_UNLINKED", entity_type="user", entity_id=context.user_id, action="disconnect")
     await session.commit()
     return {"data": {"disconnected": True}}
 

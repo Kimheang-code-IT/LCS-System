@@ -1,5 +1,6 @@
 import type {
   AppConfig,
+  AppConfigPatch,
   AppInfo,
   BackupRunSummary,
   BackupStatus,
@@ -17,7 +18,7 @@ export interface AppInfoRepository {
 
 export interface AppConfigRepository {
   get: () => Promise<AppConfig>
-  update: (input: Partial<AppConfig>) => Promise<AppConfig>
+  update: (input: AppConfigPatch) => Promise<AppConfig>
   testEmailConnection: () => Promise<{ status: ConnectionStatus, message: string }>
   sendTestEmail: (to: string) => Promise<{ status: ConnectionStatus, message: string }>
   testTelegramConnection: () => Promise<{ status: ConnectionStatus, message: string }>

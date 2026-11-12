@@ -22,6 +22,7 @@ from app.modules.finance.models import (
     FinancialAccount,
     FinancialDocument,
     FinancialDocumentAllocation,
+    FinancialDocumentComponentAllocation,
     FinancialDocumentLine,
     FinancialDocumentPosting,
     FinancialDocumentSource,
@@ -724,6 +725,8 @@ def document_payload(
             "id": str(document.id),
             "documentNo": document.document_no,
             "debitNoteNo": document.document_no,
+            "generatedKey": document.generated_key,
+            "generatedDocument": bool(document.generated_key),
             "documentType": document.document_type,
             "documentTypeId": str((document.data or {}).get("documentTypeId") or ""),
             "documentTypeCode": (document.data or {}).get("documentTypeCode"),
@@ -1815,6 +1818,30 @@ async def allocate_payment(
     }
 
 
+async def _charge_in_generated_draft(session: AsyncSession, charge_id: int) -> bool:
+    """True when a generated container invoice already carries this charge's lines."""
+    line_ids = (
+        await session.execute(
+            select(ServiceOrderChargeLine.id).where(
+                ServiceOrderChargeLine.service_order_charge_id == charge_id
+            )
+        )
+    ).scalars().all()
+    if not line_ids:
+        return False
+    return (
+        await session.scalar(
+            select(FinancialDocumentComponentAllocation.id).where(
+                FinancialDocumentComponentAllocation.source_kind == "CUSTOMER_CHARGE_LINE",
+                or_(*[
+                    FinancialDocumentComponentAllocation.source_key.like(f"charge-line:{line_id}:%")
+                    for line_id in line_ids
+                ]),
+            )
+        )
+    ) is not None
+
+
 async def create_invoice_from_charge(
     session: AsyncSession,
     context: RequestContext,
@@ -1823,6 +1850,8 @@ async def create_invoice_from_charge(
     commit: bool = True,
     idempotency_key: str | None = None,
 ) -> dict:
+    if (charge.charge_side or "CUSTOMER").upper() == "INTERNAL":
+        raise InvalidState("An internal cost charge cannot be invoiced to the customer.")
     if charge.status != "ISSUED":
         raise InvalidState("Only an issued service charge can create a finance invoice.")
     if idempotency_key:
@@ -1851,6 +1880,11 @@ async def create_invoice_from_charge(
         document = await session.get(FinancialDocument, existing.financial_document_id)
         if document is not None:
             return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+    if await _charge_in_generated_draft(session, charge.id):
+        raise Conflict(
+            "CHARGE_ALREADY_INVOICED",
+            "This charge is already included in a generated container invoice.",
+        )
     order = await session.get(ServiceOrder, charge.service_order_id)
     number = await allocate_number(session, "CUSTOMER_INVOICE")
     # The charge keeps its currency and is never rewritten. The invoice resolves
@@ -1948,6 +1982,178 @@ async def create_invoice_from_charge(
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
+async def create_combined_invoice_from_charges(
+    session: AsyncSession,
+    context: RequestContext,
+    charge_ids: list[int],
+    *,
+    idempotency_key: str | None = None,
+) -> dict:
+    """One customer invoice drafted from several issued service charges.
+
+    Every charge keeps its own ``SERVICE_ORDER_CHARGE`` source row pointing at
+    the shared document, so the existing per-charge bill-once index prevents
+    any of them from being invoiced twice, while the same document carries all
+    of their lines. The charges must share one customer and one currency; the
+    document is a finance draft and posts only through the existing workflow.
+    """
+    if not charge_ids:
+        raise ValidationFailed("Select at least one service charge.", {"ids": "Required"})
+    # Lock in id order so two concurrent combined conversions serialise instead
+    # of deadlocking against each other.
+    charges = (
+        await session.execute(
+            select(ServiceOrderCharge)
+            .where(ServiceOrderCharge.id.in_(sorted(set(charge_ids))))
+            .order_by(ServiceOrderCharge.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if len(charges) != len(set(charge_ids)):
+        raise NotFound("Service charge not found.")
+
+    if idempotency_key:
+        prior = (
+            await session.execute(
+                select(FinancialDocumentSource).where(FinancialDocumentSource.idempotency_key == idempotency_key)
+            )
+        ).scalars().first()
+        if prior is not None:
+            if prior.source_type != "SERVICE_ORDER_CHARGE" or prior.source_id != charges[0].id:
+                raise Conflict(
+                    "IDEMPOTENCY_KEY_CONFLICT",
+                    "This idempotency key already converted a different source; use a new key.",
+                )
+            document = await session.get(FinancialDocument, prior.financial_document_id)
+            if document is not None:
+                return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+
+    # Eligibility: issued, not already invoiced, one customer, one currency.
+    for charge in charges:
+        if charge.status != "ISSUED":
+            raise InvalidState(f"Only an issued service charge can create a finance invoice ({charge.charge_no} is {charge.status}).")
+    already_invoiced = {
+        row[0]
+        for row in (
+            await session.execute(
+                select(FinancialDocumentSource.source_id).where(
+                    FinancialDocumentSource.source_type == "SERVICE_ORDER_CHARGE",
+                    FinancialDocumentSource.source_id.in_([charge.id for charge in charges]),
+                )
+            )
+        ).all()
+    }
+    if already_invoiced:
+        invoiced_no = next(charge.charge_no for charge in charges if charge.id in already_invoiced)
+        raise Conflict("CHARGE_ALREADY_CONVERTED", f"{invoiced_no} is already invoiced and cannot be invoiced again.")
+    parties: set[int | None] = set()
+    for charge in charges:
+        party_id = charge.customer_party_id
+        if party_id is None and charge.service_order_id is not None:
+            order = await session.get(ServiceOrder, charge.service_order_id)
+            party_id = order.customer_party_id if order is not None else None
+        parties.add(party_id)
+    if len([party for party in parties if party is not None]) > 1 or (len(parties) > 1 and None in parties):
+        raise ValidationFailed(
+            "The selected charges belong to different customers and cannot be combined.",
+            {"ids": "Same customer required"},
+        )
+    party_id = next(iter(parties))
+    if party_id is None:
+        raise ValidationFailed("The selected charges have no customer to bill.", {"ids": "Customer required"})
+    currencies = {str(charge.currency_code or "") for charge in charges}
+    if len(currencies) > 1:
+        raise ValidationFailed(
+            "The selected charges use different currencies and cannot be combined.",
+            {"ids": "One currency required"},
+        )
+
+    order_ids = {charge.service_order_id for charge in charges if charge.service_order_id is not None}
+    service_order_id = next(iter(order_ids)) if len(order_ids) == 1 else None
+    invoice_currency, invoice_rate, invoice_base, invoice_precision = await _document_currency_inputs(
+        session,
+        {},
+        document_currency=str(next(iter(currencies)) or await get_default_currency(session)),
+        base_currency=await get_default_currency(session),
+        on_date=date.today(),
+    )
+    subtotal = sum((charge.subtotal_amount or Decimal("0") for charge in charges), Decimal("0"))
+    discount_total = sum((charge.discount_amount or Decimal("0") for charge in charges), Decimal("0"))
+    tax_total = sum((charge.tax_amount or Decimal("0") for charge in charges), Decimal("0"))
+    total = sum((charge.total_amount or Decimal("0") for charge in charges), Decimal("0"))
+    document = FinancialDocument(
+        document_no=await allocate_number(session, "CUSTOMER_INVOICE"),
+        document_type="CUSTOMER_INVOICE",
+        document_date=date.today(),
+        status="DRAFT",
+        party_id=party_id,
+        service_order_id=service_order_id,
+        currency_code=invoice_currency,
+        exchange_rate=invoice_rate,
+        base_currency_code=invoice_base,
+        description=f"Combined from service charges {', '.join(charge.charge_no for charge in charges)}",
+        subtotal_amount=subtotal,
+        discount_amount=discount_total,
+        tax_amount=tax_total,
+        total_amount=total,
+        base_subtotal_amount=fx.convert_to_base(subtotal, invoice_rate, invoice_precision),
+        base_discount_amount=fx.convert_to_base(discount_total, invoice_rate, invoice_precision),
+        base_tax_amount=fx.convert_to_base(tax_total, invoice_rate, invoice_precision),
+        base_total_amount=fx.convert_to_base(total, invoice_rate, invoice_precision),
+        created_by_user_id=context.user_id,
+        data={"sourceChargeNos": [charge.charge_no for charge in charges]},
+    )
+    session.add(document)
+    await session.flush()
+    line_no = 0
+    for charge in charges:
+        charge_lines = (
+            await session.execute(
+                select(ServiceOrderChargeLine)
+                .where(ServiceOrderChargeLine.service_order_charge_id == charge.id)
+                .order_by(ServiceOrderChargeLine.line_no)
+            )
+        ).scalars().all()
+        for line in charge_lines:
+            line_no += 1
+            session.add(
+                FinancialDocumentLine(
+                    financial_document_id=document.id,
+                    line_no=line_no,
+                    description=line.description,
+                    fee_type_id=line.fee_type_id,
+                    quantity=line.quantity,
+                    unit_price=line.unit_price,
+                    discount_amount=line.discount_amount,
+                    tax_rate=line.tax_rate,
+                    tax_amount=line.tax_amount,
+                    line_amount=line.line_amount,
+                    service_order_id=charge.service_order_id,
+                    service_order_container_id=line.service_order_container_id,
+                )
+            )
+        session.add(
+            FinancialDocumentSource(
+                financial_document_id=document.id,
+                source_type="SERVICE_ORDER_CHARGE",
+                source_id=charge.id,
+                idempotency_key=idempotency_key if charge.id == charges[0].id else None,
+            )
+        )
+    try:
+        await session.commit()
+        await cache.bump("reports")
+    except IntegrityError:
+        # The bill-once index or the idempotency key caught a racing identical
+        # request; nothing partial survives and the caller retries cleanly.
+        await session.rollback()
+        raise Conflict(
+            "CHARGE_ALREADY_CONVERTED" if not idempotency_key else "IDEMPOTENCY_KEY_CONFLICT",
+            "This conversion races an identical request that already committed. Reload the charges and retry.",
+        ) from None
+    return document_payload(document, document.data or {}, await _document_lines(session, document.id))
+
+
 async def _service_order_invoice_documents(
     session: AsyncSession, order_id: int
 ) -> list[FinancialDocument]:
@@ -2028,12 +2234,15 @@ async def create_invoice_from_service_order(session: AsyncSession, context: Requ
     charges = (
         await session.execute(
             select(ServiceOrderCharge)
-            .where(ServiceOrderCharge.service_order_id == order.id)
+            .where(
+                ServiceOrderCharge.service_order_id == order.id,
+                or_(ServiceOrderCharge.charge_side == "CUSTOMER", ServiceOrderCharge.charge_side.is_(None)),
+            )
             .order_by(ServiceOrderCharge.id)
         )
     ).scalars().all()
     if not charges:
-        raise ValidationFailed("No service charges to invoice.")
+        raise ValidationFailed("No customer service charges to invoice.")
     charge_ids = [charge.id for charge in charges]
     invoiced_ids = set(
         (
@@ -2045,7 +2254,13 @@ async def create_invoice_from_service_order(session: AsyncSession, context: Requ
             )
         ).scalars().all()
     )
-    pending = [charge for charge in charges if charge.id not in invoiced_ids]
+    pending = []
+    for charge in charges:
+        if charge.id in invoiced_ids:
+            continue
+        if await _charge_in_generated_draft(session, charge.id):
+            continue
+        pending.append(charge)
     if not pending:
         raise ValidationFailed("All service charges for this order are already invoiced.")
     zero = Decimal("0")

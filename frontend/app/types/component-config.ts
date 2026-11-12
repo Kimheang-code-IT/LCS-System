@@ -72,6 +72,7 @@ export interface ComponentAttributeInput {
   options?: Array<string | { label: string, value: string }>
   validationRules?: Record<string, unknown>
   status?: string
+  displayOrder?: number
 }
 
 export interface ComponentGroupAttribute {

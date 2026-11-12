@@ -649,11 +649,13 @@ async def test_service_order_with_finances_cannot_be_hard_deleted(client):
     assert deleted.status_code == 409, deleted.text
     assert deleted.json()["code"] == "ORDER_HAS_FINANCIAL_DOCUMENTS"
 
-    # With the document and charges removed the order is deletable again.
+    # With the document removed the invoiced charge stays as its source of
+    # truth — it can no longer be deleted, so the order keeps its audit trail.
     removed_doc = await client.request("DELETE", "/api/v1/financial-documents", headers=headers, json={"ids": [str(document_id)]})
     assert removed_doc.status_code == 200, removed_doc.text
     removed_charge = await client.request("DELETE", "/api/v1/service-charges", headers=headers, json={"ids": [str(charge_id)]})
     assert removed_charge.status_code == 200, removed_charge.text
-    free_delete = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
-    assert free_delete.status_code == 200, free_delete.text
-    assert free_delete.json()["data"]["removed"] == 1
+    assert removed_charge.json()["data"]["removed"] == 0
+    still_blocked = await client.request("DELETE", "/api/v1/service-orders", headers=headers, json={"ids": [str(order_id)]})
+    assert still_blocked.status_code == 409, still_blocked.text
+    assert still_blocked.json()["code"] == "ORDER_HAS_SERVICE_CHARGES"

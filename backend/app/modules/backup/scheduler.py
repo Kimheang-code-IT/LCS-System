@@ -51,6 +51,7 @@ async def maybe_run_due() -> None:
         await tick(session)
         if await jobs_paused(session):
             return
+        await _maybe_full_backup_due(session)
         config = await service._load_backup_config(session)
         if not config.get("enabled"):
             return
@@ -70,6 +71,58 @@ async def maybe_run_due() -> None:
                 await service.run_now(session, trigger="scheduled")
             except Exception as exc:  # noqa: BLE001 - scheduler must keep running
                 logger.warning("Scheduled backup failed: %s", exc)
+
+
+async def _maybe_full_backup_due(session) -> None:
+    """Scheduled full DR backup, opt-in through FULL_BACKUP_INTERVAL_HOURS.
+
+    Default 0 = disabled, so existing deployments keep their current schedule
+    until an operator turns disaster-recovery archives on. The last full run is
+    read from the backup journal (trigger starts with ``full-``).
+    """
+    import os
+
+    from sqlalchemy import select
+
+    from app.modules.backup import dr
+    from app.modules.backup.models import BackupRun
+
+    try:
+        interval = int(os.environ.get("FULL_BACKUP_INTERVAL_HOURS", "0") or 0)
+    except ValueError:
+        return
+    if interval <= 0:
+        return
+    last = (
+        await session.execute(
+            select(BackupRun.started_at)
+            .where(BackupRun.trigger.like("full-%"), BackupRun.status == "success")
+            .order_by(BackupRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar()
+    if not _is_due(last.isoformat() if last else "", interval, service.utcnow()):
+        return
+    async with advisory_lock(session, "backup:full-scheduled") as acquired:
+        if not acquired:
+            return
+        run = await service.create_run(session, trigger="full-scheduled", user_id=None, spreadsheet_id=None)
+        try:
+            manifest = await dr.build_archive(session)
+            remote_key = await dr.upload_archive(session, dr.archive_dir() / manifest["archive"]["file"])
+            run.status = "success"
+            run.message = f"Scheduled full backup {manifest['backupId']}."
+            run.detail = {"kind": "full", **manifest, "remoteKey": remote_key}
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 - scheduler must keep running
+            await session.rollback()
+            run = await session.get(BackupRun, run.id)
+            if run is not None:
+                run.status = "failed"
+                run.message = str(exc)[:500]
+                run.detail = {"kind": "full"}
+                await session.commit()
+            logger.warning("Scheduled full backup failed: %s", exc)
 
 
 async def _loop() -> None:
