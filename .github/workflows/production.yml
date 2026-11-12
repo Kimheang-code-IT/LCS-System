@@ -1,7 +1,7 @@
-name: Production
+name: Deploy to Hostinger
 
-# Production pipeline. Triggers only from `main` (push or manual dispatch).
-# A push to `dev` can never reach this workflow.
+# Production pipeline for the Hostinger VPS. Triggers only from `main` (push or
+# manual dispatch). A push to `dev` can never reach this workflow.
 on:
   push:
     branches: [main]
@@ -45,6 +45,85 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Every value the deployment needs is checked here, before any job connects to
+  # the VPS. A missing value names itself in one clear failure instead of
+  # aborting halfway through the remote script after files were uploaded.
+  preflight:
+    name: Preflight configuration
+    if: ${{ !inputs.diagnose }}
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      VPS_HOST: ${{ vars.VPS_HOST || vars.AWS_HOST || secrets.VPS_HOST || secrets.AWS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || vars.AWS_USER || secrets.VPS_USER || secrets.AWS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || vars.AWS_PORT || secrets.VPS_PORT || secrets.AWS_PORT || 22 }}
+      VPS_HOST_FINGERPRINT: ${{ vars.VPS_HOST_FINGERPRINT || vars.AWS_HOST_FINGERPRINT }}
+    steps:
+      - name: Validate deployment configuration
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
+          FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY || secrets.AWS_SSH_KEY }}
+          VPS_HOST_VALUE: ${{ env.VPS_HOST }}
+          VPS_USER_VALUE: ${{ env.VPS_USER }}
+          VPS_PORT_VALUE: ${{ env.VPS_PORT }}
+          FINGERPRINT: ${{ env.VPS_HOST_FINGERPRINT }}
+          EXPECTED_HOST: ${{ vars.VPS_EXPECTED_HOST }}
+          # The Telegram webhook origin is the public HTTPS application origin.
+          # An explicit TELEGRAM_PUBLIC_APP_URL wins; otherwise the site URL the
+          # frontend is built with is used, so both cannot drift apart silently.
+          TELEGRAM_ORIGIN: ${{ vars.TELEGRAM_PUBLIC_APP_URL || vars.NUXT_PUBLIC_SITE_URL }}
+        run: |
+          set -u
+          missing=""
+          require() {
+            if [ -z "$2" ]; then missing="${missing}\n  - $1"; fi
+          }
+          require "secret POSTGRES_PASSWORD" "$POSTGRES_PASSWORD"
+          require "secret JWT_SECRET_KEY" "$JWT_SECRET_KEY"
+          require "secret CSRF_SECRET_KEY" "$CSRF_SECRET_KEY"
+          require "secret FIELD_ENCRYPTION_KEY" "$FIELD_ENCRYPTION_KEY"
+          require "secret VPS_SSH_KEY (or legacy AWS_SSH_KEY)" "$SSH_KEY"
+          require "variable VPS_HOST (or legacy AWS_HOST)" "$VPS_HOST_VALUE"
+          require "variable VPS_USER (or legacy AWS_USER)" "$VPS_USER_VALUE"
+          require "variable VPS_HOST_FINGERPRINT (or legacy AWS_HOST_FINGERPRINT)" "$FINGERPRINT"
+          require "variable TELEGRAM_PUBLIC_APP_URL (or NUXT_PUBLIC_SITE_URL)" "$TELEGRAM_ORIGIN"
+          if [ -n "$missing" ]; then
+            printf 'Missing required production configuration:%b\n' "$missing" >&2
+            echo "Set the names above in the GitHub 'production' environment, then re-run." >&2
+            exit 1
+          fi
+
+          # The backend refuses to start in production unless this is a bare
+          # HTTPS origin (no path, query, credentials, or localhost).
+          case "$TELEGRAM_ORIGIN" in
+            https://*) ;;
+            *)
+              echo "TELEGRAM_PUBLIC_APP_URL must be the public https origin, e.g. https://app.example.com (got a non-https value)." >&2
+              exit 1
+              ;;
+          esac
+          origin_rest="${TELEGRAM_ORIGIN#https://}"
+          case "$origin_rest" in
+            "" | */* | *\?* | *\#* | *@* | localhost* | 127.0.0.1* | *" "*)
+              echo "TELEGRAM_PUBLIC_APP_URL must be a bare https origin: no path, query, credentials, spaces or localhost." >&2
+              exit 1
+              ;;
+          esac
+
+          # Wrong-server guard: when the intended VPS is pinned, refuse any
+          # other destination before a single byte is uploaded.
+          if [ -n "$EXPECTED_HOST" ] && [ "$EXPECTED_HOST" != "$VPS_HOST_VALUE" ]; then
+            echo "SSH destination does not match VPS_EXPECTED_HOST; refusing to deploy to the wrong server." >&2
+            exit 1
+          fi
+
+          echo "Preflight OK: destination ${VPS_USER_VALUE}@${VPS_HOST_VALUE}:${VPS_PORT_VALUE}, host key pinned, Telegram webhook origin configured."
+
   # Read-only host inspection for outages that are invisible from the deploy log
   # (nginx not listening, an exited container, a missing certificate volume).
   # Never starts, stops or rewrites anything.
@@ -55,14 +134,23 @@ jobs:
     environment: production
     permissions:
       contents: read
+    env:
+      # Hostinger VPS connection. The VPS_* names are preferred; the legacy
+      # AWS_* names hold the same Hostinger values from earlier naming and stay
+      # supported so no configured secret has to be re-created.
+      VPS_HOST: ${{ vars.VPS_HOST || vars.AWS_HOST || secrets.VPS_HOST || secrets.AWS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || vars.AWS_USER || secrets.VPS_USER || secrets.AWS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || vars.AWS_PORT || secrets.VPS_PORT || secrets.AWS_PORT || 22 }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY || secrets.AWS_SSH_KEY }}
+      VPS_HOST_FINGERPRINT: ${{ vars.VPS_HOST_FINGERPRINT || vars.AWS_HOST_FINGERPRINT }}
     steps:
       - name: Dump host and container state
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           script: |
             set -uo pipefail
             cd /opt/lcs
@@ -99,21 +187,28 @@ jobs:
   free-disk:
     name: Host disk check
     if: ${{ !inputs.diagnose }}
+    needs: [preflight]
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
+    env:
+      VPS_HOST: ${{ vars.VPS_HOST || vars.AWS_HOST || secrets.VPS_HOST || secrets.AWS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || vars.AWS_USER || secrets.VPS_USER || secrets.AWS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || vars.AWS_PORT || secrets.VPS_PORT || secrets.AWS_PORT || 22 }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY || secrets.AWS_SSH_KEY }}
+      VPS_HOST_FINGERPRINT: ${{ vars.VPS_HOST_FINGERPRINT || vars.AWS_HOST_FINGERPRINT }}
     steps:
       # Pin the VPS SSH host key: the deploy never talks to an unverified host.
       - name: Verify VPS SSH host key
         env:
-          HOST: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          PORT: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
-          FINGERPRINT: ${{ vars.AWS_HOST_FINGERPRINT }}
+          HOST: ${{ env.VPS_HOST }}
+          PORT: ${{ env.VPS_PORT }}
+          FINGERPRINT: ${{ env.VPS_HOST_FINGERPRINT }}
         run: |
           set -eu
           if [ -z "$FINGERPRINT" ]; then
-            echo "Missing repo variable AWS_HOST_FINGERPRINT (ED25519 SHA256 fingerprint of the VPS host key)." >&2
+            echo "Missing variable VPS_HOST_FINGERPRINT (ED25519 SHA256 fingerprint of the Hostinger VPS host key)." >&2
             exit 1
           fi
           scan="$(mktemp)"
@@ -134,10 +229,10 @@ jobs:
           IMAGE_PREFIX: ghcr.io/${{ github.repository }}
           CLEANUP: ${{ inputs.cleanup }}
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           envs: IMAGE_PREFIX,CLEANUP
           script: |
             set -eu
@@ -175,7 +270,7 @@ jobs:
             echo "Free space: ${free_kb} KB."
             if [ "${free_kb:-0}" -lt 1200000 ]; then
               echo "Not enough free space for a safe pre-pull (need about 1.2 GB)." >&2
-              echo "Expand the EBS root volume (growpart + resize2fs) and re-run." >&2
+              echo "Expand the VPS disk (growpart + resize2fs) and re-run." >&2
               exit 1
             fi
 
@@ -261,10 +356,11 @@ jobs:
   # NUXT_PUBLIC_SITE_URL variable.
   build:
     name: Build ${{ matrix.name }} image
-    needs: [resolve, validate-backend, validate-frontend]
+    needs: [preflight, resolve, validate-backend, validate-frontend]
     if: >-
       always() &&
       needs.resolve.outputs.build == 'true' &&
+      needs.preflight.result == 'success' &&
       needs.validate-backend.result == 'success' &&
       needs.validate-frontend.result == 'success'
     runs-on: ubuntu-latest
@@ -322,14 +418,16 @@ jobs:
   # then recreate the stack and verify HTTPS readiness. Previous image IDs are
   # kept as local rollback tags; no destructive database restore is automatic.
   #
-  # EC2 is a Docker runtime host: it does NOT hold the Git repository and never
-  # runs git clone/pull/fetch/reset. The runtime directory is /opt/lcs.
+  # The Hostinger VPS is a Docker runtime host: it does NOT hold the Git
+  # repository and never runs git clone/pull/fetch/reset. The runtime directory
+  # is /opt/lcs.
   deploy:
-    name: Deploy to AWS
-    needs: [resolve, free-disk, validate-backend, validate-frontend, build]
+    name: Deploy to Hostinger VPS
+    needs: [preflight, resolve, free-disk, validate-backend, validate-frontend, build]
     if: >-
       always() &&
       needs.resolve.result == 'success' &&
+      needs.preflight.result == 'success' &&
       needs.free-disk.result == 'success' &&
       (
         (needs.resolve.outputs.build == 'true' && needs.build.result == 'success') ||
@@ -343,6 +441,12 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      VPS_HOST: ${{ vars.VPS_HOST || vars.AWS_HOST || secrets.VPS_HOST || secrets.AWS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || vars.AWS_USER || secrets.VPS_USER || secrets.AWS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || vars.AWS_PORT || secrets.VPS_PORT || secrets.AWS_PORT || 22 }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY || secrets.AWS_SSH_KEY }}
+      VPS_HOST_FINGERPRINT: ${{ vars.VPS_HOST_FINGERPRINT || vars.AWS_HOST_FINGERPRINT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -352,10 +456,10 @@ jobs:
         env:
           DEPLOY_DIR: /opt/lcs
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           envs: DEPLOY_DIR
           script: |
             set -eu
@@ -373,10 +477,10 @@ jobs:
       - name: Upload runtime files
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           source: "infrastructure/docker-compose.prod.yml,infrastructure/restore-db.sh,infrastructure/factory-reset.sh,infrastructure/bootstrap-host.sh"
           target: /opt/lcs
           strip_components: 1
@@ -387,10 +491,10 @@ jobs:
       - name: Upload nginx config
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           source: "infrastructure/nginx/production.conf"
           target: /opt/lcs/nginx
           strip_components: 2
@@ -417,15 +521,17 @@ jobs:
           CSRF_SECRET_KEY: ${{ secrets.CSRF_SECRET_KEY }}
           FIELD_ENCRYPTION_KEY: ${{ secrets.FIELD_ENCRYPTION_KEY }}
           CORS_ORIGINS: ${{ vars.CORS_ORIGINS || 'https://lcslog.minidev.in' }}
-          TELEGRAM_PUBLIC_APP_URL: ${{ vars.TELEGRAM_PUBLIC_APP_URL }}
+          # Public HTTPS origin for the Telegram webhook. Explicit variable first,
+          # then the site origin the frontend is built with (never hardcoded).
+          TELEGRAM_PUBLIC_APP_URL: ${{ vars.TELEGRAM_PUBLIC_APP_URL || vars.NUXT_PUBLIC_SITE_URL }}
           TELEGRAM_UPDATE_MODE: webhook
           TELEGRAM_WORKER_ENABLED: "true"
           TELEGRAM_ALLOW_WEBHOOK_DELETE: "false"
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           # Sensitive values are forwarded as environment variables, never
           # interpolated into the remote script.
           envs: DEPLOY_DIR,IMAGE_TAG,IMAGE_PREFIX,SKIP_MIGRATIONS,WIPE_DATA,BACKUP_S3_BUCKET,BACKUP_S3_KMS_KEY_ID,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,JWT_SECRET_KEY,CSRF_SECRET_KEY,FIELD_ENCRYPTION_KEY,CORS_ORIGINS,TELEGRAM_PUBLIC_APP_URL,TELEGRAM_UPDATE_MODE,TELEGRAM_WORKER_ENABLED,TELEGRAM_ALLOW_WEBHOOK_DELETE
@@ -520,6 +626,22 @@ jobs:
             mv -f "$TMP" "$ENV_FILE"
             trap - EXIT
             echo "Runtime .env written atomically (0600)."
+
+            # The compose file, the runtime files and the generated .env must
+            # form a valid configuration before anything is pulled or replaced.
+            if ! $COMPOSE config -q >/dev/null 2>&1; then
+              echo "docker-compose.prod.yml is invalid with the generated .env; deployment aborted." >&2
+              restore_previous_env
+              exit 1
+            fi
+            for required_file in docker-compose.prod.yml nginx/production.conf; do
+              if [ ! -f "$DEPLOY_DIR/$required_file" ]; then
+                echo "Missing runtime file $required_file in $DEPLOY_DIR; deployment aborted." >&2
+                restore_previous_env
+                exit 1
+              fi
+            done
+            echo "Compose configuration validated."
 
             # Capture the exact image IDs the healthy stack is running. Tags in
             # a registry can be overwritten; these local tags cannot.

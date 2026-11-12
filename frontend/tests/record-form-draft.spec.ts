@@ -142,6 +142,33 @@ describe('useRecordFormDraft', () => {
     expect(readRecordDraft(recordDraftKey(user, 'quotations', '99'), 'local')).toBeNull()
   })
 
+  it('does not rewrite a committed save when the form unmounts', () => {
+    const { state, draft } = form({ description: 'saved' })
+    state.recordId.value = ''
+    draft.bind()
+    draft.schedule()
+
+    state.recordId.value = '42'
+    state.base = '2026-11-12T09:00:00Z'
+    draft.clear()
+
+    // Leaving the page right after the save (onBeforeUnmount) must not turn the
+    // saved model back into a draft for the next "New" form.
+    draft.flush()
+    expect(readRecordDraft(recordDraftKey(user, 'quotations', '42'), 'local')).toBeNull()
+    expect(readRecordDraft(recordDraftKey(user, 'quotations', ''), 'local')).toBeNull()
+  })
+
+  it('drafts again after a new edit follows a save', () => {
+    const { state, draft } = form({ description: 'saved' })
+    draft.clear()
+    state.model = { description: 'edited again' }
+    draft.schedule()
+    draft.flush()
+    expect(readRecordDraft(recordDraftKey(user, 'quotations', '12'), 'local')!.model.description)
+      .toBe('edited again')
+  })
+
   it('drops File/secret values before writing', () => {
     const { draft } = form({
       description: 'kept',

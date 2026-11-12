@@ -68,6 +68,32 @@ database changes; do not automatically restore over live data or run downgrade.
 Production images start Uvicorn, not automatic migrations.
 Coordinate maintenance announcements/status, protect in-flight financial transactions,
 verify backups before risky operations, and obtain release authorization.
+
+### GitHub configuration for the Hostinger VPS
+
+The `Deploy to Hostinger` workflow (`production.yml`) runs from `main` only. Its
+`Preflight configuration` job fails before any host contact when a required name is
+missing, so a misconfigured run never touches the VPS. Configure these in the
+GitHub `production` environment (values are never printed in logs):
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Secret | `VPS_SSH_KEY` (legacy `AWS_SSH_KEY` accepted) | Deploy-user SSH key |
+| Variable | `VPS_HOST` (legacy `AWS_HOST`) | Hostinger VPS address |
+| Variable | `VPS_USER` (legacy `AWS_USER`) | Deploy user |
+| Variable | `VPS_PORT` (legacy `AWS_PORT`, default 22) | SSH port |
+| Variable | `VPS_HOST_FINGERPRINT` (legacy `AWS_HOST_FINGERPRINT`) | ED25519 host-key pin |
+| Variable | `VPS_EXPECTED_HOST` (optional) | Wrong-server guard: the only host the deploy may target |
+| Secret | `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, `CSRF_SECRET_KEY`, `FIELD_ENCRYPTION_KEY` | Runtime secrets written to `/opt/lcs/.env` (0600) |
+| Variable | `CORS_ORIGINS`, `NUXT_PUBLIC_SITE_URL` | Public origins |
+| Variable | `TELEGRAM_PUBLIC_APP_URL` | Public HTTPS origin for the Telegram webhook; falls back to `NUXT_PUBLIC_SITE_URL` when unset |
+
+`TELEGRAM_PUBLIC_APP_URL` is the bare application origin (for example
+`https://app.example.com`) with no path, query or credentials. The backend refuses to
+start in production without it, because webhook mode needs a public HTTPS URL. Optional
+off-host S3 backup uses `BACKUP_S3_BUCKET` and `BACKUP_S3_KMS_KEY_ID`; leave them unset
+unless the VPS has the AWS CLI and a bucket.
+
 Use existing workflow rollback inputs and runbook; exact live recovery remains unverified.
 
 ## Maintenance deployment and emergency recovery

@@ -2,7 +2,7 @@ name: Dev CI
 
 # Development/integration validation.
 # Runs on pushes to `dev` and on pull requests targeting the protected `main`.
-# It never deploys, never SSHes to EC2 and never publishes images to GHCR.
+# It never deploys, never SSHes to the Hostinger VPS and never publishes images to GHCR.
 #
 # The `changes` job classifies what a push touched and the component jobs are
 # skipped when their area did not change (a docs-only push finishes in about a

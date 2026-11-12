@@ -368,6 +368,11 @@ async def test_conversion_generates_one_payment_row_per_quoted_unit(client):
     assert all(row["feeType"] == "Documentation" for row in delivery)
     assert all(row["sourceQuotationLineId"] for row in payments), "rows keep the quoted-line reference"
     assert all(not row["containerNo"] for row in payments), "no container number is fabricated"
+    # Each split unit is its own row: a shared id would make the UI edit or
+    # delete every unit at once.
+    ids = [row["id"] for row in payments]
+    assert all(ids)
+    assert len(set(ids)) == len(ids), "every expanded payment row has a distinct id"
 
 
 async def test_fractional_and_capped_quantities_keep_a_single_billing_row(client):

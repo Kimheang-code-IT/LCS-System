@@ -3820,7 +3820,8 @@
     "commonPassword": "该密码太容易被猜出，请另选一个。",
     "commonPasswordGeneric": "该密码太容易被猜出，请另选一个。",
     "duplicateAssetCode": "资产代码 {code} 已被使用。",
-    "passwordsMatch": "两次密码一致"
+    "passwordsMatch": "两次密码一致",
+    "errorCount": "{n} field errors"
   },
   "fields": {
     "feeTypeId": "费用类型",

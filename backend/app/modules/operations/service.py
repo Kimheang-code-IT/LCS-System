@@ -906,7 +906,6 @@ def _expanded_container_payment_rows(
         unit_price = line.unit_price or Decimal(0)
         fee_name = fee_names.get(line.fee_type_id)
         base = {
-            "id": uuid4().hex,
             "feeType": fee_name,
             "containerNo": "",
             "serviceOrderContainerId": "",
@@ -923,6 +922,9 @@ def _expanded_container_payment_rows(
             for _ in range(int(quantity)):
                 rows.append({
                     **base,
+                    # One identity per row: a split line must not hand the same
+                    # id to every unit, or editing one unit edits them all.
+                    "id": uuid4().hex,
                     "quantity": 1,
                     "unitPrice": unit,
                     "discountAmount": 0,
@@ -935,6 +937,7 @@ def _expanded_container_payment_rows(
         else:
             rows.append({
                 **base,
+                "id": uuid4().hex,
                 "quantity": float(quantity),
                 "unitPrice": float(unit_price),
                 "discountAmount": float(line.line_discount or 0),

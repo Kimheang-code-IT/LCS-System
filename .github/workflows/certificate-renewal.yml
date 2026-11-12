@@ -14,20 +14,28 @@ concurrency:
 
 jobs:
   renew:
+    name: Renew certificate on Hostinger VPS
     runs-on: ubuntu-latest
     environment: production
+    env:
+      # Same connection values and legacy fallbacks as the deploy workflow.
+      VPS_HOST: ${{ vars.VPS_HOST || vars.AWS_HOST || secrets.VPS_HOST || secrets.AWS_HOST }}
+      VPS_USER: ${{ vars.VPS_USER || vars.AWS_USER || secrets.VPS_USER || secrets.AWS_USER }}
+      VPS_PORT: ${{ vars.VPS_PORT || vars.AWS_PORT || secrets.VPS_PORT || secrets.AWS_PORT || 22 }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY || secrets.AWS_SSH_KEY }}
+      VPS_HOST_FINGERPRINT: ${{ vars.VPS_HOST_FINGERPRINT || vars.AWS_HOST_FINGERPRINT }}
     steps:
       # Same host-key pin as the deploy pipeline; never renew against an
       # unverified host.
       - name: Verify VPS SSH host key
         env:
-          HOST: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          PORT: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
-          FINGERPRINT: ${{ vars.AWS_HOST_FINGERPRINT }}
+          HOST: ${{ env.VPS_HOST }}
+          PORT: ${{ env.VPS_PORT }}
+          FINGERPRINT: ${{ env.VPS_HOST_FINGERPRINT }}
         run: |
           set -eu
           if [ -z "$FINGERPRINT" ]; then
-            echo "Missing repo variable AWS_HOST_FINGERPRINT." >&2
+            echo "Missing variable VPS_HOST_FINGERPRINT." >&2
             exit 1
           fi
           scan="$(mktemp)"
@@ -45,10 +53,10 @@ jobs:
       - name: Renew Let's Encrypt certificate
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
         with:
-          host: ${{ vars.AWS_HOST || secrets.AWS_HOST }}
-          username: ${{ vars.AWS_USER || secrets.AWS_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          port: ${{ vars.AWS_PORT || secrets.AWS_PORT || 22 }}
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_SSH_KEY }}
+          port: ${{ env.VPS_PORT }}
           script: |
             set -euo pipefail
             cd /opt/lcs

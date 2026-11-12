@@ -1894,7 +1894,7 @@ size="sm"
 color="error"
 size="sm"
 :loading="reversing"
-:label="$t('freight.ui.actions.reverse')"
+:label="$t('freight.moduleActions.reverse')"
             @click="confirmReverse" />
         </div>
       </template>
