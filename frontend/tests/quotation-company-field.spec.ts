@@ -51,12 +51,15 @@ describe('quotation party fields', () => {
     expect(en.freight.fieldHelp.customerName).toBeTruthy()
   })
 
-  it('offers fee type and charge basis while keeping the container optional', () => {
+  it('offers fee type and transport mode while keeping the container optional', () => {
     const pricing = quotation.tables!.find(table => table.key === 'pricingLines')!
     const column = (key: string) => pricing.columns.find(item => item.key === key)!
 
     expect(column('feeType').type).toBe('select')
-    expect(column('transportBy').labelKey).toBe('freight.ui.chargeBasis')
+    // The stored value is a transport type (Vessel/Truck/Air), so the label and
+    // its translation key must say transport mode, not charge basis.
+    expect(column('transportBy').label).toBe('Transport Mode')
+    expect(column('transportBy').labelKey).toBe('freight.fields.transportMode')
     expect(column('transportBy').required).toBe(true)
     expect(column('containerType').required).toBeFalsy()
     expect(column('quantity').rule).toMatchObject({ min: 0.001 })

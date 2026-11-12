@@ -3820,7 +3820,8 @@
     "commonPassword": "ពាក្យសម្ងាត់នេះងាយស្រួលទាយពេក។ សូមជ្រើសរើសផ្សេង។",
     "commonPasswordGeneric": "ពាក្យសម្ងាត់នេះងាយស្រួលទាយពេក។ សូមជ្រើសរើសផ្សេង។",
     "duplicateAssetCode": "លេខកូដទ្រព្យ {code} កំពុងបានប្រើរួចហើយ។",
-    "passwordsMatch": "ពាក្យសម្ងាត់ត្រូវគ្នា"
+    "passwordsMatch": "ពាក្យសម្ងាត់ត្រូវគ្នា",
+    "errorCount": "{n} field errors"
   },
   "fields": {
     "feeTypeId": "ប្រភេទថ្លៃ",

@@ -75,7 +75,7 @@ function onWheel(event: WheelEvent) {
               color="error"
 variant="subtle"
 size="sm"
-              :aria-label="t('validation.formError')"
+              :aria-label="t('validation.errorCount', { n: props.errors[item.value as string] })"
             >
               {{ props.errors[item.value as string] }}
             </UBadge>

@@ -1464,7 +1464,7 @@ if (quotationModule) freightModules.push({
     { key: 'pricingLines', title: 'Pricing', titleKm: 'តម្លៃ', addLabel: 'Add Pricing Line', columns: [
       { key: 'feeType', label: 'Fee Type', labelKm: 'ប្រភេទថ្លៃ', labelKey: 'freight.ui.feeTypeCol', type: 'select' },
       { key: 'containerType', label: 'Container Type', labelKm: 'ប្រភេទកុងតឺន័រ', labelKey: 'freight.ui.cols.containerType', type: 'select' },
-      { key: 'transportBy', label: 'Charge Basis', labelKm: 'មូលដ្ឋានគិតថ្លៃ', labelKey: 'freight.ui.chargeBasis', type: 'select', required: true },
+      { key: 'transportBy', label: 'Transport Mode', labelKm: 'មធ្យោបាយដឹក', labelKey: 'freight.fields.transportMode', type: 'select', required: true },
       { key: 'quantity', label: 'Qty', labelKm: 'បរិមាណ', labelKey: 'freight.ui.qty', type: 'number', required: true, rule: { required: true, min: 0.001 } },
       { key: 'unitPrice', label: 'Unit Price', labelKm: 'តម្លៃឯកតា', labelKey: 'freight.ui.unitPriceCol', type: 'number', required: true, rule: { required: true, min: 0 } },
       { key: 'lineTotal', label: 'Line Total', labelKm: 'សរុបជួរ', labelKey: 'freight.ui.lineTotal', type: 'number', computed: true },

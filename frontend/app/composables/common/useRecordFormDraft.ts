@@ -64,6 +64,12 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   let boundKey = ''
   let boundRecordId = ''
   let timer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * A save committed and the slot is empty. The form model still holds the
+   * saved values, so without this the unmount flush would write them straight
+   * back as a draft — and the next "New record" would silently restore them.
+   */
+  let committed = false
 
   function canDraft() {
     return options.canDraft ? options.canDraft() : true
@@ -89,6 +95,8 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     clearTimer()
     const target = targetKey || boundKey
     if (!target) return
+    // The saved model is not a draft: nothing to persist until a new edit.
+    if (committed) return
     // A save is in flight: keep the slot as it was. The save clears it on
     // success and leaves it intact on failure.
     if (options.suspend?.()) return
@@ -108,6 +116,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   /** An edit happened: write after the quiet period. */
   function schedule() {
     clearTimer()
+    committed = false
     timer = setTimeout(() => flush(), delay)
   }
 
@@ -115,6 +124,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   function bind() {
     boundKey = key.value
     boundRecordId = options.recordId()
+    committed = false
     restored.value = false
   }
 
@@ -151,6 +161,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     clearTimer()
     clearRecordDraft(key.value, storage)
     if (boundKey && boundKey !== key.value) clearRecordDraft(boundKey, storage)
+    committed = true
     restored.value = false
     boundKey = key.value
     boundRecordId = options.recordId()

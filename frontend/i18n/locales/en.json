@@ -3820,7 +3820,8 @@
     "commonPassword": "That password is too easy to guess. Choose another.",
     "commonPasswordGeneric": "That password is too easy to guess. Choose another.",
     "duplicateAssetCode": "Asset code {code} is already in use.",
-    "passwordsMatch": "Passwords match"
+    "passwordsMatch": "Passwords match",
+    "errorCount": "{n} field errors"
   },
   "fields": {
     "feeTypeId": "Fee Type",

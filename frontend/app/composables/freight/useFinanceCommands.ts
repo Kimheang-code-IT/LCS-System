@@ -106,9 +106,12 @@ export function useFinanceCommands(options: {
       path: '/finance/documents/new',
       query: {
         documentType: 'CUSTOMER_RECEIPT',
-        customer: String(model.value.customer || ''),
+        // The receipt needs the party *id*; a display name would leave the
+        // required party empty. The invoice number belongs in the reference
+        // field, never in the receipt's own document number.
+        partyId: String(model.value.partyId || ''),
         jobNo: String(model.value.jobNo || ''),
-        debitNoteNo: String(model.value.debitNoteNo || ''),
+        referenceNo: String(model.value.debitNoteNo || ''),
         amountDue: String(model.value.total || model.value.amount || ''),
       },
     })

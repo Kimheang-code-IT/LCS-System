@@ -67,6 +67,15 @@ export type AppHeaderActionsConfig = {
 const headerActions = shallowRef<AppHeaderActionsConfig | null>(null)
 /** Prevents an unmounting page from clearing the next page's actions. */
 let actionsOwnerId = 0
+/**
+ * Last component instance that wrote the shared title/breadcrumb/badge chrome.
+ * A page leaving during a route change can still have its own watchers fire for
+ * the *new* route; without this, its unmount `clear()` wipes the chrome the
+ * destination page already wrote (list → detail showed no record number).
+ */
+let chromeOwnerId = 0
+/** Monotonic instance counter so every component gets a distinct chrome id. */
+let chromeInstanceSeq = 0
 
 /**
  * Shared dynamic header state for layout AppHeader.
@@ -86,6 +95,9 @@ export function useAppHeader() {
    */
   let ownedRoute = ''
 
+  /** Identity of this composable instance in the shared chrome-owner slot. */
+  const chromeInstance = ++chromeInstanceSeq
+
   const metaTitle = computed(() => {
     const key = route.meta.titleKey
     if (typeof key !== 'string' || !key) return ''
@@ -95,21 +107,26 @@ export function useAppHeader() {
   const displayTitle = computed(() => title.value || metaTitle.value)
   const hasBreadcrumbs = computed(() => breadcrumbs.value.length > 0)
 
-  function setTitle(value: string) {
+  function claim() {
     ownedRoute = route.fullPath
+    chromeOwnerId = chromeInstance
+  }
+
+  function setTitle(value: string) {
+    claim()
     title.value = value
     breadcrumbs.value = []
   }
 
   function setBreadcrumbs(items: AppHeaderBreadcrumb[]) {
-    ownedRoute = route.fullPath
+    claim()
     breadcrumbs.value = items
     const last = items[items.length - 1]
     if (last?.label) title.value = last.label
   }
 
   function setBadges(items: AppHeaderBadge[]) {
-    ownedRoute = route.fullPath
+    claim()
     badges.value = items
   }
 
@@ -136,13 +153,16 @@ export function useAppHeader() {
    * title and the header falls back to the generic route `titleKey` (e.g. "Reports").
    */
   function clear() {
-    // Only the page that wrote this route's chrome may clear it. A leaving page
-    // whose route already changed leaves the new page's chrome untouched.
+    // Only the page that wrote this route's chrome may clear it, and only while
+    // it is still the last writer: a leaving page's watchers can fire for the
+    // destination route during the same navigation.
+    if (chromeOwnerId !== chromeInstance) return
     if (!headerChromeOwnedByCurrentRoute(ownedRoute, route.fullPath)) return
     title.value = ''
     breadcrumbs.value = []
     badges.value = []
     ownedRoute = ''
+    chromeOwnerId = 0
   }
 
   /** @deprecated use clear() */

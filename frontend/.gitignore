@@ -53,3 +53,5 @@ tmp/
 /invoice.md
 /dynamic.md
 
+e2e/.report/
+e2e/.auth/

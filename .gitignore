@@ -50,3 +50,5 @@ Thumbs.db
 
 # Local knowledge-graph artifacts (graphify); not for Git unless reviewed.
 graphify-out/
+.playwright-cli/
+frontend/e2e/.report/

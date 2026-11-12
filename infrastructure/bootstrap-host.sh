@@ -116,4 +116,4 @@ if ! $DOCKER run --rm -v "$CERT_VOLUME:/etc/letsencrypt" alpine:3.20 \
     exit 1
 fi
 echo "Certificate ready: $CERT_VOLUME:$CERT_PATH"
-echo "Next: run the Production workflow (workflow_dispatch) for the first deploy."
+echo "Next: run the 'Deploy to Hostinger' workflow (workflow_dispatch) for the first deploy."
