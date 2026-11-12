@@ -114,18 +114,42 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Backup archive path hardening — 2026-11-12
+
+CodeQL reported eight `py/path-injection` alerts in
+`backend/app/modules/backup/dr.py` (archive names, sidecar manifests, the
+decryption temp prefix and attachment `storage_key` joins). Every user- or
+database-derived value is now reduced to one basename before it reaches the
+filesystem: `_safe_archive_name`/`_safe_archive_path` confine archives to
+`FULL_BACKUP_DIR`, `_safe_member_name` and `_confined_child` guard attachment
+members, and the decryption temp file uses a fixed prefix. Archive members are
+stored as `attachments/<index>-<basename>` with the original key kept in the
+manifest (`archivePath` maps to `storageKey`), so a crafted key can no longer
+traverse out of the archive root. Behaviour and the CLI/API surface are
+unchanged; restore still verifies every checksum before extracting with
+`filter="data"`.
+
+Changed: `backend/app/modules/backup/dr.py`,
+`backend/tests/test_full_backup.py`. Evidence: `ruff check` clean,
+`pytest -q tests/test_full_backup.py tests/test_backup.py` → 20 passed. No
+schema, API or financial change. No Git commit.
+
 ### Shared document drafts + editable-table cleanup — 2026-11-12
 
 One draft state machine now serves every document form. `useRecordFormDraft`
 (on the existing `useRecordDraft` storage helpers) owns the debounced write,
 restore, conflict and clear rules; the form model stays the single authoritative
 copy. Draft envelopes are v2 (collection + user scope), and v1 copies are still
-read. A newer server row produces the shared `AppDraftConflictAlert`
-(Restore/Discard) instead of a silent overwrite. Successful saves clear only
-their own record/new slot; failed saves keep the draft.
+read. A newer server row always wins: the stale local draft is dropped without a
+prompt (no Restore/Discard banner). Successful saves clear only their own
+record/new slot; failed saves keep the draft. Service Order screens present the
+stored `ACTIVE` lifecycle as **Draft** (detail badge and list badge); Finish,
+Deactivate, filters and operations reports keep the backend values.
 
-Coverage: quotations, standalone Service Charges, financial documents and
-journals (DRAFT only), Service Orders (header + route/containers/files state +
+Coverage: every editable `DocumentView` detail form — quotations, master data,
+configuration and administration — plus standalone Service Charges, financial
+documents and journals (workflow documents draft only while DRAFT). Service
+Orders (header + route/containers/files state +
 dynamic component-tab rows), the Service Order Service Charge tab (per charge,
 keyed by the stable `clientRowId` for a new charge, so a second new charge no
 longer overwrites the first) and the Service Order Finance entries (posted rows
@@ -143,7 +167,6 @@ change-set helpers in `types/save-grid.ts`. Their tests were replaced with tests
 of the live `feeLines`/`serviceChargeFormPayload` path.
 
 Changed: `frontend/app/composables/common/{useRecordDraft.ts,useRecordFormDraft.ts}`,
-`frontend/app/components/common/AppDraftConflictAlert.vue`,
 `frontend/app/components/freight/{DocumentView.vue,JobDetail.vue,JobCharges.vue,JobFinance.vue,JobRoute.vue,JobFiles.vue,JobContainers.vue,AppLineTable.vue}`,
 `frontend/app/config/{freight-modules.ts,lcs-reference-modules.ts,route-stop-table.ts,job-workspace-forms.ts}`,
 `frontend/app/utils/freight/{job-charges.ts,job-workspace.ts}`,

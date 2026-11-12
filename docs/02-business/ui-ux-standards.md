@@ -428,7 +428,7 @@ entries.
 
 | Folder | Main components |
 |---|---|
-| `components/common/` | `AppConfirmDialog`, `AppDateRangeFilter`, `AppDraftConflictAlert`, `AppExportDialog`, `AppFilterSelect`, `AppFormErrorSummary`, `AppReferenceSelect`, `AppRolePermissionMatrix`, `AppSecretInput`, `AppSortableList` |
+| `components/common/` | `AppConfirmDialog`, `AppDateRangeFilter`, `AppExportDialog`, `AppFilterSelect`, `AppFormErrorSummary`, `AppReferenceSelect`, `AppRolePermissionMatrix`, `AppSecretInput`, `AppSortableList` |
 | `components/document/` | `AppDocumentForm`, `AppDocumentPage`, `AppDocumentTabBar`, `AppDynamicFieldRenderer`, `AppDynamicTableField`, `AppFieldGrid` |
 | `components/freight/` | `WorkspaceView`, `ModulePage`, `DocumentView`, `DynamicDataTable`, `JobDetail`, `JobOverview`, `JobRoute`, `JobContainers`, `JobCharges`, `JobFiles`, `JobFinance`, `ReportsView` |
 | `components/table/` | `AppListTable`, `AppRelatedRecords`, `AppTableRowMeta` |
@@ -465,18 +465,23 @@ Rules that follow from it:
 
 ### Unsaved document drafts
 
-Every editable document form keeps its unsaved state through
-`useRecordFormDraft` (`app/composables/common/useRecordFormDraft.ts`) on top of
-the storage helpers in `useRecordDraft.ts`:
+Every editable detail form (documents, master data, configuration and
+administration) keeps its unsaved state through `useRecordFormDraft`
+(`app/composables/common/useRecordFormDraft.ts`) on top of the storage helpers
+in `useRecordDraft.ts`:
 
 - One authoritative form model per document; the draft is a debounced mirror.
 - Key = user + collection + record (a new record uses its `new`/`<parent>:new`
   slot; a charge uses its stable `clientRowId` marker).
-- A draft written against an older server `updatedAt` is never applied
-  silently: the form shows the shared `AppDraftConflictAlert` (Restore/Discard).
+- A draft written against an older server `updatedAt` is never applied; the
+  newer server copy wins and the stale local draft is dropped without a prompt.
 - A successful save clears the draft; a failed save leaves it untouched.
 - Drafts are local-only. Restoring or switching tabs never saves, submits or
-  posts a document. Read-only/posted forms are never drafted.
+  posts a document. Read-only/posted forms are never drafted; workflow documents
+  (charges, financial documents, journals) only draft while their status is
+  still Draft. Master data/configuration forms draft regardless of their
+  Active/Inactive status, but their real status vocabulary is unchanged.
+- Password and create-only fields are stripped before a draft is written.
 - Server-owned collections (attachments, activity, allocations, journal rows)
   are excluded; credentials and `File`/`Blob` values are stripped.
 - Service Orders include their dynamic component-tab rows in the same draft.

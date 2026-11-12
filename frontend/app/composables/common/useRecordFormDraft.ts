@@ -2,13 +2,11 @@ import { computed, getCurrentInstance, onBeforeUnmount, onMounted, ref } from 'v
 import {
   clearRecordDraft,
   draftAppliesTo,
-  draftConflictsWithServer,
   readRecordDraft,
   recordDraftKey,
   sanitizeDraftModel,
   writeRecordDraft,
   type DraftStorage,
-  type RecordDraft,
 } from './useRecordDraft'
 
 type DraftModel = Record<string, unknown>
@@ -41,7 +39,7 @@ export type UseRecordFormDraftOptions<M extends DraftModel> = {
   suspend?: () => boolean
 }
 
-export type DraftRestoreResult = 'applied' | 'conflict' | 'none'
+export type DraftRestoreResult = 'applied' | 'none'
 
 /**
  * One debounced, versioned local draft for one document form.
@@ -54,7 +52,6 @@ export type DraftRestoreResult = 'applied' | 'conflict' | 'none'
 export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormDraftOptions<M>) {
   const storage = options.storage ?? 'local'
   const delay = options.delay ?? 500
-  const conflict = ref<RecordDraft | null>(null)
   const restored = ref(false)
 
   const key = computed(() => recordDraftKey(
@@ -95,8 +92,6 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     // A save is in flight: keep the slot as it was. The save clears it on
     // success and leaves it intact on failure.
     if (options.suspend?.()) return
-    // An undecided conflict must survive until the operator chooses.
-    if (conflict.value) return
     if (!canDraft() || !options.isDirty()) {
       clearRecordDraft(target, storage)
       return
@@ -113,7 +108,6 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   /** An edit happened: write after the quiet period. */
   function schedule() {
     clearTimer()
-    if (conflict.value) return
     timer = setTimeout(() => flush(), delay)
   }
 
@@ -121,13 +115,11 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   function bind() {
     boundKey = key.value
     boundRecordId = options.recordId()
-    conflict.value = null
     restored.value = false
   }
 
   /** Apply the stored draft for the bound record, if it is still compatible. */
   function restore(): DraftRestoreResult {
-    conflict.value = null
     const target = boundKey || key.value
     if (!target || !canDraft()) return 'none'
     // Quotations used sessionStorage before the shared draft layer; read that
@@ -147,28 +139,11 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
       restored.value = true
       return 'applied'
     }
-    if (draftConflictsWithServer(stored, recordId, base)) {
-      conflict.value = stored
-      return 'conflict'
-    }
-    // Same slot, different record: the stored copy cannot belong here.
+    // The server copy is newer: keep it and drop the stale local copy. There is
+    // no Restore/Discard prompt; a draft can never overwrite a newer record.
     clearRecordDraft(target, storage)
+    clearRecordDraft(target, 'session')
     return 'none'
-  }
-
-  function restoreConflict() {
-    const stored = conflict.value
-    if (!stored) return
-    options.apply(stored.model)
-    conflict.value = null
-    restored.value = true
-  }
-
-  function discardConflict() {
-    const stored = conflict.value
-    if (stored) clearRecordDraft(boundKey || key.value, storage)
-    conflict.value = null
-    restored.value = false
   }
 
   /** A save committed: clear the record slot and any pre-save `new` slot. */
@@ -176,7 +151,6 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     clearTimer()
     clearRecordDraft(key.value, storage)
     if (boundKey && boundKey !== key.value) clearRecordDraft(boundKey, storage)
-    conflict.value = null
     restored.value = false
     boundKey = key.value
     boundRecordId = options.recordId()
@@ -198,14 +172,11 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
 
   return {
     key,
-    conflict,
     restored,
     bind,
     restore,
     schedule,
     flush,
     clear,
-    restoreConflict,
-    discardConflict,
   }
 }

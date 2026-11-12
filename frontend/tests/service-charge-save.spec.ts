@@ -57,7 +57,6 @@ describe('shared service charge form', () => {
     expect(detail).toContain("v-if=\"chargesVisited\" v-show=\"activeTab === 'charges'\"")
     expect(charges).toContain('useRecordFormDraft')
     expect(charges).toContain('formDraft.restore')
-    expect(charges).toContain('formDraft.conflict')
     expect(charges).toContain('formDraft.clear')
   })
 })

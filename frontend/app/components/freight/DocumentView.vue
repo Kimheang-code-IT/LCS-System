@@ -507,8 +507,12 @@ const DRAFT_SKIP_KEYS = new Set([
   'revisionHistory',
 ])
 
-/** Collections whose detail form keeps an unsaved local draft. */
-const DRAFT_COLLECTIONS = new Set(['quotations', 'jobCharges', 'debitNotes', 'journals'])
+/**
+ * Workflow documents may only hold a local draft while the record is still a
+ * draft. Every other editable detail page (master data, configuration,
+ * administration) keeps one regardless of its Active/Inactive status.
+ */
+const DRAFT_STATUS_COLLECTIONS = new Set(['jobCharges', 'debitNotes', 'journals'])
 
 function draftSnapshot(record: FreightRecord) {
   const snapshot: Record<string, unknown> = {}
@@ -523,12 +527,15 @@ function draftSnapshot(record: FreightRecord) {
 const pristineDraftSnapshot = ref<string | null>(null)
 
 const draftCollection = computed(() => String(module.value?.collection || ''))
-const draftEligible = computed(() => DRAFT_COLLECTIONS.has(draftCollection.value))
+/** Every editable detail form keeps a local draft, like the quotation page. */
+const draftEligible = computed(() => Boolean(module.value && !module.value.readOnly))
 /** Posted/issued/read-only documents are never drafted: the server stays authoritative. */
 const draftAllowed = computed(() => {
   if (!draftEligible.value || readOnly.value) return false
-  if (draftCollection.value === 'quotations') return true
-  return isCreate.value || String(model.value.status || '').toUpperCase() === 'DRAFT'
+  if (DRAFT_STATUS_COLLECTIONS.has(draftCollection.value)) {
+    return isCreate.value || String(model.value.status || '').toUpperCase() === 'DRAFT'
+  }
+  return true
 })
 
 const quotationDraftDirty = computed(() => {
@@ -544,6 +551,13 @@ const quotationDraftDirty = computed(() => {
 /** True while a record is being fetched: no draft may be written from the old model. */
 const draftLoading = ref(false)
 
+/** Password / create-only fields never enter browser storage. */
+const draftSecretKeys = computed(() => new Set(
+  (module.value?.fields || [])
+    .filter(field => field.type === 'password' || field.createOnly)
+    .map(field => field.key),
+))
+
 const formDraft = useRecordFormDraft<FreightRecord>({
   collection: () => draftCollection.value || 'document',
   scope: () => String(auth.user?.id || 'anon'),
@@ -555,7 +569,8 @@ const formDraft = useRecordFormDraft<FreightRecord>({
   canDraft: () => draftAllowed.value,
   suspend: () => draftLoading.value,
   sanitize: (record) => Object.fromEntries(
-    Object.entries(sanitizeDraftModel(record)).filter(([key]) => !DRAFT_SKIP_KEYS.has(key)),
+    Object.entries(sanitizeDraftModel(record)).filter(([key]) =>
+      !DRAFT_SKIP_KEYS.has(key) && !draftSecretKeys.value.has(key)),
   ),
   warnOnUnload: true,
 })
@@ -1782,15 +1797,6 @@ content-wide
       </template>
 
       <template #before-form>
-        <DocumentAppDocumentContentShell
-          v-if="formDraft.conflict.value"
-          wide
-          class="pt-6">
-          <CommonAppDraftConflictAlert
-            :saved-at="formDraft.conflict.value.savedAt"
-            @restore="formDraft.restoreConflict()"
-            @discard="formDraft.discardConflict()" />
-        </DocumentAppDocumentContentShell>
         <DocumentAppDocumentContentShell
           v-if="module.collection === 'quotations' && !isCreate && String(model.sourceServiceOrderNo || '').trim()"
           wide

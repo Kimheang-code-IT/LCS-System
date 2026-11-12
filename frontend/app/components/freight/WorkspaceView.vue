@@ -18,7 +18,7 @@ import type { ExportFilters, ExportRequest } from '~/types/export'
 import type { SourcePermission } from '~/types/domain'
 import { freightModules, type FreightField, type FreightSelectOption } from '~/config/freight-modules'
 import type { ExcelModuleInfo } from '~/composables/useExcelIo'
-import { chargeDomainStatus, financeDomainStatus } from '~/utils/freight/states'
+import { chargeDomainStatus, financeDomainStatus, serviceOrderStatusLabel } from '~/utils/freight/states'
 import { quotationActionAvailability } from '~/utils/freight/quotation-actions'
 import { formatRevisionNo } from '~/utils/freight/quotation-revisions'
 import { isMoneyKey, isNumericKey, jobForQuotation, jobWorkspacePath, workspaceSectionForPath } from '~/utils/freight/job-workspace'
@@ -512,6 +512,9 @@ function recordPath(id: unknown) {
 function cellText(row: Record<string, unknown>, key: string) {
   const source = current.value?.collection === 'auditLogs' ? normalizeAuditLog(row as FreightRecord) : row
   if (key === 'revisionNo') return formatRevisionNo(source[key])
+  // Service Orders present a working ACTIVE order as "Draft"; the stored value
+  // and every report keep the backend lifecycle.
+  if (key === 'status' && current.value?.collection === 'jobs') return serviceOrderStatusLabel(source[key])
   // The revision roll-up is authoritative; older JSON copies may only carry `amount`.
   const value = key === 'total' && source.total == null ? source.amount : source[key]
   return formatFreightCell(value, key, String(source.currency || '').trim() || undefined)
@@ -867,8 +870,10 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
         }, () => text)
       }
       if (column.key === 'status' || column.key.toLowerCase().includes('status')) {
+        const raw = row.original[column.key] || row.original.workflowStatus || row.original.status
         return freightStatusBadge(
-          row.original[column.key] || row.original.workflowStatus || row.original.status,
+          // The Service Order list shows "Draft" and its warning tone.
+          current.value?.collection === 'jobs' ? text : raw,
           column.key,
           text,
         )

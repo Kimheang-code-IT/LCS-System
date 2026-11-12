@@ -98,3 +98,15 @@ async def test_archive_path_rejects_traversal(archive_root):
         dr.archive_path_from_name("../../etc/passwd")
     with pytest.raises(ValidationFailed):
         dr.archive_path_from_name("lcs-full-missing.tar.gz")
+
+
+def test_path_helpers_confine_user_values(tmp_path):
+    # A storage key may be crafted; only its basename reaches the filesystem.
+    assert dr._safe_member_name("../../etc/passwd") == "passwd"
+    assert dr._safe_member_name(r"..\\..\\windows\\system32") == "system32"
+    with pytest.raises(ValidationFailed):
+        dr._safe_member_name("..")
+    with pytest.raises(ValidationFailed):
+        dr._confined_child(tmp_path, "../escape")
+    with pytest.raises(ValidationFailed):
+        dr._safe_archive_name("lcs-full-ok.tar.gz/../../etc/passwd")

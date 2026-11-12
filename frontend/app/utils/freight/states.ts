@@ -59,6 +59,16 @@ export function chargeDomainStatus(value: unknown): ServiceChargeStatus {
   return CHARGE_STATUS[String(value || '')] || 'DRAFT'
 }
 
+/**
+ * Service Order display label. The stored lifecycle keeps `ACTIVE` (the backend
+ * and reports are authoritative); the operator-facing label for a working order
+ * is "Draft", matching how a quotation is presented before it is finished.
+ */
+export function serviceOrderStatusLabel(value: unknown): string {
+  const raw = String(value ?? '').trim()
+  return raw.toUpperCase() === 'ACTIVE' ? 'Draft' : raw
+}
+
 export function financeDomainStatus(value: unknown): FinancialDocumentStatus {
   return FINANCE_STATUS[String(value || '')] || 'DRAFT'
 }

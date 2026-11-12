@@ -334,12 +334,6 @@ defineExpose({ flushDraft: formDraft.flush, save })
   <div class="space-y-4">
     <CommonAppFormErrorSummary class="pt-4" :form-errors="formErrors" />
 
-    <CommonAppDraftConflictAlert
-      v-if="formDraft.conflict.value"
-      :saved-at="formDraft.conflict.value.savedAt"
-      @restore="formDraft.restoreConflict()"
-      @discard="formDraft.discardConflict()" />
-
     <div v-if="loading" class="flex items-center gap-2 py-6 text-sm text-muted">
       <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
       {{ t('freight.ui.loadingData') }}

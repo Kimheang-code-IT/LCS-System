@@ -31,7 +31,7 @@ import { validateDocumentFields } from '~/utils/validation/record-validation'
 import { validateComponentRows } from '~/utils/validation/component-rules'
 import { normalizeApiError } from '~/utils/validation/api-error'
 import { issueFromBackendMessage } from '~/utils/validation/field-rules'
-import { jobDomainStatus } from '~/utils/freight/states'
+import { jobDomainStatus, serviceOrderStatusLabel } from '~/utils/freight/states'
 import { sanitizeDraftModel } from '~/composables/common/useRecordDraft'
 import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 import { serviceOrderBreadcrumbs } from '~/utils/freight/job-workspace'
@@ -448,9 +448,10 @@ watch([jobNo, () => model.value.serviceOrderNo, () => model.value.status, () => 
     model.value as Record<string, unknown>,
     { loading: !notFound.value && !isCreate.value, notFound: notFound.value },
   ))
+  const statusLabel = serviceOrderStatusLabel(model.value.status)
   setBadges([
     ...(model.value.direction ? [{ label: String(model.value.direction), color: 'info' as const }] : []),
-    ...(model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : []),
+    ...(statusLabel ? [{ label: statusLabel, color: statusColor(statusLabel) }] : []),
   ])
 }, { immediate: true })
 
@@ -716,11 +717,6 @@ watch(activeTab, (tab) => {
     <template #form>
       <DocumentAppDocumentContentShell wide>
         <div class="space-y-6 py-5">
-          <CommonAppDraftConflictAlert
-            v-if="formDraft.conflict.value"
-            :saved-at="formDraft.conflict.value.savedAt"
-            @restore="formDraft.restoreConflict()"
-            @discard="formDraft.discardConflict()" />
           <!-- Every visited tab stays mounted; `v-show` swaps the visible one
                without destroying input state. -->
           <div v-if="tabVisited('overview')" v-show="activeTab === 'overview'">

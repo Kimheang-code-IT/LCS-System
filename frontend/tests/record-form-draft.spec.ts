@@ -63,7 +63,7 @@ describe('useRecordFormDraft', () => {
     expect(stored.model.description).toBe('Draft text')
   })
 
-  it('restores a compatible draft and reports a newer server copy as a conflict', () => {
+  it('restores a compatible draft and drops one written against a newer server copy', () => {
     const { state, draft } = form({ description: 'Draft text' })
     draft.flush()
 
@@ -72,15 +72,9 @@ describe('useRecordFormDraft', () => {
     expect(state.model.description).toBe('Draft text')
 
     state.base = '2026-11-12T09:00:00Z'
-    expect(draft.restore()).toBe('conflict')
-    expect(draft.conflict.value).not.toBeNull()
+    expect(draft.restore()).toBe('none')
+    // The newer server copy wins; the stale local draft is discarded silently.
     expect(state.model.description).toBe('Draft text')
-    // A pending conflict must not be erased by a debounced/clean flush.
-    draft.flush()
-    expect(readRecordDraft(recordDraftKey(user, 'quotations', '12'), 'local')).not.toBeNull()
-
-    draft.discardConflict()
-    expect(draft.conflict.value).toBeNull()
     expect(readRecordDraft(recordDraftKey(user, 'quotations', '12'), 'local')).toBeNull()
   })
 
