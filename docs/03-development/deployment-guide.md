@@ -38,8 +38,9 @@ never edited or deleted, and no ConfigurationVersion is published):
 ```bash
 # Local (backend directory, uv/venv already synced)
 uv run python scripts/seed.py --all --dry-run   # report only
-uv run python scripts/seed.py --all             # reference data
+uv run python scripts/seed.py --all             # reference data + accounting
 uv run python scripts/seed.py --module business-parties  # sample parties only
+uv run python scripts/seed.py --module accounting        # chart + bank/cash + posting rules
 uv run python scripts/seed.py --demo            # + demo rows, 5 records per table
 
 # Production host (the image ships scripts/; run it as a one-off, read-only container)
@@ -51,8 +52,10 @@ docker compose -f /opt/lcs/docker-compose.prod.yml run --rm --no-deps backend py
 rows; `--all` stays plain reference data (document-number sequences, app settings, trade
 directions, party/place roles, container and transport types, identity types, capacity
 units, fee types, currencies, document types, component attributes/groups/tabs and their
-links). Seeding can run repeatedly and is safe on an existing database; it never
-overwrites administrator edits. Run it right after the first `/auth/setup` (and after any
+links, plus the accounting bootstrap: chart of accounts, bank/cash financial accounts and
+one posting rule per financial document type). Seeding can run repeatedly and is safe on
+an existing database; it never overwrites administrator edits or an existing active
+posting rule. Run it right after the first `/auth/setup` (and after any
 "Reset data") — until then numbering, currency selects and the configuration lists are
 empty by design.
 

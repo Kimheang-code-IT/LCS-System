@@ -114,6 +114,30 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Accounting bootstrap seed — 2026-11-12
+
+The explicit seeder now has an `accounting` module (part of `--all` and
+`--configuration`): a 32-row standard freight-forwarding chart of accounts
+(assets, liabilities, equity, revenue, expenses with header/parent links), two
+settlement accounts (Bank - Operating and Cash on Hand, both USD) linked to
+1010/1020, and one active document-default posting rule for every financial
+document type (customer invoice/credit note, supplier bill/credit note,
+customer receipt, supplier payment, other income/expense, transfer,
+adjustment). Tax rules use 2200 VAT Output for sales and 1300 VAT Input for
+purchases; the legacy default account codes the posting engine expects
+(1010/1020/1100/2010/4010/4020/5010/5030) are all present.
+
+Insert-missing only: an existing chart row, financial-account link or active
+document-default posting rule is skipped, never overwritten. Run explicitly with
+`python scripts/seed.py --module accounting` (or `--all`).
+
+Changed: `backend/scripts/seed.py`, `backend/scripts/seed_data/accounting.py`,
+`backend/tests/test_seed_script.py`, `docs/03-development/deployment-guide.md`.
+Evidence: `ruff` clean, `pytest -q tests/test_seed_script.py` → 4 passed; seeded
+on the local stack → 44 inserted (32 accounts + 2 financial accounts + 10 rules),
+replay 0 inserted / 44 skipped. No schema, API or financial-posting change. No
+Git commit.
+
 ### Backup archive path hardening — 2026-11-12
 
 CodeQL reported eight `py/path-injection` alerts in

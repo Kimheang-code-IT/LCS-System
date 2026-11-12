@@ -61,6 +61,52 @@ def test_business_parties_is_an_explicit_module():
     assert args.module == "business-parties"
 
 
+async def test_accounting_seed_bootstraps_complete_books(seeded, session_factory):
+    """Chart, bank/cash accounts and one posting rule per document type."""
+    from app.modules.finance.models import ChartOfAccount, FinancialAccount, PostingRule
+
+    async with session_factory() as session:
+        coa = await seed.seed_chart_of_accounts(session)
+        await session.commit()
+        financial = await seed.seed_financial_accounts(session)
+        await session.commit()
+        rules = await seed.seed_posting_rules(session)
+        await session.commit()
+        replay = await seed.seed_accounting(session)
+        await session.commit()
+
+        accounts = {
+            row.account_code: row
+            for row in (await session.execute(select(ChartOfAccount))).scalars().all()
+        }
+        rule_rows = (await session.execute(select(PostingRule))).scalars().all()
+        financial_rows = (await session.execute(select(FinancialAccount))).scalars().all()
+
+    # The test fixture already seeds a small chart, so count the planned rows
+    # rather than assuming an empty database.
+    assert coa[0] + coa[1] == len(seed.CHART_OF_ACCOUNTS)
+    assert financial[0] + financial[1] == len(seed.FINANCIAL_ACCOUNTS)
+    assert rules[0] + rules[1] == len(seed.POSTING_RULES)
+    assert replay[0] == 0
+    assert replay[1] == len(seed.CHART_OF_ACCOUNTS) + len(seed.FINANCIAL_ACCOUNTS) + len(seed.POSTING_RULES)
+
+    assert {row["account_code"] for row in seed.CHART_OF_ACCOUNTS} <= set(accounts)
+
+    # Every posting rule points at active, postable accounts.
+    for rule in rule_rows:
+        for account_id in (rule.debit_account_id, rule.credit_account_id, rule.tax_account_id):
+            if account_id is None:
+                continue
+            account = next(row for row in accounts.values() if row.id == account_id)
+            assert account.is_postable and account.status == "ACTIVE"
+
+    # The chart is hierarchical and the settlement accounts link to it.
+    assert accounts["1300"].parent_account_id == accounts["1000"].id
+    assert accounts["1100"].is_postable and accounts["1100"].normal_balance == "DEBIT"
+    assert {row.currency_code for row in financial_rows} == {"USD"}
+    assert {row.account_type for row in financial_rows} == {"BANK", "CASH"}
+
+
 async def test_demo_seed_fills_tables_once_per_code(seeded, session_factory):
     from app.modules.master_data.models import BusinessParty, ComponentGroup, ComponentTab
 

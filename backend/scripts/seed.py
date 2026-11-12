@@ -7,6 +7,7 @@
     uv run python scripts/seed.py --configuration
     uv run python scripts/seed.py --module fee-types
     uv run python scripts/seed.py --module business-parties  # sample parties only
+    uv run python scripts/seed.py --module accounting       # chart + bank + posting rules
     uv run python scripts/seed.py --all --dry-run    # report only, no writes
 
 Behavior
@@ -43,6 +44,7 @@ from pathlib import Path
 # (local venv, a production container, or a one-off docker compose run).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from seed_data.accounting import CHART_OF_ACCOUNTS, FINANCIAL_ACCOUNTS, POSTING_RULES
 from seed_data.configuration import (
     CONFIGURATION_PLANS,
     DEMO_COMPONENT_GROUPS,
@@ -85,6 +87,8 @@ CONFIGURATION_MODULE_ORDER = (
     "component-groups",
     "component-tabs",
     "configuration-links",
+    # Finance bootstrap: chart of accounts, bank/cash accounts and posting rules.
+    "accounting",
 )
 
 
@@ -322,6 +326,143 @@ async def seed_app_settings(session) -> tuple[int, int]:
     return inserted, skipped
 
 
+async def seed_chart_of_accounts(session) -> tuple[int, int]:
+    """Insert the standard freight-forwarding chart of accounts (parents first)."""
+    from app.modules.finance.models import ChartOfAccount
+
+    rows = (await session.execute(select(ChartOfAccount))).scalars().all()
+    by_code = {row.account_code: row for row in rows}
+    inserted = skipped = 0
+    for plan in CHART_OF_ACCOUNTS:
+        code = str(plan["account_code"])
+        if code in by_code:
+            skipped += 1
+            continue
+        parent_code = str(plan.get("parent_code") or "")
+        parent = by_code.get(parent_code) if parent_code else None
+        if parent_code and parent is None:
+            raise LookupError(f"Cannot link account '{code}' to missing parent '{parent_code}'.")
+        account = ChartOfAccount(
+            account_code=code,
+            account_name=str(plan["account_name"]),
+            account_type=str(plan["account_type"]),
+            normal_balance=str(plan["normal_balance"]),
+            is_postable=bool(plan.get("postable", True)),
+            status="ACTIVE",
+            parent_account_id=parent.id if parent else None,
+        )
+        session.add(account)
+        await session.flush()
+        by_code[code] = account
+        inserted += 1
+    return inserted, skipped
+
+
+async def seed_financial_accounts(session) -> tuple[int, int]:
+    """Link the bank and cash settlement accounts to their ledger accounts."""
+    from app.modules.finance.models import ChartOfAccount, FinancialAccount
+
+    ledger_ids = {
+        code: account_id
+        for code, account_id in (
+            await session.execute(select(ChartOfAccount.account_code, ChartOfAccount.id))
+        ).all()
+    }
+    existing = set((await session.execute(select(FinancialAccount.account_id))).scalars().all())
+    inserted = skipped = 0
+    for plan in FINANCIAL_ACCOUNTS:
+        ledger_code = str(plan["ledger_code"])
+        ledger_id = ledger_ids.get(ledger_code)
+        if ledger_id is None:
+            raise LookupError(f"Cannot link financial account to missing ledger '{ledger_code}'.")
+        if ledger_id in existing:
+            skipped += 1
+            continue
+        session.add(
+            FinancialAccount(
+                account_id=ledger_id,
+                account_name=str(plan["account_name"]),
+                account_type=str(plan["account_type"]),
+                currency_code=str(plan["currency"]),
+                bank_name=plan.get("bank_name"),
+                account_number_masked=plan.get("account_number_masked"),
+                status="ACTIVE",
+            )
+        )
+        existing.add(ledger_id)
+        inserted += 1
+    if inserted:
+        await session.flush()
+    return inserted, skipped
+
+
+async def seed_posting_rules(session) -> tuple[int, int]:
+    """One active document-default rule per financial document type.
+
+    A document type that already has an active default rule is skipped, so an
+    administrator's mapping is never replaced by the bootstrap set.
+    """
+    from app.modules.finance.models import ChartOfAccount, PostingRule
+
+    account_ids = {
+        code: account_id
+        for code, account_id in (
+            await session.execute(select(ChartOfAccount.account_code, ChartOfAccount.id))
+        ).all()
+    }
+    existing = set(
+        (
+            await session.execute(
+                select(PostingRule.document_type).where(
+                    PostingRule.fee_type_id.is_(None),
+                    PostingRule.status == "ACTIVE",
+                )
+            )
+        ).scalars().all()
+    )
+    inserted = skipped = 0
+    for plan in POSTING_RULES:
+        document_type = str(plan["document_type"])
+        if document_type in existing:
+            skipped += 1
+            continue
+        debit_code = str(plan["debit_code"])
+        credit_code = str(plan["credit_code"])
+        tax_code = str(plan["tax_code"]) if plan.get("tax_code") else ""
+        missing = [code for code in (debit_code, credit_code, tax_code) if code and code not in account_ids]
+        if missing:
+            raise LookupError(
+                f"Cannot seed posting rule '{document_type}': missing account(s) {', '.join(missing)}."
+            )
+        session.add(
+            PostingRule(
+                document_type=document_type,
+                fee_type_id=None,
+                debit_account_id=account_ids[debit_code],
+                credit_account_id=account_ids[credit_code],
+                tax_account_id=account_ids[tax_code] if tax_code else None,
+                status="ACTIVE",
+                priority=0,
+                description=str(plan["description"]),
+            )
+        )
+        existing.add(document_type)
+        inserted += 1
+    if inserted:
+        await session.flush()
+    return inserted, skipped
+
+
+async def seed_accounting(session) -> tuple[int, int]:
+    """Chart of accounts + financial accounts + posting rules, in dependency order."""
+    inserted = skipped = 0
+    for step in (seed_chart_of_accounts, seed_financial_accounts, seed_posting_rules):
+        step_inserted, step_skipped = await step(session)
+        inserted += step_inserted
+        skipped += step_skipped
+    return inserted, skipped
+
+
 async def seed_business_parties(session) -> tuple[int, int]:
     """Five domain-free sample parties, linked to seeded party roles.
 
@@ -487,6 +628,8 @@ async def _run_module(session, name: str, dry_run: bool, counts: dict[str, int])
             skipped = party_counts[1] + config_counts[1]
         elif name == "business-parties":
             inserted, skipped = await seed_business_parties(session)
+        elif name == "accounting":
+            inserted, skipped = await seed_accounting(session)
         elif name == "document-sequences":
             inserted, skipped = await seed_document_sequences(session)
         elif name == "app-settings":

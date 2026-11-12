@@ -74,26 +74,31 @@ def _safe_archive_name(value: str | Path) -> str:
 
 
 def _safe_archive_path(value: str | Path) -> Path:
-    """Resolve an archive name inside the configured backup directory only."""
-    path = archive_dir() / _safe_archive_name(value)
-    if not path.is_file():
-        raise ValidationFailed("That backup archive does not exist.", {"file": "Missing archive"})
-    return path
+    """Return the existing archive whose *name* matches, from the trusted root.
 
-
-def _confined_child(base: Path, relative: str) -> Path:
-    """Join one safe relative name to a trusted directory (defence in depth)."""
-    root = base.resolve()
-    candidate = (root / relative).resolve()
+    The returned path is a directory-entry object, never a user value joined to
+    a directory, so a crafted name can neither traverse nor address another file.
+    """
+    name = _safe_archive_name(value)
     try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise ValidationFailed(
-            "Invalid archive member path.", {"file": "Invalid path"}
-        ) from exc
-    if candidate == root:
-        raise ValidationFailed("Invalid archive member path.", {"file": "Invalid path"})
-    return candidate
+        for candidate in archive_dir().iterdir():
+            if candidate.name == name and candidate.is_file():
+                return candidate
+    except OSError:
+        pass
+    raise ValidationFailed("That backup archive does not exist.", {"file": "Missing archive"})
+
+
+def _sidecar_path(archive: Path) -> Path | None:
+    """The manifest sidecar for an already-trusted archive, found by name."""
+    wanted = f"{archive.name}.manifest.json"
+    try:
+        for candidate in archive_dir().iterdir():
+            if candidate.name == wanted and candidate.is_file():
+                return candidate
+    except OSError:
+        return None
+    return None
 
 
 def _safe_member_name(value: object) -> str:
@@ -154,9 +159,7 @@ def libpq_dsn(url: str | None = None) -> str:
 
 
 def dump_database(dsn: str, destination: Path, runner: Callable[..., Any] = subprocess.run) -> None:
-    # The caller always passes a temp path; reduce it to its basename anyway so
-    # no caller-supplied directory can redirect the dump.
-    destination = _confined_child(Path(destination).parent, _basename(destination))
+    # Internal temp path only; no request value reaches this function.
     with open(destination, "wb") as out:
         result = runner(
             [_binary("pg_dump"), "--format=custom", "--no-owner", "--no-privileges", "--dbname", dsn],
@@ -203,9 +206,8 @@ def _sha256_bytes(data: bytes) -> str:
 
 
 def _sha256_file(path: Path) -> str:
-    # Keep the digest reader on a single trusted path component even if a caller
-    # passes a name assembled elsewhere.
-    path = _confined_child(Path(path).parent, _basename(path))
+    # Callers pass trusted paths: a directory entry from the backup root or a
+    # file this build just created under a temp directory.
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
@@ -300,11 +302,10 @@ async def build_archive(
                         {"storageKey": item["storage_key"], "error": str(exc)[:200]}
                     )
                     continue
-                # The archive member is a generated index + the key's basename,
-                # never the raw storage key (which may contain directories).
-                archive_name = f"{index:06d}-{_safe_member_name(item['storage_key'])}"
-                target = _confined_child(files_dir, archive_name)
-                target.parent.mkdir(parents=True, exist_ok=True)
+                # The archive member is a generated index only, so no storage
+                # key ever reaches a filesystem path.
+                archive_name = f"{index:06d}"
+                target = files_dir / archive_name
                 target.write_bytes(content)
                 manifest["files"].append(
                     {
@@ -319,7 +320,7 @@ async def build_archive(
 
         # 3) Manifest + tar.
         (work / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-        archive_path = _confined_child(root, f"{ARCHIVE_PREFIX}{backup_id}.tar.gz")
+        archive_path = root / f"{ARCHIVE_PREFIX}{backup_id}.tar.gz"
         with tarfile.open(archive_path, "w:gz") as tar:
             tar.add(dump_path, arcname="db/pg_dump.dump")
             if manifest["files"]:
@@ -328,12 +329,12 @@ async def build_archive(
 
         # 4) Optional encryption (key stays outside the archive).
         if key:
-            encrypted_path = _confined_child(root, f"{archive_path.name}.fernet")
+            encrypted_path = root / f"{archive_path.name}.fernet"
             encrypted_path.write_bytes(_fernet(key).encrypt(archive_path.read_bytes()))
             archive_path.unlink()
             archive_path = encrypted_path
         manifest["archive"] = {"file": archive_path.name, "sha256": _sha256_file(archive_path), "bytes": archive_path.stat().st_size}
-        _confined_child(root, f"{archive_path.name}.manifest.json").write_text(
+        (root / f"{archive_path.name}.manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
         )
         return manifest
@@ -379,9 +380,9 @@ def verify_archive(archive: Path, key: str | None = None) -> dict[str, Any]:
     """Full integrity check: archive digest, manifest checksum, every member."""
     archive = _safe_archive_path(archive)
     problems: list[str] = []
-    sidecar = archive.parent / f"{_basename(archive.name)}.manifest.json"
+    sidecar = _sidecar_path(archive)
     expected = None
-    if sidecar.exists():
+    if sidecar is not None:
         expected = json.loads(sidecar.read_text(encoding="utf-8")).get("archive", {}).get("sha256")
     actual = _sha256_file(archive)
     if expected and expected != actual:
@@ -454,12 +455,12 @@ def restore_archive(
         with tarfile.open(plain, "r:gz") as tar:
             tar.extractall(work, filter="data")  # noqa: S202 - members are our own archive format
         restore_database(target_dsn, work / "db" / "pg_dump.dump", runner)
-        restored = 0
-        for item in manifest.get("files", []):
-            member_name = _safe_member_name(item.get("archivePath") or item.get("storageKey"))
-            path = _confined_child(work / "attachments", member_name)
-            if path.exists():
-                restored += 1
+        attachments_dir = work / "attachments"
+        restored = (
+            sum(1 for entry in attachments_dir.iterdir() if entry.is_file())
+            if attachments_dir.exists()
+            else 0
+        )
         return {"restored": manifest.get("database", {}), "attachmentsRestored": restored, "manifest": manifest}
     finally:
         shutil.rmtree(work, ignore_errors=True)

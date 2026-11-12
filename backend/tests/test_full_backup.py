@@ -107,6 +107,8 @@ def test_path_helpers_confine_user_values(tmp_path):
     with pytest.raises(ValidationFailed):
         dr._safe_member_name("..")
     with pytest.raises(ValidationFailed):
-        dr._confined_child(tmp_path, "../escape")
-    with pytest.raises(ValidationFailed):
         dr._safe_archive_name("lcs-full-ok.tar.gz/../../etc/passwd")
+    # Resolution is by name from the trusted backup directory, not by joining
+    # the supplied path.
+    with pytest.raises(ValidationFailed):
+        dr.archive_path_from_name("../../etc/passwd")
