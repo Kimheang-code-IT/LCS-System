@@ -37,6 +37,22 @@ describe('service order finance summary', () => {
     })
   })
 
+  it('adds the container-payment sheet to the customer charges', () => {
+    const [group] = buildFinanceSummary({
+      charges: [{ id: 'sc', status: 'Draft', currency: 'USD', total: 200 }],
+      containerCharge: { currency: 'USD', total: 400 },
+      entries: [],
+      primaryCurrency: 'USD',
+    })
+    expect(group).toMatchObject({
+      totalCharges: 600,
+      chargedAmount: 0,
+      unchargedAmount: 600,
+      netAmount: 600,
+      estimated: true,
+    })
+  })
+
   it('does not clamp a credit/overcharge to zero', () => {
     const [group] = buildFinanceSummary({
       charges: [{ id: 'credit', status: 'Draft', currency: 'USD', total: -25 }],

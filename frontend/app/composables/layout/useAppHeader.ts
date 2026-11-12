@@ -67,8 +67,6 @@ export type AppHeaderActionsConfig = {
 const headerActions = shallowRef<AppHeaderActionsConfig | null>(null)
 /** Prevents an unmounting page from clearing the next page's actions. */
 let actionsOwnerId = 0
-/** Route whose page last wrote the header chrome (title/breadcrumbs/badges). */
-let chromeRoute = ''
 
 /**
  * Shared dynamic header state for layout AppHeader.
@@ -80,6 +78,13 @@ export function useAppHeader() {
   const badges = useState<AppHeaderBadge[]>('app-header-badges', () => [])
   const route = useRoute()
   const { t, te } = useI18n()
+  /**
+   * Route this component instance last wrote chrome for. A page that is being
+   * unmounted by a navigation must not wipe the chrome the *new* page already
+   * wrote (the classic list → detail race: the leaving list cleared the detail
+   * breadcrumb and the detail never re-wrote it).
+   */
+  let ownedRoute = ''
 
   const metaTitle = computed(() => {
     const key = route.meta.titleKey
@@ -91,20 +96,20 @@ export function useAppHeader() {
   const hasBreadcrumbs = computed(() => breadcrumbs.value.length > 0)
 
   function setTitle(value: string) {
-    chromeRoute = route.fullPath
+    ownedRoute = route.fullPath
     title.value = value
     breadcrumbs.value = []
   }
 
   function setBreadcrumbs(items: AppHeaderBreadcrumb[]) {
-    chromeRoute = route.fullPath
+    ownedRoute = route.fullPath
     breadcrumbs.value = items
     const last = items[items.length - 1]
     if (last?.label) title.value = last.label
   }
 
   function setBadges(items: AppHeaderBadge[]) {
-    chromeRoute = route.fullPath
+    ownedRoute = route.fullPath
     badges.value = items
   }
 
@@ -131,10 +136,13 @@ export function useAppHeader() {
    * title and the header falls back to the generic route `titleKey` (e.g. "Reports").
    */
   function clear() {
-    if (headerChromeOwnedByCurrentRoute(chromeRoute, route.fullPath)) return
+    // Only the page that wrote this route's chrome may clear it. A leaving page
+    // whose route already changed leaves the new page's chrome untouched.
+    if (!headerChromeOwnedByCurrentRoute(ownedRoute, route.fullPath)) return
     title.value = ''
     breadcrumbs.value = []
     badges.value = []
+    ownedRoute = ''
   }
 
   /** @deprecated use clear() */

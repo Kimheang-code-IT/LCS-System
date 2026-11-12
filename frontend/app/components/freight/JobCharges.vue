@@ -376,14 +376,6 @@ defineExpose({ flushDraft: formDraft.flush, save })
           :disabled="saving"
           @click="startNew('CUSTOMER')" />
         <UButton
-          v-if="canCreate"
-          icon="i-lucide-receipt"
-          color="neutral"
-          variant="outline"
-          :label="t('freight.ui.addInternalCharge')"
-          :disabled="saving"
-          @click="startNew('INTERNAL')" />
-        <UButton
           v-if="model"
           icon="i-lucide-save"
           color="primary"

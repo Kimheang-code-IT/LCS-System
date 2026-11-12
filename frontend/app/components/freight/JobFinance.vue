@@ -2,6 +2,7 @@
 import type { FreightRecord } from '~/types/record'
 import type { FreightTable } from '~/config/freight-modules'
 import { JOB_FINANCE_LINES_TABLE } from '~/config/job-workspace-forms'
+import { jobContainerPaymentTotals } from '~/utils/freight/job-containers'
 import { formatMoney } from '~/composables/freight/useFreight'
 import { useLcs } from '~/composables/freight/useLcs'
 import { useConfirm } from '~/composables/common/useConfirm'
@@ -915,9 +916,20 @@ const summaryEntries = computed<FinanceSummaryEntry[]>(() => entries.value.map((
   }
 }))
 
+/** The Containers tab's payment sheet is a customer charge too. */
+const containerCharge = computed(() => {
+  const rows = Array.isArray(props.job.containerPayments)
+    ? props.job.containerPayments as Array<Record<string, unknown>>
+    : []
+  if (!rows.length) return null
+  const totals = jobContainerPaymentTotals(rows, props.job.vatRate, props.job.discount)
+  return { currency: String(props.job.currency || ''), total: totals.total }
+})
+
 const financeSummary = computed(() => buildFinanceSummary({
   charges: props.charges || [],
   entries: summaryEntries.value,
+  containerCharge: containerCharge.value,
   internalCharges: (props.charges || [])
     .filter(charge => String(charge.chargeSide || 'CUSTOMER').toUpperCase() === 'INTERNAL')
     .map((charge) => {

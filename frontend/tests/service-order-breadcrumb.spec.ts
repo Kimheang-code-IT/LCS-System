@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { serviceOrderBreadcrumbs } from '../app/utils/freight/job-workspace'
+
+const APP = fileURLToPath(new URL('../app', import.meta.url))
 
 const list = { label: 'Service Orders', to: '/service-orders' }
 
@@ -37,5 +41,13 @@ describe('service order breadcrumb', () => {
       .toEqual([list])
     expect(serviceOrderBreadcrumbs('Service Orders', '/service-orders', { jobNo: '   ' }))
       .toEqual([list])
+  })
+
+  it('keeps the detail breadcrumb when the leaving list page unmounts', () => {
+    // The list page writes chrome for its own route; navigating to the detail
+    // must not let its unmount clear the detail's breadcrumb.
+    const header = readFileSync(`${APP}/composables/layout/useAppHeader.ts`, 'utf8')
+    expect(header).toContain('ownedRoute')
+    expect(header).toContain('headerChromeOwnedByCurrentRoute(ownedRoute, route.fullPath)')
   })
 })

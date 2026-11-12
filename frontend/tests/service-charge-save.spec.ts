@@ -18,6 +18,10 @@ describe('shared service charge form', () => {
     expect(standalone).toContain("module.collection === 'jobCharges'")
     // Embedded tab.
     expect(charges).toContain('<FreightServiceChargeForm')
+    // Internal charges are a standalone Service Charges action; the Service
+    // Order tab only offers a customer charge.
+    expect(charges).not.toContain("t('freight.ui.addInternalCharge')")
+    expect(charges).not.toContain("startNew('INTERNAL')")
     // The component is the existing config-driven document form, not a copy.
     expect(sharedForm).toContain('DocumentAppDocumentForm')
     expect(sharedForm).toContain('SERVICE_CHARGE_MODULE_PATH')

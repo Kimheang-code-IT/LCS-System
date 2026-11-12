@@ -440,7 +440,7 @@ const headerSubtitle = computed(() =>
     .filter(Boolean).join(' · '),
 )
 
-watch([jobNo, () => model.value.serviceOrderNo, () => model.value.status, () => notFound.value, headerSubtitle], () => {
+watch([() => module.value?.path, jobNo, () => model.value.serviceOrderNo, () => model.value.status, () => notFound.value, headerSubtitle], () => {
   if (!module.value) return
   setBreadcrumbs(serviceOrderBreadcrumbs(
     moduleTitle(module.value),

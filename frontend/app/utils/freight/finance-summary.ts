@@ -57,6 +57,16 @@ export type FinanceSummaryInternalCharge = {
   supplierDocumentId?: unknown
 }
 
+/**
+ * Container-payment sheet total (customer-facing). It is a priced operational
+ * charge until a financial document is raised, so it contributes to
+ * `totalCharges`/`unchargedAmount`, never to `chargedAmount`.
+ */
+export type FinanceSummaryContainerCharge = {
+  currency?: unknown
+  total?: unknown
+}
+
 export type FinanceSummaryEntry = {
   id?: string
   status?: unknown
@@ -142,6 +152,8 @@ export function buildFinanceSummary(input: {
   internalCharges?: readonly FinanceSummaryInternalCharge[]
   /** The selected charge's unsaved total, if any. */
   previewCharge?: FinanceSummaryCharge | null
+  /** The container-payment sheet total, counted as a customer charge. */
+  containerCharge?: FinanceSummaryContainerCharge | null
   /** Always show this currency even when it has no rows yet. */
   primaryCurrency?: string
 }): FinanceSummaryGroup[] {
@@ -173,6 +185,19 @@ export function buildFinanceSummary(input: {
       bucket.chargedAmount += total
     }
     else {
+      bucket.draftCharges += total
+    }
+  }
+
+  // Container payments are customer-facing priced charges. Until a financial
+  // document is raised they remain uncharged, so they raise the total and the
+  // uncharged balance but never the charged amount.
+  if (input.containerCharge) {
+    const total = amountOf(input.containerCharge.total)
+    if (total !== 0n) {
+      const currency = currencyOf(input.containerCharge.currency, primary)
+      const bucket = totals(currency)
+      bucket.totalCharges += total
       bucket.draftCharges += total
     }
   }
