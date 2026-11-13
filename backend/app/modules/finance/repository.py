@@ -97,6 +97,14 @@ class FinanceRepository:
             stmt = stmt.where(
                 FinancialDocument.document_no.ilike(pattern) | FinancialDocument.description.ilike(pattern)
             )
+        # Date filters: the page params accept `from_date`/`to_date` (also
+        # `dateFrom`/`dateTo` aliases) so mobile and web lists can scope a range.
+        from app.core.pagination import parse_date
+
+        if parse_date(page.from_date) is not None:
+            stmt = stmt.where(FinancialDocument.document_date >= parse_date(page.from_date))
+        if parse_date(page.to_date) is not None:
+            stmt = stmt.where(FinancialDocument.document_date <= parse_date(page.to_date))
         total = await count_query(self.session, stmt)
         result = await self.session.execute(
             stmt.order_by(*list_sort_orders(FinancialDocument, page, FinancialDocument.id.desc()))

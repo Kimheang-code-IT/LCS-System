@@ -772,6 +772,70 @@ async def _customers(session: AsyncSession, context: RequestContext) -> list[str
     return sorted([str(r) for r in rows if r])
 
 
+async def _payment_totals(session: AsyncSession, context: RequestContext) -> tuple[float, float]:
+    """Totals of posted payment documents, one figure per payment direction.
+
+    Mirrors the receivables/payables convention: each document's own currency
+    amount, summed without conversion, so the figures agree with the web app's
+    totals for the same population instead of inventing a second aggregation.
+    """
+    rows = (
+        await session.execute(
+            select(FinancialDocument.document_type, func.sum(FinancialDocument.total_amount))
+            .where(
+                FinancialDocument.document_type.in_(("CUSTOMER_RECEIPT", "SUPPLIER_PAYMENT")),
+                FinancialDocument.status == "POSTED",
+            )
+            .group_by(FinancialDocument.document_type)
+        )
+    ).all()
+    totals = {row[0]: float(row[1] or 0) for row in rows}
+    return totals.get("CUSTOMER_RECEIPT", 0.0), totals.get("SUPPLIER_PAYMENT", 0.0)
+
+
+async def _payment_totals_by_currency(
+    session: AsyncSession, context: RequestContext
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Per-currency split of the posted payment totals.
+
+    The headline totals sum document-currency amounts across currencies, which
+    only reads as one number while a deployment uses a single currency. The
+    breakdown exposes the same population split per currency so a multi-currency
+    dashboard can show where the total comes from without recomputing it.
+    """
+    rows = (
+        await session.execute(
+            select(
+                FinancialDocument.document_type,
+                FinancialDocument.currency_code,
+                func.sum(FinancialDocument.total_amount),
+            )
+            .where(
+                FinancialDocument.document_type.in_(("CUSTOMER_RECEIPT", "SUPPLIER_PAYMENT")),
+                FinancialDocument.status == "POSTED",
+            )
+            .group_by(FinancialDocument.document_type, FinancialDocument.currency_code)
+        )
+    ).all()
+    received: dict[str, float] = {}
+    paid: dict[str, float] = {}
+    for document_type, currency, total in rows:
+        bucket = received if document_type == "CUSTOMER_RECEIPT" else paid
+        bucket[currency] = round(bucket.get(currency, 0.0) + float(total or 0), 4)
+    return received, paid
+
+
+def _outstanding_by_currency(rows: list[dict]) -> dict[str, float]:
+    """Per-currency outstanding balances of an AR/AP projection."""
+    by_currency: dict[str, float] = {}
+    for row in rows:
+        if row.get("balance", 0) <= 0:
+            continue
+        currency = row.get("currency") or ""
+        by_currency[currency] = round(by_currency.get(currency, 0.0) + float(row["balance"]), 4)
+    return by_currency
+
+
 async def dashboard(session: AsyncSession, context: RequestContext, granularity: str = "month") -> dict:
     cache_parts = ("dashboard", _cache_scope(context), granularity)
     cached = await cache.get_json("reports", *cache_parts)
@@ -787,6 +851,8 @@ async def dashboard(session: AsyncSession, context: RequestContext, granularity:
     total_revenue, total_expense, revenue_expense_points = await _journal_revenue_expense(
         session, context, granularity
     )
+    total_received, total_paid = await _payment_totals(session, context)
+    received_by_currency, paid_by_currency = await _payment_totals_by_currency(session, context)
     customer_list = await _customers(session, context)
     cash_bank_balance = await _cash_bank_balance(session)
 
@@ -823,6 +889,17 @@ async def dashboard(session: AsyncSession, context: RequestContext, granularity:
             "cashBankBalance": cash_bank_balance,
             "revenue": total_revenue,
             "expense": total_expense,
+            # Mobile dashboard cards: posted receipts vs payments. Additive keys;
+            # existing web consumers ignore them.
+            "totalReceived": total_received,
+            "totalPaid": total_paid,
+            # Per-currency splits of the same populations: the headline totals
+            # sum document-currency amounts, so a multi-currency deployment
+            # reads the composition instead of adding apples to oranges.
+            "receivablesByCurrency": _outstanding_by_currency(receivable_rows),
+            "payablesByCurrency": _outstanding_by_currency(payable_rows),
+            "totalReceivedByCurrency": received_by_currency,
+            "totalPaidByCurrency": paid_by_currency,
         },
         "charts": {
             "revenueExpense": revenue_expense_points,

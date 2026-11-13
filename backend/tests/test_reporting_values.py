@@ -95,6 +95,52 @@ async def test_cash_and_bank_balance_reflects_posted_receipts(client):
     assert after == before + 500, f"expected the posted receipt to raise cash by 500, got {after - before}"
 
 
+async def test_dashboard_payment_totals_reflect_posted_documents(client):
+    """totalReceived/totalPaid count only POSTED receipts and payments."""
+    headers = await login(client)
+    summary = await _dashboard_summary(client, headers)
+    assert "totalReceived" in summary and "totalPaid" in summary
+    # Additive per-currency breakdowns expose the composition of the totals.
+    for key in (
+        "receivablesByCurrency",
+        "payablesByCurrency",
+        "totalReceivedByCurrency",
+        "totalPaidByCurrency",
+    ):
+        assert key in summary
+
+    party = await client.get("/api/v1/businessParties", headers=headers, params={"page_size": 200})
+    party_id = party.json()["data"]["items"][0]["id"]
+    before = summary["totalReceived"]
+    received_by_currency = dict(summary["totalReceivedByCurrency"])
+
+    draft = await client.post(
+        "/api/v1/financial-documents",
+        headers=headers,
+        json={
+            "document_type": "CUSTOMER_RECEIPT",
+            "documentDate": date.today().isoformat(),
+            "party": party_id,
+            "currency": "USD",
+            "lines": [{"description": "Draft receipt", "quantity": 1, "unitPrice": 300}],
+        },
+    )
+    assert draft.status_code == 201, draft.text
+    still = (await _dashboard_summary(client, headers))["totalReceived"]
+    assert still == before, "a draft receipt must not count as received"
+
+    posted = await client.post(
+        f"/api/v1/financial-documents/{draft.json()['data']['id']}/post", headers=headers, json={}
+    )
+    assert posted.status_code == 200, posted.text
+    refreshed = await _dashboard_summary(client, headers)
+    after = refreshed["totalReceived"]
+    assert after == before + 300, f"expected totalReceived to rise by 300, got {after - before}"
+    assert refreshed["totalReceivedByCurrency"].get("USD") == (
+        received_by_currency.get("USD", 0.0) + 300
+    )
+
+
 async def test_cash_and_bank_balance_ignores_draft_documents(client):
     """A draft is not posted, so it must not move the balance."""
     headers = await login(client)

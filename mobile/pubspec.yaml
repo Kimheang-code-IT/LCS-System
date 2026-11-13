@@ -1,0 +1,37 @@
+name: lcs_mobile
+description: LCS Freight Forwarding — Finance & Accounting mobile client for the existing LCS FastAPI backend.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^2.6.1
+  go_router: ^16.0.0
+  dio: ^5.9.0
+  cookie_jar: ^4.0.8
+  dio_cookie_manager: ^3.1.1
+  flutter_secure_storage: ^9.2.4
+  intl: ^0.20.2
+  pdf: ^3.11.3
+  printing: ^5.14.2
+  share_plus: ^12.0.0
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  generate: true

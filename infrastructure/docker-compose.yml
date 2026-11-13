@@ -69,12 +69,16 @@ services:
       CASBIN_RELOAD_INTERVAL_SECONDS: ${CASBIN_RELOAD_INTERVAL_SECONDS:-30}
       # Comma-separated browser origins allowed to call the API over CORS.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:${FRONTEND_HOST_PORT:-80},http://127.0.0.1:${FRONTEND_HOST_PORT:-80}}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,testserver}
+      # 10.0.2.2 is the Android-emulator alias for the host loopback, so the
+      # mobile app can call this dev stack from an emulator.
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,testserver,10.0.2.2}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       # File attachment storage lives in Settings → Storage & Backup (R2/Drive);
       # uploads are processed in memory and written directly to the cloud.
     ports:
-      - "${BIND_HOST:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
+      # API_BIND_HOST widens only the API for mobile devices on the LAN;
+      # the datastores below stay loopback-only.
+      - "${API_BIND_HOST:-127.0.0.1}:${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
