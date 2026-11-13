@@ -20,6 +20,12 @@ import { useLcsRepositories } from '~/repositories'
 /** CRUD for the Attribute -> Group -> Tab component configuration. */
 export function useComponentConfig() {
   const { componentConfig } = useLcsRepositories()
+  /**
+   * Bumped whenever the published configuration changes. Service Order forms
+   * watch it so an open form reloads the published layout instead of keeping a
+   * pre-publish copy in memory.
+   */
+  const publishedRevision = useState('component-config-published-revision', () => 0)
 
   const attributes = ref<ComponentAttribute[]>([])
   const groups = ref<ComponentGroup[]>([])
@@ -279,6 +285,7 @@ export function useComponentConfig() {
         version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
       ))]
       await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
+      publishedRevision.value += 1
       return published
     })
   }
@@ -291,6 +298,7 @@ export function useComponentConfig() {
         return version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
       })
       await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
+      publishedRevision.value += 1
       return activated
     })
   }
@@ -302,6 +310,7 @@ export function useComponentConfig() {
         version.status === 'PUBLISHED' ? { ...version, status: 'RETIRED' as const } : version
       ))]
       await Promise.all([loadConfigurationPreview(), loadActiveConfigurationVersion()])
+      publishedRevision.value += 1
       return rolled
     })
   }
@@ -324,6 +333,7 @@ export function useComponentConfig() {
     versionsMeta,
     activeVersion,
     preview,
+    publishedRevision,
     loading,
     saving,
     error,

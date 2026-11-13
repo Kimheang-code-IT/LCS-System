@@ -71,6 +71,16 @@ describe('financial documents module', () => {
     expect(readOnly('allocation')).toBe(true)
   })
 
+  it('shows the payment allocations as six columns: #, Document, Original Amount, Amount, Outstanding, Currency', () => {
+    const allocations = financeDocuments.tables!.find(table => table.key === 'allocations')!
+    const keys = allocations.columns.map(column => column.key)
+
+    expect(keys).toEqual(['targetDocumentNo', 'originalAmount', 'amount', 'targetOutstanding', 'currency'])
+    // Required-field indicators stay on the editable allocation inputs.
+    expect(allocations.columns.find(column => column.key === 'targetDocumentNo')?.required).toBe(true)
+    expect(allocations.columns.find(column => column.key === 'amount')?.required).toBe(true)
+  })
+
   it('keeps the status off the form: it is changed from the record menu', () => {
     // Posting and reversal produce the status, so no form field may write it.
     // The record page and the list both run the shared status manager, which

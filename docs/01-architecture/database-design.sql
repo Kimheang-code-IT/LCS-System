@@ -3895,13 +3895,23 @@ CREATE TABLE financial_document_allocations (
     payment_document_id BIGINT NOT NULL,
     -- Open document the money is applied to (an invoice or a credit).
     target_document_id BIGINT NOT NULL,
-    -- Amount of the payment applied to target_document_id.
+    -- Amount of the payment applied to target_document_id, in the payment's
+    -- currency.
     allocated_amount NUMERIC(19, 4) NOT NULL,
     -- ISO 4217 code of allocated_amount, which may differ from either
     -- document.
     allocated_currency_code VARCHAR(3) NOT NULL,
     -- Rate used to convert allocated_currency_code into the base currency.
     exchange_rate NUMERIC(19, 8) NOT NULL,
+    -- The same settlement expressed in the target document's currency,
+    -- converted at the two stored rates. An invoice's paid amount and
+    -- outstanding balance move by this value, so a KHR invoice can be settled
+    -- by a USD receipt.
+    target_amount NUMERIC(19, 4) NOT NULL,
+    -- Realised exchange gain or loss in the base currency: the payment-side
+    -- base value minus the target-side base value. Reported on the
+    -- allocation; it never re-values a posted document.
+    exchange_difference NUMERIC(19, 4) NOT NULL,
     -- Timestamp the allocation was applied.
     allocated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
     -- Identifier of the user who created this record. NULL when the action
@@ -3925,9 +3935,11 @@ CREATE INDEX ix_financial_document_allocations_target_document_id ON financial_d
 COMMENT ON TABLE financial_document_allocations IS 'Applies part of a payment document to an open invoice (or a payment against a credit). This is what makes partial settlement and multi-invoice payments possible.';
 COMMENT ON COLUMN financial_document_allocations.payment_document_id IS 'Payment or receipt document that holds the money.';
 COMMENT ON COLUMN financial_document_allocations.target_document_id IS 'Open document the money is applied to (an invoice or a credit).';
-COMMENT ON COLUMN financial_document_allocations.allocated_amount IS 'Amount of the payment applied to target_document_id.';
+COMMENT ON COLUMN financial_document_allocations.allocated_amount IS 'Amount of the payment applied to target_document_id, in the payment''s currency.';
 COMMENT ON COLUMN financial_document_allocations.allocated_currency_code IS 'ISO 4217 code of allocated_amount, which may differ from either document.';
 COMMENT ON COLUMN financial_document_allocations.exchange_rate IS 'Rate used to convert allocated_currency_code into the base currency.';
+COMMENT ON COLUMN financial_document_allocations.target_amount IS 'The same settlement expressed in the target document''s currency, converted at the two stored rates. An invoice''s paid amount and outstanding balance move by this value, so a KHR invoice can be settled by a USD receipt.';
+COMMENT ON COLUMN financial_document_allocations.exchange_difference IS 'Realised exchange gain or loss in the base currency: the payment-side base value minus the target-side base value. Reported on the allocation; it never re-values a posted document.';
 COMMENT ON COLUMN financial_document_allocations.allocated_at IS 'Timestamp the allocation was applied.';
 COMMENT ON COLUMN financial_document_allocations.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 COMMENT ON COLUMN financial_document_allocations.idempotency_key IS 'UNIQUE key that makes a repeated allocation request a no-op. This is what stops a retried request from double-settling an invoice.';

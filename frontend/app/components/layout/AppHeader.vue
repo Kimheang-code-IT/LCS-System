@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useAppHeader } from '~/composables/layout/useAppHeader'
 
-const { displayTitle, breadcrumbs, badges, hasBreadcrumbs, actions } = useAppHeader()
+const { displayTitle, breadcrumbs, hasBreadcrumbs, actions } = useAppHeader()
 
 /**
  * The header icon spins while the page's refresh handler actually runs.
@@ -70,16 +70,6 @@ async function onHeaderRefresh() {
             link: 'text-sm',
           }"
         />
-        <UBadge
-          v-for="(badge, index) in badges"
-          :key="`${badge.label}-${index}`"
-          :color="badge.color || 'info'"
-          variant="subtle"
-          size="sm"
-          class="shrink-0"
-        >
-          {{ badge.label }}
-        </UBadge>
       </div>
       <span v-else class="hidden truncate text-highlighted lg:block">{{ displayTitle || 'LCS Freight' }}</span>
     </template>

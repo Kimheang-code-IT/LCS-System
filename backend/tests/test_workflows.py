@@ -301,7 +301,13 @@ async def test_service_order_components_and_containers(client):
     assert duplicate.status_code == 409
 
     # Component tabs are configured per trade direction; the seed assigns the
-    # Customs tab (a table-mode group) to the IMPORT direction.
+    # Customs tab (a table-mode group) to the IMPORT direction. Operational tabs
+    # come only from a published configuration, so publish the seeded layout.
+    published = await client.post(
+        "/api/v1/configuration-versions", headers=headers, json={"changeNote": "workflow components"}
+    )
+    assert published.status_code == 201, published.text
+
     tabs = await client.get(f"/api/v1/service-orders/{service_order_id}/component-tabs", headers=headers)
     assert tabs.status_code == 200, tabs.text
     tab_items = tabs.json()["data"]["tabs"]

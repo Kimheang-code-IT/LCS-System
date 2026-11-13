@@ -114,6 +114,19 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Service Charges list unified — 2026-11-13
+
+The `/service-charges` list stopped hiding order-linked charges: the standalone-only
+client filter in `WorkspaceView.vue` (rows with a `jobNo` were dropped) is removed, so
+the global list now shows every accessible charge — order-linked and standalone —
+from the single `service_order_charges` table the backend `GET /service-charges`
+(`scope=all`) already returns and tests already pin (`test_linked_charges_are_listed_per_scope_and_keep_the_order_customer`).
+Columns, filters, row actions and the standalone create form were already shared and
+are unchanged. `frontend/tests/service-charge-list.spec.ts` now pins the unified list
+(no `jobNo` filter in `WorkspaceView`). Evidence: `pnpm lint` / `pnpm typecheck` /
+`pnpm test` → 916 passed / 112 files. No backend or migration changes. Playwright e2e
+not executed (no running stack/credentials in this session). No Git commit.
+
 ### Accounting bootstrap seed — 2026-11-12
 
 The explicit seeder now has an `accounting` module (part of `--all` and

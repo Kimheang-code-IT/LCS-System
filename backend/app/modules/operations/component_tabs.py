@@ -25,8 +25,6 @@ from app.modules.master_data.models import (
     ComponentAttribute,
     ComponentGroup,
     ComponentGroupAttribute,
-    ComponentTab,
-    ComponentTabGroup,
 )
 from app.modules.operations.models import ServiceOrder, ServiceOrderComponentRow
 from app.modules.operations.reference_options import reference_options
@@ -38,12 +36,6 @@ def _bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"true", "yes", "1", "on"}
-
-
-def _layout_for(link: ComponentTabGroup, group: ComponentGroup) -> dict[str, Any]:
-    from app.modules.master_data.component_config import resolve_layout
-
-    return resolve_layout(link, group)
 
 
 def _empty(value: Any) -> bool:
@@ -59,59 +51,6 @@ def _option_values(options: Any) -> list[str]:
         if candidate is not None and str(candidate) != "":
             values.append(str(candidate))
     return values
-
-
-def attribute_payload(
-    attribute: ComponentAttribute,
-    membership: ComponentGroupAttribute | None = None,
-    display_order: int | None = None,
-) -> dict[str, Any]:
-    required = attribute.is_required
-    if membership is not None and membership.is_required is not None:
-        required = membership.is_required
-    width = membership.width if membership is not None and membership.width else attribute.width
-    return {
-        "id": str(attribute.id),
-        "code": attribute.code,
-        "label": attribute.label,
-        "labelKm": attribute.label_km,
-        "fieldType": attribute.data_type,
-        "inputType": attribute.input_type,
-        "referenceType": attribute.reference_type,
-        "isRequired": required,
-        "isVisible": True if membership is None or membership.is_visible is None else bool(membership.is_visible),
-        "defaultValue": attribute.default_value,
-        "placeholder": attribute.placeholder,
-        "width": width,
-        "options": attribute.options or [],
-        "validationRules": attribute.validation_rules or {},
-        "sortOrder": display_order if display_order is not None else (membership.display_order if membership else 0),
-    }
-
-
-def group_payload(
-    group: ComponentGroup,
-    link: ComponentTabGroup,
-    attributes: list[dict[str, Any]],
-    rows: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """A runtime group, carrying the layout of the tab assignment it came from."""
-    # Imported lazily: ``component_config`` imports the operations models, so a
-    # module-level import here would close the cycle.
-    from app.modules.master_data.component_config import resolve_layout
-
-    return {
-        "id": str(group.id),
-        "tabGroupId": str(link.id),
-        "code": group.code,
-        "name": group.name,
-        "nameKm": group.name_km,
-        "renderMode": group.render_mode,
-        "displayOrder": link.display_order,
-        "attributes": attributes,
-        "rows": rows,
-        **resolve_layout(link, group),
-    }
 
 
 def row_payload(row: ServiceOrderComponentRow) -> dict[str, Any]:
@@ -143,21 +82,23 @@ async def _get_group(session: AsyncSession, group_id: int) -> ComponentGroup:
     return group
 
 
-async def _group_attributes(session: AsyncSession, group_id: int) -> list[tuple[ComponentGroupAttribute, ComponentAttribute]]:
-    rows = (
-        await session.execute(
-            select(ComponentGroupAttribute, ComponentAttribute)
-            .join(ComponentAttribute, ComponentAttribute.id == ComponentGroupAttribute.attribute_id)
-            .where(
-                ComponentGroupAttribute.group_id == group_id,
-                ComponentGroupAttribute.status == "ACTIVE",
-                ComponentGroupAttribute.is_visible.is_(True),
-                ComponentAttribute.status == "ACTIVE",
-            )
-            .order_by(ComponentGroupAttribute.display_order, ComponentGroupAttribute.id)
-        )
-    ).all()
-    return [(membership, attribute) for membership, attribute in rows]
+class _SnapshotAttribute:
+    """A published attribute entry, exposing the fields value validation reads."""
+
+    __slots__ = ("code", "data_type", "is_required", "options", "reference_type")
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self.code = str(entry.get("code") or "")
+        self.data_type = str(entry.get("dataType") or "text")
+        self.is_required = bool(entry.get("isRequired"))
+        self.options = entry.get("options") or []
+        self.reference_type = entry.get("referenceType")
+
+
+class _SnapshotMembership:
+    """The per-tab required override; a snapshot already merges it into the attribute."""
+
+    is_required = None
 
 
 async def _validate_values(
@@ -345,22 +286,6 @@ async def bootstrap(
     order = await _get_order(session, service_order_id)
     selected_direction_id = direction_id or order.trade_direction_id
 
-    tabs: list[ComponentTab] = []
-    if selected_direction_id:
-        tabs = list(
-            (
-                await session.execute(
-                    select(ComponentTab)
-                    .where(
-                        ComponentTab.trade_direction_id == selected_direction_id,
-                        ComponentTab.is_active.is_(True),
-                        ComponentTab.is_archived.is_(False),
-                    )
-                    .order_by(ComponentTab.display_order, ComponentTab.id)
-                )
-            ).scalars().all()
-        )
-
     rows = (
         await session.execute(
             select(ServiceOrderComponentRow)
@@ -375,47 +300,15 @@ async def bootstrap(
     for row in rows:
         rows_by_group.setdefault(row.group_id, []).append(row_payload(row))
 
-    reference_types: set[str] = set()
-    configuration = await config_versions.version_for_order(session, order)
+    configuration = await effective_configuration(session, order)
     snapshot = (configuration or {}).get("configSnapshot") or {}
-    historical_tabs, historical_reference_types = snapshot_tabs(snapshot, selected_direction_id, rows_by_group)
-    if snapshot.get("tabs"):
-        tab_items = historical_tabs
-        reference_types = historical_reference_types
-    else:
-        tab_items = []
-        for tab in tabs:
-            group_rows = (
-                await session.execute(
-                    select(ComponentTabGroup, ComponentGroup)
-                    .join(ComponentGroup, ComponentGroup.id == ComponentTabGroup.group_id)
-                    .where(
-                        ComponentTabGroup.tab_id == tab.id,
-                        ComponentTabGroup.status == "ACTIVE",
-                        ComponentGroup.is_active.is_(True),
-                        ComponentGroup.is_archived.is_(False),
-                    )
-                    .order_by(ComponentTabGroup.display_order, ComponentTabGroup.id)
-                )
-            ).all()
-            groups = []
-            for tab_group, group in group_rows:
-                memberships = await _group_attributes(session, group.id)
-                attributes = []
-                for membership, attribute in memberships:
-                    if attribute.data_type == "reference" and attribute.reference_type:
-                        reference_types.add(attribute.reference_type)
-                    attributes.append(attribute_payload(attribute, membership))
-                groups.append(group_payload(group, tab_group, attributes, rows_by_group.get(group.id, [])))
-            tab_items.append(
-                {
-                    "id": str(tab.id),
-                    "code": tab.code,
-                    "name": tab.name,
-                    "displayOrder": tab.display_order,
-                    "groups": groups,
-                }
-            )
+    # Without a trade direction the form has no tab scope; the live query this
+    # replaced also returned none, so keep that.
+    tab_items, reference_types = (
+        snapshot_tabs(snapshot, selected_direction_id, rows_by_group)
+        if selected_direction_id is not None
+        else ([], set())
+    )
 
     references = await reference_options(session, context, order.id, sorted(reference_types))
     return {
@@ -431,11 +324,40 @@ async def bootstrap(
     }
 
 
+async def effective_configuration(session: AsyncSession, order: ServiceOrder) -> dict | None:
+    """The published layout a Service Order renders under.
+
+    A pinned version wins, so a historical order keeps the layout it was captured
+    under. An order without a pin — created before versioning existed, or while
+    nothing had been published — renders the active published version. When
+    nothing has ever been published there is no layout at all: the live draft
+    tables are never used as a fallback, because that would expose unpublished
+    configuration to operational users.
+    """
+    configuration = await config_versions.version_for_order(session, order)
+    if configuration is None:
+        configuration = await config_versions.published_snapshot(session)
+    return configuration
+
+
+def snapshot_group(snapshot: dict[str, Any], group_id: int | str) -> dict[str, Any] | None:
+    """The group entry inside a published snapshot, or ``None`` when absent."""
+    wanted = str(group_id)
+    for tab in snapshot.get("tabs") or []:
+        for group in tab.get("groups") or []:
+            if isinstance(group, dict) and str(group.get("id") or "") == wanted:
+                return group
+    return None
+
+
 async def list_rows(
     session: AsyncSession, context: RequestContext, service_order_id: int, group_id: int, page: PageParams
 ) -> dict:
     order = await _get_order(session, service_order_id)
     await _get_group(session, group_id)
+    snapshot = (await effective_configuration(session, order) or {}).get("configSnapshot") or {}
+    if snapshot_group(snapshot, group_id) is None:
+        raise NotFound("This group is not part of the published configuration.")
     stmt = select(ServiceOrderComponentRow).where(
         ServiceOrderComponentRow.service_order_id == order.id,
         ServiceOrderComponentRow.group_id == group_id,
@@ -466,24 +388,30 @@ async def bulk_save(
 
     _ensure_order_editing(order)
     group = await _get_group(session, group_id)
-    memberships = await _group_attributes(session, group.id)
 
-    # The layout belongs to the group's assignment on a tab, so the caller names
-    # it. Older clients omit it; they keep the pre-existing group-level rule.
-    link: ComponentTabGroup | None = None
+    # Operational writes follow the published layout, never the draft tables: a
+    # group or attribute added after the last publish must not receive values.
+    snapshot = (await effective_configuration(session, order) or {}).get("configSnapshot") or {}
+    published_group = snapshot_group(snapshot, group.id)
+    if published_group is None:
+        raise ValidationFailed(
+            "This group is not part of the published configuration.",
+            {"groupId": "Not published"},
+        )
     if tab_group_id is not None:
-        link = await session.get(ComponentTabGroup, tab_group_id)
-        if link is None or link.group_id != group.id:
+        published_tab_group = str(published_group.get("tabGroupId") or "")
+        if published_tab_group and published_tab_group != str(tab_group_id):
             raise ValidationFailed("The group does not belong to that tab.", {"tabGroupId": "Mismatch"})
-    layout = (
-        _layout_for(link, group)
-        if link is not None
-        else {
-            "displayMode": "form_only" if group.render_mode == "form" else "table_only",
-            "dataCardinality": "single" if group.render_mode == "form" else "multiple",
-            "editable": True,
-        }
-    )
+    layout = {
+        "displayMode": str(published_group.get("displayMode") or "table_only"),
+        "dataCardinality": str(published_group.get("dataCardinality") or "multiple"),
+        "editable": published_group.get("editable", True) is not False,
+    }
+    memberships = [
+        (_SnapshotMembership(), _SnapshotAttribute(entry))
+        for entry in published_group.get("attributes") or []
+        if isinstance(entry, dict) and entry.get("isVisible") is not False
+    ]
     if layout["editable"] is False:
         raise ValidationFailed(
             "This group is configured as read-only.",

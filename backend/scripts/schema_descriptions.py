@@ -1374,9 +1374,19 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "financial_document_allocations": {
         "payment_document_id": "Payment or receipt document that holds the money.",
         "target_document_id": "Open document the money is applied to (an invoice or a credit).",
-        "allocated_amount": "Amount of the payment applied to target_document_id.",
+        "allocated_amount": "Amount of the payment applied to target_document_id, in the payment's currency.",
         "allocated_currency_code": "ISO 4217 code of allocated_amount, which may differ from either document.",
         "exchange_rate": "Rate used to convert allocated_currency_code into the base currency.",
+        "target_amount": (
+            "The same settlement expressed in the target document's currency, converted at the\n"
+            "two stored rates. An invoice's paid amount and outstanding balance move by this\n"
+            "value, so a KHR invoice can be settled by a USD receipt."
+        ),
+        "exchange_difference": (
+            "Realised exchange gain or loss in the base currency: the payment-side base value\n"
+            "minus the target-side base value. Reported on the allocation; it never re-values a\n"
+            "posted document."
+        ),
         "allocated_at": "Timestamp the allocation was applied.",
         "idempotency_key": (
             "UNIQUE key that makes a repeated allocation request a no-op. This is what stops a\n"

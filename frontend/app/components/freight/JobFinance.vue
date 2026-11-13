@@ -81,7 +81,7 @@ async function loadFinanceDocuments(force = false) {
   if (!orderId || (!force && remoteDocumentsOrder.value === orderId)) return
   remoteDocumentsOrder.value = orderId
   try {
-    const page = await lcs.finance.listDocuments({ page_size: 500 })
+    const page = await lcs.finance.listDocuments({ page_size: 200 })
     remoteDocuments.value = page.items.filter(isLinkedToJob)
   }
   catch {
@@ -787,51 +787,39 @@ const allocOpen = ref(false)
 const allocSaving = ref(false)
 const allocError = ref('')
 const allocSource = ref<FreightRecord | null>(null)
-const allocTargetId = ref('')
-const allocAmount = ref<number | null>(null)
-
 const allocTargets = computed(() => {
   const source = allocSource.value
   if (!source) return []
   const targetType = String(source.documentType || '').toUpperCase() === 'CUSTOMER_RECEIPT'
     ? 'CUSTOMER_INVOICE'
     : 'SUPPLIER_BILL'
-  return store.list('debitNotes')
-    .filter((row) => {
-      if (String(row.documentType || '').toUpperCase() !== targetType) return false
-      if (String(row.status || '').toUpperCase() !== 'POSTED') return false
-      if (Number(row.outstanding ?? 0) <= 0) return false
-      return String(row.partyId || '') === String(source.partyId || '')
-    })
-    .map(row => ({
-      label: `${row.documentNo} · ${formatMoney(Number(row.outstanding ?? 0), String(row.currency || ''))}`,
-      value: String(row.id),
-    }))
+  return store.list('debitNotes').filter((row) => {
+    if (String(row.documentType || '').toUpperCase() !== targetType) return false
+    if (String(row.status || '').toUpperCase() !== 'POSTED') return false
+    if (Number(row.outstanding ?? 0) <= 0) return false
+    return String(row.partyId || '') === String(source.partyId || '')
+  })
 })
 
 function openAllocation(document: FreightRecord) {
   allocSource.value = document
-  allocTargetId.value = ''
-  allocAmount.value = Number(document.outstanding ?? 0) || null
   allocError.value = ''
   allocOpen.value = true
 }
 
-async function saveAllocation() {
+async function allocate({ targetId, amount }: { targetId: string, amount: number }) {
   const source = allocSource.value
-  const amount = Number(allocAmount.value)
-  if (!source || !allocTargetId.value || !Number.isFinite(amount) || amount <= 0) {
-    allocError.value = t('validation.positive', { field: t('freight.ui.cols.amount') })
-    return
-  }
+  if (!source) return
   allocSaving.value = true
   allocError.value = ''
   try {
     const id = String(source.id)
-    await lcs.runCommand('finance-allocate', `${id}-${allocTargetId.value}`, key =>
-      lcs.finance.allocate(id, allocTargetId.value, amount, key))
+    await lcs.runCommand('finance-allocate', `${id}-${targetId}`, key =>
+      lcs.finance.allocate(id, targetId, amount, key))
     toast.add({ title: t('freight.ui.allocate'), color: 'success' })
     allocOpen.value = false
+    store.reload()
+    void loadFinanceDocuments(true)
   }
   catch (error) {
     allocError.value = lcs.errorMessage(error)
@@ -1218,31 +1206,12 @@ class="w-full" />
       </div>
     </CommonAppEntityDialog>
 
-    <CommonAppEntityDialog
+    <FreightAllocationDialog
       v-model:open="allocOpen"
-      :title="t('freight.ui.allocate')"
+      :source="allocSource"
+      :targets="allocTargets"
       :saving="allocSaving"
-      :confirm-label="t('freight.ui.allocate')"
-      :form-errors="allocError ? [allocError] : []"
-      @confirm="saveAllocation">
-      <div class="space-y-4">
-        <p v-if="allocSource" class="text-sm text-muted">
-          {{ allocSource.documentNo }} · {{ formatMoney(Number(allocSource.outstanding ?? 0), String(allocSource.currency || '')) }}
-        </p>
-        <UFormField :label="t('freight.ui.relatedDocument')" required>
-          <USelect v-model="allocTargetId" :items="allocTargets" class="w-full" />
-        </UFormField>
-        <UFormField :label="t('freight.ui.cols.amount')" required>
-          <UInputNumber
-            v-model="allocAmount"
-            :min="0"
-            :step-snapping="false"
-            :increment="false"
-            :decrement="false"
-            class="w-full"
-            :ui="{ base: 'text-right tabular-nums' }" />
-        </UFormField>
-      </div>
-    </CommonAppEntityDialog>
+      :errors="allocError ? [allocError] : []"
+      @confirm="allocate" />
   </div>
 </template>

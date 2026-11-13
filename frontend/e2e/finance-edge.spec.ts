@@ -60,7 +60,7 @@ test('an invoice totals its lines and posts once', async ({ page }) => {
   await openDocument(page, href!)
   await expect(page.getByRole('spinbutton', { name: 'Grand Total' })).toHaveValue('200')
   await page.getByRole('button', { name: 'Post' }).click()
-  await expect(page.getByText('Posted', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toHaveCount(0)
 
   // A second post is idempotent: it succeeds without changing the document.
   const documentId = href!.split('/').pop()!
@@ -84,7 +84,7 @@ test('a supplier bill posts and reaches accounts payable', async ({ page }) => {
   await openDocument(page, href!)
   await expect(page.getByRole('spinbutton', { name: 'Grand Total' })).toHaveValue('120')
   await page.getByRole('button', { name: 'Post' }).click()
-  await expect(page.getByText('Posted', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toHaveCount(0)
 
   await page.goto('/reports/finance/accounts-payable')
   await expect(page.getByText('Demo Supplier One').first()).toBeVisible()
@@ -104,7 +104,7 @@ test('a partial receipt posts against an invoice', async ({ page }) => {
 
   await openDocument(page, href!)
   await page.getByRole('button', { name: 'Post' }).click()
-  await expect(page.getByText('Posted', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toHaveCount(0)
   const invoiceNo = (await page.locator('h1').innerText()).match(/INV\d{4}-\d{6}/)?.[0] || ''
   expect(invoiceNo).toMatch(/^INV\d{4}-\d{6}$/)
 
@@ -135,7 +135,7 @@ test('a partial receipt posts against an invoice', async ({ page }) => {
 
   await openDocument(page, receiptHref!)
   await page.getByRole('button', { name: 'Post' }).click()
-  await expect(page.getByText('Posted', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toHaveCount(0)
 
   // Both documents keep their own numbers; the receipt stays a partial amount.
   await page.goto('/finance/documents')

@@ -8,12 +8,11 @@ import {
   asNumber,
   defaultStatusForModule,
   emptyFreightRecord,
-  statusColor,
   useFreightLabel,
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
 import { FINANCE_REVERSE_FORM_FIELDS } from '~/config/job-workspace-forms'
-import { FINANCIAL_DOCUMENT_TYPES } from '~/config/freight-options'
+import { FINANCIAL_DOCUMENT_TYPES, PAYMENT_DOCUMENT_TYPES } from '~/config/freight-options'
 import type { FreightRecord } from '~/types/record'
 import { useFreightRecordChrome } from '~/composables/freight/useFreightRecordChrome'
 import { useLcs } from '~/composables/freight/useLcs'
@@ -92,7 +91,7 @@ const auth = useAuthStore()
 const { t } = useI18n()
 const toast = useToast()
 const { moduleTitle, moduleSingular, fieldLabel, actionLabel } = useFreightLabel()
-const { setBreadcrumbs, setBadges, clear } = useAppHeader()
+const { setBreadcrumbs, clear } = useAppHeader()
 const { confirm } = useConfirm()
 const lcs = useLcs()
 const { localization } = useAppLocalization()
@@ -383,9 +382,6 @@ watch([title, () => module.value, () => model.value.status], () => {
     { label: moduleTitle(module.value), to: module.value.path },
     { label: title.value },
   ])
-  // Quotation Status is retired: quotations show no status badge.
-  const showStatus = module.value.collection !== 'quotations'
-  setBadges(showStatus && model.value.status ? [{ label: String(model.value.status), color: statusColor(String(model.value.status)) }] : [])
 }, { immediate: true })
 
 onBeforeUnmount(clear)
@@ -461,6 +457,72 @@ const reverseOpen = ref(false)
 const reverseDraft = reactive<Record<string, unknown>>({ reason: '' })
 const reverseErrors = ref<string[]>([])
 const reversing = ref(false)
+
+// --- Payment allocation ------------------------------------------------------
+// A payment document is allocated against posted invoices from its Allocation
+// tab; the same dialog is used by the Service Order finance tab.
+const allocationOpen = ref(false)
+const allocationSaving = ref(false)
+const allocationError = ref('')
+
+const isPaymentDocument = computed(() => PAYMENT_DOCUMENT_TYPES.some(
+  type => type === String(model.value.documentType || '').toUpperCase(),
+))
+
+const canAllocate = computed(() =>
+  module.value?.collection === 'debitNotes'
+  && isPaymentDocument.value
+  && String(model.value.status || '').toUpperCase() === 'POSTED'
+  && lcs.can('financial_document.allocate'),
+)
+
+const allocationCandidates = ref<FreightRecord[]>([])
+
+const allocationTargets = computed(() => {
+  const source = model.value
+  const targetType = String(source.documentType || '').toUpperCase() === 'CUSTOMER_RECEIPT'
+    ? 'CUSTOMER_INVOICE'
+    : 'SUPPLIER_BILL'
+  return allocationCandidates.value.filter((row) => {
+    if (String(row.id) === String(source.id)) return false
+    if (String(row.documentType || '').toUpperCase() !== targetType) return false
+    if (String(row.status || '').toUpperCase() !== 'POSTED') return false
+    if (Number(row.outstanding ?? 0) <= 0) return false
+    return String(row.partyId || '') === String(source.partyId || '')
+  })
+})
+
+/** Load the posted invoices/bills this payment may settle. */
+async function openAllocation() {
+  allocationError.value = ''
+  try {
+    const page = await lcs.finance.listDocuments({ page_size: 200 })
+    allocationCandidates.value = page.items as FreightRecord[]
+  }
+  catch {
+    allocationCandidates.value = []
+  }
+  allocationOpen.value = true
+}
+
+async function allocate({ targetId, amount }: { targetId: string, amount: number }) {
+  allocationSaving.value = true
+  allocationError.value = ''
+  try {
+    const id = String(model.value.id)
+    await lcs.runCommand('finance-allocate', `${id}-${targetId}`, key =>
+      lcs.finance.allocate(id, targetId, amount, key))
+    toast.add({ title: t('freight.ui.allocate'), color: 'success' })
+    allocationOpen.value = false
+    await refreshForm()
+  }
+  catch (error) {
+    allocationError.value = apiErrorMessage(error, t('freight.ui.saveFailed'))
+  }
+  finally {
+    allocationSaving.value = false
+  }
+}
 
 /**
  * Password dialog. One instance serves both jobs: choosing a new password for an
@@ -1851,6 +1913,17 @@ variant="subtle"
 
       <template #tab-extra="{ tabId }">
         <DocumentAppDocumentContentShell
+          v-if="tabId === 'allocation' && canAllocate"
+          wide>
+          <div class="flex justify-end py-4">
+            <UButton
+              icon="i-lucide-link"
+              size="sm"
+              :label="t('freight.ui.allocate')"
+              @click="openAllocation" />
+          </div>
+        </DocumentAppDocumentContentShell>
+        <DocumentAppDocumentContentShell
           v-if="tabId === 'revisions' && module.collection === 'quotations' && !isCreate"
           wide>
           <div class="py-6">
@@ -1899,6 +1972,13 @@ size="sm"
         </div>
       </template>
     </UModal>
+    <FreightAllocationDialog
+      v-model:open="allocationOpen"
+      :source="model"
+      :targets="allocationTargets"
+      :saving="allocationSaving"
+      :errors="allocationError ? [allocationError] : []"
+      @confirm="allocate" />
     <PrintTemplateModal
 v-if="module"
 v-model:open="printOpen"

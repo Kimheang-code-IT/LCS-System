@@ -946,9 +946,9 @@ async def _document_detail_extras(session: AsyncSession, document: FinancialDocu
             )).scalars()
         }
     names = await _document_names(session, list(counterparts.values()))
-    # Every allocation of one document shares its currency (the allocation guard
-    # requires the payment and the target to match), so the precision is looked up
-    # once rather than per row.
+    # Allocations may cross currencies, so each side is valued from its own
+    # stored amount and rate: the payment side in the payment's currency, the
+    # invoice side in the target document's currency.
     allocation_precision = await currency_precision(session, document.currency_code)
     rows: list[dict[str, Any]] = []
     for allocation in allocations:
@@ -960,16 +960,16 @@ async def _document_detail_extras(session: AsyncSession, document: FinancialDocu
         counterpart = counterparts.get(counterpart_id)
         counterpart_total = (counterpart.total_amount or Decimal("0")) if counterpart else Decimal("0")
         counterpart_paid = (counterpart.paid_amount or Decimal("0")) if counterpart else Decimal("0")
-        # The same allocated amount is worth a different base amount on each side
-        # when the two documents were booked at different rates. The difference is
-        # the exchange gain or loss the settlement realises; the stored
-        # `allocation.exchange_rate` is the payment's rate at allocation time.
         viewed_is_payment = allocation.payment_document_id == document.id
-        counterpart_rate = counterpart.exchange_rate if counterpart else None
-        payment_rate = allocation.exchange_rate if viewed_is_payment else counterpart_rate
-        invoice_rate = counterpart_rate if viewed_is_payment else document.exchange_rate
+        target_document = counterpart if viewed_is_payment else document
+        payment_amount = allocation.allocated_amount or Decimal("0")
+        target_amount = allocation.target_amount or payment_amount
         payment_base, invoice_base, exchange_difference = _allocation_fx(
-            allocation.allocated_amount or Decimal("0"), payment_rate, invoice_rate, allocation_precision
+            payment_amount,
+            allocation.exchange_rate,
+            target_amount,
+            target_document.exchange_rate if target_document else None,
+            allocation_precision,
         )
         rows.append({
             "id": str(allocation.id),
@@ -977,7 +977,9 @@ async def _document_detail_extras(session: AsyncSession, document: FinancialDocu
             "targetDocumentNo": counterpart.document_no if counterpart else "",
             "party": names.get(counterpart_id, {}).get("customer"),
             "originalAmount": float(counterpart_total),
-            "amount": float(allocation.allocated_amount or 0),
+            "amount": float(payment_amount),
+            "appliedAmount": float(target_amount),
+            "appliedCurrency": target_document.currency_code if target_document else "",
             "targetOutstanding": float(counterpart_total - counterpart_paid),
             "currency": allocation.allocated_currency_code,
             "paymentBaseAmount": float(payment_base),
@@ -1676,8 +1678,16 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
         )
         other = await session.get(FinancialDocument, other_id)
         if other is not None:
+            # Each side is undone in its own currency: the payment by the amount
+            # it paid, the invoice by the amount it received (which differs when
+            # the settlement crossed currencies).
+            reversed_amount = (
+                allocation.allocated_amount
+                if other.id == allocation.payment_document_id
+                else (allocation.target_amount or allocation.allocated_amount)
+            )
             other.paid_amount = max(
-                Decimal("0"), (other.paid_amount or Decimal("0")) - (allocation.allocated_amount or Decimal("0"))
+                Decimal("0"), (other.paid_amount or Decimal("0")) - (reversed_amount or Decimal("0"))
             )
         await session.delete(allocation)
     document.paid_amount = Decimal("0")
@@ -1688,22 +1698,43 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
 
 
 def _allocation_fx(
-    amount: Decimal,
+    payment_amount: Decimal,
     payment_rate: Decimal | None,
+    target_amount: Decimal,
     target_rate: Decimal | None,
     precision: int,
 ) -> tuple[Decimal, Decimal, Decimal]:
-    """Base value of one allocated amount on each side, and their difference.
+    """Base value of one settlement on each side, and their difference.
 
-    A payment and the invoice it settles may have been booked at different rates,
-    so the same allocated amount is worth a different base amount on each side.
-    The difference is the exchange gain or loss the settlement realises: it is
-    reported on the allocation, and posted separately when an ``EXCHANGE_DIFFERENCE``
-    posting rule is configured. Nothing here re-values a posted document.
+    A payment and the invoice it settles may use different currencies and/or
+    different rates, so each side is converted from its own amount at its own
+    stored rate. The difference is the exchange gain or loss the settlement
+    realises: it is stored on the allocation and reported, and it never
+    re-values a posted document.
     """
-    payment_base = fx.convert_to_base(amount, payment_rate or Decimal("1"), precision)
-    target_base = fx.convert_to_base(amount, target_rate or Decimal("1"), precision)
+    payment_base = fx.convert_to_base(payment_amount, payment_rate or Decimal("1"), precision)
+    target_base = fx.convert_to_base(target_amount, target_rate or Decimal("1"), precision)
     return payment_base, target_base, fx.quantize_money(payment_base - target_base, precision)
+
+
+def _cross_currency_target_amount(
+    payment: FinancialDocument,
+    target: FinancialDocument,
+    amount: Decimal,
+    target_precision: int,
+) -> Decimal:
+    """The target-document amount that ``amount`` of the payment currency settles.
+
+    Both rates are the stored snapshots taken when each document was posted, so
+    the conversion is deterministic and does not read today's rate store:
+    ``target = amount * payment_rate / target_rate``. A rate that is missing or
+    unusable raises instead of defaulting to 1.
+    """
+    if fx.same_currency(payment.currency_code, target.currency_code):
+        return amount
+    payment_rate = fx.normalize_rate(payment.exchange_rate)
+    target_rate = fx.normalize_rate(target.exchange_rate)
+    return fx.quantize_money(amount * payment_rate / target_rate, target_precision)
 
 
 async def allocate_payment(
@@ -1731,6 +1762,7 @@ async def allocate_payment(
             replay_payment_base, replay_target_base, replay_difference = _allocation_fx(
                 existing.allocated_amount,
                 existing.exchange_rate,
+                existing.target_amount or existing.allocated_amount,
                 target_doc.exchange_rate if target_doc else existing.exchange_rate,
                 replay_precision,
             )
@@ -1738,6 +1770,8 @@ async def allocate_payment(
                 "paymentDocumentId": str(existing.payment_document_id),
                 "targetDocumentId": str(existing.target_document_id),
                 "allocatedAmount": float(existing.allocated_amount),
+                "appliedAmount": float(existing.target_amount or existing.allocated_amount),
+                "appliedCurrency": target_doc.currency_code if target_doc else "",
                 "paymentBaseAmount": float(replay_payment_base),
                 "targetBaseAmount": float(replay_target_base),
                 "exchangeDifference": float(replay_difference),
@@ -1765,14 +1799,18 @@ async def allocate_payment(
         raise ValidationFailed("Allocations must target an invoice or supplier bill.")
     if payment.status != "POSTED" or target.status != "POSTED":
         raise InvalidState("Both payment and target documents must be posted.")
-    if payment.currency_code != target.currency_code:
-        raise Conflict("CURRENCY_MISMATCH", "Payment and target currency must match.")
     if payment.party_id and target.party_id and payment.party_id != target.party_id:
         # Settlement stays inside one customer/supplier: a receipt may not pay
         # another party's invoice, whatever balances both sides show.
         raise Conflict("PARTY_MISMATCH", "The payment and the target document must share the same party.")
     if amount <= 0:
         raise ValidationFailed("Allocated amount must be greater than zero.")
+
+    # The payment keeps its own currency; the invoice is settled in its own. A
+    # cross-currency settlement is converted with the two stored rates, never
+    # today's rate store, so a posted invoice is never re-stated.
+    target_precision = await currency_precision(session, target.currency_code)
+    target_amount = _cross_currency_target_amount(payment, target, amount, target_precision)
 
     allocated_so_far = await session.scalar(
         select(func.coalesce(func.sum(FinancialDocumentAllocation.allocated_amount), 0)).where(
@@ -1783,9 +1821,14 @@ async def allocate_payment(
     if amount > available:
         raise Conflict("ALLOCATION_EXCEEDS_BALANCE", "Allocation exceeds the available payment balance.")
     outstanding = (target.total_amount or Decimal("0")) - (target.paid_amount or Decimal("0"))
-    if amount > outstanding:
+    if target_amount > outstanding:
         raise Conflict("ALLOCATION_EXCEEDS_BALANCE", "Allocation exceeds the target outstanding balance.")
 
+    # Both sides of the settlement, valued in the base currency.
+    allocation_precision = await currency_precision(session, payment.currency_code)
+    payment_base_amount, target_base_amount, exchange_difference = _allocation_fx(
+        amount, payment.exchange_rate, target_amount, target.exchange_rate, allocation_precision
+    )
     session.add(
         FinancialDocumentAllocation(
             payment_document_id=payment.id,
@@ -1793,23 +1836,22 @@ async def allocate_payment(
             allocated_amount=amount,
             allocated_currency_code=payment.currency_code,
             exchange_rate=payment.exchange_rate,
+            target_amount=target_amount,
+            exchange_difference=exchange_difference,
             created_by_user_id=context.user_id,
             idempotency_key=idempotency_key,
         )
     )
-    # Both sides of the settlement, valued in the base currency.
-    allocation_precision = await currency_precision(session, payment.currency_code)
-    payment_base_amount, target_base_amount, exchange_difference = _allocation_fx(
-        amount, payment.exchange_rate, target.exchange_rate, allocation_precision
-    )
     payment.paid_amount = (payment.paid_amount or Decimal("0")) + amount
-    target.paid_amount = (target.paid_amount or Decimal("0")) + amount
+    target.paid_amount = (target.paid_amount or Decimal("0")) + target_amount
     await session.commit()
     await cache.bump("reports")
     return {
         "paymentDocumentId": str(payment.id),
         "targetDocumentId": str(target.id),
         "allocatedAmount": float(amount),
+        "appliedAmount": float(target_amount),
+        "appliedCurrency": target.currency_code,
         "paymentBaseAmount": float(payment_base_amount),
         "targetBaseAmount": float(target_base_amount),
         "exchangeDifference": float(exchange_difference),

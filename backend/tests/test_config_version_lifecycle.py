@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import login
-from tests.test_config_versions import _create_tab, _publish, _service_order
+from tests.test_config_versions import _create_publishable_tab, _publish, _service_order
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,7 +64,7 @@ async def test_activation_restores_an_earlier_snapshot_without_changing_it(clien
     first = (await _publish(client, headers, "v1")).json()["data"]
     before = await _detail(client, headers, first["id"])
 
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
     second = (await _publish(client, headers, "v2")).json()["data"]
     assert second["versionNo"] == 2
 
@@ -93,7 +93,7 @@ async def test_rollback_creates_a_new_version_and_keeps_the_source(client):
     first = (await _publish(client, headers, "baseline")).json()["data"]
     source_snapshot = (await _detail(client, headers, first["id"]))["configSnapshot"]
 
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
     second = (await _publish(client, headers, "extra tab")).json()["data"]
     assert second["versionNo"] == 2
 
@@ -121,7 +121,7 @@ async def test_rollback_creates_a_new_version_and_keeps_the_source(client):
 async def test_rollback_requires_a_reason(client):
     headers = await login(client)
     first = (await _publish(client, headers)).json()["data"]
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
     await _publish(client, headers, "second")
 
     rejected = await client.post(f"{BASE}/{first['id']}/rollback", headers=headers, json={"reason": "   "})
@@ -132,7 +132,7 @@ async def test_rollback_requires_a_reason(client):
 async def test_compare_uses_stable_ids_to_report_changes(client):
     headers = await login(client)
     first = (await _publish(client, headers, "v1")).json()["data"]
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
     second = (await _publish(client, headers, "v2")).json()["data"]
 
     compared = await client.get(f"{BASE}/{first['id']}/compare/{second['id']}", headers=headers)
@@ -149,7 +149,7 @@ async def test_compare_uses_stable_ids_to_report_changes(client):
 async def test_lifecycle_actions_are_audited(client):
     headers = await login(client)
     first = (await _publish(client, headers, "audit v1")).json()["data"]
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
     second = (await _publish(client, headers, "audit v2")).json()["data"]
 
     activated = await client.post(f"{BASE}/{first['id']}/activate", headers=headers)
@@ -240,7 +240,7 @@ async def test_duplicate_version_number_race_is_rejected_without_losing_the_acti
     first = await _publish(client, headers, "first")
     assert first.status_code == 201, first.text
 
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
 
     async def duplicate_version_no(_session):
         return 1

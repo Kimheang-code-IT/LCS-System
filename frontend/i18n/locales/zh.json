@@ -538,7 +538,9 @@
       "chargeNotIssued": "只有已签发的费用才能开票，请先签发该费用。",
       "chargesInMultipleInvoices": "这些费用分属不同发票，请在各自行菜单中逐张打印。",
       "mixedTaxRates": "混合",
-      "serviceOrderNeedsQuotation": "服务订单必须由报价单创建。请选择报价单并使用“转换为服务订单”。"
+      "serviceOrderNeedsQuotation": "服务订单必须由报价单创建。请选择报价单并使用“转换为服务订单”。",
+      "appliedToInvoice": "Applied to invoice",
+      "exchangeDifference": "Exchange difference"
     },
     "fields": {
       "accept": "受理时间",
@@ -2475,7 +2477,8 @@
       "sessionTimeoutMinutes": "会话因无操作而过期前的分钟数。",
       "backgroundJobStatus": "后台任务工作器的状态。",
       "assignAttribute": "从属性目录中选择一个属性，添加到该记录类型。",
-      "assignedStage": "将该属性限定在某个工作流阶段，或在所有阶段显示。"
+      "assignedStage": "将该属性限定在某个工作流阶段，或在所有阶段显示。",
+      "baseCurrency": "Accounting base currency. Every posted document stores the base it was booked against, so this cannot change once financial documents exist."
     },
     "common": {
       "moreActions": "更多操作",
