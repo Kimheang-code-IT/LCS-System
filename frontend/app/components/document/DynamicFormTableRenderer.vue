@@ -7,6 +7,7 @@ import {
 import { componentAttributeRule } from '~/utils/validation/component-rules'
 import { validateFieldValue } from '~/utils/validation/field-rules'
 import { issueMessage } from '~/utils/validation/messages'
+import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 
 const props = withDefaults(defineProps<{
   group: ComponentTabGroup
@@ -37,6 +38,25 @@ const singleRecord = computed(() => componentGroupIsSingleRecord(props.group))
 const editingIndex = ref<number | null>(null)
 const draft = ref<Record<string, unknown>>({})
 const draftErrors = ref<Record<string, string>>({})
+const editingSource = ref('')
+const formConflict = ref(false)
+const orderScope = inject<ComputedRef<string>>('service-order-draft-scope', computed(() => ''))
+const auth = useAuthStore()
+const formDraft = useRecordFormDraft({
+  collection: () => 'serviceOrderComponentForms',
+  scope: () => String(auth.user?.id || 'anon'),
+  recordId: () => `${orderScope.value}:${props.group.id}`,
+  model: () => ({ fields: draft.value, editingIndex: editingIndex.value, editingSource: editingSource.value }),
+  apply: (stored) => {
+    draft.value = (stored.fields || {}) as Record<string, unknown>
+    editingSource.value = String(stored.editingSource || '')
+    const index = props.rows.findIndex(row => JSON.stringify(row) === editingSource.value)
+    editingIndex.value = index >= 0 ? index : null
+    formConflict.value = stored.editingIndex !== null && index < 0
+  },
+  isDirty: () => !isBlankDraft.value,
+  canDraft: () => Boolean(orderScope.value) && props.editable,
+})
 
 function attributeLabel(attribute: ComponentTabAttribute) {
   if (te(`freight.fields.${attribute.code}`)) return t(`freight.fields.${attribute.code}`)
@@ -58,9 +78,17 @@ function resetDraft() {
   draft.value = emptyDraft()
   draftErrors.value = {}
   editingIndex.value = null
+  editingSource.value = ''
+  formConflict.value = false
 }
 
-watch(() => props.group.id, resetDraft, { immediate: true })
+watch([orderScope, () => props.group.id], () => {
+  formDraft.flush()
+  resetDraft()
+  formDraft.bind()
+  formDraft.restore()
+}, { immediate: true })
+watch(draft, () => formDraft.schedule(), { deep: true })
 
 const isBlankDraft = computed(() => {
   const initial = emptyDraft()
@@ -81,7 +109,7 @@ const isBlankDraft = computed(() => {
 const hasRequiredAttribute = computed(() => attributes.value.some(attribute => attribute.isRequired))
 
 const addDisabled = computed(() => {
-  if (!props.editable || props.saving) return true
+  if (!props.editable || props.saving || formConflict.value) return true
   if (editingIndex.value === null && singleRecord.value && props.rows.length >= 1) return true
   // An empty optional-only form has nothing to add; with required fields the
   // click is allowed so the missing value can be reported inline.
@@ -129,6 +157,8 @@ function editRow(index: number) {
   const next: Record<string, unknown> = {}
   for (const attribute of attributes.value) next[attribute.code] = row[attribute.code] ?? blank[attribute.code]
   editingIndex.value = index
+  editingSource.value = JSON.stringify(row)
+  formConflict.value = false
   draft.value = next
   draftErrors.value = {}
 }
@@ -170,6 +200,12 @@ const draftFieldPrefix = computed(() => `${props.group.id}.draft`)
 
 <template>
   <div class="space-y-5">
+    <UAlert v-if="formConflict" color="warning" :title="t('freight.ui.draftConflictTitle')">
+      <template #actions>
+        <UButton :label="t('freight.ui.restoreDraft')" @click="formConflict = false; editingSource = ''" />
+        <UButton color="neutral" :label="t('freight.ui.discardDraft')" @click="resetDraft(); formDraft.clear()" />
+      </template>
+    </UAlert>
     <section v-if="editable" class="space-y-3 rounded-lg border border-default bg-elevated/40 p-3">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h4 class="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -178,6 +214,11 @@ const draftFieldPrefix = computed(() => `${props.group.id}.draft`)
         <span v-if="singleRecord && rows.length >= 1 && editingIndex === null" class="text-[11px] text-muted">
           {{ t('freight.componentLayout.editExistingHint') }}
         </span>
+        <UButton
+          :icon="editingIndex === null ? 'i-lucide-plus' : 'i-lucide-check'"
+          :label="editingIndex === null ? t('freight.ui.addRow') : t('freight.componentLayout.updateRecord')"
+          :disabled="addDisabled"
+          @click="submitDraft" />
       </div>
 
       <DocumentDynamicFormRenderer
@@ -199,12 +240,6 @@ const draftFieldPrefix = computed(() => `${props.group.id}.draft`)
           icon="i-lucide-x"
           :label="t('actions.cancel')"
           @click="resetDraft"
-        />
-        <UButton
-          :icon="editingIndex === null ? 'i-lucide-plus' : 'i-lucide-check'"
-          :label="editingIndex === null ? t('freight.ui.addRow') : t('freight.componentLayout.updateRecord')"
-          :disabled="addDisabled"
-          @click="submitDraft"
         />
       </div>
     </section>

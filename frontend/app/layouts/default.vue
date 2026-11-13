@@ -1,7 +1,20 @@
 <script setup lang="ts">
 import { useGlobalSearch } from '~/composables/search/useGlobalSearch'
+import { usePageSeo } from '~/composables/usePageSeo'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
+const route = useRoute()
+
+// Browser-tab fallback: pages that set their own SEO title (module views,
+// detail pages) win because they register later; this covers the custom pages
+// that only declare `titleKey` in `definePageMeta`.
+usePageSeo({
+  title: () => {
+    const key = route.meta.titleKey
+    if (typeof key !== 'string' || !key) return ''
+    return te(key) ? t(key) : key
+  },
+})
 
 const {
   open,

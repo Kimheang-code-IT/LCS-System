@@ -16,20 +16,22 @@ export interface StatusActionMeta {
 }
 
 export const STATUS_ACTION_META: Record<string, StatusActionMeta> = {
-  activate: { labelKey: 'freight.statusActions.activate', icon: 'i-lucide-circle-check', color: 'success' },
-  deactivate: { labelKey: 'freight.statusActions.deactivate', icon: 'i-lucide-circle-off', color: 'warning' },
+  activate: { labelKey: 'freight.statusActions.activate', icon: 'i-lucide-circle-check', color: 'neutral' },
+  deactivate: { labelKey: 'freight.statusActions.deactivate', icon: 'i-lucide-circle-off', color: 'neutral' },
   mark: { labelKey: 'freight.statusActions.mark', icon: 'i-lucide-circle-dot', color: 'neutral' },
-  finish: { labelKey: 'freight.statusActions.finish', icon: 'i-lucide-flag', color: 'primary' },
-  issue: { labelKey: 'freight.statusActions.issue', icon: 'i-lucide-send', color: 'primary' },
-  post: { labelKey: 'freight.statusActions.post', icon: 'i-lucide-check-circle-2', color: 'primary' },
-  reverse: { labelKey: 'freight.statusActions.reverse', icon: 'i-lucide-undo-2', color: 'warning' },
-  close: { labelKey: 'freight.statusActions.close', icon: 'i-lucide-lock', color: 'warning' },
-  open: { labelKey: 'freight.statusActions.open', icon: 'i-lucide-lock-open', color: 'success' },
-  reopen: { labelKey: 'freight.statusActions.reopen', icon: 'i-lucide-lock-open', color: 'primary' },
-  send: { labelKey: 'freight.statusActions.send', icon: 'i-lucide-send', color: 'primary' },
-  accept: { labelKey: 'freight.statusActions.accept', icon: 'i-lucide-check', color: 'success' },
-  reject: { labelKey: 'freight.statusActions.reject', icon: 'i-lucide-x', color: 'error' },
-  cancel: { labelKey: 'freight.statusActions.cancel', icon: 'i-lucide-ban', color: 'warning' },
-  convert: { labelKey: 'freight.statusActions.convert', icon: 'i-lucide-arrow-right', color: 'primary' },
+  finish: { labelKey: 'freight.statusActions.finish', icon: 'i-lucide-flag', color: 'neutral' },
+  issue: { labelKey: 'freight.statusActions.issue', icon: 'i-lucide-send', color: 'neutral' },
+  post: { labelKey: 'freight.statusActions.post', icon: 'i-lucide-check-circle-2', color: 'neutral' },
+  reverse: { labelKey: 'freight.statusActions.reverse', icon: 'i-lucide-undo-2', color: 'neutral' },
+  close: { labelKey: 'freight.statusActions.close', icon: 'i-lucide-lock', color: 'neutral' },
+  open: { labelKey: 'freight.statusActions.open', icon: 'i-lucide-lock-open', color: 'neutral' },
+  reopen: { labelKey: 'freight.statusActions.reopen', icon: 'i-lucide-lock-open', color: 'neutral' },
+  send: { labelKey: 'freight.statusActions.send', icon: 'i-lucide-send', color: 'neutral' },
+  accept: { labelKey: 'freight.statusActions.accept', icon: 'i-lucide-check', color: 'neutral' },
+  reject: { labelKey: 'freight.statusActions.reject', icon: 'i-lucide-x', color: 'neutral' },
+  cancel: { labelKey: 'freight.statusActions.cancel', icon: 'i-lucide-ban', color: 'neutral' },
+  convert: { labelKey: 'freight.statusActions.convert', icon: 'i-lucide-arrow-right', color: 'neutral' },
+  // Fallback metadata for a verb the backend emits that has no specific entry;
+  // it is never offered as a menu item of its own.
   change: { labelKey: 'freight.ui.changeStatus', icon: 'i-lucide-circle-dot', color: 'neutral' },
 }

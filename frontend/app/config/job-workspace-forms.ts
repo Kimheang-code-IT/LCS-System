@@ -100,8 +100,8 @@ export const JOB_CONTAINER_PAYMENT_TABLE: FreightTable = {
  */
 export const JOB_FINANCE_LINES_TABLE: FreightTable = {
   key: 'financeLines',
-  title: 'Finance Lines',
-  titleKm: 'បន្ទាត់ហិរញ្ញវត្ថុ',
+  title: 'Financial Entries',
+  titleKey: 'freight.ui.financialEntries',
   hideTitle: true,
   columns: [
     // The entry date, edited in place with the shared date picker and stored
@@ -111,8 +111,7 @@ export const JOB_FINANCE_LINES_TABLE: FreightTable = {
     // supplied live by the Finance tab (Document Types master data).
     { key: 'type', label: 'Type', labelKm: 'ប្រភេទ', labelKey: 'freight.ui.cols.type', type: 'select', required: true },
     { key: 'description', label: 'Description', labelKm: 'បរិយាយ', labelKey: 'freight.ui.cols.description', required: true },
-    { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', labelKey: 'freight.ui.cols.amount', type: 'number', required: true },
-    { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ', labelKey: 'freight.ui.cols.currency', type: 'select', required: true },
+    { key: 'amount', label: 'Amount', labelKey: 'freight.ui.cols.amount', type: 'number', computed: true },
   ],
   hideAddRow: true,
   addLabelKey: 'freight.ui.addEntry',

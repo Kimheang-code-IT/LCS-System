@@ -11,7 +11,9 @@ from app.core.database import get_session
 from app.core.deps import require_any_permission
 from app.core.rate_limit import enforce_rate_limit
 from app.modules.reports import engine, service
+from app.modules.reports.financial_statements import financial_statement, json_numbers
 from app.modules.reports.schemas import (
+    FinancialStatementFilters,
     GeneralLedgerExportFilters,
     GeneralLedgerFilters,
     GeneralLedgerReport,
@@ -21,6 +23,21 @@ from app.modules.reports.schemas import (
 )
 
 router = APIRouter()
+
+
+@router.post("/reports/financial/{report_key}")
+async def financial_projection(
+    report_key: Literal["revenue-expense", "accounts-receivable", "accounts-payable", "profit-loss", "balance-sheet", "cash-flow"],
+    payload: FinancialStatementFilters = Body(default_factory=FinancialStatementFilters),
+    context: RequestContext = Depends(require_any_permission("report.read", "reports.revenue_expense.view", "reports.accounts_receivable.view", "reports.accounts_payable.view", "reports.profit_loss.view", "reports.balance_sheet.view", "reports.cash_flow.view")),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    # A permission for one report never grants the other five projections.
+    if not context.has_any_permission("report.read", f"reports.{report_key.replace('-', '_')}.view"):
+        context.require(f"reports.{report_key.replace('-', '_')}.view")
+    filters = payload.model_dump()
+    await enforce_rate_limit(f"reports:user:{context.user_id}", limit=REPORT_RATE_LIMIT, window_seconds=REPORT_RATE_WINDOW_SECONDS)
+    return {"data": json_numbers(await financial_statement(session, report_key, filters))}
 
 # Report queries aggregate large tables: cap per-user request rate so a single
 # session cannot hammer them. Limits are generous for normal dashboards.

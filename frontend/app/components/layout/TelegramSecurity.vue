@@ -149,6 +149,8 @@ onBeforeUnmount(() => {
         <p class="text-xs text-muted">{{ t('telegram.sendCommandHint', { bot: '@' + botUsername.replace(/^@/, '') }) }}</p>
         <p class="font-mono text-2xl tracking-[0.3em]">{{ code.code }}</p>
         <p class="text-sm">{{ t('telegram.codeExpiresIn') }}: <span class="font-mono">{{ countdown }}</span></p>
+        <!-- User-facing hint stays short: the environment details live in the
+             admin Telegram settings tab, the only diagnostic screen. -->
         <UAlert
           v-if="link && link.updatesActive === false"
           color="warning"

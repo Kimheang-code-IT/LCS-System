@@ -118,11 +118,16 @@ async def generate(
     result = await definition.run(session, filters)
     total = int(result.pop("total", len(result.get("items", []))))
     warnings = result.pop("warnings", [])
+    from app.modules.settings.service import get_default_currency
+    base_currency = await get_default_currency(session)
+    for item in result.get("items", []):
+        item["amountCurrency"] = base_currency
     result["meta"] = {
         "reportKey": definition.key,
         "title": definition.title,
         "titleKey": definition.title_key,
         "generatedAt": datetime.now(UTC),
+        "baseCurrency": base_currency,
         "page": filters.page,
         "pageSize": filters.pageSize,
         "total": total,

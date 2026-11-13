@@ -87,6 +87,8 @@ export function serviceChargeFormTabs(
     chargeManualNumber: false,
     record,
     status: String(record.status || 'Draft'),
+    editableAdjustments: options.feeLinesOnly === true,
+    hideTableChrome: options.feeLinesOnly === true,
   })
   const withInternalLines = internal
     ? tabs.map(tab => tab.id === 'fee-lines'
@@ -98,6 +100,8 @@ export function serviceChargeFormTabs(
                 supplierField(),
                 lineTableField(internalFeeLinesTable(module), {
                   chargeLinkedToJob: options.linkedToOrder === true,
+                  editableAdjustments: options.feeLinesOnly === true,
+                  hideTableChrome: options.feeLinesOnly === true,
                 }),
               ],
             }],

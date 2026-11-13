@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache, deletion, fx
 from app.core.context import RequestContext
-from app.core.exceptions import Conflict, InvalidState, NotFound, ValidationFailed
+from app.core.exceptions import AccessDenied, Conflict, InvalidState, NotFound, ValidationFailed
 from app.core.pagination import PageParams, count_query, list_sort_orders, paged
 from app.core.sequences import allocate_number
 from app.core.serialization import jsonable
@@ -166,13 +168,54 @@ async def _resolve_ledger(session: AsyncSession, reference: Any) -> ChartOfAccou
 
 async def list_accounts(session: AsyncSession, context: RequestContext, page: PageParams) -> dict:
     rows, total = await FinanceRepository(session).account_page(page)
-    codes = {row.id: row.account_code for row in rows}
+    parent_ids = {row.parent_account_id for row in rows if row.parent_account_id}
+    codes = dict((await session.execute(select(ChartOfAccount.id, ChartOfAccount.account_code).where(
+        ChartOfAccount.id.in_(parent_ids)
+    ))).all()) if parent_ids else {}
     items = [account_payload(row, codes.get(row.parent_account_id)) for row in rows]
     return paged(items, page, total)
 
 
+async def _account_configuration(session: AsyncSession, values: dict, account: ChartOfAccount | None = None) -> int | None:
+    parent_id = account.parent_account_id if account else None
+    if "parentCode" in values:
+        parent = await _resolve_ledger(session, values["parentCode"])
+        if values["parentCode"] and parent is None:
+            raise ValidationFailed("Parent account not found.", {"parentCode": "Choose an existing parent account."})
+        parent_id = parent.id if parent else None
+    visited = {account.id} if account else set()
+    ancestor_id = parent_id
+    while ancestor_id:
+        if ancestor_id in visited:
+            raise ValidationFailed("Account hierarchy cannot contain a cycle.", {"parentCode": "Choose a different parent."})
+        visited.add(ancestor_id)
+        ancestor = await session.get(ChartOfAccount, ancestor_id)
+        if ancestor is None:
+            raise ValidationFailed("Parent account not found.", {"parentCode": "Choose an existing parent account."})
+        ancestor_id = ancestor.parent_account_id
+    if account:
+        changing_classification = any(key in values and str(values[key]).upper() != getattr(account, column)
+            for key, column in (("accountType", "account_type"), ("normalBalance", "normal_balance")))
+        if changing_classification and await session.scalar(select(JournalEntryLine.id).join(JournalEntry).where(
+            JournalEntryLine.account_id == account.id, JournalEntry.status == "POSTED"
+        ).limit(1)):
+            raise Conflict("ACCOUNT_IN_USE", "A posted account cannot be reclassified; create a new account instead.")
+        if str(values.get("status", account.status)).upper() != "ACTIVE" or values.get("postable", account.is_postable) is False:
+            rule = await session.scalar(select(PostingRule.id).where(PostingRule.status == "ACTIVE", or_(
+                PostingRule.debit_account_id == account.id, PostingRule.credit_account_id == account.id,
+                PostingRule.tax_account_id == account.id,
+            )).limit(1))
+            bank = await session.scalar(select(FinancialAccount.id).where(
+                FinancialAccount.account_id == account.id, FinancialAccount.status == "ACTIVE"
+            ).limit(1))
+            if rule or bank:
+                raise Conflict("ACCOUNT_IN_USE", "Update active posting rules and financial accounts before disabling this account.")
+    return parent_id
+
+
 async def create_account(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
     values = ACCOUNT_SCHEMA.validate(data)
+    parent_id = await _account_configuration(session, values)
     account = ChartOfAccount(
         account_code=str(values["accountCode"]),
         account_name=str(values["accountName"]),
@@ -180,6 +223,7 @@ async def create_account(session: AsyncSession, context: RequestContext, data: d
         normal_balance=str(values.get("normalBalance") or "DEBIT").upper(),
         is_postable=bool(values.get("postable", True)),
         status=str(values.get("status") or "ACTIVE").upper(),
+        parent_account_id=parent_id,
     )
     session.add(account)
     await _commit_unique(
@@ -196,6 +240,7 @@ async def update_account(session: AsyncSession, context: RequestContext, account
     if account is None:
         raise NotFound("Account not found.")
     values = ACCOUNT_SCHEMA.validate(data, partial=True)
+    account.parent_account_id = await _account_configuration(session, values, account)
     for key, column in (
         ("accountCode", "account_code"),
         ("accountName", "account_name"),
@@ -215,21 +260,14 @@ async def update_account(session: AsyncSession, context: RequestContext, account
         message="This account code is already in use.",
         field="accountCode",
     )
-    return account_payload(account)
+    parent = await session.get(ChartOfAccount, account.parent_account_id) if account.parent_account_id else None
+    return account_payload(account, parent.account_code if parent else None)
 
 
 async def financial_account_payload(session: AsyncSession, account: FinancialAccount) -> dict[str, Any]:
     ledger = await session.get(ChartOfAccount, account.account_id) if account.account_id else None
-    balance = await session.scalar(
-        select(
-            func.coalesce(func.sum(JournalEntryLine.base_debit_amount - JournalEntryLine.base_credit_amount), 0)
-        )
-        .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
-        .where(
-            JournalEntryLine.account_id == account.account_id,
-            JournalEntry.status == "POSTED",
-        )
-    )
+    _, balances = await FinanceRepository(session).financial_account_details([account])
+    balance = balances.get(account.account_id, 0)
     return {
         "id": str(account.id),
         "accountName": account.account_name,
@@ -272,6 +310,9 @@ async def create_financial_account(session: AsyncSession, context: RequestContex
     ledger = await _resolve_ledger(session, values.get("ledgerCode"))
     if ledger is None:
         raise ValidationFailed("Ledger account not found.", {"ledgerCode": "Choose an account from the chart of accounts."})
+    validate_postable(ledger, "financial account", "ledgerCode")
+    if ledger.account_type != "ASSET":
+        raise ValidationFailed("Financial accounts require an asset ledger.", {"ledgerCode": "Choose a cash or bank asset account."})
     currency = await assert_currency_code(session, values.get("currency") or default_currency)
     account = FinancialAccount(
         account_id=ledger.id,
@@ -453,8 +494,12 @@ async def update_period(session: AsyncSession, context: RequestContext, period_i
             raise InvalidState(
                 "A closed period is reopened through the reopen action, which records the authorization.",
             )
-        if period.status == "DRAFT" and new_status == "CLOSED":
-            raise InvalidState("Only an open period can be closed.")
+        if new_status == "CLOSED" and period.status != "CLOSED":
+            # Closing runs blocking validation and writes PERIOD_CLOSED; a
+            # generic status edit must not bypass either.
+            raise InvalidState(
+                "Close the period through its close action so validation and audit run."
+            )
         period.status = new_status
         if new_status in {"DRAFT", "OPEN"}:
             period.closed_at = None
@@ -719,7 +764,7 @@ def document_payload(
     """
     total = document.total_amount or Decimal("0")
     paid = document.paid_amount or Decimal("0")
-    payload = dict(data or {})
+    payload = {key: value for key, value in (data or {}).items() if not key.startswith('_creation')}
     payload.update(
         {
             "id": str(document.id),
@@ -931,6 +976,7 @@ async def _document_detail_extras(session: AsyncSession, document: FinancialDocu
             FinancialDocumentAllocation.payment_document_id == document.id,
             FinancialDocumentAllocation.target_document_id == document.id,
         ))
+        .where(FinancialDocumentAllocation.reversed_at.is_(None))
         .order_by(FinancialDocumentAllocation.id)
     )).scalars().all()
     counterparts: dict[int, FinancialDocument] = {}
@@ -997,15 +1043,28 @@ async def list_documents(
     page: PageParams,
     document_type: str | None = None,
     party_id: int | None = None,
+    service_order_id: int | None = None,
 ) -> dict:
     repository = FinanceRepository(session)
-    rows, total = await repository.document_page(page, document_type=document_type, party_id=party_id)
+    rows, total = await repository.document_page(
+        page, document_type=document_type, party_id=party_id, service_order_id=service_order_id,
+    )
+    totals = await repository.document_totals(
+        page, document_type=document_type, party_id=party_id, service_order_id=service_order_id,
+    )
+    from app.modules.settings.service import get_default_currency
+
+    base_currency = await get_default_currency(session)
+    base_totals = await repository.document_base_totals(
+        page, base_currency,
+        document_type=document_type, party_id=party_id, service_order_id=service_order_id,
+    )
     lines = await repository.document_lines([row.id for row in rows])
     names = await _document_names(session, rows)
     from app.core.users import user_display_names
 
     creators = await user_display_names(session, (row.created_by_user_id for row in rows))
-    return paged(
+    result = paged(
         [
             document_payload(
                 row,
@@ -1018,6 +1077,14 @@ async def list_documents(
         page,
         total,
     )
+    # Authoritative footer aggregates for the whole filtered list, not just the
+    # loaded page (the list endpoint is paginated; a client-side sum of loaded
+    # rows would silently drop everything past page one). `totals` keeps each
+    # transaction currency separate; `baseTotals` is the one base-currency total
+    # built from each document's stored conversion.
+    result["meta"]["totals"] = totals
+    result["meta"]["baseTotals"] = base_totals
+    return result
 
 
 async def get_document(session: AsyncSession, context: RequestContext, document_id: int) -> dict:
@@ -1142,7 +1209,40 @@ async def _line_account_id(session: AsyncSession, line: dict[str, Any]) -> int |
 DOCUMENT_DATE_FIELDS = ("date", "documentDate", "postingDate", "dueDate", "valueDate")
 
 
-async def save_document(session: AsyncSession, context: RequestContext, data: dict[str, Any]) -> dict:
+async def save_order_entry(
+    session: AsyncSession, context: RequestContext, data: dict[str, Any], idempotency_key: str | None,
+) -> dict:
+    """Serialize keyed order-entry creation with the existing order row lock.
+
+    A network retry returns the original document, including its real posting
+    state. The key and payload digest are server metadata, never client fields.
+    """
+    order_id = _int_or_none(data.get("serviceOrderId"))
+    if not idempotency_key or not order_id or data.get("id"):
+        return await save_document(session, context, data)
+    order = (await session.execute(
+        select(ServiceOrder).where(ServiceOrder.id == order_id).with_for_update()
+    )).scalar_one_or_none()
+    if order is None:
+        raise ValidationFailed("Choose a valid service order.", {"serviceOrderId": "Service order not found."})
+    key = f"{context.user_id}:{idempotency_key}"
+    digest = hashlib.sha256(json.dumps(jsonable(data), sort_keys=True).encode()).hexdigest()
+    existing = (await session.execute(select(FinancialDocument).where(
+        FinancialDocument.service_order_id == order_id,
+        FinancialDocument.data["_creationKey"].as_string() == key,
+    ))).scalars().first()
+    if existing is not None:
+        if (existing.data or {}).get("_creationDigest") != digest:
+            raise Conflict("IDEMPOTENCY_CONFLICT", "This entry was already created with different values. Open the saved entry.")
+        return await get_document(session, context, existing.id)
+    return await save_document(session, context, data, creation_metadata={"_creationKey": key, "_creationDigest": digest})
+
+
+async def save_document(
+    session: AsyncSession, context: RequestContext, data: dict[str, Any], *, creation_metadata: dict | None = None,
+) -> dict:
+    if data.get("id") and not context.has_permission("financial_document.update"):
+        raise AccessDenied("Missing permission: financial_document.update")
     data = DOCUMENT_WRITE_SCHEMA.validate(data, partial=bool(data.get("id")))
     default_currency = await get_default_currency(session)
     document_type = str(data.get("documentType") or data.get("document_type") or "CUSTOMER_INVOICE").upper()
@@ -1190,7 +1290,11 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document_id = data.get("id")
     document: FinancialDocument | None = None
     if document_id and str(document_id).isdigit():
-        document = await session.get(FinancialDocument, int(document_id))
+        document = (await session.execute(select(FinancialDocument).where(
+            FinancialDocument.id == int(document_id)
+        ).with_for_update())).scalar_one_or_none()
+    if document_id and document is None:
+        raise NotFound("Financial document not found.")
     lines = validate_line_items(data.get("lines"), DOCUMENT_LINE_SCHEMA)
     manual_order_id = _int_or_none(data.get("serviceOrderId"))
     if document_id is None and manual_order_id is not None:
@@ -1358,8 +1462,9 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
     document.base_total_amount = fx.convert_to_base(
         subtotal - discount_total + tax_total, exchange_rate, precision
     )
+    metadata = {key: value for key, value in (document.data or {}).items() if key in {"_creationKey", "_creationDigest"}}
     document.data = {
-        **jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt"}}),
+        **jsonable({key: value for key, value in data.items() if key not in {"id", "lines", "createdAt", "updatedAt", "_creationKey", "_creationDigest"}}),
         # Custom type metadata survives the payload echo; posting and numbering
         # keep reading the canonical document_type code.
         **(
@@ -1371,6 +1476,8 @@ async def save_document(session: AsyncSession, context: RequestContext, data: di
             if document_type_record is not None
             else {}
         ),
+        **metadata,
+        **(creation_metadata or {}),
     }
     await session.commit()
     saved_lines = await _document_lines(session, document.id)
@@ -1414,7 +1521,7 @@ async def _resolve_account_ref(session: AsyncSession, value: Any) -> ChartOfAcco
 
 def rule_resolver(session: AsyncSession) -> PostingRuleResolver:
     """One resolver per request; it caches the accounts it touches."""
-    return PostingRuleResolver(session, legacy_defaults=DEFAULT_ACCOUNTS)
+    return PostingRuleResolver(session)
 
 
 def posting_service(session: AsyncSession) -> AccountingPostingService:
@@ -1477,6 +1584,15 @@ async def post_document(session: AsyncSession, context: RequestContext, document
 
     total = document.total_amount or Decimal("0")
     document_lines = await _document_lines(session, document.id)
+    settlement = None
+    settlement_ledger = None
+    if document.document_type in PAYMENT_TYPES and document.financial_account_id:
+        settlement = await session.get(FinancialAccount, document.financial_account_id)
+        if settlement is None or settlement.status != "ACTIVE" or settlement.currency_code != document.currency_code:
+            raise ValidationFailed("Choose an active financial account in the document currency.", {
+                "financialAccountId": "Account is inactive, missing, or has a different currency."
+            })
+        settlement_ledger = _validate_posting_account(await session.get(ChartOfAccount, settlement.account_id), "financial account")
     draft = await posting_service(session).build(
         document_type=document.document_type,
         total=total,
@@ -1497,6 +1613,13 @@ async def post_document(session: AsyncSession, context: RequestContext, document
             "A journal needs at least two lines.",
             field_errors={"lines": "Add the document lines before posting."},
         )
+    if settlement:
+        cash_debit = document.document_type == "CUSTOMER_RECEIPT"
+        for line in draft.lines:
+            if line.debit == cash_debit:
+                line.account = settlement_ledger
+        draft.resolution["financialAccountId"] = str(settlement.id)
+        draft.resolution["settlementAccount"] = settlement_ledger.account_code
 
     entry_no = await allocate_number(session, "JOURNAL")
     entry = JournalEntry(
@@ -1663,6 +1786,7 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
     allocations = (
         await session.execute(
             select(FinancialDocumentAllocation).where(
+                FinancialDocumentAllocation.reversed_at.is_(None),
                 or_(
                     FinancialDocumentAllocation.payment_document_id == document.id,
                     FinancialDocumentAllocation.target_document_id == document.id,
@@ -1689,7 +1813,8 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
             other.paid_amount = max(
                 Decimal("0"), (other.paid_amount or Decimal("0")) - (reversed_amount or Decimal("0"))
             )
-        await session.delete(allocation)
+        allocation.reversed_at = datetime.now(UTC)
+        allocation.reversed_by_document_id = document.id
     document.paid_amount = Decimal("0")
     document.status = "REVERSED"
     await session.commit()
@@ -1745,6 +1870,8 @@ async def allocate_payment(
     idempotency_key: str | None = None,
 ) -> dict:
     data = ALLOCATION_WRITE_SCHEMA.validate(data)
+    target_id = _int_or_none(data.get("target_document_id") or data.get("targetDocumentId"))
+    amount = _decimal(data.get("amount") or data.get("allocated_amount"))
     if idempotency_key:
         existing = (
             await session.execute(
@@ -1754,6 +1881,10 @@ async def allocate_payment(
             )
         ).scalars().first()
         if existing is not None:
+            if existing.reversed_at is not None:
+                raise Conflict("ALLOCATION_REVERSED", "This allocation was reversed; its key cannot create a new settlement.")
+            if existing.payment_document_id != payment_id or existing.target_document_id != target_id or existing.allocated_amount != amount:
+                raise Conflict("IDEMPOTENCY_CONFLICT", "This key already allocated a different payment, invoice or amount.")
             payment_doc = await session.get(FinancialDocument, existing.payment_document_id)
             target_doc = await session.get(FinancialDocument, existing.target_document_id)
             replay_precision = await currency_precision(
@@ -1782,8 +1913,12 @@ async def allocate_payment(
     payment = (
         await session.execute(select(FinancialDocument).where(FinancialDocument.id == payment_id).with_for_update())
     ).scalars().first()
-    target_id = _int_or_none(data.get("target_document_id") or data.get("targetDocumentId"))
-    amount = _decimal(data.get("amount") or data.get("allocated_amount"))
+    # A competing request may have committed while this one waited for the
+    # payment lock. Replay before testing its now-reduced available balance.
+    if idempotency_key and await session.scalar(select(FinancialDocumentAllocation.id).where(
+        FinancialDocumentAllocation.idempotency_key == idempotency_key
+    )):
+        return await allocate_payment(session, context, payment_id, data, idempotency_key)
     if payment is None:
         raise NotFound("Payment document not found.")
     if target_id is None:
@@ -1797,6 +1932,9 @@ async def allocate_payment(
         raise ValidationFailed("Only payment or receipt documents can be allocated.")
     if target.document_type not in INVOICE_TYPES:
         raise ValidationFailed("Allocations must target an invoice or supplier bill.")
+    expected_target = "CUSTOMER_INVOICE" if payment.document_type == "CUSTOMER_RECEIPT" else "SUPPLIER_BILL"
+    if target.document_type != expected_target:
+        raise Conflict("ALLOCATION_TYPE_MISMATCH", "Customer receipts settle customer invoices; supplier payments settle supplier bills.")
     if payment.status != "POSTED" or target.status != "POSTED":
         raise InvalidState("Both payment and target documents must be posted.")
     if payment.party_id and target.party_id and payment.party_id != target.party_id:
@@ -1815,6 +1953,7 @@ async def allocate_payment(
     allocated_so_far = await session.scalar(
         select(func.coalesce(func.sum(FinancialDocumentAllocation.allocated_amount), 0)).where(
             FinancialDocumentAllocation.payment_document_id == payment.id
+            , FinancialDocumentAllocation.reversed_at.is_(None)
         )
     )
     available = (payment.total_amount or Decimal("0")) - Decimal(str(allocated_so_far or 0))
@@ -2476,7 +2615,11 @@ async def save_journal(session: AsyncSession, context: RequestContext, data: dic
     journal_id = data.get("id")
     entry: JournalEntry | None = None
     if journal_id and str(journal_id).isdigit():
-        entry = await session.get(JournalEntry, int(journal_id))
+        entry = (await session.execute(select(JournalEntry).where(
+            JournalEntry.id == int(journal_id)
+        ).with_for_update())).scalar_one_or_none()
+    if journal_id and entry is None:
+        raise NotFound("Journal entry not found.")
     entry_date = _date(data.get("entryDate")) or date.today()
     posting_date = _date(data.get("postingDate")) or entry_date
     period = await resolve_period(session, posting_date)
@@ -2593,6 +2736,7 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
     if len(lines) < 2:
         raise ValidationFailed("A journal must have at least two lines before posting.")
     for index, line in enumerate(lines, start=1):
+        _validate_posting_account(await session.get(ChartOfAccount, line.account_id), f"line {index}")
         if line.debit_amount < 0 or line.credit_amount < 0 or ((line.debit_amount > 0) == (line.credit_amount > 0)):
             raise ValidationFailed(
                 "Every journal line must contain exactly one positive debit or credit.",
@@ -2612,11 +2756,14 @@ async def post_journal(session: AsyncSession, context: RequestContext, journal_i
             "JOURNAL_UNBALANCED",
             "Total base-currency debit must equal total base-currency credit.",
         )
-    period = await session.get(AccountingPeriod, entry.accounting_period_id) if entry.accounting_period_id else None
-    if period is not None:
+    period = await resolve_period(session, entry.posting_date or entry.entry_date)
+    period = (await session.execute(select(AccountingPeriod).where(
+        AccountingPeriod.id == period.id
+    ).with_for_update())).scalar_one()
+    if period.status != "OPEN":
         code = "PERIOD_NOT_OPEN" if period.status == "DRAFT" else "PERIOD_CLOSED"
-        if period.status != "OPEN":
-            raise Conflict(code, "The accounting period is not open.")
+        raise Conflict(code, "The accounting period is not open.")
+    entry.accounting_period_id = period.id
     entry.status = "POSTED"
     entry.posted_at = datetime.now(UTC)
     entry.posted_by_user_id = context.user_id
@@ -2858,6 +3005,13 @@ async def update_financial_account(session: AsyncSession, context: RequestContex
     if account is None:
         raise NotFound("Financial account not found.")
     values = FINANCIAL_ACCOUNT_SCHEMA.validate(data, partial=True)
+    previous_ledger = await session.get(ChartOfAccount, account.account_id)
+    if (("currency" in values and values["currency"] != account.currency_code)
+        or ("ledgerCode" in values and str(values["ledgerCode"]) not in {str(account.account_id), previous_ledger.account_code if previous_ledger else ''})):
+        if await session.scalar(select(JournalEntryLine.id).join(JournalEntry).where(
+            JournalEntryLine.account_id == account.account_id, JournalEntry.status == "POSTED"
+        ).limit(1)):
+            raise Conflict("ACCOUNT_IN_USE", "A financial account with posted history keeps its ledger and currency.")
     if "ledgerCode" in values:
         ledger = await _resolve_ledger(session, values["ledgerCode"])
         if ledger is None:
@@ -2866,6 +3020,9 @@ async def update_financial_account(session: AsyncSession, context: RequestContex
                 {"ledgerCode": "Choose an account from the chart of accounts."},
             )
         account.account_id = ledger.id
+        validate_postable(ledger, "financial account", "ledgerCode")
+        if ledger.account_type != "ASSET":
+            raise ValidationFailed("Financial accounts require an asset ledger.", {"ledgerCode": "Choose a cash or bank asset account."})
     for key, column in (
         ("accountName", "account_name"),
         ("bankName", "bank_name"),

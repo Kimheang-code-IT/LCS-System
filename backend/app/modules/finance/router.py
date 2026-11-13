@@ -397,19 +397,21 @@ async def list_financial_documents(
     page: PageParams = Depends(page_params),
     document_type: str | None = Query(None, max_length=32),
     party_id: int | None = Query(None, ge=1),
+    service_order_id: int | None = Query(None, ge=1),
     context: RequestContext = Depends(require_permission("financial_document.read")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.list_documents(session, context, page, document_type, party_id)}
+    return {"data": await service.list_documents(session, context, page, document_type, party_id, service_order_id)}
 
 
 @router.post("/financial-documents", status_code=status.HTTP_201_CREATED)
 async def create_financial_document(
     payload: dict = Body(default={}),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", min_length=1, max_length=128),
     context: RequestContext = Depends(require_permission("financial_document.create")),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    return {"data": await service.save_document(session, context, payload)}
+    return {"data": await service.save_order_entry(session, context, payload, idempotency_key)}
 
 
 @router.delete("/financial-documents")

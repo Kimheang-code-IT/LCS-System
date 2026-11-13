@@ -1302,6 +1302,21 @@ async def _charge_with_details(
             payload["supplierDocumentId"] = str(generated.id)
             payload["supplierDocumentNo"] = generated.document_no
     payload["costTotal"] = float(sum((line.cost_amount or 0) for line in lines))
+    # Base-currency equivalents for operational summaries: the approved rate that
+    # a new invoice for this charge would resolve, converted here so the Service
+    # Order Finance cards can show one base currency. Posted accounting still
+    # reads the document's own stored conversion.
+    from app.core import fx
+    from app.modules.master_data.currency_rates import resolve_document_rate
+    from app.modules.settings.service import get_default_currency
+
+    base_currency = await get_default_currency(session)
+    payload["baseCurrency"] = base_currency
+    rate = await resolve_document_rate(session, charge.currency_code, base_currency)
+    if rate is not None:
+        payload["exchangeRate"] = float(rate)
+        payload["baseTotal"] = float(fx.convert_to_base(charge.total_amount or 0, rate))
+        payload["baseCostTotal"] = float(fx.convert_to_base(payload["costTotal"], rate))
     payload["feeLines"] = [
         {
             "id": str(line.id),

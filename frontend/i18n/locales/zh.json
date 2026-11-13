@@ -74,6 +74,8 @@
       "comments": "评论",
       "favorite": "收藏",
       "actions": "操作",
+      "actionsForRecord": "{record} 的操作",
+      "recordsFooter": "{n} 条记录",
       "actionCompleted": "操作已完成",
       "deactivated": "记录已停用",
       "recordDeactivated": "记录已停用",
@@ -508,7 +510,9 @@
       "totalExpenses": "总支出",
       "netAmount": "净额",
       "saveCharge": "保存费用单",
-      "financeSummary": "财务汇总",
+      "financialEntries": "财务分录",
+    "viewJournal": "查看日记账",
+    "financeSummary": "财务汇总",
       "refreshFinancialDrafts": "刷新财务草稿",
       "financialDraftsRefreshed": "财务草稿已刷新",
       "addInternalCharge": "添加内部费用",
@@ -520,6 +524,18 @@
       "chargedAmount": "已计费金额",
       "unchargedAmount": "未计费金额",
       "outstandingBalance": "未结余额",
+      "allocationExceedsReceipt": "核销金额超过收款金额。",
+      "allocationExceedsInvoice": "核销金额超过发票未结余额。",
+      "invoiceAllocation": "发票核销",
+      "receivePayment": "登记收款",
+      "actualProfitNote": "已过账收入减已过账费用",
+      "actualProfit": "实际利润",
+      "outstandingPayable": "应付未付",
+      "supplierPayments": "供应商付款",
+      "outstandingReceivable": "应收未收",
+      "totalCustomerPayments": "客户收款合计",
+      "unbilledCharges": "未开票费用",
+      "totalInvoiced": "已开票合计",
       "estimated": "预估",
       "posted": "已过账",
       "estimatedMargin": "预估经营利润（包含草稿值）",
@@ -557,6 +573,7 @@
       "address": "地址",
       "afterData": "变更后数据",
       "allocatedAmount": "已分配金额",
+      "paidAmount": "已付金额",
       "allocatedAt": "分配时间",
       "allocations": "分配明细",
       "amount": "金额",
@@ -1549,8 +1566,7 @@
         "singular": "用户",
         "description": "按角色和部门管理员工访问权限。",
         "fields": {
-          "role": "分配角色",
-          "pagePermissions": "有效权限"
+          "role": "分配角色"
         }
       },
       "serviceCharges": {
@@ -2172,6 +2188,7 @@
       "history": "版本历史",
       "retire": "停用",
       "published": "配置已发布",
+      "newTitle": "新建配置版本",
       "unchangedDescription": "当前配置与已发布版本一致，无需发布。"
     },
     "statusActions": {
@@ -3907,7 +3924,7 @@
     "copied": "已复制",
     "copyFailed": "无法复制，请手动选择命令。",
     "codeExpired": "验证码已过期，请生成新验证码。",
-    "updatesWaitingHint": "Telegram 尚未接收更新，因此 /verify 不会得到回复。请让管理员启用 polling（TELEGRAM_UPDATE_MODE=polling）或注册 HTTPS webhook。",
+    "updatesWaitingHint": "Telegram 目前未接收消息，/verify 可能不会收到回复。若持续无响应，请联系管理员检查 Telegram 连接。",
     "username": "Telegram 用户名",
     "telegramUserId": "Telegram 用户 ID",
     "verifiedDate": "验证时间",

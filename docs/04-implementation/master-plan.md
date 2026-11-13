@@ -114,6 +114,64 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Finance and financial-report audit close-out — 2026-11-14
+
+Verified and corrected the Finance/Financial Reports slice already in the working tree.
+Confirmed fixes: posted-financial projections now expose amounts as JSON numbers with
+AR/AP aging buckets (`Current`, `1-30`, `31-60`, `61-90`, `90+`); trial balance keeps its
+posted-only movement rows (no zero-balance or draft-only rows); a period cannot be closed
+through the generic record edit (only the validated/audited close action); account
+deactivation is refused while an active posting rule or financial account still uses it;
+allocation reversal retains history via `reversed_at` and the additive migration
+`a8b9c0d1e2f3`; posting-rule creation keeps its priority uniqueness tests aligned with the
+seeded production-parity rules.
+- Frontend: duplicate Period Closing menu item removed (routes redirect to Accounting
+  Periods); period status is no longer editable in the form; journal/document status and
+  manual entry-type selects removed from forms (status comes from row actions/backend);
+  AR/AP status filter removed because the as-of projection does not filter by paid state;
+  AR/AP Aging column added; table Actions column is sticky and neutral with red Delete only.
+- Verification (owning directories): backend focused suites `test_financial_documents_module`,
+  `test_job_finance_entries`, `test_report_export`, `test_report_generation`,
+  `test_accounting_periods`, `test_period_closing`, `test_posting_rules`,
+  `test_financial_report_cutoffs`, `test_finance_audit_controls`, `test_document_totals`,
+  `test_order_finance_sync`, `test_deletion_policy` → all pass; `test_multi_currency`,
+  `test_finance_automation`, `test_reporting_values` → pass. `ruff check` passes on changed
+  backend files. Frontend `vitest run` → 934 passed / 115 files; `nuxt typecheck`, scoped
+  ESLint and `i18n:check` pass.
+- Limits: PostgreSQL-only allocation/period-closing tests skipped (no disposable PG target);
+  Playwright browser acceptance was not run (no configured server/browser credentials). No
+  production data, mobile code, deployment or commit changed.
+
+### Service Order tables, drafts and Finance simplification - 2026-11-14
+
+Scoped web change: Route-style dynamic table headers/actions; page Save coordinates
+configured rows and the existing charge save boundary. Shared local drafts retain
+configured forms, Finance rows/payment intent and conflicts. Finance has four shared
+summary cards, one currency-aware entries table, details/dialog actions, scoped
+paginated document reads and targeted mutation refresh. Receipt/expense creation
+replays keyed requests under the existing order lock; posting/allocation rules stay
+in their existing services. No mobile, schema, deployment or production-data change.
+
+Task-owned files (other dirty work preserved):
+- `backend/app/modules/finance/{repository,router,service}.py`; `backend/tests/test_order_finance_sync.py`.
+- `frontend/app/components/freight/{AppLineTable,DynamicDataTable,JobCharges,JobDetail,JobFinance,JobRoute}.vue`.
+- `frontend/app/components/document/{DynamicFormTableRenderer,DynamicGroupRenderer,DynamicTableRenderer}.vue`.
+- `frontend/app/composables/common/useRecordFormDraft.ts`; `frontend/app/composables/freight/{useComponentTabs,useLcs}.ts`.
+- `frontend/app/config/job-workspace-forms.ts`; `frontend/app/repositories/{contracts,http}/lcs.ts`; `frontend/app/stores/freight.ts`; `frontend/app/utils/freight/finance-draft.ts`.
+- `frontend/i18n/locales/{en,km,zh}.json`; `frontend/tests/{component-tab-drafts,finance-cache-refresh,finance-draft,record-form-draft,service-charge-save}.spec.ts`; this evidence note.
+
+Executed verification (owning directory):
+- Frontend: `pnpm typecheck` and scoped ESLint passed. Final focused command: `pnpm exec vitest run tests/component-tab-drafts.spec.ts tests/finance-cache-refresh.spec.ts tests/finance-draft.spec.ts tests/finance-summary.spec.ts tests/service-order-draft.spec.ts tests/record-form-draft.spec.ts tests/document-draft-integration.spec.ts tests/service-charge-save.spec.ts tests/app-line-table.spec.ts tests/i18n-locales.spec.ts` → 80 passed / 10 files.
+- Backend: `uv run --no-sync pytest -q tests/test_order_finance_sync.py tests/test_job_finance_entries.py tests/test_frontend_api_contract.py tests/test_route_authorization.py` initially exposed the new conflict-handler constructor error; corrected it. Existing selectors: 15 passed; `uv run --no-sync pytest -q tests/test_order_finance_sync.py` → 4 passed, including receipt/expense retry, posted immutability, validation rollback and scoped pagination.
+- Backend: `uv run --no-sync ruff check app/modules/finance/service.py app/modules/finance/router.py app/modules/finance/repository.py tests/test_order_finance_sync.py --fix` passed. `git diff --check` passed. Independent read-only review findings corrected; final focused review found no remaining critical issue.
+
+Limits/Handoff: browser acceptance and real PostgreSQL concurrency remain unexecuted
+(no configured browser credentials or disposable PostgreSQL target). Graphify query
+and update unavailable because the tool command allowlist blocks Graphify. Next
+acceptance step: isolated browser Route/Customs/configured form → refresh → page
+Save, then partial receipt/expense and responsive Finance check; run the keyed-create
+race against a disposable PostgreSQL target. No roadmap phase advanced or commit made.
+
 ### Service Charges list unified — 2026-11-13
 
 The `/service-charges` list stopped hiding order-linked charges: the standalone-only

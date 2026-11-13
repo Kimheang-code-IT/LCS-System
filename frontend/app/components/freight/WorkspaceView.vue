@@ -27,7 +27,10 @@ import { limitFilterSelects, matchesFilter, parseFilterQuery } from '~/utils/fil
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { pageActionPermission } from '~/utils/freight/page-access'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
-import { listTablePageSummary, listTableSelectedIds } from '~/utils/table/list-table'
+import { listTableCountFooter, listTableSumFooter } from '~/utils/table/list-footers'
+import { baseAmount } from '~/utils/freight/fx'
+import { formatConfigVersion, getFormatConfig } from '~/utils/format/format-service'
+import { listTableSelectedIds } from '~/utils/table/list-table'
 import { type ListSortKind, type ListSortSelection, listSortKindFor } from '~/utils/table/list-sort'
 import { documentSequenceTypeLabel, isDocumentSequenceType } from '~/utils/document-sequences'
 import { normalizeAuditLog, resolveAuditEntityPath } from '~/utils/freight/audit-logs'
@@ -70,13 +73,23 @@ const moduleList = useModuleList(current)
 const moduleRecord = useModuleRecord(current)
 
 /**
+ * The one configured base currency (System Settings → Localization). Every
+ * financial total, footer and summary is expressed in it; the backend stores
+ * the same code with each converted amount, so the two cannot disagree.
+ */
+const baseCurrency = computed(() => {
+  void formatConfigVersion.value
+  return String(getFormatConfig().currency || '').trim().toUpperCase()
+})
+
+/**
  * Status changes are policy-driven: the backend says which transitions exist
  * from the record's current status and which of them this caller may run, so
  * the row menu can only ever offer a legal action.
  */
 const {
   busyId,
-  menuItem: statusMenuItem,
+  menuItems: statusMenuItems,
   transitionsOf,
   run: statusRun,
 } = useRecordStatus(module, {
@@ -561,10 +574,6 @@ function auditEntityLinkFor(row: Record<string, unknown>) {
   )
 }
 
-const pageSummary = computed(() =>
-  listTablePageSummary(t, result.value.total, pagination.value),
-)
-
 function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   const collection = current.value?.collection
   // Quotations (Edit / Convert / Delete / Duplicate) and Service Orders
@@ -633,7 +642,6 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
     items.push({
       label: t('freight.statusActions.finish'),
       icon: 'i-lucide-flag',
-      color: 'primary',
       disabled: !finishTransition,
       onSelect: () => { if (finishTransition) void statusRun(row, finishTransition) },
     })
@@ -654,19 +662,28 @@ function rowMenuItems(row: Record<string, unknown>): DropdownMenuItem[][] {
   else if (collection === 'debitNotes') {
     const status = financeDomainStatus(row.status)
     if (status === 'DRAFT' && lcs.can('financial_document.update_draft')) items.push({ label: t('freight.ui.editDraft'), icon: 'i-lucide-pencil', onSelect: () => openRow(row) })
-    if (status === 'POSTED' && lcs.can('financial_document.allocate')) items.push({ label: t('freight.ui.allocate'), icon: 'i-lucide-split', onSelect: () => openRow(row) })
+    // Customer-side documents receive money; supplier bills pay it. Both go to
+    // the document page, which owns the allocation workflow.
+    const customerSide = ['CUSTOMER_INVOICE', 'CREDIT_NOTE'].includes(String(row.documentType || '').toUpperCase())
+    if (status === 'POSTED' && lcs.can('financial_document.allocate')) {
+      items.push({
+        label: t(customerSide ? 'freight.moduleActions.recordPayment' : 'freight.ui.allocate'),
+        icon: 'i-lucide-split',
+        onSelect: () => openRow(row),
+      })
+    }
   }
   if (collection !== 'quotations' && collection !== 'jobs' && !isProtectedManagementRecord(collection, row)) {
-    // Change Status. The transitions come from the backend policy — legal from
-    // this record's status and permitted for this caller — so an action can
-    // never be offered that the API would refuse for being invalid. This also
-    // keeps the read-only Accounting Periods list actionable: closing and
-    // reopening are status transitions, not record edits.
-    const statusItem = statusMenuItem(row, {
+    // Direct status transitions ("Post", "Reverse", "Close period",
+    // "Mark as Active"…). They come from the backend policy — legal from this
+    // record's status and permitted for this caller — so an action can never
+    // be offered that the API would refuse for being invalid. This also keeps
+    // the read-only Accounting Periods list actionable: closing and reopening
+    // are status transitions, not record edits.
+    items.push(...statusMenuItems(row, {
       confirmDescription: transition =>
         transition.action === 'close' ? periodCloseSummary(row) : undefined,
-    })
-    if (statusItem) items.push(statusItem)
+    }))
   }
   if (canMutate.value && collection !== 'quotations' && collection !== 'jobs' && !isProtectedManagementRecord(collection, row)
     && recordStatusValue(row) === 'INACTIVE') {
@@ -795,10 +812,46 @@ const IDENTITY_LINK_KEYS = new Set(['code', 'partyCode', 'assetCode', 'assetName
 const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
   if (!current.value) return []
   const titleKey = current.value.titleField
-  const dataColumns = current.value.columns.map((column) => ({
+  // Financial documents are genuinely server-paginated, so their money footers
+  // use the backend's filtered-list aggregates instead of summing loaded rows.
+  const collection = current.value.collection
+  // One configured base currency for every financial total (System Settings →
+  // Localization). No hardcoded code: the server and the formatter agree on it.
+  const baseCurrencyCode = baseCurrency.value
+  const docBaseTotals = collection === 'debitNotes'
+    ? moduleList.meta.value?.baseTotals as { currency?: string, grand?: number, outstanding?: number } | undefined
+    : undefined
+  const docBaseTotalsMap = (key: 'grand' | 'outstanding'): Map<string, number> | null =>
+    docBaseTotals ? new Map([[String(docBaseTotals.currency || baseCurrencyCode), Number(docBaseTotals[key] ?? 0)]]) : null
+  // A row's amount in the base currency: the stored conversion when it has one
+  // (`baseTotalAmount` / its stored `exchangeRate`), never today's rate.
+  const baseValueOf = (row: Record<string, unknown>, key: string): number | null => {
+    if (key === 'total' && row.baseTotalAmount != null) return Number(row.baseTotalAmount)
+    const amount = key === 'total' && row.total == null ? row.amount : row[key]
+    const currency = String(row.currency || '').trim().toUpperCase()
+    if (currency && currency === baseCurrencyCode) return Number(amount ?? 0)
+    return baseAmount(amount, row.exchangeRate)
+  }
+
+  const dataColumns = current.value.columns.map((column, index) => ({
     accessorKey: column.key,
     enableSorting: true,
     header: fieldLabel(column),
+    // Record count under the first column; decimal-safe per-currency sums
+    // under money columns. Recomputed from the store on every data change, so
+    // create/edit/post/reverse/filter/pagination all update them.
+    footer: index === 0
+      ? listTableCountFooter<Record<string, unknown>>(t)
+      : isMoneyKey(column.key)
+        ? listTableSumFooter<Record<string, unknown>>({
+            currencyOf: row => String(row.currency || ''),
+            baseCurrency: baseCurrencyCode || undefined,
+            baseAmountOf: row => baseValueOf(row, column.key),
+            ...(collection === 'debitNotes' && ['total', 'outstanding'].includes(column.key)
+              ? { serverTotals: () => docBaseTotalsMap(column.key === 'total' ? 'grand' : 'outstanding') }
+              : {}),
+          })
+        : undefined,
     meta: {
       sortKind: columnSortKind(column),
       ...(isNumericKey(column.key) || isMoneyKey(column.key) || column.key === 'tasksProgress' || column.key === 'containersCount'
@@ -891,7 +944,6 @@ const columns = computed<TableColumn<Record<string, unknown>>[]>(() => {
     ...dataColumns,
     ...(!isTableOnly.value
       ? [listTableRowMetaColumn<Record<string, unknown>>({
-          summary: pageSummary.value,
           items: rowMenuItems,
           loadingId: busyId.value,
         })]
@@ -998,16 +1050,7 @@ function filterItems(filter: { options?: readonly FreightSelectOption[] | Freigh
       :refreshing="pending || manualRefreshing"
       @create="openCreate"
       @refresh="refresh"
-    >
-      <!-- Period Closing never creates periods: send users to Accounting Periods. -->
-      <CommonAppDocumentActionButton
-        v-if="current.path === '/finance/period-closing'"
-        :label="t('freight.pages.accountingPeriods')"
-        icon="i-lucide-calendar-range"
-        color="secondary"
-        @click="navigateTo('/finance/accounting-periods')"
-      />
-    </LayoutAppHeaderPageActions>
+    />
 
     <CommonAppExportDialog
       v-model:open="exportOpen"

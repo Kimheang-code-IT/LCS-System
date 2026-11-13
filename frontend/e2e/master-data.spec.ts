@@ -18,7 +18,7 @@ async function createParty(page: Page, kind: 'Customer' | 'Supplier', name: stri
   await roles.fill(kind)
   await page.keyboard.press('Enter')
   await expect(page.getByText(kind, { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('button', { name: /^(Create|Save changes)$/ }).click()
   await expect(page).toHaveURL(/\/master-data\/business-parties\/?$/)
   return code
 }
@@ -38,7 +38,7 @@ test('a customer and a supplier party can be created and listed', async ({ page 
 /** A party without its required fields is refused before it is stored. */
 test('a business party requires a code, a legal name and a role', async ({ page }) => {
   await page.goto('/master-data/business-parties/new')
-  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('button', { name: /^(Create|Save changes)$/ }).click()
   await expect(page.getByText('Party Code is required.')).toBeVisible()
   await expect(page.getByText('Legal Name is required.')).toBeVisible()
   await expect(page.getByText('Party Roles is required.')).toBeVisible()

@@ -29,17 +29,22 @@ const PASSWORD_FORMS = [
   'components/document/AppFieldGrid.vue',
 ]
 
-// The create-user form's save button lives in the document chrome, not the grid.
-const SUBMIT_GATES = [
-  ...PASSWORD_FORMS.filter(file => file !== 'components/document/AppFieldGrid.vue'),
-  'components/freight/DocumentView.vue',
-]
+// The create-user save button lives in the document chrome, not the grid. It is
+// always rendered; DocumentView validates the password on submit instead of
+// hiding the action, so it is covered by the dedicated check below.
+const SUBMIT_GATES = PASSWORD_FORMS.filter(file => file !== 'components/document/AppFieldGrid.vue')
 
 const WEAK_PASSWORDS = ['abc@1234', 'ABC@1234', 'Abcd@efg', 'Abcd1234', 'Ab@123']
 
 describe('every password form', () => {
   it.each(PASSWORD_FORMS)('%s shows the live requirement checklist', (file) => {
     expect(source(file)).toContain('<CommonAppPasswordRequirements')
+  })
+
+  it('the create-user save action is always rendered and validated on submit', () => {
+    const text = source('components/freight/DocumentView.vue')
+    expect(text).toContain('const canRunSave = computed(() => !readOnly.value)')
+    expect(text).toContain('const failures = collectValidationFailures(isNew)')
   })
 
   it.each(SUBMIT_GATES)('%s disables submission until the password passes', (file) => {

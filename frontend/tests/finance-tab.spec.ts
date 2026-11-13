@@ -7,15 +7,15 @@ const APP = fileURLToPath(new URL('../app', import.meta.url))
 const source = readFileSync(`${APP}/components/freight/JobFinance.vue`, 'utf8')
 
 describe('service order finance tab', () => {
-  it('edits entries inline with Date, Type, Description, Amount and Currency', () => {
-    // The Business Party is not a column: income entries default to the order
-    // customer and payee entries are completed through Additional Details.
+  it('edits entries inline with Date, Type, Description and Amount', () => {
+    // Party and currency are not columns: income entries default to the order
+    // customer and the order currency, and both are completed through the
+    // Additional Details dialog when the document needs something else.
     expect(JOB_FINANCE_LINES_TABLE.columns.map(column => column.key)).toEqual([
       'date',
       'type',
       'description',
       'amount',
-      'currency',
     ])
     expect(JOB_FINANCE_LINES_TABLE.columns.find(column => column.key === 'type')?.type).toBe('select')
     expect(JOB_FINANCE_LINES_TABLE.hideAddRow).toBe(true)
@@ -23,7 +23,7 @@ describe('service order finance tab', () => {
   })
 
   it('lists only financial documents linked to the current order', () => {
-    expect(source).toContain('props.documents')
+    expect(source).toContain('service_order_id: orderId')
     expect(source).toContain('isLinkedToJob')
     expect(source).not.toContain('jobFinanceChargeLines')
     expect(source).not.toContain('job.expenses')
@@ -48,7 +48,7 @@ describe('service order finance tab', () => {
     expect(source).not.toContain('new Date().toISOString().slice(0, 10)')
     expect(source).toContain('customerPartyId')
     expect(source).toContain('INCOME_BEHAVIORS.has(behavior)')
-    expect(source).toContain('@click="addEntry"')
+    expect(source).toContain(':items="addEntryItems"')
     expect(source).not.toContain('openCreate')
     expect(source).toContain("date: 'date'")
   })

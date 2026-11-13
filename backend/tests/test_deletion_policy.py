@@ -54,6 +54,19 @@ async def _delete_accounts(client, headers, ids: list[str]):
     return await client.request("DELETE", "/api/v1/chart-of-accounts", headers=headers, json={"ids": ids})
 
 
+async def _deactivate_posting_rules_for(client, headers, code: str) -> None:
+    """Deactivating an account is refused while an active rule still uses it."""
+    rules = await client.get("/api/v1/posting-rules", headers=headers, params={"page_size": 200})
+    assert rules.status_code == 200, rules.text
+    for rule in rules.json()["data"]["items"]:
+        used = {rule.get("debitAccount"), rule.get("creditAccount"), rule.get("taxAccount")}
+        if code in used and str(rule.get("status") or "").upper() == "ACTIVE":
+            changed = await client.put(
+                f"/api/v1/posting-rules/{rule['id']}", headers=headers, json={"status": "INACTIVE"}
+            )
+            assert changed.status_code == 200, changed.text
+
+
 def _posted_document(client, headers, party_id: str):
     """A posted customer invoice, so real journal lines reference the accounts."""
     return client.post(
@@ -104,6 +117,12 @@ async def test_a_referenced_account_cannot_be_deleted_even_when_inactive(client)
     """The seeded 4010 is used by the posting rules the finance baseline creates."""
     headers = await login(client)
     revenue = next(row for row in await _accounts(client, headers) if row["accountCode"] == "4010")
+    in_use = await client.put(
+        f"/api/v1/chart-of-accounts/{revenue['id']}", headers=headers, json={"status": "INACTIVE"}
+    )
+    assert in_use.status_code == 409, in_use.text
+    assert in_use.json()["code"] == "ACCOUNT_IN_USE"
+    await _deactivate_posting_rules_for(client, headers, "4010")
     await _set_account_status(client, headers, revenue["id"], "INACTIVE")
 
     blocked = await _delete_accounts(client, headers, [revenue["id"]])
@@ -124,6 +143,11 @@ async def test_an_account_used_by_a_posted_journal_cannot_be_deleted(client):
     assert posted.status_code == 200, posted.text
 
     receivable = next(row for row in await _accounts(client, headers) if row["accountCode"] == "1100")
+    in_use = await client.put(
+        f"/api/v1/chart-of-accounts/{receivable['id']}", headers=headers, json={"status": "INACTIVE"}
+    )
+    assert in_use.status_code == 409, in_use.text
+    await _deactivate_posting_rules_for(client, headers, "1100")
     await _set_account_status(client, headers, receivable["id"], "INACTIVE")
 
     blocked = await _delete_accounts(client, headers, [receivable["id"]])

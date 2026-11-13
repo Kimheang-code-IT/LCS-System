@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { FreightTable } from '~/config/freight-modules'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   table: FreightTable | null
   modelValue: Array<Record<string, unknown>>
   disabled?: boolean
@@ -29,27 +29,20 @@ const emit = defineEmits<{
   'update:modelValue': [Array<Record<string, unknown>>]
   'save': []
 }>()
-
 const { t } = useI18n()
+const tableEditor = ref<{ addRow: () => void } | null>(null)
+defineExpose({ addRow: () => tableEditor.value?.addRow() })
 
-const headerActions = computed(() => props.disabled
-  ? []
-  : [{
-      label: t('freight.ui.saveChanges'),
-      icon: 'i-lucide-save',
-      disabled: props.saving,
-      onClick: () => emit('save'),
-    }])
 </script>
 
 <template>
   <div class="space-y-3">
     <FreightAppLineTable
       v-if="table"
+      ref="tableEditor"
       :table="table"
       :model-value="modelValue"
       :disabled="disabled"
-      :header-actions="headerActions"
       :field-errors="fieldErrors"
       :error-key="errorKey"
       :on-cell-edit="onCellEdit"

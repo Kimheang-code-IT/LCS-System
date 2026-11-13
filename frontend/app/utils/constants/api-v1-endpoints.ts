@@ -125,6 +125,7 @@ export const ApiV1Endpoints = {
   ARCHIVE_RESTORE: (entityType: string, entityId: number | string) =>
     `/api/v1/archive/${encodeURIComponent(entityType)}/${entityId}/restore`,
   REPORTS_DASHBOARD: '/api/v1/reports/dashboard',
+  REPORTS_FINANCIAL_STATEMENT: (key: string) => `/api/v1/reports/financial/${key}`,
   REPORTS_RECEIVABLES: '/api/v1/reports/receivables',
   REPORTS_PAYABLES: '/api/v1/reports/payables',
   REPORTS_PROFITABILITY: '/api/v1/reports/profitability',

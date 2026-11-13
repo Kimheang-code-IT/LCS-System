@@ -13,7 +13,7 @@ import { csvCell } from '../app/utils/export/csv'
 const SOURCE = readFileSync(
   fileURLToPath(new URL('../app/components/freight/ReportsView.vue', import.meta.url)),
   'utf8',
-)
+).replace(/\r\n/g, '\n')
 const QUERIES = readFileSync(
   fileURLToPath(new URL('../app/utils/freight/report-queries.ts', import.meta.url)),
   'utf8',

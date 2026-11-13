@@ -114,6 +114,7 @@
       "address": "អាសយដ្ឋាន",
       "afterData": "ទិន្នន័យបន្ទាប់",
       "allocatedAmount": "ចំនួនបានបែងចែក",
+      "paidAmount": "ចំនួនបានបង់",
       "allocatedAt": "បែងចែកនៅ",
       "allocations": "ការបែងចែក",
       "amount": "ចំនួន",
@@ -855,8 +856,7 @@
         "singular": "អ្នកប្រើ",
         "description": "គ្រប់គ្រងសិទ្ធិបុគ្គលិកតាមតួនាទី និងនាយកដ្ឋាន។",
         "fields": {
-          "role": "តួនាទីប្រើប្រាស់",
-          "pagePermissions": "សិទ្ធិដែលមានប្រសិទ្ធភាព"
+          "role": "តួនាទីប្រើប្រាស់"
         }
       },
       "serviceCharges": {
@@ -1149,6 +1149,8 @@
       "comments": "មតិ",
       "favorite": "ចូលចិត្ត",
       "actions": "សកម្មភាព",
+      "actionsForRecord": "សកម្មភាពសម្រាប់ {record}",
+      "recordsFooter": "{n} កំណត់ត្រា",
       "actionCompleted": "សកម្មភាពបានបញ្ចប់",
       "deactivated": "បានបិទដំណើរការ",
       "recordDeactivated": "បានបិទដំណើរការ",
@@ -1583,7 +1585,9 @@
       "totalExpenses": "ប្រាក់ចំណាយសរុប",
       "netAmount": "ចំនួនសុទ្ធ",
       "saveCharge": "រក្សាទុកថ្លៃសេវា",
-      "financeSummary": "សេចក្តីសង្ខេបហិរញ្ញវត្ថុ",
+      "financialEntries": "បញ្ជីហិរញ្ញវត្ថុ",
+    "viewJournal": "មើលទិនានុប្បវត្តិ",
+    "financeSummary": "សេចក្តីសង្ខេបហិរញ្ញវត្ថុ",
       "refreshFinancialDrafts": "ធ្វើឱ្យសេចក្តីព្រាងហិរញ្ញវត្ថុថ្មី",
       "financialDraftsRefreshed": "បានធ្វើឱ្យសេចក្តីព្រាងហិរញ្ញវត្ថុថ្មី",
       "addInternalCharge": "បន្ថែមថ្លៃខាងក្នុង",
@@ -1595,6 +1599,18 @@
       "chargedAmount": "ចំនួនបានគិតថ្លៃ",
       "unchargedAmount": "ចំនួនមិនទាន់គិតថ្លៃ",
       "outstandingBalance": "សមតុល្យនៅសល់",
+      "allocationExceedsReceipt": "ការចែកចាយលើសចំនួនទូទាត់។",
+      "allocationExceedsInvoice": "ការចែកចាយលើសសមតុល្យវិក្កយបត្រ។",
+      "invoiceAllocation": "ការចែកចាយវិក្កយបត្រ",
+      "receivePayment": "ទទួលការទូទាត់",
+      "actualProfitNote": "ចំណូលដែលបានចុះបញ្ជីដកចំណាដែលបានចុះបញ្ជី",
+      "actualProfit": "ប្រាក់ចំណេញជាក់លាក់",
+      "outstandingPayable": "បំណុលត្រូវបង់",
+      "supplierPayments": "ការទូទាត់ឱ្យអ្នកផ្គត់ផ្គង់",
+      "outstandingReceivable": "បំណុលត្រូវទទួល",
+      "totalCustomerPayments": "សរុបការទូទាត់ពីអតិថិជន",
+      "unbilledCharges": "ថ្លៃសេវាមិនទាន់បានវិក្កយបត្រ",
+      "totalInvoiced": "សរុបដែលបានវិក្កយបត្រ",
       "estimated": "ប៉ាន់ស្មាន",
       "posted": "បានចុះបញ្ជី",
       "estimatedMargin": "រឹមប្រតិបត្តិការប៉ាន់ស្មាន (រួមទាំងសេចក្តីព្រាង)",
@@ -2172,6 +2188,7 @@
       "history": "ប្រវត្តិកំណែ",
       "retire": "ដកចេញ",
       "published": "បានផ្សព្វផ្សាយការកំណត់រចនាសម្ព័ន្ធ",
+      "newTitle": "កំណែកំណត់រចនាសម្ព័ន្ធថ្មី",
       "unchangedDescription": "ការកំណត់រចនាសម្ព័ន្ធបច្ចុប្បន្នដូចនឹងកំណែដែលបានផ្សព្វផ្សាយ ដូច្នេះគ្មានអ្វីត្រូវផ្សព្វផ្សាយទេ។"
     },
     "statusActions": {
@@ -3907,7 +3924,7 @@
     "copied": "បានចម្លង",
     "copyFailed": "មិនអាចចម្លងបានទេ។ សូមជ្រើសរើសពាក្យបញ្ជាដោយដៃ។",
     "codeExpired": "លេខកូដផ្ទៀងផ្ទាត់ផុតកំណត់ហើយ។ សូមបង្កើតលេខកូដថ្មី។",
-    "updatesWaitingHint": "Telegram មិនទាន់ទទួលបច្ចុប្បន្នភាពទេ ដូច្នេះ /verify នឹងមិនត្រូវបានឆ្លើយតប។ សូមឱ្យអ្នកគ្រប់គ្រងបើក polling (TELEGRAM_UPDATE_MODE=polling) ឬចុះឈ្មោះ webhook HTTPS។",
+    "updatesWaitingHint": "Telegram មិនទាន់ទទួលសារទេ ដូច្នេះ /verify អាចនឹងមិនទទួលបានការឆ្លើយតប។ ប្រសិនបើវានៅតែស្ងាត់ សូមធ្វើការទំនាក់ទំនងជាមួយអ្នកគ្រប់គ្រងដើម្បីពិនិត្យការតភ្ជាប់ Telegram។",
     "username": "ឈ្មោះអ្នកប្រើ Telegram",
     "telegramUserId": "លេខសម្គាល់អ្នកប្រើ Telegram",
     "verifiedDate": "បានផ្ទៀងផ្ទាត់",

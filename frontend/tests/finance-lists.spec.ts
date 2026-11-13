@@ -118,6 +118,7 @@ describe('financial report columns', () => {
       'total',
       'paid',
       'outstanding',
+      'agingBucket',
       'status',
     ])
     expect(reportKeys('accounts-payable')).toEqual([
@@ -129,6 +130,7 @@ describe('financial report columns', () => {
       'total',
       'paid',
       'outstanding',
+      'agingBucket',
       'status',
     ])
   })

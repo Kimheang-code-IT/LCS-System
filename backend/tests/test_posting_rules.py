@@ -275,6 +275,8 @@ async def test_an_inactive_rule_is_ignored(session_factory, seeded):
 
 async def test_without_a_rule_the_last_resort_map_is_used_and_says_so(session_factory, seeded):
     async with session_factory() as session:
+        from sqlalchemy import delete
+        await session.execute(delete(PostingRule).where(PostingRule.document_type == "TRANSFER"))
         # TRANSFER is in DEFAULT_ACCOUNTS but has no seeded rule.
         resolved = await PostingRuleResolver(session, legacy_defaults=DEFAULT_ACCOUNTS).resolve("TRANSFER")
 
@@ -405,13 +407,9 @@ async def test_the_journal_snapshots_the_rule_that_produced_it(client, session_f
         assert snapshot["ruleId"]
 
 
-async def test_a_customer_credit_note_mirrors_the_invoice_it_corrects(client, session_factory):
+async def test_a_customer_credit_note_mirrors_the_invoice_it_corrects(client):
     headers = await login(client)
-    async with session_factory() as session:
-        # A credit note has no seeded rule; give it the mirror of the invoice.
-        session.add_all(await _posting_rule_columns(session, "CREDIT_NOTE", "4010", "1100"))
-        await session.commit()
-
+    # The seeded credit-note rule is the mirror of the invoice rule.
     document_id = await _document(
         client, headers, "CREDIT_NOTE", [{"description": "Short delivery", "quantity": 1, "unitPrice": 80}]
     )
@@ -422,20 +420,6 @@ async def test_a_customer_credit_note_mirrors_the_invoice_it_corrects(client, se
     assert _credit_codes(journal) == {"1100"}
     assert _debit_codes(journal) == {"4010"}
     assert journal["debitTotal"] == journal["creditTotal"] == 80
-
-
-async def _posting_rule_columns(session, document_type: str, debit: str, credit: str) -> list[PostingRule]:
-    ids = await _account_ids(session, debit, credit)
-    return [
-        PostingRule(
-            document_type=document_type,
-            fee_type_id=None,
-            debit_account_id=ids[debit],
-            credit_account_id=ids[credit],
-            status="ACTIVE",
-            priority=0,
-        )
-    ]
 
 
 async def test_a_payment_posts_two_lines_against_its_control_accounts(client):
@@ -457,8 +441,6 @@ async def test_a_payment_posts_two_lines_against_its_control_accounts(client):
 async def test_tax_is_split_out_of_the_detail_line_when_the_rule_names_a_tax_account(client, session_factory):
     headers = await login(client)
     async with session_factory() as session:
-        session.add_all(await _posting_rule_columns(session, "CREDIT_NOTE", "4010", "1100"))
-        await session.commit()
         await _add_rule(
             session, document_type="SUPPLIER_BILL", debit="5040", credit="2010", tax="5030", priority=9
         )
@@ -527,17 +509,17 @@ async def test_a_draft_is_never_half_posted_when_a_rule_cannot_resolve(client, s
         )
         session.add(dormant)
         await session.commit()
-        ids = await _account_ids(session, "1100")
-        session.add(
-            PostingRule(
-                document_type="CREDIT_NOTE",
-                fee_type_id=None,
-                debit_account_id=dormant.id,
-                credit_account_id=ids["1100"],
-                status="ACTIVE",
-                priority=0,
+        rule = (
+            await session.execute(
+                select(PostingRule).where(
+                    PostingRule.document_type == "CREDIT_NOTE",
+                    PostingRule.fee_type_id.is_(None),
+                    PostingRule.status == "ACTIVE",
+                )
             )
-        )
+        ).scalars().first()
+        assert rule is not None
+        rule.debit_account_id = dormant.id
         await session.commit()
 
     document_id = await _document(
@@ -683,14 +665,27 @@ async def test_two_active_rules_may_share_a_scope_only_at_different_priorities(c
     assert dormant.status_code == 201, dormant.text
 
 
-async def test_an_optional_priority_left_blank_is_not_a_malformed_number(client):
+async def test_an_optional_priority_left_blank_is_not_a_malformed_number(client, session_factory):
     """The form sends "" for an empty optional number, which must not be an error."""
     headers = await login(client)
+    async with session_factory() as session:
+        # Free the priority-0 slot the seed occupies in this scope.
+        seeded = (
+            await session.execute(
+                select(PostingRule).where(
+                    PostingRule.document_type == "CREDIT_NOTE",
+                    PostingRule.fee_type_id.is_(None),
+                    PostingRule.status == "ACTIVE",
+                )
+            )
+        ).scalars().all()
+        for rule in seeded:
+            await session.delete(rule)
+        await session.commit()
     response = await client.post(
         "/api/v1/postingRules",
         headers=headers,
         json={
-            # CREDIT_NOTE has no seeded rule, so priority 0 is free in this scope.
             "documentType": "CREDIT_NOTE",
             "debitAccount": "4010",
             "creditAccount": "1100",
@@ -1022,6 +1017,7 @@ async def test_concurrent_rules_at_the_same_priority_leave_one_winner(session_fa
                     PostingRule.document_type == "CREDIT_NOTE",
                     PostingRule.fee_type_id.is_(None),
                     PostingRule.status == "ACTIVE",
+                    PostingRule.priority == 3,
                 )
             )
         ).scalars().all()

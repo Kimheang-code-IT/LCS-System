@@ -43,15 +43,14 @@ describe('service order workspace tables', () => {
     expect(payload.total).toBe(198)
   })
 
-  it('keeps the finance grid inline-editable with date, type, description, amount and currency', () => {
-    // The Business Party is not a column: income entries default to the order
-    // customer and payee entries are completed through Additional Details.
+  it('keeps the finance grid inline-editable with date, type, description and amount', () => {
+    // Party and currency are not columns: they default from the order and are
+    // completed through Additional Details when they differ.
     expect(JOB_FINANCE_LINES_TABLE.columns.map(column => column.key)).toEqual([
       'date',
       'type',
       'description',
       'amount',
-      'currency',
     ])
     expect(JOB_FINANCE_LINES_TABLE.columns.find(column => column.key === 'type')?.type).toBe('select')
     expect(JOB_FINANCE_LINES_TABLE.hideAddRow).toBe(true)

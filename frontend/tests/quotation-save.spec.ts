@@ -14,7 +14,8 @@ describe('quotation save wiring', () => {
   it('save() is gated by canRunSave, which does not exclude quotations', () => {
     expect(source).toContain('if (!canRunSave.value) return')
     const runGuard = source.slice(source.indexOf('const canRunSave'), source.indexOf('const canSave'))
-    expect(runGuard).toContain('validatePasswordStrength')
+    // The only gate is read-only; password strength is validated on submit.
+    expect(runGuard).toContain('!readOnly.value')
   })
 
   it('the inline save grid stays disabled for quotations', () => {

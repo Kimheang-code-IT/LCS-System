@@ -20,11 +20,13 @@ import {
 import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import { isDeletableCharge } from '~/utils/freight/job-charges'
+import { recalculateFreightRecord } from '~/utils/freight/document-calculations'
+import { createClientId } from '~/utils/client-id'
 import {
   SERVICE_CHARGE_DRAFT_COLLECTION,
   emptyLinkedServiceCharge,
   serviceChargeDraftRecordId,
-  serviceChargeFormPayload,
+  serviceChargeModule,
 } from '~/utils/freight/service-charge-form'
 
 const props = defineProps<{
@@ -35,7 +37,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:dirty': [dirty: boolean]
-  'update:charges': [charges: FreightRecord[]]
   'saved': [charge: FreightRecord]
 }>()
 
@@ -76,56 +77,6 @@ const dirty = computed(() => Boolean(model.value)
   && JSON.stringify(sanitizeDraftModel(model.value)) !== savedSnapshot.value)
 
 const userScope = computed(() => String(auth.user?.id || auth.user?.email || 'anon'))
-
-/**
- * Saved linked charges plus the selected charge's unsaved total. The Finance
- * tab consumes this projection, so its preview follows fee-line/discount/tax
- * edits without duplicating the charge calculation there.
- */
-const summaryCharges = computed<FreightRecord[]>(() => {
-  const rows = charges.value.map(charge => ({
-    id: String(charge.id || ''),
-    clientRowId: String(charge.clientRowId || ''),
-    status: charge.status,
-    chargeSide: charge.chargeSide || 'CUSTOMER',
-    currency: charge.currency,
-    total: charge.total,
-    costTotal: charge.costTotal,
-    supplierPartyId: charge.supplierPartyId,
-    financialDocumentId: charge.financialDocumentId,
-    supplierDocumentId: charge.supplierDocumentId,
-  }))
-  const current = model.value
-  if (!current) return rows
-  const preview = {
-    id: String(current.id || ''),
-    clientRowId: String(current.clientRowId || ''),
-    status: current.status,
-    chargeSide: current.chargeSide || 'CUSTOMER',
-    currency: current.currency,
-    total: Number(serviceChargeFormPayload(current).total || 0),
-    costTotal: Number(
-      (Array.isArray(current.feeLines) ? current.feeLines as Array<Record<string, unknown>> : [])
-        .reduce((sum, line) => sum + Number(line.costAmount ?? (Number(line.quantity || 0) * Number(line.costUnitPrice || 0))), 0)
-        .toFixed(2),
-    ),
-    supplierPartyId: current.supplierPartyId,
-    financialDocumentId: current.financialDocumentId,
-    supplierDocumentId: current.supplierDocumentId,
-  }
-  const index = rows.findIndex(row =>
-    (preview.id && row.id === preview.id)
-    || (preview.clientRowId && row.clientRowId === preview.clientRowId),
-  )
-  if (index >= 0) {
-    rows[index] = preview
-    return rows
-  }
-  // An unsaved new charge still contributes to the preview total.
-  return dirty.value ? [...rows, preview] : rows
-})
-
-watch(summaryCharges, value => emit('update:charges', value), { immediate: true, deep: true })
 
 function draftRecordId(record: FreightRecord): string {
   // A charge carries its own order link, so a draft flushed while the page is
@@ -260,6 +211,27 @@ function startNew(side: 'CUSTOMER' | 'INTERNAL' = 'CUSTOMER') {
   emit('update:dirty', dirty.value)
 }
 
+/**
+ * "Add Fee Line": the tab's one add action. With no charge yet it initializes
+ * the linked charge (which seeds one blank line); otherwise it appends a blank
+ * editable row to the active draft charge and recalculates its totals. A
+ * posted charge is never touched.
+ */
+function addFeeLine() {
+  if (!model.value) {
+    startNew('CUSTOMER')
+    return
+  }
+  if (!canEditCurrent.value) return
+  const lines = Array.isArray(model.value.feeLines)
+    ? [...(model.value.feeLines as Array<Record<string, unknown>>)]
+    : []
+  lines.push({ clientRowId: createClientId('feeLine'), feeType: '', description: '', quantity: 1, unitAmount: 0 })
+  model.value = recalculateFreightRecord(serviceChargeModule(), { ...model.value, feeLines: lines })
+}
+
+const canAddFeeLine = computed(() => (model.value ? canEditCurrent.value : canCreate.value))
+
 watch(model, () => {
   emit('update:dirty', dirty.value)
   if (dirty.value) formDraft.schedule()
@@ -269,8 +241,9 @@ watch(model, () => {
 
 async function save() {
   const record = model.value
-  if (!record || saving.value || !canEditCurrent.value) return
-  if (!form.value?.validate()) return
+  if (!record || !dirty.value) return true
+  if (saving.value || !canEditCurrent.value) return false
+  if (!form.value?.validate()) return false
   const targetOrder = orderId.value
   const targetId = String(record.id || '')
   const marker = String(record.clientRowId || '')
@@ -316,11 +289,13 @@ async function save() {
     catch { /* the next navigation reloads it */ }
     emit('saved', saved)
     toast.add({ title: t('freight.ui.save'), color: 'success' })
+    return true
   }
   catch (error) {
     // The shared form renders field and form-level messages itself; the working
     // rows and the local draft are left exactly as the operator typed them.
     form.value?.applyServerError(error)
+    return false
   }
   finally {
     saving.value = false
@@ -348,46 +323,38 @@ defineExpose({ flushDraft: formDraft.flush, save })
         icon="i-lucide-refresh-cw"
         :label="t('lcs.common.retry')"
         @click="load" />
-      <div v-if="!loadFailed && (charges.length || model || canCreate)" class="flex flex-wrap items-end gap-2">
-        <UFormField v-if="charges.length" :label="t('freight.pages.serviceCharges')" class="min-w-64 flex-1">
-          <USelect
-            :model-value="selectedId"
-            :items="charges.map(charge => ({
-              label: [
-                String(charge.chargeNo || charge.id || ''),
-                String(charge.chargeSide || 'CUSTOMER').toUpperCase() === 'INTERNAL'
-                  ? t('freight.ui.internalCharge')
-                  : t('freight.ui.customerCharge'),
-                String(charge.total ?? ''),
-              ].filter(Boolean).join(' · '),
-              value: String(charge.id),
-            }))"
-            :placeholder="t('freight.ui.noServiceCharges')"
-            value-key="value"
-            class="w-full"
-            @update:model-value="(value: unknown) => selectCharge(charges.find(charge => String(charge.id) === String(value)) || null)" />
-        </UFormField>
+      <!-- One heading line: the tab title and its single add action. -->
+      <div v-if="!loadFailed" class="flex items-center justify-between gap-2">
+        <FreightJobSectionHeader :title="t('freight.pages.serviceCharges')" />
         <UButton
-          v-if="canCreate"
+          v-if="canAddFeeLine"
           icon="i-lucide-plus"
           color="neutral"
-          variant="outline"
-          :label="t('freight.ui.addCharge')"
+          variant="soft"
+          :label="t('freight.ui.addFeeLine')"
           :disabled="saving"
-          @click="startNew('CUSTOMER')" />
+          @click="addFeeLine" />
+      </div>
+      <!-- Several charges (customer + internal) stay distinct: compact chips,
+           no dropdown. Each keeps its own party, currency and totals. -->
+      <div v-if="!loadFailed && charges.length > 1" class="flex flex-wrap items-center gap-1.5">
         <UButton
-          v-if="model"
-          icon="i-lucide-save"
-          color="primary"
-          :label="model.id ? t('freight.ui.saveChanges') : t('freight.ui.saveCharge')"
-          :loading="saving"
-          :disabled="!canEditCurrent || !dirty"
-          @click="save" />
+          v-for="charge in charges"
+          :key="String(charge.id)"
+          size="xs"
+          :color="String(charge.id) === selectedId ? 'primary' : 'neutral'"
+          :variant="String(charge.id) === selectedId ? 'soft' : 'outline'"
+          :label="[
+            String(charge.chargeNo || charge.id || ''),
+            String(charge.chargeSide || 'CUSTOMER').toUpperCase() === 'INTERNAL'
+              ? t('freight.ui.internalCharge')
+              : t('freight.ui.customerCharge'),
+          ].filter(Boolean).join(' · ')"
+          :disabled="saving"
+          @click="selectCharge(charge)" />
       </div>
 
       <div v-if="model" class="space-y-2">
-        <FreightJobSectionHeader
-          :title="`${t('freight.pages.serviceCharges')} — ${t('freight.tables.feeLines')}`" />
         <FreightServiceChargeForm
           ref="form"
           :model="model"
@@ -401,7 +368,7 @@ defineExpose({ flushDraft: formDraft.flush, save })
       <FreightJobEmptyState
         v-else-if="!loadFailed"
         :title="t('freight.ui.noServiceCharges')"
-        :description="t('freight.ui.addCharge')"
+        :description="canCreate ? t('freight.ui.addFeeLine') : ''"
         icon="i-lucide-receipt-text" />
     </template>
   </div>

@@ -6,6 +6,8 @@ import { useFormValidation } from '~/composables/common/useFormValidation'
 import { userSourcePermissions } from '~/utils/freight/permissions'
 import { snapshotPreviewTabs } from '~/utils/freight/config-version-preview'
 import { apiErrorMessage, normalizeApiError } from '~/utils/validation/api-error'
+import { useAppHeader } from '~/composables/layout/useAppHeader'
+import { usePageSeo } from '~/composables/usePageSeo'
 
 definePageMeta({
   titleKey: 'freight.pages.configurationVersions',
@@ -18,6 +20,7 @@ const route = useRoute()
 const { confirm } = useConfirm()
 const config = useComponentConfig()
 const auth = useAuthStore()
+const { setBreadcrumbs, clear } = useAppHeader()
 
 const versionId = computed(() => String(route.params.id || ''))
 const detail = ref<ConfigurationVersion | null>(null)
@@ -26,6 +29,17 @@ const notFound = ref(false)
 const loading = ref(false)
 const pageErrors = ref<string[]>([])
 const name = ref('')
+
+/** The header breadcrumb shows the loaded version, not a generic page label. */
+watch(detail, (value) => {
+  if (!value) return
+  setBreadcrumbs([
+    { label: t('freight.pages.configurationVersions'), to: '/configuration/versions' },
+    { label: `v${value.versionNo}` },
+  ])
+})
+onBeforeUnmount(clear)
+usePageSeo({ title: () => detail.value ? `v${detail.value.versionNo}` : t('freight.pages.configurationVersions') })
 
 const rollbackOpen = ref(false)
 const rollbackReason = ref('')

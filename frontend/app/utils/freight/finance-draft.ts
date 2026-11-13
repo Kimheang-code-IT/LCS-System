@@ -7,6 +7,20 @@
  * reported as skipped so the operator can decide instead of silently losing an
  * edit.
  */
+import { scaledDecimal } from './finance-summary'
+
+/** Reconcile a committed allocation after a lost response, before validating retry bounds. */
+export function reconcileReceiptAllocations<T extends { id: string, amount: unknown, completed?: boolean }>(
+  drafts: readonly T[], saved: readonly Record<string, unknown>[],
+): T[] {
+  return drafts.map(allocation => ({
+    ...allocation,
+    completed: Boolean(allocation.completed || saved.some(row =>
+      String(row.targetDocumentId) === allocation.id
+      && scaledDecimal(row.amount) === scaledDecimal(allocation.amount))),
+  }))
+}
+
 export const FINANCE_DRAFT_FIELDS = [
   'date',
   'type',
@@ -60,11 +74,12 @@ export function mergeFinanceDraftRows<Row extends Record<string, unknown>>(
   serverRows: Row[],
   draftRows: readonly FinanceDraftRow[],
   sourceOf: (row: Row) => DraftSource | undefined,
-): { rows: Row[], skipped: number } {
+): { rows: Row[], skipped: number, rejected: FinanceDraftRow[] } {
   const byId = new Map(serverRows.map(row => [String(row.id ?? ''), row]))
   const restored = new Map<string, Row>()
   const additions: Row[] = []
   let skipped = 0
+  const rejected: FinanceDraftRow[] = []
 
   for (const draft of draftRows) {
     const id = String(draft.id ?? '').trim()
@@ -76,16 +91,19 @@ export function mergeFinanceDraftRows<Row extends Record<string, unknown>>(
     const source = server ? sourceOf(server) : undefined
     if (!server || !source) {
       skipped += 1
+      rejected.push(draft)
       continue
     }
     if (String(source.status || '').toUpperCase() !== 'DRAFT') {
       skipped += 1
+      rejected.push(draft)
       continue
     }
     const base = String(draft._baseUpdatedAt || '')
     const current = String(source.updatedAt || '')
     if (base && current && base !== current) {
       skipped += 1
+      rejected.push(draft)
       continue
     }
     const next = { ...server } as Record<string, unknown>
@@ -101,6 +119,7 @@ export function mergeFinanceDraftRows<Row extends Record<string, unknown>>(
       ...additions,
     ],
     skipped,
+    rejected,
   }
 }
 

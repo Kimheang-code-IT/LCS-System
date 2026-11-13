@@ -173,6 +173,7 @@ class FinancialDocumentSource(PKMixin, Base):
     source_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(32), nullable=False, default="GENERATED_FROM")
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
 
 
@@ -232,6 +233,9 @@ class FinancialDocumentAllocation(PKMixin, Base):
     allocated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+    #: Reversal retires the settlement without deleting its historical linkage.
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_by_document_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("financial_documents.id"))
 
 
 class PostingRule(PKMixin, TimestampMixin, Base):

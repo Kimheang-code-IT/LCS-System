@@ -44,6 +44,22 @@ function form(model: Record<string, unknown>, overrides: Record<string, unknown>
 }
 
 describe('useRecordFormDraft', () => {
+  it('keeps an opted-in conflicting draft until explicit restore or discard', () => {
+    const { state, draft } = form({ description: 'Unsaved route' }, { preserveConflict: true })
+    draft.flush()
+    state.base = '2026-11-12T09:00:00Z'
+    state.model = { description: 'Newer server route' }
+    expect(draft.restore()).toBe('none')
+    expect(draft.conflict.value).toBe(true)
+    state.dirty = false
+    draft.flush()
+    expect(readRecordDraft(recordDraftKey(user, 'quotations', '12'), 'local')?.model.description).toBe('Unsaved route')
+    draft.restoreConflict()
+    expect(state.model.description).toBe('Unsaved route')
+    expect(draft.conflict.value).toBe(false)
+    draft.clear()
+    expect(readRecordDraft(recordDraftKey(user, 'quotations', '12'), 'local')).toBeNull()
+  })
   beforeEach(() => {
     vi.stubGlobal('localStorage', memoryStorage())
     vi.stubGlobal('sessionStorage', memoryStorage())

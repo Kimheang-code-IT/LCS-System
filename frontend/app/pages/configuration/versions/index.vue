@@ -10,6 +10,8 @@ import { useComponentConfig } from '~/composables/freight/useComponentConfig'
 import { useConfirm } from '~/composables/common/useConfirm'
 import { userSourcePermissions } from '~/utils/freight/permissions'
 import { apiErrorMessage } from '~/utils/validation/api-error'
+import { useAppHeader } from '~/composables/layout/useAppHeader'
+import { usePageSeo } from '~/composables/usePageSeo'
 
 definePageMeta({
   titleKey: 'freight.pages.configurationVersions',
@@ -21,6 +23,14 @@ const toast = useToast()
 const { confirm } = useConfirm()
 const config = useComponentConfig()
 const auth = useAuthStore()
+const { setTitle, setBreadcrumbs, clear } = useAppHeader()
+
+onMounted(() => {
+  setTitle(t('freight.pages.configurationVersions'))
+  setBreadcrumbs([{ label: t('freight.pages.configurationVersions') }])
+})
+onBeforeUnmount(clear)
+usePageSeo({ title: () => t('freight.pages.configurationVersions') })
 
 const rows = computed(() => config.versions.value)
 const meta = computed(() => config.versionsMeta.value)

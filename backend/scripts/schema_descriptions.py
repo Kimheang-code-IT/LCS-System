@@ -1388,6 +1388,8 @@ COLUMN_DESCRIPTIONS: dict[str, dict[str, str]] = {
             "posted document."
         ),
         "allocated_at": "Timestamp the allocation was applied.",
+        "reversed_at": "Timestamp the settlement was reversed; NULL denotes an active allocation. Original amounts and links remain available for historical cutoff reports.",
+        "reversed_by_document_id": "Financial document whose reversal retired this allocation without deleting its accounting history.",
         "idempotency_key": (
             "UNIQUE key that makes a repeated allocation request a no-op. This is what stops a\n"
             "retried request from double-settling an invoice."

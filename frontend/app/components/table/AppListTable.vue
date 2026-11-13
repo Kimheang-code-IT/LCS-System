@@ -190,7 +190,7 @@ function onSelect(event: Event, row: TableRow<T>) {
 <template>
   <div class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden px-1.5 pt-1.5 pb-0">
     <div class="flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-sm border border-default bg-default shadow-xs">
-      <div class="flex items-center gap-3 border-b border-default px-2 py-2">
+      <div class="flex shrink-0 items-center gap-3 border-b border-default px-2 py-2">
         <CommonAppLiveSearch
           v-model="search"
           class="w-56 shrink-0 sm:w-64"
@@ -272,7 +272,7 @@ function onSelect(event: Event, row: TableRow<T>) {
         </UTable>
       </div>
 
-      <div class="flex items-center justify-between gap-2 border-t border-default px-2 py-1.5">
+      <div class="flex shrink-0 items-center justify-between gap-2 border-t border-default px-2 py-1.5">
         <div class="flex items-center gap-1.5">
           <span class="text-[11px] leading-none text-muted">{{ t('common.rowsPerPage') }}</span>
           <USelect

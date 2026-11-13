@@ -109,7 +109,7 @@ describe('service order finance summary', () => {
       ],
       primaryCurrency: 'USD',
     })
-    expect(group!.outstandingBalance).toBe(150)
+    expect(group!.outstandingReceivable).toBe(150)
   })
 
   it('applies approved credit adjustments without clamping negative balances', () => {
@@ -123,7 +123,7 @@ describe('service order finance summary', () => {
       primaryCurrency: 'USD',
     })
     // 20 outstanding invoice − 35 approved credit = −15 customer credit.
-    expect(group!.outstandingBalance).toBe(-15)
+    expect(group!.outstandingReceivable).toBe(-15)
     expect(group!.totalExpenses).toBe(-10)
   })
 
@@ -160,7 +160,7 @@ describe('service order finance summary', () => {
       unchargedAmount: 0,
       totalExpenses: 0,
       netAmount: 0,
-      outstandingBalance: 0,
+      outstandingReceivable: 0,
       estimated: false,
     })
   })
@@ -171,5 +171,67 @@ describe('service order finance summary', () => {
       [{ code: 'CUSTOM_INVOICE', accountingBehavior: 'CUSTOMER_INVOICE' }],
     )).toBe('CUSTOMER_INVOICE')
     expect(financeDocumentBehavior({ documentType: 'SUPPLIER_BILL' })).toBe('SUPPLIER_BILL')
+  })
+
+  it('computes invoiced, unbilled, payments and actual profit from posted documents', () => {
+    const [group] = buildFinanceSummary({
+      charges: [{ id: 'c', status: 'Issued', currency: 'USD', total: 3250 }],
+      entries: [
+        { id: 'inv', status: 'Posted', behavior: 'CUSTOMER_INVOICE', currency: 'USD', total: 3000, paidAmount: 1000, outstanding: 2000 },
+        { id: 'rec', status: 'Posted', behavior: 'CUSTOMER_RECEIPT', currency: 'USD', total: 1000, paidAmount: 1000 },
+        { id: 'bill', status: 'Posted', behavior: 'SUPPLIER_BILL', currency: 'USD', total: 800, paidAmount: 300, outstanding: 500 },
+        { id: 'pay', status: 'Posted', behavior: 'SUPPLIER_PAYMENT', currency: 'USD', total: 300 },
+      ],
+      primaryCurrency: 'USD',
+    })
+    expect(group).toMatchObject({
+      totalInvoiced: 3000,
+      unbilledCharges: 250,
+      totalCustomerPayments: 1000,
+      outstandingReceivable: 2000,
+      supplierPayments: 300,
+      outstandingPayable: 500,
+      actualProfit: 2200,
+      estimatedProfit: 2450,
+      estimated: false,
+    })
+  })
+
+  it('keeps settlements and drafts out of actual profit', () => {
+    const [group] = buildFinanceSummary({
+      charges,
+      entries: [
+        { id: 'inv', status: 'Posted', behavior: 'CUSTOMER_INVOICE', currency: 'USD', total: 200, paidAmount: 50, outstanding: 150 },
+        { id: 'rec', status: 'Posted', behavior: 'CUSTOMER_RECEIPT', currency: 'USD', total: 50 },
+        { id: 'bill', status: 'Draft', behavior: 'SUPPLIER_BILL', currency: 'USD', total: 40 },
+        { id: 'pay', status: 'Draft', behavior: 'SUPPLIER_PAYMENT', currency: 'USD', total: 10 },
+      ],
+      primaryCurrency: 'USD',
+    })
+    expect(group).toMatchObject({
+      totalInvoiced: 200,
+      totalCustomerPayments: 50,
+      supplierPayments: 0,
+      outstandingPayable: 0,
+      actualProfit: 200,
+      estimated: true,
+    })
+  })
+
+  it('reduces totalInvoiced with a posted credit note', () => {
+    const [group] = buildFinanceSummary({
+      charges: [],
+      entries: [
+        { id: 'inv', status: 'Posted', behavior: 'CUSTOMER_INVOICE', currency: 'USD', total: 300, paidAmount: 0, outstanding: 300 },
+        { id: 'cn', status: 'Posted', behavior: 'CREDIT_NOTE', currency: 'USD', total: 50, outstanding: 50 },
+      ],
+      primaryCurrency: 'USD',
+    })
+    expect(group).toMatchObject({
+      totalInvoiced: 250,
+      unbilledCharges: -250,
+      outstandingReceivable: 250,
+      actualProfit: 250,
+    })
   })
 })

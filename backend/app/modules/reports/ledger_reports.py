@@ -95,10 +95,10 @@ async def resolve_range(session: AsyncSession, filters: ReportFilters) -> tuple[
             "The requested fiscal year has no accounting periods.",
             {"fiscalYear": f"No accounting periods are defined for {filters.fiscalYear}."},
         )
-    return (
-        max(from_date, first) if from_date else first,
-        min(to_date, last) if to_date else last,
-    )
+    start, end = max(from_date, first) if from_date else first, min(to_date, last) if to_date else last
+    if start > end:
+        raise ValidationFailed("The date range does not intersect the fiscal year.", {"fiscalYear": "Choose an overlapping fiscal year and date range."})
+    return start, end
 
 
 def _side(net: Decimal) -> tuple[Decimal, Decimal]:
@@ -365,6 +365,8 @@ async def export_general_ledger(
         from_date=from_date, to_date=to_date, **filter_kwargs
     )
     opening_balance = sum(openings.values(), ZERO)
+    from app.modules.settings.service import get_default_currency
+    base_currency = await get_default_currency(session)
 
     for row in _scope_rows(
         "General Ledger",
@@ -378,6 +380,7 @@ async def export_general_ledger(
             "Currency": filters.currency,
             "Rows": total,
             "Opening balance": csv_export.money(opening_balance),
+            "Amount currency": base_currency,
         },
     ):
         yield row

@@ -22,6 +22,7 @@ export function useComponentTabs(
   const tabs = ref<ComponentTabRuntime[]>([])
   const references = ref<Record<string, Record<string, string>>>({})
   const rowsByGroup = ref<Record<string, FlatRow[]>>({})
+  const savedRowsByGroup = ref<Record<string, FlatRow[]>>({})
   const loading = ref(false)
   const saving = ref(false)
   const error = ref<string | null>(null)
@@ -31,9 +32,20 @@ export function useComponentTabs(
   const directionKey = computed(() => String(toValue(directionId) || '').trim())
   const cacheKey = computed(() => `${orderKey.value}|${directionKey.value}`)
   const sections = computed(() => tabs.value.map(tab => tab.code))
+  let loadSequence = 0
+  let rowsOrder = ''
+  const editedGroups = new Set<string>()
 
   async function load(force = false) {
     const key = orderKey.value
+    const requestedCacheKey = cacheKey.value
+    const sequence = ++loadSequence
+    if (rowsOrder !== key) {
+      rowsOrder = key
+      rowsByGroup.value = {}
+      savedRowsByGroup.value = {}
+      editedGroups.clear()
+    }
     if (!key) {
       tabs.value = []
       rowsByGroup.value = {}
@@ -46,24 +58,30 @@ export function useComponentTabs(
     error.value = null
     try {
       const data = await componentConfig.bootstrap(key, directionKey.value || undefined)
-      tabs.value = data.tabs || []
+      if (sequence !== loadSequence || requestedCacheKey !== cacheKey.value) return
       references.value = data.references || {}
       const map: Record<string, FlatRow[]> = {}
-      for (const tab of tabs.value) {
+      const baseline: Record<string, FlatRow[]> = {}
+      for (const tab of data.tabs || []) {
         for (const group of tab.groups) {
           // A single-record form with no saved row still needs one editable row,
           // otherwise required-field validation would have nothing to inspect.
-          map[group.id] = ensureCardinality(group, mergeRows(group.id, (group.rows || []).map(componentRowToFlatRow)))
+          baseline[group.id] = ensureCardinality(group, (group.rows || []).map(componentRowToFlatRow))
+          map[group.id] = editedGroups.has(group.id)
+            ? rowsByGroup.value[group.id] || []
+            : baseline[group.id]!
         }
       }
       rowsByGroup.value = map
-      loadedFor.value = cacheKey.value
+      savedRowsByGroup.value = baseline
+      tabs.value = data.tabs || []
+      loadedFor.value = requestedCacheKey
     }
     catch (err) {
-      error.value = err instanceof Error ? err.message : String(err)
+      if (sequence === loadSequence) error.value = err instanceof Error ? err.message : String(err)
     }
     finally {
-      loading.value = false
+      if (sequence === loadSequence) loading.value = false
     }
   }
 
@@ -74,30 +92,6 @@ export function useComponentTabs(
   // instead of keeping the pre-publish tabs it loaded earlier.
   const publishedRevision = useState('component-config-published-revision', () => 0)
   watch(publishedRevision, () => { void load(true) })
-
-  /**
-   * Reloading (for example after the Trade Direction changes) must never wipe
-   * values the user already typed in a tab that exists in both configurations.
-   * Server rows still win for cells the user left blank, so a fresh load can
-   * still pick up values another user saved in the meantime.
-   */
-  function mergeRows(groupId: string, serverRows: FlatRow[]): FlatRow[] {
-    const existing = rowsByGroup.value[groupId]
-    if (!existing?.length) return serverRows
-    if (serverRows.length !== existing.length) return serverRows
-    return serverRows.map((row, index) => {
-      const local = existing[index] || {}
-      const merged: FlatRow = { ...row }
-      for (const [key, value] of Object.entries(local)) {
-        if (key.startsWith('_') || key === 'id') continue
-        const blank = value === undefined || value === null
-          || (typeof value === 'string' && value.trim() === '')
-          || (Array.isArray(value) && value.length === 0)
-        if (!blank && row[key] === undefined) merged[key] = value
-      }
-      return merged
-    })
-  }
 
   function tabByCode(code: string): ComponentTabRuntime | null {
     return tabs.value.find(tab => tab.code === code) || null
@@ -130,6 +124,7 @@ export function useComponentTabs(
   }
 
   function setGroupRows(groupId: string, rows: FlatRow[]) {
+    editedGroups.add(groupId)
     const group = findGroup(groupId)
     rowsByGroup.value = { ...rowsByGroup.value, [groupId]: group ? ensureCardinality(group, rows) : rows }
   }
@@ -148,17 +143,25 @@ export function useComponentTabs(
     saving.value = true
     error.value = null
     try {
+      const order = orderKey.value
+      const submitted = JSON.stringify(rowsForGroup(groupId))
       const payload = rowsForGroup(groupId).map(row => ({
         id: isPersistedComponentRowId(row.id) ? String(row.id) : undefined,
         values: componentFlatRowToValues(row),
       }))
       const saved = await componentConfig.saveGroupRows(
-        orderKey.value,
+        order,
         groupId,
         payload,
         findGroup(groupId)?.tabGroupId,
       )
-      setGroupRows(groupId, saved.map(componentRowToFlatRow))
+      if (order !== orderKey.value) return
+      const serverRows = saved.map(componentRowToFlatRow)
+      savedRowsByGroup.value = { ...savedRowsByGroup.value, [groupId]: serverRows }
+      if (JSON.stringify(rowsForGroup(groupId)) === submitted) {
+        setGroupRows(groupId, serverRows)
+        editedGroups.delete(groupId)
+      }
     }
     finally {
       saving.value = false
@@ -169,6 +172,7 @@ export function useComponentTabs(
     tabs,
     references,
     rowsByGroup,
+    savedRowsByGroup,
     sections,
     loading,
     saving,

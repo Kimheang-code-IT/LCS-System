@@ -39,13 +39,14 @@ describe('shared service charge form', () => {
     expect(sharedForm).toContain('payload')
   })
 
-  it('has its own save boundary — the page save never touches charges', () => {
+  it('coordinates page save through the charge form own validated save boundary', () => {
     expect(charges).toContain('async function save()')
     expect(charges).toContain('createForOrder')
     expect(charges).toContain('saveDraft')
     expect(detail).not.toContain('chargesTab.value?.savePending()')
-    expect(detail).toContain('never creates or posts one')
-    // The page save still exists and only writes the order.
+    expect(detail).toContain('chargesEditor.value?.save()')
+    expect(charges).not.toContain('@click="save"')
+    // Header save uses both existing boundaries without posting documents.
     expect(detail).toContain('moduleRecord.update')
   })
 

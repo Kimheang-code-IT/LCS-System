@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ComponentTabGroup } from '~/types/component-config'
-import { resolveComponentLayout } from '~/utils/freight/component-layout'
+import { componentGroupIsSingleRecord, resolveComponentLayout } from '~/utils/freight/component-layout'
 
 const props = withDefaults(defineProps<{
   group: ComponentTabGroup
@@ -26,6 +26,7 @@ const emit = defineEmits<{
 
 const layout = computed(() => resolveComponentLayout(props.group))
 const editable = computed(() => props.editable && layout.value.editable)
+const tableEditor = ref<{ addRow: () => void } | null>(null)
 
 /** A non-collapsible group is always open, whatever its default state says. */
 function initialExpanded() {
@@ -80,6 +81,14 @@ const formErrors = computed(() => {
 
         <span class="truncate">{{ group.name }}</span>
       </component>
+      <UButton
+        v-if="layout.displayMode === 'table_only' && editable && !componentGroupIsSingleRecord(group)"
+        icon="i-lucide-plus"
+        color="neutral"
+        variant="soft"
+        :label="$t('freight.ui.addRow')"
+        :disabled="saving"
+        @click="tableEditor?.addRow()" />
       <UBadge
         v-if="!editable"
         color="neutral"
@@ -100,12 +109,14 @@ const formErrors = computed(() => {
         :saving="saving"
         :errors="formErrors"
         :field-key-prefix="`${group.id}.0`"
+        :show-submit="false"
         @update:field="setFormField"
         @submit="emit('save-group')"
       />
 
       <DocumentDynamicTableRenderer
         v-else-if="layout.displayMode === 'table_only'"
+        ref="tableEditor"
         :group="group"
         :rows="rows"
         :references="references"

@@ -454,8 +454,8 @@ async def test_reversing_an_allocated_invoice_unsettles_and_money_stays_received
     assert reversal.json()["data"]["status"] == "Reversed"
 
     async with session_factory() as session:
-        # The settlement is undone on both sides; the allocation history is gone
-        # and nothing was refunded (the receipt journal stays untouched).
+        # The settlement is undone on both sides; the allocation row is retained
+        # as history (retired by reversed_at) and nothing was refunded.
         rows = (
             await session.execute(
                 select(FinancialDocumentAllocation).where(
@@ -463,7 +463,9 @@ async def test_reversing_an_allocated_invoice_unsettles_and_money_stays_received
                 )
             )
         ).scalars().all()
-        assert rows == []
+        assert len(rows) == 1
+        assert rows[0].reversed_at is not None
+        assert rows[0].reversed_by_document_id == int(invoice["id"])
         receipt_left = await session.get(FinancialDocument, int(receipt["id"]))
         assert receipt_left.paid_amount == 0, "the receipt is unapplied again, not refunded"
         # The original entry survives and the reversal mirrors it: two entries, each balanced.

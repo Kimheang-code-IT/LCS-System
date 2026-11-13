@@ -9,11 +9,14 @@ export function useModuleList(module: Ref<FreightModule | undefined>) {
   const error = ref<unknown>(null)
   const items = ref<FreightRecord[]>([])
   const total = ref(0)
+  /** Extra list meta (e.g. server-computed footer aggregates). */
+  const meta = ref<Record<string, unknown>>({})
 
   async function refresh(query: ModuleListQuery = {}) {
     if (!module.value) {
       items.value = []
       total.value = 0
+      meta.value = {}
       return
     }
     pending.value = true
@@ -23,11 +26,13 @@ export function useModuleList(module: Ref<FreightModule | undefined>) {
       const result = await repository.list({ page_size: 200, ...query })
       items.value = result.items
       total.value = result.meta.total
+      meta.value = result.meta as unknown as Record<string, unknown>
     }
     catch (err) {
       error.value = err
       items.value = []
       total.value = 0
+      meta.value = {}
     }
     finally {
       pending.value = false
@@ -39,6 +44,7 @@ export function useModuleList(module: Ref<FreightModule | undefined>) {
     error,
     items,
     total,
+    meta,
     refresh,
   }
 }

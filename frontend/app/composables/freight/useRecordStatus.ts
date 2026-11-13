@@ -100,11 +100,11 @@ export function useRecordStatus(
     return t(statusActionMeta(transition.action).labelKey)
   }
 
-  /** The "Change Status" submenu for one record, or null when nothing applies. */
-  function menuItem(row: Record<string, unknown>, extras: StatusRunExtras = {}): DropdownMenuItem | null {
+  /** Direct status-transition items for one record, or none when nothing applies. */
+  function menuItems(row: Record<string, unknown>, extras: StatusRunExtras = {}): DropdownMenuItem[] {
     const collection = module.value?.collection
-    if (!collection) return null
-    const items = transitionsOf(row)
+    if (!collection) return []
+    return transitionsOf(row)
       .filter(transition => transition.kind === 'status' || Boolean(statusCommand(collection, transition.action)))
       .filter(transition => extras.allowTransition?.(transition) !== false)
       .map((transition) => {
@@ -112,16 +112,9 @@ export function useRecordStatus(
         return {
           label: labelOf(transition),
           icon: meta.icon,
-          ...(meta.color === 'neutral' ? {} : { color: meta.color }),
           onSelect: () => { void run(row, transition, extras) },
         } satisfies DropdownMenuItem
       })
-    if (!items.length) return null
-    return {
-      label: t('freight.ui.changeStatus'),
-      icon: 'i-lucide-circle-dot',
-      children: items,
-    }
   }
 
   async function askForReason(transition: RecordStatusTransition): Promise<string | undefined | null> {
@@ -192,5 +185,5 @@ export function useRecordStatus(
     }
   }
 
-  return { policy, busyId, loadPolicy, transitionsOf, menuItem, labelOf, run }
+  return { policy, busyId, loadPolicy, transitionsOf, menuItems, labelOf, run }
 }

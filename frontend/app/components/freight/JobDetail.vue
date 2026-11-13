@@ -42,8 +42,6 @@ const toast = useToast()
 const router = useRouter()
 const { t, te } = useI18n()
 const { moduleTitle, fieldLabel } = useFreightLabel()
-/** Linked charges with the Service Charge tab's unsaved totals (when visited). */
-const chargeSummaryRows = ref<FreightRecord[]>([])
 const { setBreadcrumbs, clear } = useAppHeader()
 const { confirm, setLoading: setConfirmLoading, dismiss: dismissConfirm } = useConfirm()
 const lcs = useLcs()
@@ -55,6 +53,7 @@ const notFound = ref(false)
  *  only so the page can warn before a destructive action. */
 const chargesDirty = ref(false)
 const chargesVisited = ref(false)
+const chargesEditor = ref<{ save: () => Promise<boolean | undefined> } | null>(null)
 /** The Finance tab has the same local inline draft; keep it alive too. */
 const financeVisited = ref(false)
 /** Every visited editable tab stays mounted (hidden) so its local controls —
@@ -107,6 +106,7 @@ const directionId = computed(() => {
   return row ? String(row.id) : undefined
 })
 const componentTabsState = useComponentTabs(jobNo, directionId)
+provide('service-order-draft-scope', computed(() => String(model.value.id || '')))
 const componentSections = computed(() => componentTabsState.sections.value)
 const workspaceSections = computed(() => [
   ...JOB_FIXED_WORKSPACE_SECTIONS,
@@ -225,8 +225,10 @@ async function saveComponentGroup(groupId: string) {
   validation.clearTableErrors(groupId)
   try {
     await componentTabsState.saveGroup(groupId)
-    // The saved rows are the new baseline: only later edits are draft-worthy.
-    componentRowsSnapshot.value = componentRowsJson()
+    const baseline = JSON.parse(componentRowsSnapshot.value || '{}')
+    baseline[groupId] = sanitizeDraftModel({ rows: componentTabsState.savedRowsByGroup.value[groupId] }).rows
+    componentRowsSnapshot.value = JSON.stringify(baseline)
+    return true
   }
   catch (error) {
     validation.reset()
@@ -254,6 +256,7 @@ async function saveComponentGroup(groupId: string) {
     if (normalized.message && !formLevel.length) formLevel.push(normalized.message)
     validation.setErrors(mapped, formLevel)
     await validation.focusFirstInvalid()
+    return false
   }
 }
 
@@ -332,6 +335,7 @@ const formDraft = useRecordFormDraft<FreightRecord>({
     return next
   },
   suspend: () => saving.value,
+  preserveConflict: true,
   warnOnUnload: true,
 })
 
@@ -343,7 +347,7 @@ function restorePageDraft() {
 
 /** Keep the component-row baseline in step with a fresh load or a group save. */
 function captureComponentBaseline() {
-  const serverRows = componentRowsJson()
+  const serverRows = JSON.stringify(sanitizeDraftModel(componentTabsState.savedRowsByGroup.value))
   if (componentDraftPending.value) {
     for (const [groupId, rows] of Object.entries(componentDraftPending.value)) {
       if (Array.isArray(rows)) componentTabsState.setGroupRows(groupId, rows)
@@ -356,7 +360,7 @@ function captureComponentBaseline() {
 watch(() => componentTabsState.tabs.value, captureComponentBaseline, { immediate: true })
 
 watch(
-  [() => sanitizeDraftModel(model.value), componentRowsDirty],
+  [() => sanitizeDraftModel(model.value), () => componentRowsJson()],
   () => {
     if (jobDirty.value) formDraft.schedule()
     // A reverted edit must not leave a stale local copy behind.
@@ -367,9 +371,6 @@ watch(
 
 function load() {
   if (!module.value) return
-  // The preview belongs to the previous order; the Service Charge tab emits a
-  // fresh projection once the new order is available.
-  if (String(model.value.id || '') !== recordId.value) chargeSummaryRows.value = []
   // The route may already address a new record while `model` still holds the
   // previous one: keep that copy under its own key before replacing it.
   formDraft.flush()
@@ -526,11 +527,14 @@ async function save() {
       return
     }
     const payload = { ...model.value }
-    // Snapshot of what this request writes. Anything typed while it is in flight
-    // must survive in the draft instead of being cleared by the response.
-    const submitted = JSON.stringify(sanitizeDraftModel(model.value))
-    // Service Charges have their own save boundary (the Service Charge tab's own
-    // button); the order save never creates or posts one.
+    if (chargesDirty.value && !await chargesEditor.value?.save()) return
+    const baseline = JSON.parse(componentRowsSnapshot.value || '{}')
+    for (const [groupId, rows] of Object.entries(componentTabsState.rowsByGroup.value)) {
+      if (JSON.stringify(sanitizeDraftModel({ rows }).rows) === JSON.stringify(baseline[groupId])) continue
+      if (!await saveComponentGroup(groupId)) return
+    }
+    // Charges keep their own validated API boundary; page Save coordinates it
+    // with dynamic rows and the order without posting financial documents.
     if (isCreate.value || !payload.id) {
       if (isCreate.value) {
         // A retried create is a replay for the backend: the idempotency key
@@ -546,14 +550,17 @@ async function save() {
       }
     }
     else {
-      await moduleRecord.update(String(payload.id), payload)
-      // The request wrote `submitted`, not whatever is in the model now. Keep
+      const saved = await moduleRecord.update(String(payload.id), payload)
+      if (saved.updatedAt) {
+        model.value = { ...model.value, updatedAt: saved.updatedAt }
+        payload.updatedAt = saved.updatedAt
+      }
+      // The request wrote `payload`, not whatever is in the model now. Keep
       // later keystrokes untouched; the baseline is what the server accepted.
-      savedSnapshot.value = submitted
+      savedSnapshot.value = JSON.stringify(sanitizeDraftModel(payload))
     }
     // Clear only when nothing newer was typed while the request was open.
-    if (JSON.stringify(sanitizeDraftModel(model.value)) === submitted) formDraft.clear()
-    else formDraft.flush()
+    if (!jobDirty.value && !componentRowsDirty.value) formDraft.clear()
     toast.add({ title: t('freight.ui.save'), color: 'success' })
     // Return to the service-order list after saving.
     await navigateTo(module.value.path)
@@ -564,6 +571,7 @@ async function save() {
   }
   finally {
     saving.value = false
+    if (jobDirty.value) formDraft.flush()
     validation.submitting.value = false
   }
 }
@@ -711,6 +719,12 @@ watch(activeTab, (tab) => {
     <template #form>
       <DocumentAppDocumentContentShell wide>
         <div class="space-y-6 py-5">
+          <UAlert v-if="formDraft.conflict.value" color="warning" :title="t('freight.ui.draftConflictTitle')">
+            <template #actions>
+              <UButton :label="t('freight.ui.restoreDraft')" @click="formDraft.restoreConflict" />
+              <UButton color="neutral" :label="t('freight.ui.discardDraft')" @click="formDraft.clear" />
+            </template>
+          </UAlert>
           <!-- Every visited tab stays mounted; `v-show` swaps the visible one
                without destroying input state. -->
           <div v-if="tabVisited('overview')" v-show="activeTab === 'overview'">
@@ -748,7 +762,7 @@ watch(activeTab, (tab) => {
                 :tab="componentTab"
                 :references="componentTabsState.references.value"
                 :rows-by-group="componentTabsState.rowsByGroup.value"
-                :editable="canEdit"
+                :editable="canEdit && !saving"
                 :saving="componentTabsState.saving.value"
                 :loading="componentTabsState.loading.value"
                 :error="componentTabsState.error.value"
@@ -772,13 +786,15 @@ watch(activeTab, (tab) => {
                inline draft survives tab switches. -->
           <div v-if="financeVisited" v-show="activeTab === 'finance'">
             <FreightJobFinance
+              :key="String(model.id || '')"
+              :active="activeTab === 'finance'"
               :job="model"
               :job-no="jobNo"
               :customer="String(model.customer || '')"
               :documents="debitNotes"
               :supplier-costs="supplierCosts"
               :receivables="receivables"
-              :charges="chargeSummaryRows.length ? chargeSummaryRows : charges"
+              :charges="charges"
               :summary-loading="!model.id"
               :editable="canEdit"
             />
@@ -787,11 +803,12 @@ watch(activeTab, (tab) => {
                its own (the shared Service Charge form), never the page save. -->
           <div v-if="chargesVisited" v-show="activeTab === 'charges'">
             <FreightJobCharges
+              :key="String(model.id || '')"
+              ref="chargesEditor"
               :job="model"
               :job-no="jobNo"
               :editable="canEdit"
               @update:dirty="chargesDirty = $event"
-              @update:charges="chargeSummaryRows = $event"
               @saved="patchJob({ chargesTotal: $event.total })"
             />
           </div>

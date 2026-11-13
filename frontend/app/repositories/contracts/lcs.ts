@@ -2,6 +2,7 @@ import type { FreightRecord } from '~/types/record'
 import type { LcsPaged } from '~/types/domain'
 
 export type LcsListQuery = {
+  service_order_id?: string
   q?: string
   page?: number
   page_size?: number
@@ -85,7 +86,7 @@ export interface FinanceRepository {
   getPrintData: (id: string, template: string, containerId?: string) => Promise<import('~/utils/freight/financial-print').FinancialPrintData>
   listDocuments: (query?: LcsListQuery) => Promise<LcsPaged<FreightRecord>>
   getDocument: (id: string) => Promise<FreightRecord>
-  createDocument: (input: CreateRecordInput) => Promise<FreightRecord>
+  createDocument: (input: CreateRecordInput, key?: string) => Promise<FreightRecord>
   saveDraft: (record: FreightRecord) => Promise<FreightRecord>
   post: (documentId: string, idempotencyKey: string) => Promise<FreightRecord>
   reverse: (documentId: string, reason: string, idempotencyKey: string) => Promise<FreightRecord>
@@ -164,6 +165,7 @@ export type DashboardSummary = {
 }
 
 export interface ReportGenerateMeta {
+  baseCurrency?: string
   reportKey: string
   title: string
   titleKey: string
@@ -198,6 +200,12 @@ export interface GeneralLedgerReport {
 }
 
 export interface ReportsRepository {
+  financialStatement: (key: string, filters: Record<string, unknown>) => Promise<{
+    items: FreightRecord[]
+    groups: Array<{ type: string, rows: Array<{ name: string, amount: number }>, total: number }>
+    totals: Record<string, number | Record<string, number>>
+    meta: { generatedAt: string, baseCurrency: string, warnings: string[], currencies: string[], parties: string[] }
+  }>
   dashboard: (granularity?: 'day' | 'month' | 'year') => Promise<DashboardSummary>
   receivables: () => Promise<FreightRecord[]>
   payables: () => Promise<FreightRecord[]>

@@ -51,6 +51,11 @@ class TrialBalanceExportFilters(TrialBalanceFilters):
     fields: list[str] | None = Field(default=None, max_length=32)
 
 
+class FinancialStatementFilters(ReportFilters):
+    currencies: list[str] = Field(default_factory=list, max_length=200)
+    parties: list[str] = Field(default_factory=list, max_length=200)
+
+
 class GeneralLedgerExportFilters(GeneralLedgerFilters):
     """General-ledger filters plus an optional column selection for the CSV."""
 
@@ -58,6 +63,7 @@ class GeneralLedgerExportFilters(GeneralLedgerFilters):
 
 
 class ReportMeta(BaseModel):
+    baseCurrency: str | None = None
     reportKey: str
     title: str
     titleKey: str
@@ -100,6 +106,7 @@ class TrialBalanceReport(BaseModel):
 
 
 class GeneralLedgerRow(BaseModel):
+    amountCurrency: str | None = None
     id: str
     postingDate: date | None
     journalNo: str

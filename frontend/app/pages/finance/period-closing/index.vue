@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** Config-driven Period Closing workspace: module defined in app/config/lcs-reference-modules.ts. */
-definePageMeta({ titleKey: 'freight.pages.periodClosing', permission: 'finance.accounting_periods.view' })
+definePageMeta({ titleKey: 'freight.pages.accountingPeriods', permission: 'finance.accounting_periods.view' })
+await navigateTo({ path: '/finance/accounting-periods', query: useRoute().query }, { replace: true })
 </script>
-<template><FreightWorkspaceView /></template>
+<template><span /></template>

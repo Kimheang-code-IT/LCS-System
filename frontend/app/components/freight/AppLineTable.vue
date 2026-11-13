@@ -18,6 +18,8 @@ import { tableColumnSignature } from '~/utils/table/table-shape'
 import { applyLineAdjustments, lineSubtotal } from '~/utils/table/line-adjustments'
 import { referenceItemForValue, referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
 import { createClientId } from '~/utils/client-id'
+const slots = useSlots()
+defineExpose({ addRow })
 
 const props = withDefaults(defineProps<{
   table: FreightTable
@@ -585,6 +587,8 @@ function buildColumns(table: FreightTable): TableColumn<Record<string, unknown>>
       meta: columnMeta(column),
       cell: ({ row }: { row: { original: Record<string, unknown> } }) => {
         const index = Number(row.original._rowIndex || 0)
+        const customCell = slots[`cell-${column.key}`]
+        if (customCell) return customCell({ row: row.original, index })
         const disabled = rowLocked(row.original) || Boolean(column.lockCell?.(row.original))
         if (isFileTable.value && column.key === 'fileName') return fileNameCell(row.original)
         if (column.inlineFields?.length && !isMoneyColumnKey(column.key)) {

@@ -26,6 +26,7 @@ export const useFreightStore = defineStore('freight', () => {
   const remoteCache = ref<Record<string, FreightRecord[]>>({})
   const remoteLoaded = ref<Record<string, boolean>>({})
   const inflight = new Map<string, Promise<void>>()
+  const queuedRefresh = new Map<string, Promise<void>>()
 
   function recordFailure(error: unknown) {
     lastError.value = apiErrorMessage(error, t('api.somethingWentWrong'))
@@ -39,9 +40,9 @@ export const useFreightStore = defineStore('freight', () => {
     revision.value += 1
   }
 
-  function reload() {
-    const loaded = Object.keys(remoteLoaded.value).filter(key => remoteLoaded.value[key])
-    remoteLoaded.value = {}
+  function reload(collections?: string[]) {
+    const loaded = collections || Object.keys(remoteLoaded.value).filter(key => remoteLoaded.value[key])
+    for (const collection of loaded) remoteLoaded.value[collection] = false
     void Promise.all(loaded.map(collection => ensureRemote(collection, true)))
     bumpRevision()
   }
@@ -83,7 +84,19 @@ export const useFreightStore = defineStore('freight', () => {
     if (import.meta.server) return
     if (!collection) return
     if (!force && remoteLoaded.value[collection]) return
-    if (inflight.has(collection)) return inflight.get(collection)
+    if (inflight.has(collection)) {
+      if (!force) return inflight.get(collection)
+      if (!queuedRefresh.has(collection)) {
+        const pending = inflight.get(collection)!.then(() => {
+          queuedRefresh.delete(collection)
+          return ensureRemote(collection, true)
+        }).finally(() => {
+          if (queuedRefresh.get(collection) === pending) queuedRefresh.delete(collection)
+        })
+        queuedRefresh.set(collection, pending)
+      }
+      return queuedRefresh.get(collection)
+    }
 
     if (JOB_DERIVED_COLLECTIONS.includes(collection)) {
       const promise = ensureRemote('jobs', force).then(() => {

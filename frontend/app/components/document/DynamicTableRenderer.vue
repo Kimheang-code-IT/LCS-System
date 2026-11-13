@@ -37,7 +37,15 @@ const emit = defineEmits<{
 const table = computed(() => componentGroupToFreightTable(props.group, props.references, {
   hideTitle: true,
   // A single-record group edits its one row; appending would fail on save.
-  hideAddRow: componentGroupIsSingleRecord(props.group),
+  hideAddRow: componentGroupIsSingleRecord(props.group) || (props.group.displayMode === 'table_only' && props.group.showGroupTitle),
+}))
+const tableEditor = ref<{ addRow: () => void } | null>(null)
+defineExpose({ addRow: () => tableEditor.value?.addRow() })
+const editableTable = computed(() => table.value && ({
+  ...table.value,
+  columns: props.editable && !componentGroupIsSingleRecord(props.group) && !props.rowInlineActions
+    ? [...table.value.columns, { key: '_delete', label: '', type: 'delete' as const }]
+    : table.value.columns,
 }))
 </script>
 
@@ -45,7 +53,8 @@ const table = computed(() => componentGroupToFreightTable(props.group, props.ref
   <div>
     <FreightDynamicDataTable
       v-if="table"
-      :table="table"
+      ref="tableEditor"
+      :table="editableTable"
       :model-value="rows"
       :disabled="!editable"
       :saving="saving"

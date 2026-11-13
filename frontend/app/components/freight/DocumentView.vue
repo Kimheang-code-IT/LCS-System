@@ -62,7 +62,6 @@ import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 import { parseRowKey } from '~/utils/validation/error-paths'
 import { apiErrorMessage } from '~/utils/validation/api-error'
 import type { ValidationFailure } from '~/utils/validation/field-rules'
-import { validatePasswordStrength } from '~/utils/validation/field-rules'
 import { isProtectedManagementRecord } from '~/utils/auth/protected-system-records'
 import { pageActionPermission } from '~/utils/freight/page-access'
 import { hasRawSourceCapability } from '~/utils/freight/permissions'
@@ -211,7 +210,7 @@ function clearFieldError(key: string) {
  * reverse / close / reopen) run through the shared status manager, so the
  * record page and the list offer exactly the same legal transitions.
  */
-const { menuItem: statusMenuItem } = useRecordStatus(module, {
+const { menuItems: statusMenuItems } = useRecordStatus(module, {
   onError: (message) => { validation.addFormError(message) },
   onChanged: () => load(),
 })
@@ -764,20 +763,17 @@ const documentSaveLabel = computed(() => {
   if (module.value?.collection === 'jobCharges') {
     return isCreate.value ? t('freight.ui.saveCharge') : t('freight.ui.saveChanges')
   }
-  return t('lcs.common.save')
+  // A create form has nothing to "change" yet.
+  return isCreate.value ? t('lcs.common.create') : t('lcs.common.save')
 })
 
 /**
- * Creating a user chooses that account's initial password, so their save waits
- * until it satisfies the shared policy. Everything else may save.
+ * Saving stays available so the operator can always submit and see what is
+ * missing; `save()` validates every field (including the initial password)
+ * before anything is sent. Hiding the button until the password passed left the
+ * create-user form with no visible action at all.
  */
-const canRunSave = computed(() => {
-  if (readOnly.value) return false
-  if (isCreate.value && module.value?.collection === 'users') {
-    return !validatePasswordStrength(String(model.value?.password ?? ''))
-  }
-  return true
-})
+const canRunSave = computed(() => !readOnly.value)
 
 /**
  * The inline save grid stays off for quotations: their header Save action runs
@@ -1174,14 +1170,14 @@ const moreItems = computed<DropdownMenuItem[][]>(() => {
 
   if (canMutateRecord.value && !protectedSystemRecord.value) {
     // Change Status is policy-driven: only transitions that are legal from this
-    // record's status and permitted for this caller are offered. Financial
-    // documents still run the posting and reversal engines through their own
-    // endpoints — the status is never written directly.
-    const statusItem = statusMenuItem(model.value, {
+    // record's status and permitted for this caller are offered, as direct
+    // items ("Post", "Reverse"…). Financial documents still run the posting
+    // and reversal engines through their own endpoints — the status is never
+    // written directly.
+    items.push(...statusMenuItems(model.value, {
       allowTransition: transition => module.value?.collection !== 'quotations'
         || transitionsAvailableForQuotation(transition),
-    })
-    if (statusItem) items.push(statusItem)
+    }))
     // Active records must be deactivated first; only inactive records can be deleted.
     if (String(model.value.status || '').trim().toUpperCase() === 'INACTIVE') {
       items.push({
@@ -1617,6 +1613,9 @@ async function save(status?: string) {
       passwordDialog.revealedPassword = String(payload.password)
       passwordDialog.mode = 'handover'
       passwordDialog.open = true
+      // Leave the form only once the password has been dismissed; without this
+      // the close handler had nothing to act on and the form stayed open.
+      handoverLeaving.value = true
       return
     }
     // "Add new" from a reference select: return to the originating document and
@@ -1838,13 +1837,6 @@ content-wide
 @refresh="refreshForm"
 @navigate-previous="navigatePrevious"
 @navigate-next="navigateNext">
-      <FreightUserPasswordDialog
-        :open="passwordDialog.open"
-        :mode="passwordDialog.mode"
-        :user-id="passwordDialog.userId"
-        :user-label="passwordDialog.userLabel"
-        :revealed-password="passwordDialog.revealedPassword"
-        @update:open="onPasswordDialogClosed" />
 
       <template #actions>
         <CommonAppDocumentActionButton
@@ -1972,6 +1964,14 @@ size="sm"
         </div>
       </template>
     </UModal>
+      <FreightUserPasswordDialog
+        :open="passwordDialog.open"
+        :mode="passwordDialog.mode"
+        :user-id="passwordDialog.userId"
+        :user-label="passwordDialog.userLabel"
+        :revealed-password="passwordDialog.revealedPassword"
+        @update:open="onPasswordDialogClosed" />
+
     <FreightAllocationDialog
       v-model:open="allocationOpen"
       :source="model"

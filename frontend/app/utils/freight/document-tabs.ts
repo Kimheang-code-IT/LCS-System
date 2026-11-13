@@ -118,6 +118,10 @@ export type ModuleDocumentTabsOptions = {
   compact?: boolean
   chargeLinkedToJob?: boolean
   chargeManualNumber?: boolean
+  /** Service Order charges tab: totals block gets inline Discount / Tax Rate. */
+  editableAdjustments?: boolean
+  /** Embedded tab (SO charges tab): the host renders the title and Add button. */
+  hideTableChrome?: boolean
   readOnlyKeys?: string[]
   /**
    * Document type of the record being edited (`financial_documents.document_type`).
@@ -233,6 +237,10 @@ export function lineTableField(
   const resolved = {
     ...withChargeColumns(table, options.chargeLinkedToJob),
     ...(upload ? { upload } : {}),
+    // An embedded tab renders its host's section title and Add button, so the
+    // shared table hides its own (avoids a duplicate heading and a second
+    // add-row control).
+    ...(options.hideTableChrome ? { hideTitle: true, hideAddRow: true } : {}),
   }
   return {
     key: table.key,
@@ -250,6 +258,10 @@ export function lineTableField(
       // tax step, so neither line is shown.
       showDiscountTotals: Boolean(table.pricing) && !table.hideDiscountTax,
       includeTax: Boolean(table.pricing) && !table.hideDiscountTax,
+      // Service Order charges tab: the totals block's Discount / Tax Rate rows
+      // become inline inputs (single fee line only) writing the line's own
+      // per-line adjustment values.
+      editableAdjustments: options.editableAdjustments === true,
     },
   }
 }

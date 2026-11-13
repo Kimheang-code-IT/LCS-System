@@ -30,6 +30,7 @@ import {
 } from '~/utils/freight/document-tabs'
 import { resolveDynamicFieldKind } from '~/composables/freight/useDynamicFieldRegistry'
 import { referenceOptionSource, referenceSelectItems } from '~/utils/freight/reference-options'
+import { applyLineAdjustments, lineSubtotal } from '~/utils/table/line-adjustments'
 import { formFieldError } from '~/utils/validation/form-field-error'
 
 const props = defineProps<{
@@ -339,6 +340,17 @@ const showDiscountTotals = computed(() => Boolean(props.field.meta?.showDiscount
 const includeTaxTotal = computed(() => Boolean(props.field.meta?.includeTax))
 const lineCompact = computed(() => Boolean(props.field.meta?.compact))
 const lineViewOnly = computed(() => Boolean(props.field.meta?.viewOnly || props.field.readOnly))
+/**
+ * Inline Discount / Tax Rate editing in the totals block (Service Order
+ * charges tab only, via `meta.editableAdjustments`). They edit the fee line's
+ * own adjustment values — exactly what the row menu's "Additional Details"
+ * dialog writes — so the backend's per-line model is never bypassed. Only a
+ * single-line charge has an unambiguous mapping; multi-line charges keep the
+ * read-only aggregate and per-line editing.
+ */
+const adjustmentsEditable = computed(() =>
+  Boolean(props.field.meta?.editableAdjustments) && !lineViewOnly.value && !props.disabled
+  && lineRows.value.length === 1)
 const lineHeaderActions = computed(() => {
   if (!lineTableHeaderActions || !lineTable.value) return []
   if (lineTable.value.key === 'feeLines' && documentModel?.value) {
@@ -370,6 +382,22 @@ const effectiveTaxRate = computed(() => {
   if (!(taxable > 0)) return 0
   return Number((moneyAmount('tax') / taxable * 100).toFixed(2))
 })
+
+const adjustmentsLineBase = computed(() => lineSubtotal(lineRows.value[0] || {}))
+const adjustmentsDiscount = computed(() => Number(lineRows.value[0]?.discount ?? lineRows.value[0]?.discountAmount) || 0)
+const adjustmentsTaxRate = computed(() => Number(lineRows.value[0]?.taxRate) || 0)
+
+/** Merge the summary edit onto the fee line — both key spellings plus the
+ * derived tax amount — exactly like the per-line dialog does. */
+function saveAdjustments(values: { discount?: number, taxRate?: number }) {
+  const row = lineRows.value[0]
+  if (!row) return
+  const adjusted = applyLineAdjustments(row, {
+    discount: values.discount ?? adjustmentsDiscount.value,
+    taxRate: values.taxRate ?? adjustmentsTaxRate.value,
+  })
+  lineRows.value = lineRows.value.map((item, index) => index === 0 ? adjusted : item)
+}
 
 function onFileChange(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
@@ -540,14 +568,40 @@ function removeDestination(id: string) {
       </div>
       <div v-if="showDiscountTotals" class="flex items-center justify-between gap-4">
         <span class="text-muted">{{ $t('freight.fields.discount') }}</span>
-        <span class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('discount')) }}</span>
+        <UInputNumber
+          v-if="adjustmentsEditable"
+          :model-value="adjustmentsDiscount"
+          :min="0"
+          :max="adjustmentsLineBase > 0 ? adjustmentsLineBase : undefined"
+          :increment="false"
+          :decrement="false"
+          :step-snapping="false"
+          size="sm"
+          class="w-32"
+          :ui="{ base: 'text-right tabular-nums' }"
+          @update:model-value="value => saveAdjustments({ discount: Number(value) || 0 })"
+        />
+        <span v-else class="font-medium text-highlighted">{{ moneyLabel(moneyAmount('discount')) }}</span>
       </div>
       <div
         v-if="includeTaxTotal"
         class="flex items-center justify-between gap-4"
       >
         <span class="text-muted">{{ $t('freight.ui.taxRatePct') }}</span>
-        <span class="font-medium text-highlighted">{{ effectiveTaxRate }} %</span>
+        <UInputNumber
+          v-if="adjustmentsEditable"
+          :model-value="adjustmentsTaxRate"
+          :min="0"
+          :max="100"
+          :increment="false"
+          :decrement="false"
+          :step-snapping="false"
+          size="sm"
+          class="w-24"
+          :ui="{ base: 'text-right tabular-nums' }"
+          @update:model-value="value => saveAdjustments({ taxRate: Number(value) || 0 })"
+        />
+        <span v-else class="font-medium text-highlighted">{{ effectiveTaxRate }} %</span>
       </div>
       <div
         v-if="includeTaxTotal"

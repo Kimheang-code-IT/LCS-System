@@ -126,9 +126,9 @@ export function createHttpFinanceRepository(): FinanceRepository {
     )),
     listDocuments: async query => asPaged(unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.FINANCIAL_DOCUMENTS, { query }))),
     getDocument: async id => unwrapApiData(await api.get<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.FINANCIAL_DOCUMENTS}/${id}`)),
-    createDocument: async input =>
-      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.FINANCIAL_DOCUMENTS, stripOfficialNumberFields(input, 'debitNotes'))),
-    saveDraft: async record => unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.FINANCIAL_DOCUMENTS, record)),
+    createDocument: async (input, key) =>
+      unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.FINANCIAL_DOCUMENTS, stripOfficialNumberFields(input, 'debitNotes'), key ? withIdempotency(key) : {})),
+    saveDraft: async record => unwrapApiData(await api.put<ApiResponse<FreightRecord>>(`${ApiV1Endpoints.FINANCIAL_DOCUMENTS}/${record.id}`, record)),
     post: async (documentId, key) =>
       unwrapApiData(await api.post<ApiResponse<FreightRecord>>(ApiV1Endpoints.FINANCIAL_POST(documentId), {}, withIdempotency(key))),
     reverse: async (documentId, reason, key) =>
@@ -235,6 +235,7 @@ export function createHttpUiSchemaRepository(): UiSchemaRepository {
 export function createHttpReportsRepository(): import('~/repositories/contracts/lcs').ReportsRepository {
   const api = useApi()
   return {
+    financialStatement: async (key, filters) => unwrapApiData(await api.post(ApiV1Endpoints.REPORTS_FINANCIAL_STATEMENT(key), filters)),
     dashboard: async granularity => unwrapApiData(await api.get<ApiResponse<import('~/repositories/contracts/lcs').DashboardSummary>>(ApiV1Endpoints.REPORTS_DASHBOARD, { query: { granularity: granularity ?? 'month' } })),
     receivables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_RECEIVABLES)),
     payables: async () => unwrapApiData(await api.get<ApiResponse<FreightRecord[]>>(ApiV1Endpoints.REPORTS_PAYABLES)),

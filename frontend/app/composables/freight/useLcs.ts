@@ -30,11 +30,11 @@ export function useLcs() {
     return errorMessage(error)
   }
 
-  async function runCommand<T>(command: string, entityId: string, fn: (key: string) => Promise<T>) {
+  async function runCommand<T>(command: string, entityId: string, fn: (key: string) => Promise<T>, collections?: string[]) {
     const key = rememberIdempotencyKey(command, entityId)
     const result = await fn(key)
     clearIdempotencyKey(command, entityId)
-    store.reload()
+    store.reload(collections)
     return result
   }
 

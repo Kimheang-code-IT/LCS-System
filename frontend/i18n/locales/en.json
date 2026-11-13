@@ -114,6 +114,7 @@
       "address": "Address",
       "afterData": "After Data",
       "allocatedAmount": "Allocated Amount",
+      "paidAmount": "Paid Amount",
       "allocatedAt": "Allocated At",
       "allocations": "Allocations",
       "amount": "Amount",
@@ -855,8 +856,7 @@
         "singular": "User",
         "description": "Manage staff access by role and department.",
         "fields": {
-          "role": "Assigned Role",
-          "pagePermissions": "Effective permissions"
+          "role": "Assigned Role"
         }
       },
       "serviceCharges": {
@@ -1149,6 +1149,8 @@
       "comments": "Comments",
       "favorite": "Favorite",
       "actions": "Actions",
+      "actionsForRecord": "Actions for {record}",
+      "recordsFooter": "1 record | {n} records",
       "actionCompleted": "Action completed",
       "deactivated": "Records deactivated",
       "recordDeactivated": "Record deactivated",
@@ -1583,7 +1585,9 @@
       "totalExpenses": "Total Expenses",
       "netAmount": "Net Amount",
       "saveCharge": "Save Charge",
-      "financeSummary": "Finance Summary",
+      "financialEntries": "Financial Entries",
+    "viewJournal": "View Journal",
+    "financeSummary": "Finance Summary",
       "refreshFinancialDrafts": "Refresh Financial Drafts",
       "financialDraftsRefreshed": "Financial drafts refreshed",
       "addInternalCharge": "Add Internal Charge",
@@ -1595,6 +1599,18 @@
       "chargedAmount": "Charged Amount",
       "unchargedAmount": "Uncharged Amount",
       "outstandingBalance": "Outstanding Balance",
+      "allocationExceedsReceipt": "Allocated amounts exceed the payment amount.",
+      "allocationExceedsInvoice": "Allocation exceeds the invoice outstanding balance.",
+      "invoiceAllocation": "Invoice Allocation",
+      "receivePayment": "Receive Payment",
+      "actualProfitNote": "Posted income minus posted expenses",
+      "actualProfit": "Actual Profit",
+      "outstandingPayable": "Outstanding Payable",
+      "supplierPayments": "Supplier Payments",
+      "outstandingReceivable": "Outstanding Receivable",
+      "totalCustomerPayments": "Total Customer Payments",
+      "unbilledCharges": "Unbilled Charges",
+      "totalInvoiced": "Total Invoiced",
       "estimated": "Estimated",
       "posted": "Posted",
       "estimatedMargin": "Estimated operating margin (includes draft values)",
@@ -2172,7 +2188,8 @@
       "history": "Version history",
       "retire": "Retire",
       "published": "Configuration published",
-      "unchangedDescription": "The live configuration matches the published version, so there is nothing to publish."
+      "newTitle": "New Configuration Version",
+    "unchangedDescription": "The live configuration matches the published version, so there is nothing to publish."
     },
     "statusActions": {
       "activate": "Activate",
@@ -3907,7 +3924,7 @@
     "copied": "Copied",
     "copyFailed": "Could not copy. Select the command manually.",
     "codeExpired": "The verification code expired. Generate a new code.",
-    "updatesWaitingHint": "Telegram updates are not being received yet, so /verify will not be answered. Ask an administrator to enable polling (TELEGRAM_UPDATE_MODE=polling) or register the HTTPS webhook.",
+    "updatesWaitingHint": "Telegram is not receiving messages right now, so /verify may get no reply. If it stays silent, ask an administrator to check the Telegram connection.",
     "username": "Telegram username",
     "telegramUserId": "Telegram user ID",
     "verifiedDate": "Verified",

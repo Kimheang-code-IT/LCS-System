@@ -119,7 +119,6 @@ export function useMenu() {
         pageLink(t('freight.pages.financialAccounts'), '/finance/financial-accounts'),
         pageLink(t('freight.pages.journals'), '/finance/journals'),
         pageLink(t('freight.pages.accountingPeriods'), '/finance/accounting-periods'),
-        pageLink(t('freight.pages.periodClosing'), '/finance/period-closing'),
         pageLink(t('freight.pages.postingRules'), '/finance/posting-rules'),
       ]),
       group('financial-reports', t('freight.nav.financialReports'), 'i-lucide-chart-no-axes-combined', reportLinks('finance')),

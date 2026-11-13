@@ -72,8 +72,10 @@ test('a partial cross-currency receipt applies the converted amount', async ({ p
 
   // The payment page now lists the allocation and the invoice is half settled.
   await expect(page.getByText(invoice.documentNo).first()).toBeVisible()
-  const invoiceAfter = await (await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)).json()
-  expect(invoiceAfter.data.outstanding).toBe(2_000_000)
+  await expect.poll(async () => {
+    const response = await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)
+    return (await response.json()).data.outstanding
+  }).toBe(2_000_000)
   await page.goto(`/finance/documents/${invoice.id}`)
   await expect(page.getByRole('spinbutton', { name: 'Grand Total' })).toHaveValue('4,000,000')
 })
@@ -104,8 +106,10 @@ test('a full allocation clears the outstanding balance', async ({ page }) => {
   await page.getByRole('spinbutton', { name: /^Amount/ }).fill('300')
   await page.getByRole('dialog').getByRole('button', { name: 'Allocate' }).click()
 
-  const invoiceAfter = await (await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)).json()
-  expect(invoiceAfter.data.outstanding).toBe(0)
+  await expect.poll(async () => {
+    const response = await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)
+    return (await response.json()).data.outstanding
+  }).toBe(0)
   await page.goto(`/finance/documents/${invoice.id}`)
   await expect(page.getByRole('spinbutton', { name: 'Grand Total' })).toHaveValue('300')
 })
@@ -135,8 +139,10 @@ test('a reversed payment offers no allocation action', async ({ page }) => {
   await openAllocationTab(page, receipt.id)
   await expect(page.getByRole('button', { name: 'Allocate' })).toHaveCount(0)
   // The invoice remains fully outstanding: the reversed receipt settled nothing.
-  const invoiceAfter = await (await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)).json()
-  expect(invoiceAfter.data.outstanding).toBe(100)
+  await expect.poll(async () => {
+    const response = await page.context().request.get(`/api/v1/financial-documents/${invoice.id}`)
+    return (await response.json()).data.outstanding
+  }).toBe(100)
   await page.goto(`/finance/documents/${invoice.id}`)
   await expect(page.getByRole('spinbutton', { name: 'Grand Total' })).toHaveValue('100')
 })

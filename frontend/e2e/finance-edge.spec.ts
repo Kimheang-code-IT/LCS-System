@@ -26,7 +26,7 @@ async function createDocument(
     await row.getByRole('spinbutton').nth(1).fill(String(line.price))
     await row.getByRole('spinbutton').nth(1).press('Tab')
   }
-  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('button', { name: /^(Create|Save changes)$/ }).click()
   await expect(page).toHaveURL(/\/finance\/documents$/)
   const firstRow = page.getByRole('row')
     .filter({ has: page.getByRole('link', { name: /^(INV|BILL)\d{4}-\d{6}$/ }) })
@@ -124,7 +124,7 @@ test('a partial receipt posts against an invoice', async ({ page }) => {
   await line.getByRole('spinbutton').nth(0).fill('1')
   await line.getByRole('spinbutton').nth(1).fill('80')
   await line.getByRole('spinbutton').nth(1).press('Tab')
-  await page.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('button', { name: /^(Create|Save changes)$/ }).click()
   await expect(page).toHaveURL(/\/finance\/documents$/)
 
   const receiptRow = page.getByRole('row')

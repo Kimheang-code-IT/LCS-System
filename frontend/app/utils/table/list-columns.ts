@@ -4,7 +4,6 @@ import { TableAppTableRowMeta, UCheckbox } from '#components'
 import { freightTableCheckboxMeta } from '~/utils/table/theme'
 
 type Translate = (key: string) => string
-
 /** Leading checkbox column for list tables (header + row). */
 export function listTableSelectColumn<T extends Record<string, unknown>>(
   t: Translate,
@@ -31,23 +30,29 @@ export function listTableSelectColumn<T extends Record<string, unknown>>(
   }
 }
 
-/** Trailing row-actions column (no avatar / time / comment meta). */
+/** The row label behind the menu trigger's accessible name ("Actions for INV…"). */
+function rowLabel(row: Record<string, unknown>): string {
+  return String(row.documentNo || row.quotationNo || row.jobNo || row.code || row.name || row.id || '')
+}
+
+/** Trailing row-actions column: sticky "Actions" header and a ⋯ menu per row. */
 export function listTableRowMetaColumn<T extends Record<string, unknown>>(options: {
-  summary: string
   items: (row: T) => DropdownMenuItem[][]
   loadingId?: string
 }): TableColumn<T> {
   return {
     id: 'actions',
-    header: () => h('div', { class: 'flex items-center justify-end gap-1.5 text-xs font-normal text-muted' }, [
-      h('span', options.summary),
-    ]),
+    header: () => h('div', { class: 'flex items-center justify-center gap-1.5 text-xs font-normal text-muted' }, 'Actions'),
     enableSorting: false,
     enableHiding: false,
-    meta: { class: { td: 'text-end whitespace-nowrap', th: 'w-20' } },
+    // Sticks to the right edge so the ⋯ menu stays reachable while the table
+    // scrolls horizontally (financial document lists are wide). Header and
+    // trigger are centred, like every other list table.
+    meta: { class: { td: 'text-center whitespace-nowrap sticky right-0 bg-default', th: 'sticky right-0 bg-default w-20 text-center' } },
     cell: ({ row }) => h(TableAppTableRowMeta, {
       items: options.items(row.original),
-      loading: options.loadingId === String(row.original.id || ''),
+      loading: options.loadingId === String((row.original as Record<string, unknown>).id || ''),
+      label: rowLabel(row.original as Record<string, unknown>),
     }),
   }
 }

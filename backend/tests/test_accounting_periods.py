@@ -370,12 +370,18 @@ async def test_updating_a_period_validates_dates_and_overlap(client, session_fac
     # A closed period keeps its dates even with no postings: reopening is the
     # only sanctioned path back, and the direct PUT reopen is refused so the
     # authorization and the reason always run through the status endpoint.
-    locked = await client.put(
+    # Closing itself is refused on the generic edit path for the same reason:
+    # the close action owns blocking validation and the PERIOD_CLOSED audit.
+    direct_close = await client.put(
         f"/api/v1/accounting-periods/{period['id']}",
         headers=headers,
         json={"status": "CLOSED"},
     )
-    assert locked.status_code == 200, locked.text
+    assert direct_close.status_code == 409
+    closed = await client.post(
+        f"/api/v1/accounting-periods/{period['id']}/close", headers=headers, json={}
+    )
+    assert closed.status_code == 200, closed.text
     date_change = await client.put(
         f"/api/v1/accounting-periods/{period['id']}",
         headers=headers,

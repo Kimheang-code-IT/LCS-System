@@ -1293,7 +1293,6 @@ export const freightModules: FreightModule[] = [
       f('email', 'Email', 'អ៊ីមែល', 'General', 'ទូទៅ', 'text', undefined, { required: true, rule: { maxLength: 255 } }),
       f('password', 'Password', 'ពាក្យសម្ងាត់', 'General', 'ទូទៅ', 'password', undefined, { required: true, createOnly: true, helpKey: 'freight.users.password.fieldHelp', rule: { password: true, minLength: 8, maxLength: 128 } }),
       f('role', 'Assigned Role', 'តួនាទីប្រើប្រាស់', 'General', 'ទូទៅ', 'select', undefined, { required: true, labelKey: 'freight.modules.users.fields.role' }),
-      f('pagePermissions', 'Effective Permissions', '', 'General', 'ទូទៅ', 'multiselect', undefined, { readOnly: true, labelKey: 'freight.modules.users.fields.pagePermissions' }),
     ],
     // There is no stored password to display: the server keeps an Argon2id
     // digest, so the only way to give somebody access is to set a new one.
@@ -1609,6 +1608,10 @@ if (invoicesModule) freightModules.push({
   path: '/finance/documents',
   documentForm: 'finance',
   permission: 'finance.financial_documents.view',
+  // The collection stays `debitNotes` (shared API endpoint and i18n field keys),
+  // so the title needs explicit keys to escape the debit-notes labels.
+  titleKey: 'freight.pages.financialDocuments',
+  singularKey: 'freight.fields.financialDocument',
   title: 'Financial Documents',
   titleKm: 'ឯកសារហិរញ្ញវត្ថុ',
   singular: 'Financial Document',
@@ -1629,10 +1632,10 @@ if (invoicesModule) freightModules.push({
     col('createdAt', 'Created At', 'បង្កើតនៅ', { labelKey: 'freight.fields.createdAt', type: 'datetime' }),
   ],
   fields: [
-    f('debitNoteNo', 'Document No.', 'លេខឯកសារ', 'Header', 'ក្បាល', 'text', undefined, { required: true, computed: true, labelKey: 'freight.fields.documentNo' }),
+    f('debitNoteNo', 'Document No.', 'លេខឯកសារ', 'Header', 'ក្បាល', 'text', undefined, { required: true, computed: true, labelKey: 'freight.fields.documentNo', helpKey: 'freight.fieldHelp.documentNo' }),
     f('documentType', 'Document Type', 'ប្រភេទឯកសារ', 'Header', 'ក្បាល', 'select', FINANCIAL_DOCUMENT_TYPES, { referenceFilter: financeDocumentTypeFilter }),
     f('date', 'Document Date', 'កាលបរិច្ឆេទឯកសារ', 'Header', 'ក្បាល', 'date', undefined, { required: true, labelKey: 'freight.fields.documentDate' }),
-    f('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី', 'Header', 'ក្បាល', 'date'), f('dueDate', 'Due Date', 'ថ្ងៃផុតកំណត់', 'Header', 'ក្បាល', 'date', undefined, { documentTypes: CREDIT_TERM_DOCUMENT_TYPES }), f('status', 'Status', 'ស្ថានភាព', 'Header', 'ក្បាល', 'select', DEBIT_NOTE_STATUS),
+    f('postingDate', 'Posting Date', 'កាលបរិច្ឆេទចុះបញ្ជី', 'Header', 'ក្បាល', 'date'), f('dueDate', 'Due Date', 'ថ្ងៃផុតកំណត់', 'Header', 'ក្បាល', 'date', undefined, { documentTypes: CREDIT_TERM_DOCUMENT_TYPES }),
     f('partyId', 'Party', 'ដៃគូ', 'Party & Scope', 'ដៃគូ និងវិសាលភាព', 'select', undefined, { required: true, labelKey: 'freight.fields.businessParty' }), f('jobNo', 'Service Order', 'បញ្ជាសេវាកម្ម', 'Party & Scope', 'ដៃគូ និងវិសាលភាព'),
     f('currency', 'Currency', 'រូបិយប័ណ្ណ', 'Amounts', 'ចំនួនទឹកប្រាក់', 'select'), f('exchangeRate', 'Exchange Rate', 'អត្រាប្តូរប្រាក់', 'Amounts', 'ចំនួនទឹកប្រាក់', 'number', undefined, { visibleWhen: { differs: ['currency', 'baseCurrency'] }, helpKey: 'freight.fieldHelp.exchangeRate', rule: { number: true, positive: true, decimalPlaces: 8 } }), f('rateDirection', 'Conversion', 'ការប្តូរប្រាក់', 'Amounts', 'ចំនួនទឹកប្រាក់', 'text', undefined, { computed: true, visibleWhen: { differs: ['currency', 'baseCurrency'] } }), f('baseCurrency', 'Base Currency', 'រូបិយប័ណ្ណមូលដ្ឋាន', 'Amounts', 'ចំនួនទឹកប្រាក់', 'text', undefined, { computed: true }), f('baseTotalAmount', 'Total in Base Currency', 'សរុបជារូបិយប័ណ្ណមូលដ្ឋាន', 'Amounts', 'ចំនួនទឹកប្រាក់', 'number', undefined, { computed: true }), f('amount', 'Subtotal', 'សរុបរង', 'Amounts', 'ចំនួនទឹកប្រាក់', 'number', undefined, { computed: true }), f('vat', 'Tax', 'ពន្ធ', 'Amounts', 'ចំនួនទឹកប្រាក់', 'number', undefined, { computed: true }), f('total', 'Total', 'សរុប', 'Amounts', 'ចំនួនទឹកប្រាក់', 'number', undefined, { computed: true }),
     f('paymentMethod', 'Payment Method', 'វិធីទូទាត់', 'Settlement', 'ការទូទាត់', 'select', PAYMENT_METHODS, { documentTypes: PAYMENT_DOCUMENT_TYPES }), f('financialAccountId', 'Financial Account', 'គណនីហិរញ្ញវត្ថុ', 'Settlement', 'ការទូទាត់', 'select', undefined, { documentTypes: PAYMENT_DOCUMENT_TYPES }), f('valueDate', 'Value Date', 'កាលបរិច្ឆេទតម្លៃ', 'Settlement', 'ការទូទាត់', 'date', undefined, { documentTypes: PAYMENT_DOCUMENT_TYPES }), f('referenceNo', 'Reference Number', 'លេខយោង', 'Settlement', 'ការទូទាត់'),

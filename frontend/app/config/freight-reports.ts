@@ -114,7 +114,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('revenue', 'Revenue', { labelKey: 'freight.reportCatalog.columns.revenue' }),
     n('expense', 'Expense', { labelKey: 'freight.reportCatalog.columns.expense' }),
   ]),
-  report('accounts-receivable', 'finance', 'Accounts Receivable', 'Posted customer balances and aging.', ['party', 'status', 'currency', 'date'], [
+  report('accounts-receivable', 'finance', 'Accounts Receivable', 'Posted customer balances and aging.', ['party', 'currency', 'date'], [
     col('invoiceNo', 'Invoice No.', { labelKey: 'freight.reportCatalog.columns.invoiceNo' }),
     col('jobNo', 'SO No.', { labelKey: 'freight.ui.cols.jobNo' }),
     col('customer', 'Business Party', { labelKey: 'freight.ui.cols.customer' }),
@@ -123,9 +123,10 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('total', 'Total', { labelKey: 'freight.reportCatalog.columns.total' }),
     n('paid', 'Paid'),
     n('outstanding', 'Outstanding', { labelKey: 'freight.reportCatalog.columns.outstanding' }),
+    col('agingBucket', 'Aging'),
     status('status', 'Status', { labelKey: 'freight.ui.status' }),
   ]),
-  report('accounts-payable', 'finance', 'Accounts Payable', 'Posted supplier balances and aging.', ['party', 'status', 'currency', 'date'], [
+  report('accounts-payable', 'finance', 'Accounts Payable', 'Posted supplier balances and aging.', ['party', 'currency', 'date'], [
     col('invoiceNo', 'Bill No.', { labelKey: 'freight.reportCatalog.columns.billNo' }),
     col('jobNo', 'SO No.', { labelKey: 'freight.ui.cols.jobNo' }),
     col('supplier', 'Supplier', { labelKey: 'freight.reportCatalog.columns.supplier' }),
@@ -134,6 +135,7 @@ export const FREIGHT_REPORTS: FreightReportDefinition[] = [
     n('total', 'Total', { labelKey: 'freight.reportCatalog.columns.total' }),
     n('paid', 'Paid'),
     n('outstanding', 'Outstanding', { labelKey: 'freight.reportCatalog.columns.outstanding' }),
+    col('agingBucket', 'Aging'),
     status('status', 'Status', { labelKey: 'freight.ui.status' }),
   ]),
   report('general-ledger', 'finance', 'General Ledger', 'Posted accounting movement by ledger account.', ['party', 'date'], [

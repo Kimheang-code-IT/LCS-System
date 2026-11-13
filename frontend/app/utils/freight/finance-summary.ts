@@ -41,6 +41,17 @@ export function scaledNumber(value: bigint): number {
   return Number(value) / Number(SCALE)
 }
 
+/**
+ * ``amount × rate`` in the same scaled-integer space, rounded half-up to four
+ * decimal places. Used to express a stored transaction amount in the configured
+ * base currency without going through binary floats.
+ */
+export function convertScaled(amount: unknown, rate: unknown): number {
+  const product = scaledDecimal(amount) * scaledDecimal(rate)
+  const half = SCALE / 2n
+  return scaledNumber(product >= 0n ? (product + half) / SCALE : (product - half) / SCALE)
+}
+
 export type FinanceSummaryCharge = {
   id?: string
   clientRowId?: string
@@ -78,6 +89,10 @@ export type FinanceSummaryEntry = {
   /** Posted invoice/bill balance left after allocations. */
   outstanding?: unknown
   paidAmount?: unknown
+  /** Rate the document stored when saved/posted (its base-currency conversion). */
+  exchangeRate?: unknown
+  /** Stored base-currency total, when the API provides one. */
+  baseTotalAmount?: unknown
 }
 
 export type FinanceSummaryGroup = {
@@ -87,7 +102,22 @@ export type FinanceSummaryGroup = {
   unchargedAmount: number
   totalExpenses: number
   netAmount: number
-  outstandingBalance: number
+  /** Posted receivable balance (the old outstandingBalance, renamed for clarity). */
+  outstandingReceivable: number
+  /** Sum of posted customer invoices (+ other income) minus posted credit notes. */
+  totalInvoiced: number
+  /** totalCharges not yet covered by a posted invoice/credit. */
+  unbilledCharges: number
+  /** Sum of posted customer receipts (cash actually received). */
+  totalCustomerPayments: number
+  /** Sum of posted supplier payments (cash actually paid out). */
+  supplierPayments: number
+  /** Posted payable balance owed to suppliers. */
+  outstandingPayable: number
+  /** netAmount (estimated profit; includes draft values). */
+  estimatedProfit: number
+  /** totalInvoiced − posted expenses (posted documents only). */
+  actualProfit: number
   /** Amounts still in DRAFT (preview) rather than formally charged/posted. */
   draftCharges: number
   draftExpenses: number
@@ -103,6 +133,11 @@ type Totals = {
   draftCharges: bigint
   draftExpenses: bigint
   outstandingBalance: bigint
+  totalInvoiced: bigint
+  postedExpenses: bigint
+  totalCustomerPayments: bigint
+  supplierPayments: bigint
+  outstandingPayable: bigint
 }
 
 function emptyTotals(currency: string): Totals {
@@ -114,6 +149,11 @@ function emptyTotals(currency: string): Totals {
     draftCharges: 0n,
     draftExpenses: 0n,
     outstandingBalance: 0n,
+    totalInvoiced: 0n,
+    postedExpenses: 0n,
+    totalCustomerPayments: 0n,
+    supplierPayments: 0n,
+    outstandingPayable: 0n,
   }
 }
 
@@ -221,10 +261,27 @@ export function buildFinanceSummary(input: {
     const currency = currencyOf(entry.currency, primary)
     const bucket = totals(currency)
     const total = amountOf(entry.total)
+    // Settlements move cash, not margin: only posted receipts/payments count,
+    // and their balance lives on the invoice, so they stay out of the profit.
+    if (behavior === 'CUSTOMER_RECEIPT' || behavior === 'SUPPLIER_PAYMENT') {
+      if (status === 'POSTED') {
+        if (behavior === 'CUSTOMER_RECEIPT') bucket.totalCustomerPayments += total
+        else bucket.supplierPayments += total
+      }
+      continue
+    }
     if (EXPENSE_BEHAVIORS.has(behavior) || EXPENSE_CREDIT_BEHAVIORS.has(behavior)) {
       const signed = EXPENSE_CREDIT_BEHAVIORS.has(behavior) ? -total : total
       bucket.totalExpenses += signed
       if (status !== 'POSTED') bucket.draftExpenses += signed
+      else {
+        bucket.postedExpenses += signed
+        const paid = amountOf(entry.paidAmount)
+        const outstanding = entry.outstanding !== undefined && entry.outstanding !== null
+          ? amountOf(entry.outstanding)
+          : total - paid
+        bucket.outstandingPayable += EXPENSE_CREDIT_BEHAVIORS.has(behavior) ? -outstanding : outstanding
+      }
       continue
     }
     if (!INCOME_BEHAVIORS.has(behavior) && !INCOME_CREDIT_BEHAVIORS.has(behavior)) continue
@@ -236,13 +293,17 @@ export function buildFinanceSummary(input: {
       const outstanding = entry.outstanding !== undefined && entry.outstanding !== null
         ? amountOf(entry.outstanding)
         : total - paid
-      bucket.outstandingBalance += INCOME_CREDIT_BEHAVIORS.has(behavior) ? -outstanding : outstanding
+      const credit = INCOME_CREDIT_BEHAVIORS.has(behavior)
+      bucket.totalInvoiced += credit ? -total : total
+      bucket.outstandingBalance += credit ? -outstanding : outstanding
     }
   }
 
   return [...groups.values()].map((bucket) => {
     const uncharged = bucket.totalCharges - bucket.chargedAmount
     const net = bucket.totalCharges - bucket.totalExpenses
+    const unbilled = bucket.totalCharges - bucket.totalInvoiced
+    const actual = bucket.totalInvoiced - bucket.postedExpenses
     return {
       currency: bucket.currency,
       totalCharges: scaledNumber(bucket.totalCharges),
@@ -251,7 +312,14 @@ export function buildFinanceSummary(input: {
       unchargedAmount: scaledNumber(uncharged),
       totalExpenses: scaledNumber(bucket.totalExpenses),
       netAmount: scaledNumber(net),
-      outstandingBalance: scaledNumber(bucket.outstandingBalance),
+      outstandingReceivable: scaledNumber(bucket.outstandingBalance),
+      totalInvoiced: scaledNumber(bucket.totalInvoiced),
+      unbilledCharges: scaledNumber(unbilled),
+      totalCustomerPayments: scaledNumber(bucket.totalCustomerPayments),
+      supplierPayments: scaledNumber(bucket.supplierPayments),
+      outstandingPayable: scaledNumber(bucket.outstandingPayable),
+      estimatedProfit: scaledNumber(net),
+      actualProfit: scaledNumber(actual),
       draftCharges: scaledNumber(bucket.draftCharges),
       draftExpenses: scaledNumber(bucket.draftExpenses),
       estimated: bucket.draftCharges !== 0n || bucket.draftExpenses !== 0n,

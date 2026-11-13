@@ -37,6 +37,8 @@ export type UseRecordFormDraftOptions<M extends DraftModel> = {
   warnOnUnload?: boolean
   /** True while a request is in flight: writes are skipped, never cleared. */
   suspend?: () => boolean
+  /** Keep conflicting operational drafts until an explicit restore/discard. */
+  preserveConflict?: boolean
 }
 
 export type DraftRestoreResult = 'applied' | 'none'
@@ -53,6 +55,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   const storage = options.storage ?? 'local'
   const delay = options.delay ?? 500
   const restored = ref(false)
+  const conflict = ref(false)
 
   const key = computed(() => recordDraftKey(
     options.scope(),
@@ -95,6 +98,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     clearTimer()
     const target = targetKey || boundKey
     if (!target) return
+    if (conflict.value) return
     // The saved model is not a draft: nothing to persist until a new edit.
     if (committed) return
     // A save is in flight: keep the slot as it was. The save clears it on
@@ -126,6 +130,7 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     boundRecordId = options.recordId()
     committed = false
     restored.value = false
+    conflict.value = false
   }
 
   /** Apply the stored draft for the bound record, if it is still compatible. */
@@ -151,6 +156,10 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     }
     // The server copy is newer: keep it and drop the stale local copy. There is
     // no Restore/Discard prompt; a draft can never overwrite a newer record.
+    if (options.preserveConflict) {
+      conflict.value = true
+      return 'none'
+    }
     clearRecordDraft(target, storage)
     clearRecordDraft(target, 'session')
     return 'none'
@@ -163,8 +172,19 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
     if (boundKey && boundKey !== key.value) clearRecordDraft(boundKey, storage)
     committed = true
     restored.value = false
+    conflict.value = false
     boundKey = key.value
     boundRecordId = options.recordId()
+  }
+
+  function restoreConflict() {
+    if (!conflict.value || !canDraft()) return
+    const stored = readRecordDraft(boundKey || key.value, storage)
+    if (!stored) return
+    options.apply(stored.model)
+    conflict.value = false
+    restored.value = true
+    schedule()
   }
 
   if (getCurrentInstance()) {
@@ -184,6 +204,8 @@ export function useRecordFormDraft<M extends DraftModel>(options: UseRecordFormD
   return {
     key,
     restored,
+    conflict,
+    restoreConflict,
     bind,
     restore,
     schedule,

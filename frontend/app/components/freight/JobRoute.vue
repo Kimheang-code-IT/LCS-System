@@ -38,7 +38,12 @@ function setRows(value: Array<Record<string, unknown>>) {
   persist(value)
 }
 
-watch(() => props.job.id, loadRows, { immediate: true })
+watch(() => jobRoutePlaces(props.job), () => {
+  // The parent normalizes values for persistence. Do not feed that trimming
+  // back into an active input (e.g. the space between two words).
+  const local = jobRoutePlaces({ id: props.job.id, ...jobFieldsFromPlaces(rows.value) })
+  if (JSON.stringify(local) !== JSON.stringify(jobRoutePlaces(props.job))) loadRows()
+}, { immediate: true, deep: true })
 </script>
 
 <template>

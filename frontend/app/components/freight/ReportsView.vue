@@ -10,12 +10,13 @@ import { formatNumber } from '~/utils/format/format-service'
 import type { FreightRecord } from '~/types/record'
 import { ACTIVE_STATUS, CONTAINER_STATUSES } from '~/config/freight-options'
 import { downloadCsv, downloadBlob } from '~/utils/export/csv'
-import { buildStatementGroups, reportRowDate, statementDifference as statementDifferenceOf } from '~/utils/freight/report'
-import { buildReportRows, buildRevenueExpenseReportRows } from '~/utils/freight/report-queries'
+import { reportRowDate } from '~/utils/freight/report'
+import { buildReportRows } from '~/utils/freight/report-queries'
 import { isFilterValueActive } from '~/utils/filter/select-ui'
 import { limitFilterSelects, matchesFilter } from '~/utils/filter/values'
 import { listTableRowMetaColumn, listTableSelectColumn } from '~/utils/table/list-columns'
-import { listTablePageSummary } from '~/utils/table/list-table'
+import { listTableCountFooter, listTableSumFooter } from '~/utils/table/list-footers'
+import { isMoneyKey } from '~/utils/freight/job-workspace'
 import { type ListSortKind, type ListSortSelection, listSortKindFor } from '~/utils/table/list-sort'
 import { getFreightReport, type FreightReportDefinition } from '~/config/freight-reports'
 import { isGeneratedReport, reportExportBody, reportGenerateBody, type ReportFilterValues } from '~/utils/freight/report-request'
@@ -53,6 +54,7 @@ const sort = ref<ListSortSelection>(null)
 const rowSelection = ref<Record<string, boolean>>({})
 function jobByNo(value: unknown) { return store.list('jobs').find(row => String(row.jobNo) === String(value)) }
 
+const financialSlugs = ['revenue-expense', 'accounts-receivable', 'accounts-payable', 'profit-loss', 'balance-sheet', 'cash-flow']
 const ledgerSlugs = ['revenue-expense', 'general-ledger', 'trial-balance', 'profit-loss', 'balance-sheet', 'cash-flow']
 const backendSlugs = ['accounts-receivable', 'accounts-payable', 'profitability', ...ledgerSlugs]
 const useBackend = computed(() => backendSlugs.includes(slug.value))
@@ -88,7 +90,9 @@ const reportTotal = ref(0)
 const trialBalanceTotals = ref<Record<string, number> | null>(null)
 const trialBalanceBalanced = ref(true)
 const backendRows = ref<FreightRecord[]>([])
-const backendLedgerLines = ref<FreightRecord[]>([])
+const financialProjection = ref<Awaited<ReturnType<typeof reports.financialStatement>> | null>(null)
+const ledgerControls = ref<Record<string, number> | null>(null)
+const amountCurrency = ref('')
 
 type ExtraReportFilters = Omit<ReportFilterValues, 'dateFrom' | 'dateTo'>
 const EMPTY_EXTRA_FILTERS: ExtraReportFilters = {
@@ -145,7 +149,9 @@ function resetResults() {
   trialBalanceTotals.value = null
   trialBalanceBalanced.value = true
   backendRows.value = []
-  backendLedgerLines.value = []
+  financialProjection.value = null
+  ledgerControls.value = null
+  amountCurrency.value = ''
 }
 
 /**
@@ -171,28 +177,16 @@ function errorMessage(error: unknown) {
   return payload.data?.message || payload.message || t('freight.reportCatalog.generateFailed')
 }
 
-async function loadBackendReport() {
-  let data: FreightRecord[] = []
-  backendLedgerLines.value = []
-  if (slug.value === 'accounts-receivable') data = await reports.receivables()
-  else if (slug.value === 'accounts-payable') data = await reports.payables()
-  else if (slug.value === 'profitability') data = await reports.profitability()
-  else {
-    const lines = await reports.ledgerLines()
-    backendLedgerLines.value = lines
-    if (slug.value === 'revenue-expense') data = buildRevenueExpenseReportRows(lines)
-    else if (slug.value === 'cash-flow') {
-      let balance = 0
-      data = lines.filter(row => Boolean(row.isCashAccount)).map((row) => {
-        const cashIn = Number(row.debit || 0)
-        const cashOut = Number(row.credit || 0)
-        balance += cashIn - cashOut
-        return { ...row, cashIn, cashOut, runningBalance: balance }
-      })
-    }
-    else data = lines
+async function loadBackendReport(requestedSlug: string) {
+  if (financialSlugs.includes(requestedSlug)) {
+    const projection = await reports.financialStatement(requestedSlug, {
+      fromDate: dateFrom.value || undefined, toDate: dateTo.value || undefined,
+      currencies: [...currency.value], parties: [...party.value],
+    })
+    return { rows: projection.items, projection }
   }
-  backendRows.value = data
+  const data = await reports.profitability()
+  return { rows: data, projection: null }
 }
 
 /**
@@ -214,6 +208,7 @@ async function generateReport() {
       if (slug.value === 'trial-balance') {
         const result = await reports.generateTrialBalance(body)
         if (token !== runToken.value) return
+        amountCurrency.value = result.meta.baseCurrency || ''
         backendRows.value = result.items
         trialBalanceTotals.value = result.totals
         trialBalanceBalanced.value = result.balanced
@@ -224,6 +219,8 @@ async function generateReport() {
       else {
         const result = await reports.generateGeneralLedger(body)
         if (token !== runToken.value) return
+        amountCurrency.value = result.meta.baseCurrency || ''
+        ledgerControls.value = { openingBalance: result.openingBalance, ...result.totals }
         backendRows.value = result.items
         trialBalanceTotals.value = null
         reportWarnings.value = result.meta.warnings
@@ -232,11 +229,14 @@ async function generateReport() {
       }
     }
     else if (useBackend.value) {
-      await loadBackendReport()
+      const loaded = await loadBackendReport(slug.value)
       if (token !== runToken.value) return
-      reportTotal.value = backendRows.value.length
-      generatedAt.value = new Date().toISOString()
-      reportWarnings.value = []
+      backendRows.value = loaded.rows
+      financialProjection.value = loaded.projection
+      amountCurrency.value = loaded.projection?.meta.baseCurrency || ''
+      reportTotal.value = loaded.rows.length
+      generatedAt.value = loaded.projection?.meta.generatedAt || new Date().toISOString()
+      reportWarnings.value = loaded.projection?.meta.warnings || []
     }
     else {
       // Operational reports read the shared store: fetch the collections the
@@ -283,7 +283,7 @@ const filtered = computed(() => {
   // A generated report was already filtered and paged by the backend; applying
   // the toolbar filters again would drop rows the server counted. Search only
   // narrows the page that is on screen.
-  if (serverPaged.value) {
+  if (serverPaged.value || financialSlugs.includes(slug.value)) {
     const needle = q.value.trim().toLowerCase()
     if (!needle) return backendRows.value
     return backendRows.value.filter(row => Object.values(row).join(' ').toLowerCase().includes(needle))
@@ -307,7 +307,14 @@ watch([q, party, status, currency, dateFrom, dateTo, extraFilters, slug, sort], 
   // The operations reports recompute from loaded rows, so filters apply live;
   // a manual re-run (and the stale banner) does not exist on those pages.
   if (autoLoad.value) return
+  // Financial projections filter on the server; search and sort stay local, so
+  // those never trigger a duplicate request.
+  if (financialSlugs.includes(slug.value)) return
   if (generated.value) stale.value = true
+}, { deep: true })
+// Only the fields the projection endpoint accepts re-run it.
+watch([party, currency, dateFrom, dateTo], () => {
+  if (financialSlugs.includes(slug.value) && generated.value) void generateReport()
 }, { deep: true })
 // Server pagination is a request, not a client slice: fetch the page the user
 // actually asked for. It never fires for a report that has not been generated.
@@ -316,7 +323,8 @@ watch(() => [pagination.value.pageIndex, pagination.value.pageSize], () => {
   void generateReport()
 })
 const choices = (getter:(r:FreightRecord)=>unknown) => computed(() => [...new Set(rows.value.map(r=>String(getter(r)||'')).filter(Boolean))].sort().map(value=>({label:value,value})))
-const partyItems=choices(r=>r.customer||r.supplier||r.party), currencyItems=choices(r=>r.currency)
+const partyItems=computed(()=>financialProjection.value?.meta.parties.map(value=>({label:value,value})) || choices(r=>r.customer||r.supplier||r.party).value)
+const currencyItems=computed(()=>financialProjection.value?.meta.currencies.map(value=>({label:value,value})) || choices(r=>r.documentCurrency||r.currency).value)
 const statusItems=computed(()=>{
   if (['service-orders','service-order-status'].includes(slug.value)) return labeledStatusOptions(ACTIVE_STATUS, t, te)
   if (slug.value==='containers') return labeledStatusOptions(CONTAINER_STATUSES, t, te)
@@ -346,16 +354,8 @@ function setFilterValue(key: ReportFilterKey, value: string[] | string | undefin
   else currency.value = next
 }
 
-const statementTypes=computed(()=>report.value.statementTypes||(slug.value==='profit-loss'?['Revenue','Expense']:['Asset','Liability','Equity']))
-const statementLines = computed(() => backendLedgerLines.value)
-const filteredPostedLines=computed(()=>statementLines.value.filter((row)=>{
-  const day=reportRowDate(row)
-  return matchesFilter(row.currency,currency.value)
-    && (!dateFrom.value||day>=dateFrom.value)
-    && (!dateTo.value||day<=dateTo.value)
-}))
-const statementGroups=computed(()=>buildStatementGroups(filteredPostedLines.value, statementTypes.value))
-const statementDifference=computed(()=>statementDifferenceOf(statementGroups.value, slug.value==='balance-sheet'))
+const statementGroups=computed(()=>financialProjection.value?.groups || [])
+const statementDifference=computed(()=>Number(financialProjection.value?.totals[slug.value==='balance-sheet'?'difference':'net'] || 0))
 const statementFooterLabel=computed(()=>{const key=report.value.statementFooterKey;return key&&te(key)?t(key):(slug.value==='profit-loss'?'Net Profit':'Difference')})
 function actions(row: FreightRecord): DropdownMenuItem[][] {
   const job = jobByNo(row.jobNo)
@@ -385,10 +385,14 @@ function actions(row: FreightRecord): DropdownMenuItem[][] {
   return items.length ? [items] : []
 }
 const columns=computed<TableColumn<FreightRecord>[]>(()=>{
-  const list=report.value.columns.map(column=>{
+  const list=report.value.columns.map((column,index)=>{
     const label = columnLabel(column)
     const kind: ListSortKind = column.numeric ? 'number' : listSortKindFor(column.key)
-    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:true,meta:{sortKind:kind,...(column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:{})},cell:({row}:{row:{original:FreightRecord}})=>{
+    return {accessorKey:column.key,header:column.numeric?()=>h('span',{class:'block text-right'},label):label,enableSorting:true,meta:{sortKind:kind,...(column.numeric?{class:{th:'text-right',td:'text-right tabular-nums whitespace-nowrap'}}:{})},footer:index===0
+      ?listTableCountFooter<FreightRecord>(t)
+      :isMoneyKey(column.key)
+        ?listTableSumFooter<FreightRecord>({currencyOf:row=>String(row.amountCurrency||row.currency||amountCurrency.value||'').trim()})
+        :undefined,cell:({row}:{row:{original:FreightRecord}})=>{
       if(column.status)return freightStatusBadge(row.original[column.key],column.key)
       if(column.key==='jobNo'&&report.value.group==='operations'){const job=jobByNo(row.original.jobNo);if(job)return h(ULink,{to:`/service-orders/${job.id}`,class:'font-medium text-highlighted hover:text-primary hover:underline'},()=>String(row.original.jobNo||'—'))}
       if(column.key==='quotationNo'){
@@ -411,14 +415,13 @@ const columns=computed<TableColumn<FreightRecord>[]>(()=>{
         return h('span',{class:'text-default'},text)
       }
       if(column.integer)return formatNumber(row.original[column.key],{maximumFractionDigits:0,minimumFractionDigits:0})
-      return formatFreightCell(row.original[column.key],column.key,String(row.original.currency||'').trim()||undefined)
+      return formatFreightCell(row.original[column.key],column.key,String(row.original.amountCurrency||row.original.currency||amountCurrency.value||'').trim()||undefined)
     }}
   })
   return [
     listTableSelectColumn<FreightRecord>(t),
     ...list,
     listTableRowMetaColumn<FreightRecord>({
-      summary: listTablePageSummary(t, filtered.value.length, pagination.value),
       items: actions,
     }),
   ]
@@ -560,6 +563,16 @@ async function exportCsv(request:{fieldCodes:string[]}){
         />
         <span v-if="generatedAtLabel" class="ms-auto text-muted">{{ generatedAtLabel }}</span>
       </div>
+    </div>
+
+    <div v-if="ledgerControls || financialProjection" class="flex flex-wrap gap-4 border border-default bg-default px-3 py-2 text-xs">
+      <span v-for="(value, key) in (ledgerControls || financialProjection?.totals || {})" :key="key">
+        <template v-if="typeof value === 'number'">
+          {{ t(`freight.reportCatalog.controls.${key}`) }}:
+          <b>{{ formatMoney(value, amountCurrency || undefined) }}</b>
+        </template>
+      </span>
+      <span class="text-muted">{{ amountCurrency }}</span>
     </div>
 
     <template v-if="!isStatement">
@@ -711,16 +724,16 @@ async function exportCsv(request:{fieldCodes:string[]}){
                 <h2 class="border-b border-default pb-1.5 text-sm font-semibold">{{ group.type }}</h2>
                 <div v-for="row in group.rows" :key="row.name" class="flex justify-between px-3 py-1.5 text-sm">
                   <span>{{ row.name }}</span>
-                  <span class="tabular-nums">{{ formatMoney(row.amount, currency.length === 1 ? currency[0] : undefined) }}</span>
+                  <span class="tabular-nums">{{ formatMoney(row.amount, amountCurrency || undefined) }}</span>
                 </div>
                 <div class="flex justify-between border-t border-default px-3 pt-2 text-sm font-semibold">
                   <span>Total {{ group.type }}</span>
-                  <span>{{ formatMoney(group.total, currency.length === 1 ? currency[0] : undefined) }}</span>
+                  <span>{{ formatMoney(group.total, amountCurrency || undefined) }}</span>
                 </div>
               </div>
               <div class="flex justify-between border-t-2 border-default px-3 pt-3 font-semibold">
                 <span>{{ statementFooterLabel }}</span>
-                <span>{{ formatMoney(statementDifference, currency.length === 1 ? currency[0] : undefined) }}</span>
+                <span>{{ formatMoney(statementDifference, amountCurrency || undefined) }}</span>
               </div>
             </div>
           </section>

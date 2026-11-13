@@ -5,6 +5,8 @@ import { useFormValidation } from '~/composables/common/useFormValidation'
 import { userSourcePermissions } from '~/utils/freight/permissions'
 import { snapshotPreviewTabs } from '~/utils/freight/config-version-preview'
 import { apiErrorMessage } from '~/utils/validation/api-error'
+import { useAppHeader } from '~/composables/layout/useAppHeader'
+import { usePageSeo } from '~/composables/usePageSeo'
 
 definePageMeta({
   titleKey: 'freight.pages.configurationVersions',
@@ -15,6 +17,16 @@ const { t } = useI18n()
 const toast = useToast()
 const config = useComponentConfig()
 const auth = useAuthStore()
+const { setBreadcrumbs, clear } = useAppHeader()
+
+onMounted(() => {
+  setBreadcrumbs([
+    { label: t('freight.pages.configurationVersions'), to: '/configuration/versions' },
+    { label: t('freight.configVersions.newTitle') },
+  ])
+})
+onBeforeUnmount(clear)
+usePageSeo({ title: () => t('freight.configVersions.newTitle') })
 
 const name = ref('')
 const pageErrors = ref<string[]>([])
