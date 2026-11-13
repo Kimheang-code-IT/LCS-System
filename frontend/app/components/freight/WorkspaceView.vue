@@ -194,13 +194,11 @@ const result = computed(() => {
       shipments: store.list('shipments'),
     })
   }
-  // The Service Charges page lists standalone charges only: linked charges
-  // belong to their Service Order's Service Charge tab.
-  if (current.value?.collection === 'jobCharges') {
-    all = all.filter(row => !String(row.jobNo || '').trim())
-  }
-  // The backend module list endpoints don't understand the toolbar filter
-  // fields, so apply them (and the search box) on the loaded page client-side.
+  // The Service Charges list is unified: linked charges and standalone charges
+  // are the same table (service_order_charges), so every accessible row appears
+  // here; linked ones stay visible on their order's tab too. The backend module
+  // list endpoints don't understand the toolbar filter fields, so apply them
+  // (and the search box) on the loaded page client-side.
   all = all.filter(rowMatchesToolbarFilters)
   return { rows: all, total: all.length, all }
 })

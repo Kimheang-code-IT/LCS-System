@@ -1,6 +1,5 @@
 import { h } from 'vue'
 import { UBadge } from '#components'
-import type { AppHeaderBadge } from '~/composables/layout/useAppHeader'
 import type { FreightAction, FreightField, FreightModule, FreightRelated, FreightSelectOption, FreightTable } from '~/config/freight-modules'
 import { getFreightModule } from '~/config/freight-modules'
 import { JOB_CHECKLIST_TYPES } from '~/config/freight-options'
@@ -219,7 +218,7 @@ export function groupedFields(module: FreightModule) {
   return groups
 }
 
-export function statusColor(status: string): AppHeaderBadge['color'] {
+export function statusColor(status: string): 'error' | 'neutral' | 'primary' | 'secondary' | 'success' | 'info' | 'warning' {
   const value = status.toLowerCase()
   if (['active', 'paid', 'cleared', 'delivered', 'approved', 'accepted', 'closed', 'completed', 'finished', 'pod received', 'posted', 'issued', 'converted'].some(s => value.includes(s))) return 'success'
   if (['pending', 'processing', 'partial', 'in transit', 'arriving', 'submitted', 'sent', 'in_progress', 'open', 'draft', 'maintenance'].some(s => value.includes(s))) return 'warning'

@@ -34,6 +34,38 @@ async def _create_tab(client, headers, code: str, name: str, direction: str | No
     return response.json()["data"]
 
 
+async def _create_publishable_tab(
+    client, headers, code: str, name: str, direction: str | None = None
+) -> dict:
+    """A tab that satisfies the publish rules (it needs a group and an attribute)."""
+    tab = await _create_tab(client, headers, code, name, direction)
+    group = await client.post(
+        "/api/v1/component-groups",
+        headers=headers,
+        json={"code": f"{code.lower()}_group", "name": f"{name} Group"},
+    )
+    assert group.status_code == 201, group.text
+    attribute = await client.post(
+        "/api/v1/component-attributes",
+        headers=headers,
+        json={"code": f"{code.lower()}_field", "label": f"{name} Field", "dataType": "text"},
+    )
+    assert attribute.status_code == 201, attribute.text
+    linked = await client.post(
+        f"/api/v1/component-groups/{group.json()['data']['id']}/attributes",
+        headers=headers,
+        json={"attributeId": attribute.json()["data"]["id"]},
+    )
+    assert linked.status_code == 201, linked.text
+    attached = await client.post(
+        f"/api/v1/component-tabs/{tab['id']}/groups",
+        headers=headers,
+        json={"groupId": group.json()["data"]["id"]},
+    )
+    assert attached.status_code == 201, attached.text
+    return tab
+
+
 async def _service_order(client, headers) -> str:
     quotation = await client.post(
         "/api/v1/quotations",
@@ -101,7 +133,7 @@ async def test_a_new_publish_retires_the_previous_version(client):
     headers = await login(client)
     assert (await _publish(client, headers)).status_code == 201
 
-    await _create_tab(client, headers, "EXTRA", "Extra")
+    await _create_publishable_tab(client, headers, "EXTRA", "Extra")
 
     second = await _publish(client, headers, "added a tab")
     assert second.status_code == 201, second.text
@@ -125,7 +157,7 @@ async def test_existing_service_orders_keep_the_configuration_they_were_captured
     assert pinned.json()["data"]["id"] == version_one
 
     # Changing the live configuration must not repoint the existing order.
-    await _create_tab(client, headers, "LATER", "Later")
+    await _create_publishable_tab(client, headers, "LATER", "Later")
     assert (await _publish(client, headers, "second configuration")).status_code == 201
 
     still_pinned = await client.get(f"/api/v1/service-orders/{order_id}/configuration-version", headers=headers)
@@ -170,7 +202,9 @@ async def test_attribute_code_cannot_change_once_values_are_saved(client):
     assert memberships.status_code == 200, memberships.text
     attribute = memberships.json()["data"][0]
 
-    # Save a value keyed by that attribute's code on a real service order.
+    # Save a value keyed by that attribute's code on a real service order. The
+    # order renders the published layout, so publish the seeded configuration.
+    assert (await _publish(client, headers, "seed configuration")).status_code == 201
     order_id = await _service_order(client, headers)
     saved = await client.post(
         f"/api/v1/service-orders/{order_id}/component-tabs/groups/{group['id']}/rows/bulk",

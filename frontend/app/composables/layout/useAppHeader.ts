@@ -8,11 +8,6 @@ export type AppHeaderBreadcrumb = {
   icon?: string
 }
 
-export type AppHeaderBadge = {
-  label: string
-  color?: 'error' | 'neutral' | 'primary' | 'secondary' | 'success' | 'info' | 'warning'
-}
-
 export type AppHeaderCreateButton = {
   label: string
   icon?: string
@@ -84,7 +79,6 @@ let chromeInstanceSeq = 0
 export function useAppHeader() {
   const title = useState('app-header-title', () => '')
   const breadcrumbs = useState<AppHeaderBreadcrumb[]>('app-header-breadcrumbs', () => [])
-  const badges = useState<AppHeaderBadge[]>('app-header-badges', () => [])
   const route = useRoute()
   const { t, te } = useI18n()
   /**
@@ -125,11 +119,6 @@ export function useAppHeader() {
     if (last?.label) title.value = last.label
   }
 
-  function setBadges(items: AppHeaderBadge[]) {
-    claim()
-    badges.value = items
-  }
-
   /** Register header actions; returns an owner id for safe clear on unmount. */
   function setActions(config: AppHeaderActionsConfig | null): number {
     const id = ++actionsOwnerId
@@ -160,7 +149,6 @@ export function useAppHeader() {
     if (!headerChromeOwnedByCurrentRoute(ownedRoute, route.fullPath)) return
     title.value = ''
     breadcrumbs.value = []
-    badges.value = []
     ownedRoute = ''
     chromeOwnerId = 0
   }
@@ -173,13 +161,11 @@ export function useAppHeader() {
   return {
     title,
     breadcrumbs,
-    badges,
     actions: headerActions,
     displayTitle,
     hasBreadcrumbs,
     setTitle,
     setBreadcrumbs,
-    setBadges,
     setActions,
     clearActions,
     clear,

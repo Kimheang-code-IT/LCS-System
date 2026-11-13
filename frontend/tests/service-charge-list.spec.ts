@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { getFreightModule } from '../app/config/freight-modules'
 
@@ -32,10 +34,14 @@ describe('service charge list', () => {
     }
   })
 
-  it('keeps the party and document-type filters; the list itself is standalone-only', () => {
+  it('keeps the party and document-type filters and stays unified', () => {
     const filters = charges.filters || []
     expect(filters.find(filter => filter.key === 'customer')?.labelKey).toBe('freight.fields.customerPartyId')
     expect(filters.find(filter => filter.key === 'documentType')).toBeTruthy()
     expect(filters.some(filter => filter.key === 'jobNo' || filter.key === 'status')).toBe(false)
+    // The global list shows every charge: linked charges and standalone charges
+    // are the same backend table, so nothing is filtered out client-side.
+    const workspace = readFileSync(resolve(__dirname, '../app/components/freight/WorkspaceView.vue'), 'utf8')
+    expect(workspace).not.toMatch(/jobCharges[\s\S]{0,120}filter\(row\s*=>\s*!String\(row\.jobNo/)
   })
 })

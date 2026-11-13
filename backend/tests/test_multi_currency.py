@@ -451,3 +451,366 @@ async def test_an_invoice_generated_from_a_charge_keeps_the_currency_and_takes_i
     assert source.status_code == 200, source.text
     assert source.json()["data"]["currency"] == "KHR"
     assert source.json()["data"]["total"] == pytest.approx(100)
+
+# --- Multi-currency settlements -------------------------------------------------
+
+
+async def _service_order(client, headers, currency: str = "KHR") -> str:
+    quotation = await client.post(
+        "/api/v1/quotations",
+        headers=headers,
+        json={
+            "date": date.today().isoformat(),
+            "customer": "Multi Currency Settlement",
+            "direction": "Import",
+            "currency": currency,
+            "amount": 100,
+            "pricingLines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert quotation.status_code == 201, quotation.text
+    revision_id = quotation.json()["data"]["revisionId"]
+    assert (await client.post(f"/api/v1/quotation-revisions/{revision_id}/send", headers=headers, json={})).status_code == 200
+    assert (await client.post(f"/api/v1/quotation-revisions/{revision_id}/accept", headers=headers, json={})).status_code == 200
+    converted = await client.post(f"/api/v1/quotation-revisions/{revision_id}/convert", headers=headers, json={})
+    assert converted.status_code == 201, converted.text
+    return converted.json()["data"]["serviceOrderId"]
+
+
+async def _receipt(client, headers, party_id: int, amount: float, currency: str, rate: float) -> dict:
+    return await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": currency,
+        "exchangeRate": rate,
+        "lines": [{"description": "Received", "quantity": 1, "unitPrice": amount}],
+    })
+
+
+async def _allocate(client, headers, payment_id, target_id, amount: float):
+    return await client.post(
+        f"/api/v1/financial-documents/{payment_id}/allocate",
+        headers=headers,
+        json={"target_document_id": int(target_id), "amount": amount},
+    )
+
+
+async def test_one_invoice_is_settled_by_payments_in_several_currencies(client, session_factory, seeded):
+    """Requirement 6: 4,000,000 KHR invoiced, settled by USD and KHR receipts."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id,
+        currency="KHR",
+        exchangeRate=0.00025,
+        lines=[{"description": "Freight", "quantity": 1, "unitPrice": 4_000_000}],
+    ))
+    await _post(client, headers, invoice["id"])
+
+    # 1 USD = 4,000 KHR, so 500 USD applies 2,000,000 KHR.
+    steps = [
+        (500, "USD", 1, 2_000_000),
+        (1_000_000, "KHR", 0.00025, 1_000_000),
+        (250, "USD", 1, 1_000_000),
+    ]
+    for amount, currency, rate, applied in steps:
+        receipt = await _receipt(client, headers, party_id, amount, currency, rate)
+        await _post(client, headers, receipt["id"])
+        response = await _allocate(client, headers, receipt["id"], invoice["id"], amount)
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["appliedAmount"] == pytest.approx(applied)
+        assert data["appliedCurrency"] == "KHR"
+        # The two sides are worth the same base amount when the rates agree.
+        assert data["exchangeDifference"] == pytest.approx(0.0, abs=0.01)
+
+    detail = await _detail(client, headers, invoice["id"])
+    assert detail["currency"] == "KHR", "the invoice keeps its document currency"
+    assert detail["paidAmount"] == pytest.approx(4_000_000)
+    assert detail["outstanding"] == pytest.approx(0)
+
+    receipt_detail = await _detail(client, headers, receipt["id"])
+    assert receipt_detail["currency"] == "USD", "the payment keeps its own currency"
+    assert receipt_detail["allocations"][0]["appliedCurrency"] == "KHR"
+
+
+async def test_a_cross_currency_allocation_cannot_exceed_the_invoice_outstanding(client, session_factory, seeded):
+    """Requirement 11: the converted amount, not the payment amount, is bounded."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id, currency="KHR", exchangeRate=0.00025,
+        lines=[{"description": "Freight", "quantity": 1, "unitPrice": 1_000}],
+    ))
+    await _post(client, headers, invoice["id"])
+
+    receipt = await _receipt(client, headers, party_id, 1, "USD", 1)
+    await _post(client, headers, receipt["id"])
+
+    # 1 USD is 4,000 KHR, which is more than the 1,000 KHR outstanding.
+    refused = await _allocate(client, headers, receipt["id"], invoice["id"], 1)
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "ALLOCATION_EXCEEDS_BALANCE"
+
+    accepted = await _allocate(client, headers, receipt["id"], invoice["id"], 0.25)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["data"]["appliedAmount"] == pytest.approx(1_000)
+    assert (await _detail(client, headers, invoice["id"]))["outstanding"] == pytest.approx(0)
+
+
+async def test_a_cross_currency_settlement_uses_the_stored_rates(client, session_factory, seeded):
+    """Requirement 7: the rate store may move; a posted pair keeps its snapshot."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id, currency="KHR", exchangeRate=0.00025,
+        lines=[{"description": "Freight", "quantity": 1, "unitPrice": 1_000}],
+    ))
+    receipt = await _receipt(client, headers, party_id, 1, "USD", 1)
+    await _post(client, headers, invoice["id"])
+    await _post(client, headers, receipt["id"])
+
+    # A later approved rate must not change what these documents already say.
+    await _rate(client, headers, "USD", "KHR", 5000)
+    response = await _allocate(client, headers, receipt["id"], invoice["id"], 0.25)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["appliedAmount"] == pytest.approx(1_000)
+    assert (await _detail(client, headers, invoice["id"]))["exchangeRate"] == pytest.approx(0.00025)
+
+
+async def test_a_service_order_currency_cannot_change_once_it_is_priced(client, session_factory, seeded):
+    """Requirement 4: the inherited document currency is not an editable field."""
+    headers = await login(client)
+    order_id = await _service_order(client, headers, "KHR")
+
+    charge = await client.post(
+        f"/api/v1/service-orders/{order_id}/charges",
+        headers=headers,
+        json={
+            "documentDate": date.today().isoformat(),
+            "lines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert charge.status_code == 201, charge.text
+    assert charge.json()["data"]["currency"] == "KHR"
+
+    blocked = await client.put(
+        f"/api/v1/service-orders/{order_id}", headers=headers, json={"currency": "USD"}
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["code"] == "DOCUMENT_CURRENCY_LOCKED"
+
+    detail = await client.get(f"/api/v1/service-orders/{order_id}", headers=headers)
+    assert detail.json()["data"]["currency"] == "KHR"
+
+
+async def test_a_linked_charge_inherits_the_order_currency(client, session_factory, seeded):
+    """Requirement 5: the order's currency is the default, not a free-text field."""
+    headers = await login(client)
+    order_id = await _service_order(client, headers, "KHR")
+
+    inherited = await client.post(
+        f"/api/v1/service-orders/{order_id}/charges",
+        headers=headers,
+        json={
+            "documentDate": date.today().isoformat(),
+            "lines": [{"description": "Freight", "quantity": 1, "unitPrice": 100}],
+        },
+    )
+    assert inherited.status_code == 201, inherited.text
+    assert inherited.json()["data"]["currency"] == "KHR"
+
+    # An explicit other currency stays possible for a supplier cost booked in
+    # its own currency; reports group by currency and never sum across them.
+    explicit = await client.post(
+        f"/api/v1/service-orders/{order_id}/charges",
+        headers=headers,
+        json={
+            "documentDate": date.today().isoformat(),
+            "currency": "USD",
+            "lines": [{"description": "Supplier cost", "quantity": 1, "unitPrice": 10}],
+        },
+    )
+    assert explicit.status_code == 201, explicit.text
+    assert explicit.json()["data"]["currency"] == "USD"
+
+
+async def test_the_base_currency_cannot_change_after_a_posting(client, session_factory, seeded):
+    """Requirement 2: the accounting base is fixed once the ledger has entries."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    config_url = "/api/v1/settings/app-config"
+    allowed = await client.patch(config_url, headers=headers, json={"localization": {"currency": "KHR"}})
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["data"]["localization"]["currency"] == "KHR"
+
+    invoice = await _create(client, headers, _invoice(party_id))
+    await _post(client, headers, invoice["id"])
+
+    blocked = await client.patch(config_url, headers=headers, json={"localization": {"currency": "USD"}})
+    assert blocked.status_code == 422, blocked.text
+    assert "localization.currency" in blocked.json()["field_errors"]
+
+async def test_one_receipt_settles_several_invoices(client, session_factory, seeded):
+    """Requirement: one payment may be allocated across more than one invoice."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    first = await _create(client, headers, _invoice(
+        party_id, lines=[{"description": "Freight", "quantity": 1, "unitPrice": 600}],
+    ))
+    second = await _create(client, headers, _invoice(
+        party_id, lines=[{"description": "Handling", "quantity": 1, "unitPrice": 400}],
+    ))
+    receipt = await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": "USD",
+        "exchangeRate": 1,
+        "lines": [{"description": "Received", "quantity": 1, "unitPrice": 1000}],
+    })
+    for document in (first, second, receipt):
+        await _post(client, headers, document["id"])
+
+    for target, amount in ((first, 600), (second, 400)):
+        allocated = await _allocate(client, headers, receipt["id"], target["id"], amount)
+        assert allocated.status_code == 200, allocated.text
+        assert allocated.json()["data"]["appliedAmount"] == pytest.approx(amount)
+
+    assert (await _detail(client, headers, first["id"]))["outstanding"] == pytest.approx(0)
+    assert (await _detail(client, headers, second["id"]))["outstanding"] == pytest.approx(0)
+    payment = await _detail(client, headers, receipt["id"])
+    assert payment["outstanding"] == pytest.approx(0), "the receipt is fully allocated"
+
+    over = await _allocate(client, headers, receipt["id"], first["id"], 1)
+    assert over.status_code == 409, over.text
+
+
+async def test_a_partial_receipt_leaves_the_invoice_outstanding(client, session_factory, seeded):
+    """Requirement: partial payments reduce, never clear, the outstanding amount."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id, lines=[{"description": "Freight", "quantity": 1, "unitPrice": 500}],
+    ))
+    receipt = await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": "USD",
+        "exchangeRate": 1,
+        "lines": [{"description": "Part payment", "quantity": 1, "unitPrice": 200}],
+    })
+    await _post(client, headers, invoice["id"])
+    await _post(client, headers, receipt["id"])
+
+    allocated = await _allocate(client, headers, receipt["id"], invoice["id"], 200)
+    assert allocated.status_code == 200, allocated.text
+
+    detail = await _detail(client, headers, invoice["id"])
+    assert detail["paidAmount"] == pytest.approx(200)
+    assert detail["outstanding"] == pytest.approx(300)
+
+
+async def test_allocating_requires_posted_documents(client, session_factory, seeded):
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(party_id))
+    await _post(client, headers, invoice["id"])
+    draft_receipt = await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": "USD",
+        "exchangeRate": 1,
+        "lines": [{"description": "Draft", "quantity": 1, "unitPrice": 100}],
+    })
+
+    refused = await _allocate(client, headers, draft_receipt["id"], invoice["id"], 100)
+    assert refused.status_code in (409, 422), refused.text
+
+
+async def test_reversing_a_receipt_frees_the_invoice(client, session_factory, seeded):
+    """Reversal removes the allocation and restores both subledgers."""
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id, lines=[{"description": "Freight", "quantity": 1, "unitPrice": 300}],
+    ))
+    receipt = await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": "USD",
+        "exchangeRate": 1,
+        "lines": [{"description": "Received", "quantity": 1, "unitPrice": 300}],
+    })
+    await _post(client, headers, invoice["id"])
+    await _post(client, headers, receipt["id"])
+    assert (await _allocate(client, headers, receipt["id"], invoice["id"], 300)).status_code == 200
+
+    reversed_receipt = await client.post(
+        f"/api/v1/financial-documents/{receipt['id']}/reverse",
+        headers=headers,
+        json={"reason": "Payment bounced"},
+    )
+    assert reversed_receipt.status_code in (200, 201), reversed_receipt.text
+    assert reversed_receipt.json()["data"]["status"] == "Reversed"
+
+    restored = await _detail(client, headers, invoice["id"])
+    assert restored["paidAmount"] == pytest.approx(0)
+    assert restored["outstanding"] == pytest.approx(300)
+    assert restored["allocations"] == []
+
+
+async def test_reversing_a_cross_currency_receipt_restores_the_invoice_currency_amount(
+    client, session_factory, seeded
+):
+    headers = await login(client)
+    async with session_factory() as session:
+        party_id = await _party(session)
+
+    invoice = await _create(client, headers, _invoice(
+        party_id, currency="KHR", exchangeRate=0.00025,
+        lines=[{"description": "Freight", "quantity": 1, "unitPrice": 4_000_000}],
+    ))
+    receipt = await _create(client, headers, {
+        "documentType": "CUSTOMER_RECEIPT",
+        "date": "2026-03-05",
+        "partyId": party_id,
+        "currency": "USD",
+        "exchangeRate": 1,
+        "lines": [{"description": "Received", "quantity": 1, "unitPrice": 500}],
+    })
+    await _post(client, headers, invoice["id"])
+    await _post(client, headers, receipt["id"])
+    allocated = await _allocate(client, headers, receipt["id"], invoice["id"], 500)
+    assert allocated.status_code == 200, allocated.text
+    assert (await _detail(client, headers, invoice["id"]))["outstanding"] == pytest.approx(2_000_000)
+
+    reversed_receipt = await client.post(
+        f"/api/v1/financial-documents/{receipt['id']}/reverse",
+        headers=headers,
+        json={"reason": "Cross-currency refund"},
+    )
+    assert reversed_receipt.status_code in (200, 201), reversed_receipt.text
+    restored = await _detail(client, headers, invoice["id"])
+    assert restored["paidAmount"] == pytest.approx(0)
+    assert restored["outstanding"] == pytest.approx(4_000_000)

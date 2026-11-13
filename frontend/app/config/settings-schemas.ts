@@ -96,6 +96,7 @@ export const appConfigTabs: DocumentTabSchema[] = [
           {
             key: 'localization.currency',
             labelKey: 'lcs.settings.currency',
+            helpKey: 'lcs.fieldHelp.baseCurrency',
             type: 'select',
             options: CURRENCY_OPTIONS,
           },

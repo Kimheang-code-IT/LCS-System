@@ -349,18 +349,42 @@ def validate_snapshot(snapshot: dict[str, Any]) -> dict[str, str]:
         errors.setdefault("changeNote", "Create at least one active tab before publishing.")
         return errors
 
+    seen_tab_codes: set[str] = set()
     for tab_index, tab in enumerate(tabs):
         prefix = f"tabs.{tab_index}"
-        if not str(tab.get("code") or "").strip():
+        code = str(tab.get("code") or "").strip()
+        if not code:
             errors[f"{prefix}.code"] = "Required"
+        elif code.lower() in seen_tab_codes:
+            errors[f"{prefix}.code"] = "Duplicate tab identifier."
+        else:
+            seen_tab_codes.add(code.lower())
         if not str(tab.get("name") or "").strip():
             errors[f"{prefix}.name"] = "Required"
-        for group_index, group in enumerate(tab.get("groups") or []):
+        try:
+            tab_order = int(tab.get("displayOrder") or 0)
+        except (TypeError, ValueError):
+            tab_order = -1
+        if tab_order < 0:
+            errors[f"{prefix}.displayOrder"] = "Must be zero or greater."
+        groups = tab.get("groups") or []
+        if not groups:
+            errors[f"{prefix}.groups"] = "Add at least one group to this tab."
+        seen_group_codes: set[str] = set()
+        for group_index, group in enumerate(groups):
             group_prefix = f"{prefix}.groups.{group_index}"
-            if not str(group.get("code") or "").strip():
+            group_code = str(group.get("code") or "").strip()
+            if not group_code:
                 errors[f"{group_prefix}.code"] = "Required"
+            elif group_code.lower() in seen_group_codes:
+                errors[f"{group_prefix}.code"] = "Duplicate group in this tab."
+            else:
+                seen_group_codes.add(group_code.lower())
             if not str(group.get("name") or "").strip():
                 errors[f"{group_prefix}.name"] = "Required"
+            attributes = group.get("attributes") or []
+            if not attributes:
+                errors[f"{group_prefix}.attributes"] = "Add at least one attribute to this group."
             display_mode = str(group.get("displayMode") or "").strip()
             cardinality = str(group.get("dataCardinality") or "").strip()
             if display_mode not in LAYOUT_DISPLAY_MODES:
@@ -377,7 +401,7 @@ def validate_snapshot(snapshot: dict[str, Any]) -> dict[str, str]:
                 errors[f"{group_prefix}.formColumns"] = "Must be 1, 2, 3 or 4."
 
             seen_codes: set[str] = set()
-            for attribute_index, attribute in enumerate(group.get("attributes") or []):
+            for attribute_index, attribute in enumerate(attributes):
                 attribute_prefix = f"{group_prefix}.attributes.{attribute_index}"
                 code = str(attribute.get("code") or "").strip()
                 if not code:
@@ -407,6 +431,18 @@ async def current_published_id(session: AsyncSession) -> int | None:
     """The live configuration version, or ``None`` when nothing is published."""
     version = await _published_version(session)
     return version.id if version is not None else None
+
+
+async def published_snapshot(session: AsyncSession) -> dict[str, Any] | None:
+    """The active published version (with its frozen snapshot), or ``None``.
+
+    Operational readers use this — never the live ``component_*`` tables — so an
+    administrator editing drafts cannot change what a Service Order renders.
+    """
+    version = await _published_version(session)
+    if version is None:
+        return None
+    return await _serialize_one(session, version, include_snapshot=True)
 
 
 async def _lock_publish(session: AsyncSession) -> None:

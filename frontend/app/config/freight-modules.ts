@@ -1666,7 +1666,7 @@ if (invoicesModule) freightModules.push({
     {
       key: 'allocations', title: 'Payment Allocations', titleKm: 'ការបែងចែកការទូទាត់', addLabel: 'Allocate document',
       columns: [
-        { key: 'targetDocumentNo', label: 'Document', labelKm: 'ឯកសារ', required: true }, { key: 'party', label: 'Party', labelKm: 'ដៃគូ' }, { key: 'originalAmount', label: 'Original Amount', labelKm: 'ចំនួនដើម', type: 'number' }, { key: 'amount', label: 'Allocated', labelKm: 'បានបែងចែក', type: 'number', required: true }, { key: 'targetOutstanding', label: 'Outstanding', labelKm: 'នៅសល់', type: 'number' }, { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ' }, { key: 'allocatedAt', label: 'Date', labelKm: 'កាលបរិច្ឆេទ', type: 'date' },
+        { key: 'targetDocumentNo', label: 'Document', labelKm: 'ឯកសារ', required: true }, { key: 'originalAmount', label: 'Original Amount', labelKm: 'ចំនួនដើម', type: 'number' }, { key: 'amount', label: 'Amount', labelKm: 'ចំនួន', type: 'number', required: true }, { key: 'targetOutstanding', label: 'Outstanding', labelKm: 'នៅសល់', type: 'number' }, { key: 'currency', label: 'Currency', labelKm: 'រូបិយប័ណ្ណ' },
       ],
     },
     { key: 'sourceRelationships', title: 'Source Relationships', titleKm: 'ទំនាក់ទំនងប្រភព', columns: SOURCE_RELATIONSHIP_COLUMNS },

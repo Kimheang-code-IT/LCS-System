@@ -31,6 +31,12 @@ shared `storageState` breaks after the first test rotates it.
 | `access-control.spec.ts` | viewer account: no create control, create-form deep link and admin pages redirected |
 | `print-reports.spec.ts` | quotation print/PDF view, trial balance debit = credit |
 | `reports.spec.ts` | every finance/operations report renders with no server error |
+| `component-tabs.spec.ts` | Service Order dynamic tabs come only from the published configuration (draft invisible, publish, draft edit, v2, failed publish, refresh, saved values) |
+| `payment-allocation.spec.ts` | allocate a posted receipt from the payment document's Allocation tab: partial cross-currency preview, full settlement, reversed payment offers no action |
+
+`component-tabs.spec.ts` is stateful (`describe.serial`): it publishes configuration
+versions, so run it against an isolated database. Test 1 (nothing published) only
+runs on a database that has no active version yet; it skips on re-runs.
 
 ## Artifacts
 

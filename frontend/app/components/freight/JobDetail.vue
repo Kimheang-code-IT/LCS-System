@@ -12,7 +12,6 @@ import { useRequotation } from '~/composables/freight/useRequotation'
 import {
   emptyFreightRecord,
   groupedFields,
-  statusColor,
   useFreightLabel,
   useFreightRouteModule,
 } from '~/composables/freight/useFreight'
@@ -31,7 +30,7 @@ import { validateDocumentFields } from '~/utils/validation/record-validation'
 import { validateComponentRows } from '~/utils/validation/component-rules'
 import { normalizeApiError } from '~/utils/validation/api-error'
 import { issueFromBackendMessage } from '~/utils/validation/field-rules'
-import { jobDomainStatus, serviceOrderStatusLabel } from '~/utils/freight/states'
+import { jobDomainStatus } from '~/utils/freight/states'
 import { sanitizeDraftModel } from '~/composables/common/useRecordDraft'
 import { useRecordFormDraft } from '~/composables/common/useRecordFormDraft'
 import { serviceOrderBreadcrumbs } from '~/utils/freight/job-workspace'
@@ -45,7 +44,7 @@ const { t, te } = useI18n()
 const { moduleTitle, fieldLabel } = useFreightLabel()
 /** Linked charges with the Service Charge tab's unsaved totals (when visited). */
 const chargeSummaryRows = ref<FreightRecord[]>([])
-const { setBreadcrumbs, setBadges, clear } = useAppHeader()
+const { setBreadcrumbs, clear } = useAppHeader()
 const { confirm, setLoading: setConfirmLoading, dismiss: dismissConfirm } = useConfirm()
 const lcs = useLcs()
 
@@ -448,11 +447,6 @@ watch([() => module.value?.path, jobNo, () => model.value.serviceOrderNo, () => 
     model.value as Record<string, unknown>,
     { loading: !notFound.value && !isCreate.value, notFound: notFound.value },
   ))
-  const statusLabel = serviceOrderStatusLabel(model.value.status)
-  setBadges([
-    ...(model.value.direction ? [{ label: String(model.value.direction), color: 'info' as const }] : []),
-    ...(statusLabel ? [{ label: statusLabel, color: statusColor(statusLabel) }] : []),
-  ])
 }, { immediate: true })
 
 onBeforeUnmount(clear)

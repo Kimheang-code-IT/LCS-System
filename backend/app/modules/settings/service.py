@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import cache
@@ -662,6 +662,31 @@ async def update_app_config(session: AsyncSession, context: RequestContext | Non
             validate_localization_patch(localization_patch)
         current_localization = normalize_localization(current.get("localization"))
         patch["localization"] = validate_localization_patch(deep_merge(current_localization, localization_patch))
+        requested_currency = str((patch["localization"] or {}).get("currency") or "").strip().upper()
+        current_currency = str(current_localization.get("currency") or "").strip().upper()
+        if requested_currency and current_currency and requested_currency != current_currency:
+            # The localization currency is the accounting base currency: every
+            # posted document stores the base it was booked against, so changing
+            # it mid-ledger would split the books. Require a controlled transition.
+            from app.modules.finance.models import FinancialDocument, JournalEntry
+
+            posted_documents = await session.scalar(
+                select(func.count()).select_from(FinancialDocument).where(
+                    FinancialDocument.status.in_(("POSTED", "REVERSED"))
+                )
+            )
+            posted_journals = await session.scalar(
+                select(func.count()).select_from(JournalEntry).where(JournalEntry.status == "POSTED")
+            )
+            if int(posted_documents or 0) or int(posted_journals or 0):
+                raise ValidationFailed(
+                    "The base currency cannot be changed after financial documents have been posted.",
+                    {
+                        "localization.currency": (
+                            "Close the ledger and migrate the balances before changing the base currency."
+                        ),
+                    },
+                )
     cleaned = _without_blank_secrets(patch)
     if "telegram" in patch:
         from app.modules.telegram.service import prepare_patch

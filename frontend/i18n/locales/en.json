@@ -1613,7 +1613,9 @@
       "chargeNotIssued": "Only an issued charge can be invoiced. Issue this charge first.",
       "chargesInMultipleInvoices": "These charges belong to different invoices. Print each one from its row menu.",
       "mixedTaxRates": "Mixed",
-      "serviceOrderNeedsQuotation": "Service Orders must be created from a Quotation. Please select a quotation and use Convert to Service Order."
+      "serviceOrderNeedsQuotation": "Service Orders must be created from a Quotation. Please select a quotation and use Convert to Service Order.",
+      "appliedToInvoice": "Applied to invoice",
+      "exchangeDifference": "Exchange difference"
     },
     "jobSections": {
       "overview": "Overview",
@@ -2460,7 +2462,8 @@
       "sessionTimeoutMinutes": "Minutes of inactivity before the session expires.",
       "backgroundJobStatus": "Background job worker status.",
       "assignAttribute": "Choose an attribute from the catalog to add to this record type.",
-      "assignedStage": "Limit this attribute to a workflow stage, or show it on all stages."
+      "assignedStage": "Limit this attribute to a workflow stage, or show it on all stages.",
+      "baseCurrency": "Accounting base currency. Every posted document stores the base it was booked against, so this cannot change once financial documents exist."
     },
     "actions": {
       "addItem": "Add Item",

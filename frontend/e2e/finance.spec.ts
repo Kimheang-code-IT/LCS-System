@@ -31,14 +31,16 @@ test('financial document: create, post and reverse', async ({ page }) => {
   expect(documentNo).toMatch(/^INV\d{4}-\d{6}$/)
 
   await page.goto(href!)
-  await expect(page.getByText('Draft').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toBeVisible()
   await page.getByRole('button', { name: 'Post' }).click()
-  await expect(page.getByText('Posted').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Post' })).toHaveCount(0)
 
   // Reverse with a reason; the reversal journal is created server-side.
   await page.getByRole('button', { name: 'More actions' }).click()
   await page.getByRole('menuitem', { name: 'Reverse' }).click()
   await page.getByRole('textbox', { name: 'Reason*' }).fill('E2E reversal test')
   await page.getByRole('dialog').getByRole('button').last().click()
-  await expect(page.getByText('Reversed').first()).toBeVisible()
+  const documentId = href!.split('/').pop()!
+  const reversed = await (await page.context().request.get(`/api/v1/financial-documents/${documentId}`)).json()
+  expect(reversed.data.status).toBe('Reversed')
 })

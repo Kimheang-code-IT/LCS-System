@@ -69,6 +69,12 @@ export function useComponentTabs(
 
   watch(cacheKey, () => { void load() }, { immediate: true })
 
+  // Publishing (or activating/rolling back) a configuration version bumps this
+  // shared counter, so an already-open form reloads the newly published layout
+  // instead of keeping the pre-publish tabs it loaded earlier.
+  const publishedRevision = useState('component-config-published-revision', () => 0)
+  watch(publishedRevision, () => { void load(true) })
+
   /**
    * Reloading (for example after the Trade Direction changes) must never wipe
    * values the user already typed in a tab that exists in both configurations.

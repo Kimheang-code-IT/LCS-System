@@ -214,9 +214,21 @@ class FinancialDocumentAllocation(PKMixin, Base):
 
     payment_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("financial_documents.id"), nullable=False, index=True)
     target_document_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("financial_documents.id"), nullable=False, index=True)
+    #: Amount applied in the payment document's currency.
     allocated_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
     allocated_currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default=DEFAULT_CURRENCY)
+    #: The payment's rate at allocation time (the rate the receipt was posted at).
     exchange_rate: Mapped[Decimal] = mapped_column(Numeric(19, 8), nullable=False, default=1)
+    #: The same settlement expressed in the target document's currency. Equal to
+    #: ``allocated_amount`` when both documents share a currency; otherwise the
+    #: payment amount converted at the two stored rates. The target's
+    #: ``paid_amount`` is incremented by this value, so an invoice in KHR can be
+    #: settled by a receipt in USD without re-stating either document.
+    target_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
+    #: Realised exchange gain/loss in the accounting base currency
+    #: (payment base value minus target base value). Reported on the allocation;
+    #: never re-values a posted document.
+    exchange_difference: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False, default=0)
     allocated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, server_default=func.now())
     created_by_user_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("users.id"))
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)

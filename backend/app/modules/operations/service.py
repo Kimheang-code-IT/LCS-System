@@ -450,7 +450,12 @@ async def save_service_order(
         if "direction" in data:
             order.trade_direction_id = (await resolve_direction(session, data.get("direction"))).id
         order.status = normalize_order_status(data.get("status"), order.status)
-        order.currency_code = data.get("currency") or order.currency_code
+        requested_currency = str(data.get("currency") or "").strip().upper()
+        if requested_currency and requested_currency != str(order.currency_code or "").upper():
+            await _assert_order_currency_changeable(session, order, requested_currency)
+            from app.modules.master_data.currency_rates import assert_currency_code
+
+            order.currency_code = await assert_currency_code(session, requested_currency, "currency")
 
     # A brand-new quotation-based order arrives with the UI's empty route
     # collections; the server-side copy is authoritative, so a blank list must
@@ -727,6 +732,39 @@ async def create_service_order_from_quotation(
     await session.flush()
     await _attach_quotation_copy(session, order, quotation, revision)
     return order
+
+
+async def _assert_order_currency_changeable(
+    session: AsyncSession, order: ServiceOrder, requested_currency: str
+) -> None:
+    """Document currency may only change before anything is priced against it.
+
+    A Service Order inherits its quotation's currency. Once charges or financial
+    documents exist they carry their own currency snapshot, so re-denominating
+    the order would silently mix currencies in one settlement chain. A correction
+    before that point stays allowed and is audited by the normal order update.
+    """
+    from app.modules.finance.models import FinancialDocument
+
+    charge_count = await session.scalar(
+        select(func.count()).select_from(ServiceOrderCharge).where(
+            ServiceOrderCharge.service_order_id == order.id
+        )
+    )
+    document_count = await session.scalar(
+        select(func.count()).select_from(FinancialDocument).where(
+            FinancialDocument.service_order_id == order.id
+        )
+    )
+    if int(charge_count or 0) or int(document_count or 0):
+        raise Conflict(
+            "DOCUMENT_CURRENCY_LOCKED",
+            (
+                f"This service order is already priced in {order.currency_code}. "
+                f"Remove its charges and financial documents before changing the currency to "
+                f"{requested_currency}."
+            ),
+        )
 
 
 async def _attach_quotation_copy(
@@ -1443,6 +1481,10 @@ async def save_charge(session: AsyncSession, context: RequestContext, data: dict
         effective_party_id = (await resolve_party_by_id(session, supplied_party)).id \
             if supplied_party not in (None, "") \
             else (await resolve_party_by_name(session, customer_name, context)).id
+
+    # A linked charge inherits the order's currency unless the operator names
+    # another one explicitly (a supplier cost may be booked in its own currency;
+    # reporting groups by currency and never sums across them).
     # Idempotent create: a retry after a lost response carries the same stable
     # client marker. Adopt the row it already created instead of inserting a
     # second charge (two genuinely different rows have different markers).

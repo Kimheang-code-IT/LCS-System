@@ -93,6 +93,14 @@ async def _service_order(client, headers) -> str:
     return converted.json()["data"]["serviceOrderId"]
 
 
+async def _publish(client, headers, note: str = "layout publish") -> dict:
+    response = await client.post(
+        "/api/v1/configuration-versions", headers=headers, json={"changeNote": note}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]
+
+
 async def _bootstrap(client, headers, order_id: str) -> dict:
     response = await client.get(f"/api/v1/service-orders/{order_id}/component-tabs", headers=headers)
     assert response.status_code == 200, response.text
@@ -141,6 +149,7 @@ async def _shipment_tab(client, headers) -> tuple[dict, list[dict]]:
 async def test_one_tab_renders_independent_layouts_in_configured_order(client):
     headers = await login(client)
     tab, links = await _shipment_tab(client, headers)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
 
     payload = await _bootstrap(client, headers, order_id)
@@ -167,6 +176,7 @@ async def test_one_tab_renders_independent_layouts_in_configured_order(client):
 
 async def test_legacy_assignment_without_layout_keeps_its_render_mode(client):
     headers = await login(client)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
     payload = await _bootstrap(client, headers, order_id)
     customs = next(tab for tab in payload["tabs"] if tab["code"] == "CUSTOMS")
@@ -215,6 +225,7 @@ async def test_form_only_cannot_keep_multiple_records(client):
 async def test_changing_to_single_record_is_refused_when_rows_would_be_hidden(client):
     headers = await login(client)
     _, links = await _shipment_tab(client, headers)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
     table_group = links[1]
     assert table_group["displayMode"] == "table_only"
@@ -239,6 +250,7 @@ async def test_changing_to_single_record_is_refused_when_rows_would_be_hidden(cl
 async def test_save_enforces_the_assignment_cardinality(client):
     headers = await login(client)
     _, links = await _shipment_tab(client, headers)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
     general = links[0]
 
@@ -261,6 +273,7 @@ async def test_save_enforces_the_assignment_cardinality(client):
 async def test_form_and_table_rows_save_and_reload(client):
     headers = await login(client)
     _, links = await _shipment_tab(client, headers)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
     cargo = links[2]
 
@@ -284,7 +297,6 @@ async def test_form_and_table_rows_save_and_reload(client):
 async def test_read_only_layout_refuses_writes_and_requires_configuration_permission(client):
     headers = await login(client)
     _, links = await _shipment_tab(client, headers)
-    order_id = await _service_order(client, headers)
     cargo = links[2]
 
     read_only = await client.patch(
@@ -294,6 +306,8 @@ async def test_read_only_layout_refuses_writes_and_requires_configuration_permis
     )
     assert read_only.status_code == 200, read_only.text
     assert read_only.json()["data"]["editable"] is False
+    await _publish(client, headers, "read-only layout")
+    order_id = await _service_order(client, headers)
 
     refused = await _save(
         client, headers, order_id, cargo["id"],
@@ -388,6 +402,7 @@ async def test_column_order_and_visibility_come_from_the_group_membership(client
     )
     assert reordered.status_code == 200, reordered.text
 
+    await _publish(client, headers, "ordered columns")
     order_id = await _service_order(client, headers)
     payload = await _bootstrap(client, headers, order_id)
     runtime = next(
@@ -402,6 +417,7 @@ async def test_column_order_and_visibility_come_from_the_group_membership(client
 async def test_duplicate_row_ids_are_refused(client):
     headers = await login(client)
     _, links = await _shipment_tab(client, headers)
+    await _publish(client, headers)
     order_id = await _service_order(client, headers)
     cargo = links[2]
 
