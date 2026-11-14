@@ -114,6 +114,44 @@ Explicitly requested future package planning does not authorize feature implemen
 
 ## History
 
+### Finance audit follow-up — 2026-11-14
+
+Resumed against committed audit work and fixed the remaining demonstrated gaps:
+- AR/AP reconcile configured control accounts even with manual opening journals and no
+  source invoices; missing mappings report reconciliation as unavailable. Legacy array
+  APIs now include signed credits/unapplied payments while retaining date aliases,
+  numeric party IDs and partial-payment status.
+- Allocation/reversal locks acquire documents in ID order and refresh settlement history
+  after locking. Cutoff reports apply allocations only after both documents' posting dates;
+  reversal cannot precede the original posting date. Period-close AR/AP summaries use the
+  selected end date and base amounts.
+- Document conversion uses base-currency precision. Journal lines use cumulative rounding
+  per debit/credit side, retain source amounts/rates, and record precision and line rounding
+  in posting metadata. Posted document precision is retained for subledger valuation.
+- Targeted finance invalidation refreshes generated reports and active job finance data;
+  unrelated reference reloads do not advance the finance revision.
+
+Verification from owning directories:
+- Backend `uv run --no-sync pytest -q tests/test_financial_report_cutoffs.py
+  tests/test_finance_audit_controls.py tests/test_period_closing.py
+  tests/test_job_finance_entries.py tests/test_multi_currency.py tests/test_report_accounting.py
+  tests/test_reporting_values.py tests/test_reports_dashboard.py`: 79 passed, 2 failed.
+  Failures were an obsolete zero-AR expectation (unapplied receipt must equal ledger credit)
+  and a new test reading `journalId` from the post response instead of detail; both corrected.
+- Final `uv run --no-sync pytest -q --tb=short tests/test_financial_report_cutoffs.py
+  tests/test_multi_currency.py::test_currency_precision_rounds_the_converted_amount
+  tests/test_job_finance_entries.py::test_reversing_an_allocated_invoice_unsettles_and_money_stays_received`:
+  **13 passed**, including AR/AP future-date cases, legacy compatibility and split-line rounding.
+- `uv run --no-sync ruff check` on the four changed backend modules and three affected test
+  files passed. Frontend `pnpm exec vitest run tests/finance-cache-refresh.spec.ts`: 2 passed;
+  `pnpm typecheck` and scoped ESLint on the changed store, two components, repository contract
+  and cache test passed. Independent read-only DEEP review confirmed the cutoff corrections.
+- Limits: no PostgreSQL race/rollback or browser acceptance executed during this follow-up;
+  local Docker was unavailable. The earlier isolated migration upgrade passed, but does not
+  prove race or rollback behavior. Graphify query/update remains blocked by the tool allowlist.
+  Existing SQLAlchemy fixture-cycle and Starlette deprecation warnings remain. No production
+  data, deployment, mobile changes or Git commit performed; other sessions' changes preserved.
+
 ### Finance and financial-report audit close-out — 2026-11-14
 
 Verified and corrected the Finance/Financial Reports slice already in the working tree.

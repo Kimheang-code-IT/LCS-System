@@ -273,6 +273,9 @@ async function refreshReport() {
   if (!useBackend.value) store.reload()
   await generateReport()
 }
+watch(() => store.financialRevision, () => {
+  if (useBackend.value && generated.value) void generateReport()
+})
 
 const rows = computed<FreightRecord[]>(() => {
   if (!generated.value) return []

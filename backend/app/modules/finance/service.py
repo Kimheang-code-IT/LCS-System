@@ -995,7 +995,7 @@ async def _document_detail_extras(session: AsyncSession, document: FinancialDocu
     # Allocations may cross currencies, so each side is valued from its own
     # stored amount and rate: the payment side in the payment's currency, the
     # invoice side in the target document's currency.
-    allocation_precision = await currency_precision(session, document.currency_code)
+    allocation_precision = await currency_precision(session, document.base_currency_code)
     rows: list[dict[str, Any]] = []
     for allocation in allocations:
         counterpart_id = (
@@ -1170,7 +1170,7 @@ async def _document_currency_inputs(
     """
     currency = await assert_currency_code(session, document_currency)
     base = await assert_currency_code(session, base_currency, field="baseCurrency")
-    precision = await currency_precision(session, currency)
+    precision = await currency_precision(session, base)
     if fx.same_currency(currency, base):
         return currency, Decimal("1"), base, precision
     rate = data.get("exchangeRate")
@@ -1452,7 +1452,7 @@ async def save_document(
             "Enter a positive entry amount.",
             {"lines.0.unitPrice": "Amount must be greater than zero."},
         )
-    # The converted amounts, rounded with the currency's own precision. Deriving
+    # The converted amounts, rounded with the base currency's precision. Deriving
     # them here (and again at posting) is what keeps the document, the journal it
     # writes and the printed invoice showing the same base-currency figures.
     document.base_currency_code = base_currency
@@ -1651,13 +1651,24 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     # The stored converted amounts must agree with the journal this posting writes.
     # `save_document` already derives them from the same rate; recomputing here
     # also repairs a document written before these columns existed.
-    precision = await currency_precision(session, document.currency_code)
     document.base_currency_code = document.base_currency_code or await get_default_currency(session)
+    precision = await currency_precision(session, document.base_currency_code)
     document.base_subtotal_amount = fx.convert_to_base(document.subtotal_amount or Decimal("0"), exchange_rate, precision)
     document.base_discount_amount = fx.convert_to_base(document.discount_amount or Decimal("0"), exchange_rate, precision)
     document.base_tax_amount = fx.convert_to_base(document.tax_amount or Decimal("0"), exchange_rate, precision)
     document.base_total_amount = fx.convert_to_base(document.total_amount or Decimal("0"), exchange_rate, precision)
+    # Cumulative rounding distributes each side's minor-unit remainder without
+    # changing source amounts or introducing an unbalanced rounding journal.
+    source_totals = {True: Decimal("0"), False: Decimal("0")}
+    base_totals = {True: Decimal("0"), False: Decimal("0")}
+    rounding = []
     for line_no, draft_line in enumerate(draft.lines, start=1):
+        side = draft_line.debit
+        source_totals[side] += draft_line.amount
+        converted = fx.convert_to_base(source_totals[side], exchange_rate, precision)
+        base_amount = converted - base_totals[side]
+        base_totals[side] = converted
+        rounding.append(str(base_amount - draft_line.amount * exchange_rate))
         session.add(
             JournalEntryLine(
                 journal_entry_id=entry.id,
@@ -1671,10 +1682,13 @@ async def post_document(session: AsyncSession, context: RequestContext, document
                 credit_amount=Decimal("0") if draft_line.debit else draft_line.amount,
                 currency_code=document.currency_code,
                 exchange_rate=exchange_rate,
-                base_debit_amount=draft_line.amount * exchange_rate if draft_line.debit else Decimal("0"),
-                base_credit_amount=Decimal("0") if draft_line.debit else draft_line.amount * exchange_rate,
+                base_debit_amount=base_amount if draft_line.debit else Decimal("0"),
+                base_credit_amount=Decimal("0") if draft_line.debit else base_amount,
             )
         )
+
+    entry.data = {**(entry.data or {}), "baseCurrencyPrecision": precision, "baseRoundingByLine": rounding}
+    document.data = {**(document.data or {}), "baseCurrencyPrecision": precision}
 
     # The lines must land while the header is still DRAFT. ``fn_guard_journal_line``
     # is an immediate trigger and rejects any line written to a POSTED entry, so
@@ -1685,6 +1699,8 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     # The draft is balanced by construction; re-checking here means a future
     # strategy cannot slip an unbalanced entry past the service boundary.
     draft.assert_balanced()
+    if base_totals[True] != base_totals[False]:
+        raise ValidationFailed("The journal must balance in the base currency.")
     entry.debit_total = draft.debit_total
     entry.credit_total = draft.credit_total
     entry.status = "POSTED"
@@ -1698,12 +1714,27 @@ async def post_document(session: AsyncSession, context: RequestContext, document
     return document_payload(document, document.data or {}, await _document_lines(session, document.id))
 
 
+async def _lock_financial_documents(session: AsyncSession, ids: set[int]) -> dict[int, FinancialDocument]:
+    rows = (await session.scalars(select(FinancialDocument).where(
+        FinancialDocument.id.in_(ids)
+    ).order_by(FinancialDocument.id).with_for_update().execution_options(populate_existing=True))).all()
+    return {row.id: row for row in rows}
+
+
 async def reverse_document(session: AsyncSession, context: RequestContext, document_id: int, reason: str) -> dict:
-    document = (
-        await session.execute(
-            select(FinancialDocument).where(FinancialDocument.id == document_id).with_for_update()
-        )
-    ).scalars().first()
+    allocation_query = select(FinancialDocumentAllocation).where(
+        FinancialDocumentAllocation.reversed_at.is_(None), or_(
+            FinancialDocumentAllocation.payment_document_id == document_id,
+            FinancialDocumentAllocation.target_document_id == document_id,
+        ),
+    )
+    links = (await session.scalars(allocation_query)).all()
+    ids = {document_id} | {value for link in links for value in (link.payment_document_id, link.target_document_id)}
+    locked_documents = await _lock_financial_documents(session, ids)
+    allocations = (await session.scalars(allocation_query.execution_options(populate_existing=True))).all()
+    if any(link.payment_document_id not in locked_documents or link.target_document_id not in locked_documents for link in allocations):
+        raise Conflict("SETTLEMENT_CHANGED", "A new allocation committed during reversal. Retry with the current settlement history.")
+    document = locked_documents.get(document_id)
     if document is None:
         raise NotFound("Financial document not found.")
     if document.status == "REVERSED":
@@ -1716,7 +1747,11 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
     if posting is None:
         raise NotFound("Original posting not found.")
     original_entry = await session.get(JournalEntry, posting.journal_entry_id)
+    if original_entry is None:
+        raise NotFound("Original journal entry not found.")
     posting_date = date.today()
+    if posting_date < original_entry.posting_date:
+        raise Conflict("REVERSAL_BEFORE_POSTING", "A reversal cannot precede the original posting date.")
     period = await resolve_period(session, posting_date)
     locked = (
         await session.execute(
@@ -1783,24 +1818,13 @@ async def reverse_document(session: AsyncSession, context: RequestContext, docum
     reversal.status = "POSTED"
     await session.flush()
     # Undo payment allocations so the subledger (paid_amount) matches the ledger.
-    allocations = (
-        await session.execute(
-            select(FinancialDocumentAllocation).where(
-                FinancialDocumentAllocation.reversed_at.is_(None),
-                or_(
-                    FinancialDocumentAllocation.payment_document_id == document.id,
-                    FinancialDocumentAllocation.target_document_id == document.id,
-                )
-            )
-        )
-    ).scalars().all()
     for allocation in allocations:
         other_id = (
             allocation.target_document_id
             if allocation.payment_document_id == document.id
             else allocation.payment_document_id
         )
-        other = await session.get(FinancialDocument, other_id)
+        other = locked_documents.get(other_id)
         if other is not None:
             # Each side is undone in its own currency: the payment by the amount
             # it paid, the invoice by the amount it received (which differs when
@@ -1888,7 +1912,7 @@ async def allocate_payment(
             payment_doc = await session.get(FinancialDocument, existing.payment_document_id)
             target_doc = await session.get(FinancialDocument, existing.target_document_id)
             replay_precision = await currency_precision(
-                session, existing.allocated_currency_code or (payment_doc.currency_code if payment_doc else None)
+                session, payment_doc.base_currency_code if payment_doc else None
             )
             replay_payment_base, replay_target_base, replay_difference = _allocation_fx(
                 existing.allocated_amount,
@@ -1910,9 +1934,10 @@ async def allocate_payment(
                 "targetOutstanding": float((target_doc.total_amount or Decimal("0")) - (target_doc.paid_amount or Decimal("0"))) if target_doc else 0.0,
                 "idempotentReplay": True,
             }
-    payment = (
-        await session.execute(select(FinancialDocument).where(FinancialDocument.id == payment_id).with_for_update())
-    ).scalars().first()
+    if target_id is None:
+        raise ValidationFailed("Target document is required.")
+    locked = await _lock_financial_documents(session, {payment_id, target_id})
+    payment = locked.get(payment_id)
     # A competing request may have committed while this one waited for the
     # payment lock. Replay before testing its now-reduced available balance.
     if idempotency_key and await session.scalar(select(FinancialDocumentAllocation.id).where(
@@ -1921,11 +1946,7 @@ async def allocate_payment(
         return await allocate_payment(session, context, payment_id, data, idempotency_key)
     if payment is None:
         raise NotFound("Payment document not found.")
-    if target_id is None:
-        raise ValidationFailed("Target document is required.")
-    target = (
-        await session.execute(select(FinancialDocument).where(FinancialDocument.id == target_id).with_for_update())
-    ).scalars().first()
+    target = locked.get(target_id)
     if target is None:
         raise NotFound("Target document not found.")
     if payment.document_type not in PAYMENT_TYPES:
@@ -1952,8 +1973,8 @@ async def allocate_payment(
 
     allocated_so_far = await session.scalar(
         select(func.coalesce(func.sum(FinancialDocumentAllocation.allocated_amount), 0)).where(
-            FinancialDocumentAllocation.payment_document_id == payment.id
-            , FinancialDocumentAllocation.reversed_at.is_(None)
+            FinancialDocumentAllocation.payment_document_id == payment.id,
+            FinancialDocumentAllocation.reversed_at.is_(None),
         )
     )
     available = (payment.total_amount or Decimal("0")) - Decimal(str(allocated_so_far or 0))
@@ -1964,7 +1985,7 @@ async def allocate_payment(
         raise Conflict("ALLOCATION_EXCEEDS_BALANCE", "Allocation exceeds the target outstanding balance.")
 
     # Both sides of the settlement, valued in the base currency.
-    allocation_precision = await currency_precision(session, payment.currency_code)
+    allocation_precision = await currency_precision(session, payment.base_currency_code)
     payment_base_amount, target_base_amount, exchange_difference = _allocation_fx(
         amount, payment.exchange_rate, target_amount, target.exchange_rate, allocation_precision
     )

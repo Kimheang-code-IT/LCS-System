@@ -10,8 +10,10 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import fx
 from app.core.exceptions import ValidationFailed
-from app.modules.finance.models import FinancialDocument, FinancialDocumentAllocation, JournalEntry
+from app.modules.finance.models import FinancialDocument, FinancialDocumentAllocation, JournalEntry, PostingRule
+from app.modules.master_data.currency_rates import currency_precision
 from app.modules.master_data.models import BusinessParty
 from app.modules.operations.models import ServiceOrder
 from app.modules.reports.repository import ReportRepository
@@ -168,7 +170,13 @@ async def _subledger(session, key, filters, ledger, result, cutoff):
         FinancialDocument.status.in_(["POSTED", "REVERSED"]),
         func.coalesce(FinancialDocument.posting_date, FinancialDocument.document_date) <= cutoff,
     )
+    eligible_documents = select(FinancialDocument.id).where(
+        FinancialDocument.status.in_(["POSTED", "REVERSED"]),
+        func.coalesce(FinancialDocument.posting_date, FinancialDocument.document_date) <= cutoff,
+    )
     allocations = (await session.scalars(select(FinancialDocumentAllocation).where(
+        FinancialDocumentAllocation.payment_document_id.in_(eligible_documents),
+        FinancialDocumentAllocation.target_document_id.in_(eligible_documents),
         func.date(FinancialDocumentAllocation.allocated_at) <= cutoff,
         or_(FinancialDocumentAllocation.reversed_at.is_(None), func.date(FinancialDocumentAllocation.reversed_at) > cutoff),
     ))).all()
@@ -179,6 +187,7 @@ async def _subledger(session, key, filters, ledger, result, cutoff):
         used[allocation.payment_document_id] += allocation.allocated_amount
     by_currency = defaultdict(lambda: ZERO)
     base_outstanding = ZERO
+    base_precision = await currency_precision(session, result["meta"]["baseCurrency"])
     for doc, party, job in (await session.execute(stmt)).all():
         if doc.id in reversed_ids or (filters.get("currencies") and doc.currency_code not in filters["currencies"]) or (filters.get("parties") and str(party or "") not in filters["parties"]):
             continue
@@ -186,7 +195,12 @@ async def _subledger(session, key, filters, ledger, result, cutoff):
         allocated = paid[doc.id] if is_invoice else used[doc.id] if doc.document_type == payment_type else ZERO
         balance = (doc.total_amount-allocated) * (1 if is_invoice else -1)
         by_currency[doc.currency_code] += balance
-        base_balance = balance*(doc.exchange_rate or Decimal("1"))
+        # Keep the posted base snapshot; value settlements at that document's
+        # stored rate, with full settlement consuming any rounding remainder.
+        precision = fx.currency_precision((doc.data or {}).get("baseCurrencyPrecision", base_precision))
+        base_balance = (doc.base_total_amount - fx.convert_to_base(
+            allocated, doc.exchange_rate or Decimal("1"), precision
+        )) * (1 if is_invoice else -1) if balance else ZERO
         base_outstanding += base_balance
         days = (cutoff-doc.due_date).days if doc.due_date else 0
         result["items"].append({"id": str(doc.id), "documentNo": doc.document_no, "invoiceNo": doc.document_no,
@@ -203,6 +217,14 @@ async def _subledger(session, key, filters, ledger, result, cutoff):
     # chart code. Manual postings on these accounts remain visible differences.
     source_types = dict((await session.execute(select(FinancialDocument.id, FinancialDocument.document_type))).all())
     controls = set()
+    rules = (await session.scalars(select(PostingRule).where(
+        PostingRule.status == "ACTIVE",
+        PostingRule.document_type.in_([invoice_type, credit_type, payment_type]),
+    ))).all()
+    for rule in rules:
+        debit_control = (customer and rule.document_type == invoice_type) or (
+            not customer and rule.document_type in {credit_type, payment_type})
+        controls.add(rule.debit_account_id if debit_control else rule.credit_account_id)
     for row in ledger:
         kind = source_types.get(row["source_document_id"])
         if row["entry_type"] == "REVERSAL":
@@ -214,8 +236,11 @@ async def _subledger(session, key, filters, ledger, result, cutoff):
     control = sum(((decimal(row["base_debit_amount"])-decimal(row["base_credit_amount"]))*(1 if customer else -1)
         for row in ledger if row["account_id"] in controls), ZERO)
     difference = base_outstanding-control
-    result["totals"] = {"baseOutstanding": base_outstanding, "controlBalance": control,
-        "difference": difference, "perCurrency": dict(by_currency)}
+    result["totals"] = {"baseOutstanding": base_outstanding, "controlBalance": control if controls else None,
+        "difference": difference if controls else None, "perCurrency": dict(by_currency)}
+    result["meta"]["reconciliationAvailable"] = bool(controls)
+    if not controls:
+        result["meta"]["warnings"].append("Reconciliation is unavailable: configure the receivable/payable control account mappings.")
     if difference:
         result["meta"]["warnings"].append("Subledger/control discrepancy: inspect manual control postings, historical data and unposted exchange differences; no balancing adjustment was applied.")
     result["meta"]["basis"] = "Posted documents and retained allocations effective at cutoff; original currencies shown separately"

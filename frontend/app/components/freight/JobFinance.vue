@@ -388,6 +388,12 @@ onMounted(() => { void loadFinanceDocuments(); void loadOrderCharges() })
 watch(() => props.active, (active) => {
   if (active) { void synchronizeFinance(); void loadOrderCharges() }
 })
+watch(() => store.financialRevision, () => {
+  if (props.active && !saving.value && !savingRowId.value && !paySaving.value && !postingId.value && !allocSaving.value) {
+    void synchronizeFinance()
+    void loadOrderCharges()
+  }
+})
 
 /** One unsaved inline row: today's date in the configured timezone, the Service Order currency. */
 function newFinanceRow(): FinanceRow {

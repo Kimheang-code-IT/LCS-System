@@ -3921,13 +3921,21 @@ CREATE TABLE financial_document_allocations (
     -- UNIQUE key that makes a repeated allocation request a no-op. This is
     -- what stops a retried request from double-settling an invoice.
     idempotency_key VARCHAR(128),
+    -- Timestamp the settlement was reversed; NULL denotes an active
+    -- allocation. Original amounts and links remain available for historical
+    -- cutoff reports.
+    reversed_at TIMESTAMP WITH TIME ZONE,
+    -- Financial document whose reversal retired this allocation without
+    -- deleting its accounting history.
+    reversed_by_document_id BIGINT,
     -- Surrogate primary key. BIGSERIAL sequence-backed and never reused.
     id BIGSERIAL NOT NULL,
     CONSTRAINT pk_financial_document_allocations PRIMARY KEY (id),
     CONSTRAINT fk_financial_document_allocations_payment_document_id_f_f494 FOREIGN KEY(payment_document_id) REFERENCES financial_documents (id),
     CONSTRAINT fk_financial_document_allocations_target_document_id_fi_faa8 FOREIGN KEY(target_document_id) REFERENCES financial_documents (id),
     CONSTRAINT fk_financial_document_allocations_created_by_user_id_users FOREIGN KEY(created_by_user_id) REFERENCES users (id),
-    CONSTRAINT uq_financial_document_allocations_idempotency_key UNIQUE (idempotency_key)
+    CONSTRAINT uq_financial_document_allocations_idempotency_key UNIQUE (idempotency_key),
+    CONSTRAINT fk_financial_document_allocations_reversed_by_document__be9b FOREIGN KEY(reversed_by_document_id) REFERENCES financial_documents (id)
 );
 CREATE INDEX ix_financial_document_allocations_payment_document_id ON financial_document_allocations (payment_document_id);
 CREATE INDEX ix_financial_document_allocations_target_document_id ON financial_document_allocations (target_document_id);
@@ -3943,6 +3951,8 @@ COMMENT ON COLUMN financial_document_allocations.exchange_difference IS 'Realise
 COMMENT ON COLUMN financial_document_allocations.allocated_at IS 'Timestamp the allocation was applied.';
 COMMENT ON COLUMN financial_document_allocations.created_by_user_id IS 'Identifier of the user who created this record. NULL when the action was performed by the system, or set to NULL by ON DELETE SET NULL once the user is removed.';
 COMMENT ON COLUMN financial_document_allocations.idempotency_key IS 'UNIQUE key that makes a repeated allocation request a no-op. This is what stops a retried request from double-settling an invoice.';
+COMMENT ON COLUMN financial_document_allocations.reversed_at IS 'Timestamp the settlement was reversed; NULL denotes an active allocation. Original amounts and links remain available for historical cutoff reports.';
+COMMENT ON COLUMN financial_document_allocations.reversed_by_document_id IS 'Financial document whose reversal retired this allocation without deleting its accounting history.';
 COMMENT ON COLUMN financial_document_allocations.id IS 'Surrogate primary key. BIGSERIAL sequence-backed and never reused.';
 
 -- --------------------------------------------------------------------------

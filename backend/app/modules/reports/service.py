@@ -36,112 +36,25 @@ def _cache_scope(context: RequestContext) -> str:
     return "admin" if context.is_platform_admin else "standard"
 
 
+def _legacy_subledger_rows(result: dict, payment_type: str) -> list[dict]:
+    from app.modules.reports.financial_statements import json_numbers
+    return json_numbers([{**row,
+        "partyId": int(row["partyId"]) if row["partyId"] else None,
+        "documentDate": row["invoiceDate"],
+        "status": "PAID" if row["outstanding"] == 0 else "PARTIAL" if row["paid"] else "OPEN",
+    } for row in result["items"] if row["documentType"] != payment_type or row["outstanding"] != 0])
+
+
 async def receivables(session: AsyncSession, context: RequestContext) -> list[dict]:
-    cache_parts = ("receivables", _cache_scope(context))
-    cached = await cache.get_json("reports", *cache_parts)
-    if cached is not None:
-        return cached
-    from datetime import date as _date
-    today = _date.today().isoformat()
-    stmt = (
-        select(FinancialDocument, BusinessParty.display_name, ServiceOrder.service_order_no)
-        .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
-        .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
-        .where(
-            FinancialDocument.document_type == "CUSTOMER_INVOICE",
-            FinancialDocument.status == "POSTED",
-        )
-    )
-    rows = (await session.execute(stmt)).all()
-    items = []
-    for row, party_name, service_order_no in rows:
-        outstanding = (row.total_amount or Decimal("0")) - (row.paid_amount or Decimal("0"))
-        due = row.due_date.isoformat() if row.due_date else None
-        doc_date = row.document_date.isoformat() if row.document_date else None
-        aging_days = None
-        if due and doc_date:
-            try:
-                aging_days = (_date.fromisoformat(today) - _date.fromisoformat(due)).days
-            except ValueError:
-                aging_days = None
-        items.append(
-            {
-                "id": str(row.id),
-                "documentNo": row.document_no,
-                "invoiceNo": row.document_no,
-                "partyId": row.party_id,
-                "customer": party_name or "",
-                "jobNo": service_order_no or "",
-                "documentDate": doc_date,
-                "invoiceDate": doc_date,
-                "dueDate": due,
-                "currency": row.currency_code,
-                "total": _f(row.total_amount),
-                "paid": _f(row.paid_amount),
-                "balance": _f(outstanding),
-                "outstanding": _f(outstanding),
-                "aging": f"{aging_days}d" if aging_days is not None and aging_days > 0 else "",
-                "status": "PAID" if outstanding <= 0 else ("PARTIAL" if row.paid_amount else "OPEN"),
-            }
-        )
-    await cache.set_json(
-        "reports", *cache_parts, value=items, ttl_seconds=settings.cache_ttl_report_seconds
-    )
-    return items
+    from app.modules.reports.financial_statements import financial_statement
+    result = await financial_statement(session, "accounts-receivable", {})
+    return _legacy_subledger_rows(result, "CUSTOMER_RECEIPT")
 
 
 async def payables(session: AsyncSession, context: RequestContext) -> list[dict]:
-    cache_parts = ("payables", _cache_scope(context))
-    cached = await cache.get_json("reports", *cache_parts)
-    if cached is not None:
-        return cached
-    from datetime import date as _date
-    today = _date.today().isoformat()
-    stmt = (
-        select(FinancialDocument, BusinessParty.display_name, ServiceOrder.service_order_no)
-        .outerjoin(BusinessParty, BusinessParty.id == FinancialDocument.party_id)
-        .outerjoin(ServiceOrder, ServiceOrder.id == FinancialDocument.service_order_id)
-        .where(
-            FinancialDocument.document_type == "SUPPLIER_BILL",
-            FinancialDocument.status == "POSTED",
-        )
-    )
-    rows = (await session.execute(stmt)).all()
-    items = []
-    for row, party_name, service_order_no in rows:
-        outstanding = (row.total_amount or Decimal("0")) - (row.paid_amount or Decimal("0"))
-        due = row.due_date.isoformat() if row.due_date else None
-        doc_date = row.document_date.isoformat() if row.document_date else None
-        aging_days = None
-        if due and doc_date:
-            try:
-                aging_days = (_date.fromisoformat(today) - _date.fromisoformat(due)).days
-            except ValueError:
-                aging_days = None
-        items.append(
-            {
-                "id": str(row.id),
-                "documentNo": row.document_no,
-                "invoiceNo": row.document_no,
-                "partyId": row.party_id,
-                "supplier": party_name or "",
-                "jobNo": service_order_no or "",
-                "documentDate": doc_date,
-                "billDate": doc_date,
-                "dueDate": due,
-                "currency": row.currency_code,
-                "total": _f(row.total_amount),
-                "paid": _f(row.paid_amount),
-                "balance": _f(outstanding),
-                "outstanding": _f(outstanding),
-                "aging": f"{aging_days}d" if aging_days is not None and aging_days > 0 else "",
-                "status": "PAID" if outstanding <= 0 else ("PARTIAL" if row.paid_amount else "OPEN"),
-            }
-        )
-    await cache.set_json(
-        "reports", *cache_parts, value=items, ttl_seconds=settings.cache_ttl_report_seconds
-    )
-    return items
+    from app.modules.reports.financial_statements import financial_statement
+    result = await financial_statement(session, "accounts-payable", {})
+    return _legacy_subledger_rows(result, "SUPPLIER_PAYMENT")
 
 
 async def _account_type_totals(session: AsyncSession, context: RequestContext, account_type: str) -> list[dict]:

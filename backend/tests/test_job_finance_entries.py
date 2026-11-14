@@ -510,7 +510,8 @@ async def test_reversing_an_allocated_invoice_unsettles_and_money_stays_received
     ar = [line for line in ledger if line["accountCode"] == "1100"]
     assert sum(line["debit"] for line in ar) - sum(line["credit"] for line in ar) == -200
     receivables = (await client.get("/api/v1/reports/receivables", headers=headers)).json()["data"]
-    assert sum(row["balance"] for row in receivables) == 0
+    assert sum(row["balance"] for row in receivables) == -200
+    assert next(row for row in receivables if row["id"] == receipt["id"])["documentType"] == "CUSTOMER_RECEIPT"
     unapplied = (await client.get(f"/api/v1/financial-documents/{receipt['id']}", headers=headers)).json()["data"]
     assert float(unapplied["total"]) - float(unapplied["paidAmount"]) == 200
 

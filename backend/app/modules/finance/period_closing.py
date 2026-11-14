@@ -146,39 +146,17 @@ async def _financial_summary(session: AsyncSession, period: AccountingPeriod, ba
         else:
             expense += Decimal(str(debit)) - Decimal(str(credit))
 
-    posteds = (
-        await session.execute(
-            select(
-                FinancialDocument.document_type,
-                func.coalesce(
-                    func.sum(
-                        func.coalesce(FinancialDocument.total_amount, Decimal("0"))
-                        - func.coalesce(FinancialDocument.paid_amount, Decimal("0"))
-                    ),
-                    Decimal("0"),
-                ),
-                func.count(),
-            )
-            .where(
-                FinancialDocument.status == "POSTED",
-                FinancialDocument.document_type.in_(
-                    ("CUSTOMER_INVOICE", "SUPPLIER_BILL", "CUSTOMER_RECEIPT", "SUPPLIER_PAYMENT")
-                ),
-            )
-            .group_by(FinancialDocument.document_type)
-        )
-    ).all()
-    outstanding = {document_type: Decimal(str(total)) for document_type, total, _count in posteds}
-    unapplied = sum(
-        (total for document_type, total, _count in posteds if document_type in ("CUSTOMER_RECEIPT", "SUPPLIER_PAYMENT")),
-        Decimal("0"),
-    )
+    from app.modules.reports.financial_statements import financial_statement
+    ar = await financial_statement(session, "accounts-receivable", {"toDate": period.end_date})
+    ap = await financial_statement(session, "accounts-payable", {"toDate": period.end_date})
+    unapplied = sum((-row["baseOutstanding"] for projection in (ar, ap) for row in projection["items"]
+        if row["documentType"] in {"CUSTOMER_RECEIPT", "SUPPLIER_PAYMENT"}), Decimal("0"))
     return {
         "revenue": float(revenue),
         "expenses": float(expense),
         "profit": float(revenue - expense),
-        "arOutstanding": float(outstanding.get("CUSTOMER_INVOICE", Decimal("0"))),
-        "apOutstanding": float(outstanding.get("SUPPLIER_BILL", Decimal("0"))),
+        "arOutstanding": float(ar["totals"]["baseOutstanding"]),
+        "apOutstanding": float(ap["totals"]["baseOutstanding"]),
         "unappliedPayments": float(unapplied),
         "currency": base_currency,
     }

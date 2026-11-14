@@ -203,8 +203,8 @@ export interface ReportsRepository {
   financialStatement: (key: string, filters: Record<string, unknown>) => Promise<{
     items: FreightRecord[]
     groups: Array<{ type: string, rows: Array<{ name: string, amount: number }>, total: number }>
-    totals: Record<string, number | Record<string, number>>
-    meta: { generatedAt: string, baseCurrency: string, warnings: string[], currencies: string[], parties: string[] }
+    totals: Record<string, number | Record<string, number> | null>
+    meta: { generatedAt: string, baseCurrency: string, warnings: string[], currencies: string[], parties: string[], reconciliationAvailable?: boolean }
   }>
   dashboard: (granularity?: 'day' | 'month' | 'year') => Promise<DashboardSummary>
   receivables: () => Promise<FreightRecord[]>

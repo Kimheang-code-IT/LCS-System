@@ -12,6 +12,7 @@ import {
 
 export const useFreightStore = defineStore('freight', () => {
   const revision = ref(0)
+  const financialRevision = ref(0)
   const api = useApi()
   const { t } = useI18n()
 
@@ -41,6 +42,10 @@ export const useFreightStore = defineStore('freight', () => {
   }
 
   function reload(collections?: string[]) {
+    if (!collections || collections.some(collection => [
+      'debitNotes', 'supplierCosts', 'receivables', 'journals', 'accountingPeriods',
+      'postingRules', 'financialAccounts', 'chartOfAccounts', 'jobCharges',
+    ].includes(collection))) financialRevision.value += 1
     const loaded = collections || Object.keys(remoteLoaded.value).filter(key => remoteLoaded.value[key])
     for (const collection of loaded) remoteLoaded.value[collection] = false
     void Promise.all(loaded.map(collection => ensureRemote(collection, true)))
@@ -257,6 +262,7 @@ export const useFreightStore = defineStore('freight', () => {
   }
 
   return {
+    financialRevision,
     reload,
     list,
     get,

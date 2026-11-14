@@ -238,12 +238,13 @@ async def test_a_posted_document_keeps_its_rate_and_base_amounts(client, session
     assert (await _detail(client, headers, created["id"]))["exchangeRate"] == pytest.approx(0.00025)
 
 
-async def test_currency_precision_rounds_the_converted_amount(client, session_factory, seeded):
+@pytest.mark.parametrize(("amounts", "expected"), [([100], 0.03), ([100, 100], 0.05)])
+async def test_currency_precision_rounds_the_converted_amount(client, session_factory, seeded, amounts, expected):
     """Requirement 14: precision is configuration, not a hardcoded two decimals."""
     headers = await login(client)
     async with session_factory() as session:
         party_id = await _party(session)
-    # The Riel has no minor unit; the master says so, and the conversion obeys it.
+    # The Riel has no minor unit; the USD base still has cents.
     created_currency = await client.post(
         "/api/v1/currencies",
         headers=headers,
@@ -253,12 +254,27 @@ async def test_currency_precision_rounds_the_converted_amount(client, session_fa
     assert created_currency.json()["data"]["decimalPlaces"] == 0
 
     detail = await _detail(client, headers, (
-        await _create(client, headers, _invoice(party_id, currency="KHR", exchangeRate=0.00025))
+        await _create(client, headers, _invoice(party_id, currency="KHR", exchangeRate=0.00025,
+            lines=[{"description": "Freight", "quantity": 1, "unitPrice": amount} for amount in amounts]))
     )["id"])
 
-    # 100 KHR * 0.00025 = 0.025 USD, rounded to whole Riel-denominated dollars.
+    # 100 KHR * 0.00025 = 0.025 USD, rounded to USD cents.
     assert detail["currencyPrecision"] == 0
-    assert detail["baseTotalAmount"] == pytest.approx(0.0)
+    assert detail["baseTotalAmount"] == pytest.approx(expected)
+    posted = await _post(client, headers, detail["id"])
+    assert posted["baseTotalAmount"] == pytest.approx(expected)
+    posted = await _detail(client, headers, detail["id"])
+    from app.modules.finance.models import JournalEntryLine
+    async with session_factory() as session:
+        lines = (await session.scalars(select(JournalEntryLine).where(
+            JournalEntryLine.journal_entry_id == int(posted["journalId"])
+        ))).all()
+        assert sum(line.base_debit_amount for line in lines) == sum(line.base_credit_amount for line in lines)
+        assert float(sum(line.base_debit_amount for line in lines)) == pytest.approx(expected)
+    ar = await client.post("/api/v1/reports/financial/accounts-receivable", headers=headers, json={})
+    assert ar.status_code == 200, ar.text
+    assert ar.json()["data"]["totals"]["baseOutstanding"] == pytest.approx(expected)
+    assert ar.json()["data"]["totals"]["difference"] == 0
 
 
 async def test_a_journal_must_also_balance_in_the_base_currency(client, session_factory, seeded):

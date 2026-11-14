@@ -43,9 +43,59 @@ async def test_invoice_receipt_credit_reconcile_ar_and_do_not_double_revenue(cli
     assert allocated.status_code == 200, allocated.text
     ar = await report(client, headers, "accounts-receivable")
     assert ar["totals"]["difference"] == 0 and ar["totals"]["baseOutstanding"] == 50
+    legacy_response = await client.get("/api/v1/reports/receivables", headers=headers)
+    assert legacy_response.status_code == 200, legacy_response.text
+    legacy = legacy_response.json()["data"]
+    legacy_invoice = next(row for row in legacy if row["id"] == invoice["id"])
+    assert legacy_invoice["documentDate"] == today.isoformat()
+    assert legacy_invoice["status"] == "PARTIAL"
+    assert isinstance(legacy_invoice["partyId"], int)
+    assert sum(row["balance"] for row in legacy) == 50
     profit = await report(client, headers, "profit-loss")
     assert profit["totals"]["revenue"] == 90
     assert profit["totals"]["net"] == 90
+
+
+@pytest.mark.parametrize(("invoice_kind", "payment_kind", "key"), [
+    ("CUSTOMER_INVOICE", "CUSTOMER_RECEIPT", "accounts-receivable"),
+    ("SUPPLIER_BILL", "SUPPLIER_PAYMENT", "accounts-payable"),
+])
+async def test_future_payment_cannot_settle_before_its_posting_date(client, invoice_kind, payment_kind, key):
+    headers = await login(client)
+    today = date.today()
+    future = today + timedelta(days=1)
+    invoice = await entry(client, headers, invoice_kind, 100, today)
+    payment = await entry(client, headers, payment_kind, 40, future)
+    response = await client.post(f"/api/v1/financial-documents/{payment['id']}/allocate", headers=headers,
+        json={"target_document_id": invoice["id"], "amount": 40})
+    assert response.status_code == 200, response.text
+    current = await report(client, headers, key, toDate=today.isoformat())
+    assert current["totals"]["baseOutstanding"] == current["totals"]["controlBalance"] == 100
+    later = await report(client, headers, key, toDate=future.isoformat())
+    assert later["totals"]["baseOutstanding"] == later["totals"]["controlBalance"] == 60
+    reversal = await client.post(f"/api/v1/financial-documents/{payment['id']}/reverse", headers=headers,
+        json={"reason": "Cannot reverse before posting"})
+    assert reversal.status_code == 409, reversal.text
+    unchanged = await report(client, headers, key, toDate=today.isoformat())
+    assert unchanged["totals"]["difference"] == 0
+
+
+async def test_manual_control_opening_cannot_falsely_reconcile_an_empty_subledger(client):
+    headers = await login(client)
+    response = await client.post("/api/v1/journal-entries", headers=headers, json={
+        "entryDate": date.today().isoformat(), "lines": [
+            {"accountCode": "1100", "debitAmount": 100},
+            {"accountCode": "3010", "creditAmount": 100},
+        ],
+    })
+    assert response.status_code == 201, response.text
+    posted = await client.post(f"/api/v1/journal-entries/{response.json()['data']['id']}/post", headers=headers, json={})
+    assert posted.status_code == 200, posted.text
+    ar = await report(client, headers, "accounts-receivable", currencies=[], parties=[])
+    assert ar["totals"]["baseOutstanding"] == 0
+    assert ar["totals"]["controlBalance"] == 100
+    assert ar["totals"]["difference"] == -100
+    assert ar["meta"]["warnings"]
 
 
 async def test_ar_aging_buckets_follow_the_cutoff_and_due_date(client):
